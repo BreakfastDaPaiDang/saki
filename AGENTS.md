@@ -128,6 +128,20 @@ Real-API tests and demos read `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`, 
 - TODO markers: `FIXME`/`TODO`/`XXX` by urgency ([semantics](docs/development.md)).
 - Files end with exactly one trailing newline; `git diff --cached --check` (pre-commit) gates it.
 
+## Agent skills
+
+### Issue tracker
+
+Track issues and PRDs in GitHub Issues; external pull requests are not a triage request surface. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+Use the five triage labels and their Work Item Status mappings. See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Use the multi-context map at [CONTEXT-MAP.md](CONTEXT-MAP.md). See [docs/agents/domain.md](docs/agents/domain.md).
+
 ## Defensive patterns
 
 Read [docs/defensive-patterns.md](docs/defensive-patterns.md) before lifecycle, concurrency, subprocess, or teardown work.
