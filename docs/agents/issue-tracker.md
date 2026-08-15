@@ -1,5 +1,7 @@
 # Issue tracker: GitHub
 
+English | [中文](issue-tracker.zh.md)
+
 Issues and PRDs for this repository live in [BreakfastDaPaiDang/saki](https://github.com/BreakfastDaPaiDang/saki). Use the `gh` CLI for issue operations.
 
 ## Conventions

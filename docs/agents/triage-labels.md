@@ -1,5 +1,7 @@
 # Triage labels
 
+English | [中文](triage-labels.zh.md)
+
 The engineering skills use five canonical triage roles. Each role maps to one GitHub label and, where applicable, a Work Item Status.
 
 | Canonical role | GitHub label | Work Item Status | Meaning |

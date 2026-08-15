@@ -1,5 +1,7 @@
 # Domain docs
 
+English | [中文](domain.zh.md)
+
 Saki uses multiple domain contexts. The root context map identifies each glossary and its scope.
 
 ## Before exploring
