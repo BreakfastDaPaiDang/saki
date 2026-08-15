@@ -26,6 +26,8 @@ Work Management defines how Saki organizes intended work, delivery progress, mil
 
 **Blockage**: A condition preventing progress without replacing the Work Item Status. _Avoid_: Blocked as a Work Item Status
 
+**Outcome Evidence**: A located observation or artifact used to establish whether a Work Item's acceptance conditions are satisfied, such as a test result, commit, pull request, CI result, release, deployment state, log, or business metric. _Avoid_: Agent success message
+
 **Triage Role**: The routing decision that identifies the next human or Agent action before a Work Item is claimed.
 
 **Board**: A view of Work Items grouped by Work Item Status.
