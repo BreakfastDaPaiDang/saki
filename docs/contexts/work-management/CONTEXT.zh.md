@@ -26,6 +26,8 @@ Work Management 定义 Saki 如何组织预期工作、交付进度、里程碑�
 
 **Blockage**：阻止进展但不取代 Work Item Status 的条件。_避免_：把 Blocked 用作 Work Item Status
 
+**Outcome Evidence**：用于确定 Work Item 验收条件是否满足的可定位观察或产物，例如测试结果、commit、pull request、CI 结果、Release、部署状态、日志或业务指标。_避免_：Agent 成功消息
+
 **Triage Role**：在 Work Item 被认领前，确定下一项人工或 agent 操作的路由决策。
 
 **Board**：按 Work Item Status 分组显示 Work Item 的视图。
