@@ -73,7 +73,9 @@ jobs:
           || 'dsh-ubuntu-24-04-16core' }}
     name: node 24 / static
     env:
-      DSH_GATE_CONCURRENCY: '8'
+      # Saki uses GitHub-hosted standard runners, which have a much smaller
+      # CPU/memory budget than upstream's dedicated 16-core pool.
+      DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
     steps:
       # Fetch complete history so the archive gate can read the trusted PR base from a reused shallow checkout.
       - uses: actions/checkout@v6
@@ -127,12 +129,13 @@ jobs:
           || 'dsh-ubuntu-24-04-16core' }}
     name: node 24 / coverage
     env:
-      # The hosted 16-core runner uses six coverage workers. The failover pool
+      # Saki's standard hosted runner gets two workers and one gate at a time.
+      # The upstream hosted 16-core runner uses six coverage workers. The failover pool
       # shares one 64-core VM across six always-on runner instances, so each
       # instance may use eight while keeping the worst case at 8 × 6 = 48
       # workers; process-bound suites remain isolated in forks.
-      DSH_COVERAGE_MAX_WORKERS: ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '8' || '6' }}
-      DSH_GATE_CONCURRENCY: '3'
+      DSH_COVERAGE_MAX_WORKERS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '8' || '6' }}
+      DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '1' || '3' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -192,12 +195,13 @@ jobs:
           || 'dsh-ubuntu-24-04-16core' }}
     name: node 24 / snapshots and artifacts
     env:
-      DSH_GATE_CONCURRENCY: '8'
+      DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '1' || '8' }}
       DSH_NODE_COMPAT_SKIP_TYPECHECK: '1'
-      DSH_OXLINT_THREADS: '8'
-      DSH_PUBLINT_CONCURRENCY: '8'
-      # Failover halves snapshot concurrency for the shared 64-core VM.
-      DSH_SNAPSHOT_MAX_CONCURRENCY: ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '12' || '32' }}
+      DSH_OXLINT_THREADS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
+      DSH_PUBLINT_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
+      # Saki uses two snapshot workers; upstream failover halves concurrency
+      # for the shared 64-core VM while the dedicated pool retains 32.
+      DSH_SNAPSHOT_MAX_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '12' || '32' }}
     steps:
       - uses: actions/checkout@v6
         with:
