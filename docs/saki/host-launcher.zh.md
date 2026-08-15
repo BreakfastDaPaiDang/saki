@@ -2,7 +2,7 @@
 
 [English](host-launcher.md) | 中文
 
-本文档定义从仓库检出版本启动 Saki 的 Windows 宿主进程。启动器负责进程前置条件和继承的网络设置；运行时插件可以展示或编辑宿主偏好，但不能取代加载插件的进程。
+本文档定义从仓库检出版本启动 Saki 的 Windows 宿主进程。稳定入口包含兼容 Windows PowerShell 5.1 的引导层，常规宿主启动器则明确声明并运行于 PowerShell 7。启动器负责进程前置条件和继承的网络设置；运行时插件可以展示或编辑宿主偏好，但不能取代加载插件的进程。
 
 ## 用法
 
@@ -19,6 +19,19 @@
 ```
 
 构建保持显式，因为它开销较大，而且源码启动器不会检测过期产物。
+
+## PowerShell 运行时
+
+`scripts/start-saki.ps1` 是 Windows PowerShell 5.1 和 PowerShell 7 共用的稳定入口，并会报告检测到的运行时版本。如果系统已有受支持的 `pwsh`，入口会立即在 PowerShell 7 下启动宿主，同时保留原调用中的代理、构建和 DSH 参数。
+
+如果缺少 `pwsh`，或者其版本低于 PowerShell 7，引导层会先询问，再通过 `winget install` 或 `winget upgrade` 安装 `Microsoft.PowerShell`。没有得到明确同意时，它不会安装软件或请求提权。确实需要无人值守安装时，可以显式传入 `-InstallPowerShell`；要在不弹出询问的情况下拒绝安装，可以传入 `-DeclinePowerShellInstall`：
+
+```powershell
+.\scripts\start-saki.ps1 -InstallPowerShell -Build
+.\scripts\start-saki.ps1 -DeclinePowerShellInstall
+```
+
+安装成功后，引导层会报告最终版本，并在 `pwsh` 下重新启动宿主。如果 `winget` 不可用、安装失败，或者当前进程还找不到新命令，入口会以非零状态退出，并给出 [PowerShell 手动安装说明](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows)。如果安装已经成功但当前进程的 `PATH` 尚未更新，通常重新打开终端即可。
 
 ## 代理配置
 

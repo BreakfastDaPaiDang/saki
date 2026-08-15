@@ -2,7 +2,7 @@
 
 English | [中文](host-launcher.zh.md)
 
-This reference defines the Windows host process that starts Saki from its repository checkout. The launcher owns process prerequisites and inherited network settings; runtime plugins may expose or edit host preferences but cannot replace the process that loads them.
+This reference defines the Windows host process that starts Saki from its repository checkout. The stable entry point includes a Windows PowerShell 5.1-compatible bootstrap, while the ordinary host launcher declares and runs on PowerShell 7. The launcher owns process prerequisites and inherited network settings; runtime plugins may expose or edit host preferences but cannot replace the process that loads them.
 
 ## Usage
 
@@ -19,6 +19,19 @@ The default command is `pnpm dsh web`, executed from the Saki repository root. P
 ```
 
 The build is explicit because it is expensive and the source launcher does not detect stale artifacts.
+
+## PowerShell runtime
+
+`scripts/start-saki.ps1` is the stable entry point on both Windows PowerShell 5.1 and PowerShell 7. It reports the detected runtime version. When a supported `pwsh` is already available, it starts the PowerShell 7 host immediately and preserves the proxy, build, and DSH arguments from the original invocation.
+
+When `pwsh` is missing or older than PowerShell 7, the bootstrap asks before running `winget install` or `winget upgrade` for `Microsoft.PowerShell`. It never installs or requests elevation without that explicit answer. For an intentional unattended invocation, use `-InstallPowerShell`; use `-DeclinePowerShellInstall` to reject installation without prompting:
+
+```powershell
+.\scripts\start-saki.ps1 -InstallPowerShell -Build
+.\scripts\start-saki.ps1 -DeclinePowerShellInstall
+```
+
+After a successful installation, the bootstrap reports the resulting version and relaunches the host under `pwsh`. If `winget` is unavailable, installation fails, or the new command is not yet visible, the entry point exits nonzero with [manual PowerShell installation instructions](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows). Opening a new terminal is usually sufficient when a successful installation has not yet updated the current process's `PATH`.
 
 ## Proxy configuration
 
