@@ -1,0 +1,45 @@
+# Saki Windows host launcher
+
+English | [中文](host-launcher.zh.md)
+
+This reference defines the Windows host process that starts Saki from its repository checkout. The launcher owns process prerequisites and inherited network settings; runtime plugins may expose or edit host preferences but cannot replace the process that loads them.
+
+## Usage
+
+Run the launcher from any directory:
+
+```powershell
+.\scripts\start-saki.ps1
+```
+
+The default command is `pnpm dsh web`, executed from the Saki repository root. Production Web startup requires current build artifacts; pass `-Build` after a fresh checkout or after source changes that affect generated packages or frontend bundles:
+
+```powershell
+.\scripts\start-saki.ps1 -Build
+```
+
+The build is explicit because it is expensive and the source launcher does not detect stale artifacts.
+
+## Proxy configuration
+
+The launcher uses `SAKI_PROXY_URI` when set and otherwise defaults to `http://127.0.0.1:7897`. It verifies that the proxy accepts a TCP connection, enables Node environment-proxy support, and supplies uppercase and lowercase proxy variables to Saki and its child processes.
+
+Override the proxy for one invocation or disable inherited proxy settings:
+
+```powershell
+.\scripts\start-saki.ps1 -ProxyUri http://127.0.0.1:7890
+.\scripts\start-saki.ps1 -NoProxy
+```
+
+The launcher restores the calling PowerShell process's proxy variables when Saki exits. `localhost`, `127.0.0.1`, and `::1` always remain outside the proxy while Saki runs.
+
+## DSH arguments
+
+Arguments that the launcher does not recognize are forwarded to the repository's `dsh` command. For example:
+
+```powershell
+.\scripts\start-saki.ps1 web --port 3081
+.\scripts\start-saki.ps1 --profile headless "summarize this repository"
+```
+
+Launcher parameters must precede forwarded DSH arguments. A missing `pnpm`, invalid proxy URI, unavailable proxy, failed build, or failed DSH process exits nonzero.
