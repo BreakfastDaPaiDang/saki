@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/host-launcher.md
-host-launcher.md: 16c9d1eb49668f3de10ab578b592feecb10de227
-host-launcher.zh.md: 9f65f2cb8140246415e4cd1bce8e77c269ca29a9
+host-launcher.md: ed8cf554a5e2eec0eabca66d19a5e095130cea55
+host-launcher.zh.md: 088cb345835b369ff331d1dc97567c50764008a9

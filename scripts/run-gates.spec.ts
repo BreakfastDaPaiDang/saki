@@ -98,6 +98,7 @@ describe('gate graph validation', () => {
 
     expect(byId.get('coverage')?.allowFailure).not.toBe(true)
     expect(byId.get('coverage-exempt-heavy')?.allowFailure).not.toBe(true)
+    expect(byId.get('saki-powershell-bootstrap')?.allowFailure).not.toBe(true)
     expect(byId.get('duplication')?.allowFailure).toBe(true)
   })
 
