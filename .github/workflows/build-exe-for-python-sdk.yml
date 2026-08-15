@@ -193,25 +193,15 @@ jobs:
             ARM64) image=quay.io/pypa/manylinux_2_28_aarch64 ;;
             *) echo "::error::Unsupported Linux runner architecture $RUNNER_ARCH"; exit 1 ;;
           esac
+          # pnpm's restored side-effects cache can carry node-pty's top-level
+          # Makefile without node-gyp's generated node-addon-api target files.
+          # A forced host rebuild regenerates the complete gyp graph; the
+          # manylinux make below then replaces only the release objects.
+          npm_config_build_from_source=true pnpm rebuild node-pty
           addon_dir="$(realpath packages/subprocess/subprocess-local/node_modules/node-pty)"
           addon="$addon_dir/build/Release/pty.node"
           [ -f "$addon_dir/build/Makefile" ] || {
             echo "::error::node-pty install did not generate $addon_dir/build/Makefile"
-            exit 1
-          }
-          # node-gyp writes the node-addon-api target path relative to pnpm's
-          # virtual package directory. pnpm 11 keeps the dependency in the
-          # shared virtual store instead, so recreate the directory alias the
-          # generated Makefile expects before entering the manylinux container.
-          api_dir="$(realpath "$addon_dir/../node-addon-api")"
-          api_package_dir="$(dirname "$(dirname "$api_dir")")"
-          virtual_package_dir="$(dirname "$(dirname "$addon_dir")")"
-          api_compat_dir="$virtual_package_dir/$(basename "$api_package_dir")"
-          if [ ! -e "$api_compat_dir" ]; then
-            ln -s "$api_package_dir" "$api_compat_dir"
-          fi
-          [ -f "$api_compat_dir/node_modules/node-addon-api/node_addon_api_maybe.target.mk" ] || {
-            echo "::error::node-addon-api Makefile target missing from $api_compat_dir"
             exit 1
           }
           docker run --rm \
