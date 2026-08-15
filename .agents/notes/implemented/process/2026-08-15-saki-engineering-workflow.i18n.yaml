@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-15-saki-engineering-workflow.md
-2026-08-15-saki-engineering-workflow.md: c00f4198242950698568b53b44541d87d9abf635
-2026-08-15-saki-engineering-workflow.zh.md: 1dbba5c8d472e28df0e52b319413e3a5b37774f3
+2026-08-15-saki-engineering-workflow.md: 22e1a6ea782d4dbc8ac03efebdda5999844a7124
+2026-08-15-saki-engineering-workflow.zh.md: ca5fbc7d96d7fd1dac80f542499e5d1498cfb4a2
