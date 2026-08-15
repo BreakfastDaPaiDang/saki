@@ -96,10 +96,22 @@ describe('CI workflow', () => {
     // never the Windows switch.
     for (const [jobName, job] of [['node-24', node24], ['node-24-coverage', node24Coverage], ['node-24-consumers', node24Consumers]] as const) {
       expect(typeof job['runs-on']).toBe('string')
+      expect(job['runs-on'], `${jobName} must allow Saki to select standard runners`).toContain('SAKI_CI_RUNNERS')
+      expect(job['runs-on']).toContain('ubuntu-latest')
       expect(job['runs-on'], `${jobName} runs-on must use the Linux failover switch`).toContain('DSH_CI_FAILOVER_LINUX')
       expect(job['runs-on'], `${jobName} runs-on must not use the Windows failover switch`).not.toContain('DSH_CI_FAILOVER_WINDOWS')
       expect(job['runs-on']).toContain('vm-backup')
     }
+    if (!isRecord(node24.env) || !isRecord(node24Coverage.env) || !isRecord(node24Consumers.env)) {
+      throw new TypeError('Required Linux CI jobs must define environment budgets')
+    }
+    expect(node24.env.DSH_GATE_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
+    expect(node24Coverage.env.DSH_COVERAGE_MAX_WORKERS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
+    expect(node24Coverage.env.DSH_GATE_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '1'")
+    expect(node24Consumers.env.DSH_GATE_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '1'")
+    expect(node24Consumers.env.DSH_OXLINT_THREADS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
+    expect(node24Consumers.env.DSH_PUBLINT_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
+    expect(node24Consumers.env.DSH_SNAPSHOT_MAX_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(aggregate['runs-on']).toContain('DSH_CI_FAILOVER_LINUX')
     expect(aggregate['runs-on']).not.toContain('DSH_CI_FAILOVER_WINDOWS')
     expect(aggregate['runs-on']).toContain('vm-backup')
@@ -327,6 +339,9 @@ describe('Python release workflows', () => {
     const manylinuxAddon = buildSteps.find(step => isRecord(step) && step.name === 'Rebuild Linux node-pty against manylinux 2.28')
     const macosCheck = buildSteps.find(step => isRecord(step) && step.name === 'Check macOS deployment target')
     const manylinuxSmoke = buildSteps.find(step => isRecord(step) && step.name === 'Run wheel in a manylinux 2.28 container')
+    if (!isRecord(manylinuxAddon) || typeof manylinuxAddon.run !== 'string') {
+      throw new TypeError('Python wheel builder must define the manylinux node-pty rebuild step')
+    }
     expect(call.inputs).toHaveProperty('targets')
     expect(call.inputs).toMatchObject({
       ci: { type: 'boolean', default: false },
@@ -343,6 +358,8 @@ describe('Python release workflows', () => {
     expect(JSON.stringify(manylinuxAddon)).toContain('manylinux_2_28_x86_64')
     expect(JSON.stringify(manylinuxAddon)).toContain('manylinux_2_28_aarch64')
     expect(JSON.stringify(manylinuxAddon)).toContain('$HOME/setup-pnpm:$HOME/setup-pnpm:ro')
+    expect(manylinuxAddon.run).toContain('api_compat_dir="$virtual_package_dir/$(basename "$api_package_dir")"')
+    expect(manylinuxAddon.run).toContain('node_addon_api_maybe.target.mk')
     expect(JSON.stringify(manylinuxAddon)).toContain('node-pty-glibc-versions.txt')
     expect(JSON.stringify(manylinuxAddon)).toContain('le 2.28')
     expect(macosCheck).toMatchObject({ if: "runner.os == 'macOS'" })
