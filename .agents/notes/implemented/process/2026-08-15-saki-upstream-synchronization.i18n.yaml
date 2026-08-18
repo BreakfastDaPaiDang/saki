@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-15-saki-upstream-synchronization.md
+2026-08-15-saki-upstream-synchronization.md: 531ca487f64dbfccdae73016550730b0bf4b3459
+2026-08-15-saki-upstream-synchronization.zh.md: c630c0a79ca01f5f187ad856fe9de8010fd58c8d

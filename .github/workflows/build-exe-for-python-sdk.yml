@@ -194,6 +194,11 @@ jobs:
             *) echo "::error::Unsupported Linux runner architecture $RUNNER_ARCH"; exit 1 ;;
           esac
           addon_dir="$(realpath packages/subprocess/subprocess-local/node_modules/node-pty)"
+          # pnpm's restored side-effects cache can carry node-pty's top-level
+          # Makefile without node-gyp's generated node-addon-api target files.
+          # Run the dependency's lifecycle in its real package directory so a
+          # workspace-level rebuild cannot silently skip this transitive package.
+          # The manylinux make below then replaces only the release objects.
           (cd "$addon_dir" && npm_config_build_from_source=true pnpm run install)
           addon="$addon_dir/build/Release/pty.node"
           [ -f "$addon_dir/build/Makefile" ] || {

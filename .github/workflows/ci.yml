@@ -60,16 +60,22 @@ jobs:
   # in-house pool's readiness is re-proven on every master push by the
   # serial-linux-selfhosted standby lane below. The Windows failover switch is
   # the separate DSH_CI_FAILOVER_WINDOWS variable on the windows-native job below.
+  # Saki sets SAKI_CI_RUNNERS=standard to select public GitHub-hosted runners
+  # before evaluating either upstream private-pool selector.
   node-24:
     if: github.event_name == 'pull_request'
     runs-on: >-
-      ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
+      ${{ vars.SAKI_CI_RUNNERS == 'standard'
+          && 'ubuntu-latest'
+          || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
           || 'dsh-ubuntu-24-04-16core' }}
     name: node 24 / static
     env:
-      DSH_GATE_CONCURRENCY: '8'
+      # Saki uses GitHub-hosted standard runners, which have a much smaller
+      # CPU/memory budget than upstream's dedicated 16-core pool.
+      DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
     steps:
       # Fetch complete history so the archive gate can read the trusted PR base from a reused shallow checkout.
       - uses: actions/checkout@v6
@@ -115,18 +121,21 @@ jobs:
   node-24-coverage:
     if: github.event_name == 'pull_request'
     runs-on: >-
-      ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
+      ${{ vars.SAKI_CI_RUNNERS == 'standard'
+          && 'ubuntu-latest'
+          || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
           || 'dsh-ubuntu-24-04-16core' }}
     name: node 24 / coverage
     env:
-      # The hosted 16-core runner uses six coverage workers. The failover pool
+      # Saki's standard hosted runner gets two workers and one gate at a time.
+      # The upstream hosted 16-core runner uses six coverage workers. The failover pool
       # shares one 64-core VM across six always-on runner instances, so each
       # instance may use eight while keeping the worst case at 8 × 6 = 48
       # workers; process-bound suites remain isolated in forks.
-      DSH_COVERAGE_MAX_WORKERS: ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '8' || '6' }}
-      DSH_GATE_CONCURRENCY: '3'
+      DSH_COVERAGE_MAX_WORKERS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '8' || '6' }}
+      DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '1' || '3' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -178,18 +187,21 @@ jobs:
   node-24-consumers:
     if: github.event_name == 'pull_request'
     runs-on: >-
-      ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
+      ${{ vars.SAKI_CI_RUNNERS == 'standard'
+          && 'ubuntu-latest'
+          || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
           || 'dsh-ubuntu-24-04-16core' }}
     name: node 24 / snapshots and artifacts
     env:
-      DSH_GATE_CONCURRENCY: '8'
+      DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '1' || '8' }}
       DSH_NODE_COMPAT_SKIP_TYPECHECK: '1'
-      DSH_OXLINT_THREADS: '8'
-      DSH_PUBLINT_CONCURRENCY: '8'
-      # Failover halves snapshot concurrency for the shared 64-core VM.
-      DSH_SNAPSHOT_MAX_CONCURRENCY: ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '12' || '32' }}
+      DSH_OXLINT_THREADS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
+      DSH_PUBLINT_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
+      # Saki uses two snapshot workers; upstream failover halves concurrency
+      # for the shared 64-core VM while the dedicated pool retains 32.
+      DSH_SNAPSHOT_MAX_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '12' || '32' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -443,11 +455,14 @@ jobs:
   # self-hosted pool and stay queued for the hosted runner — see the failover
   # runbook. This Windows switch is independent of the Linux
   # DSH_CI_FAILOVER_LINUX variable that retargets the three required Linux jobs
-  # and the all-checks-passed verdict above.
+  # and the all-checks-passed verdict above; SAKI_CI_RUNNERS=standard takes
+  # precedence for both operating systems.
   windows-native:
     if: github.event_name == 'pull_request'
     runs-on: >-
-      ${{ vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
+      ${{ vars.SAKI_CI_RUNNERS == 'standard'
+          && 'windows-latest'
+          || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "dsh-win-ci", "windows"]')
           || 'dsh-windows-2025-16core' }}
@@ -924,7 +939,9 @@ jobs:
     # (DSH_CI_FAILOVER_LINUX), not the Windows one, because it aggregates the
     # required Linux workers and runs on the vm-backup pool.
     runs-on: >-
-      ${{ vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
+      ${{ vars.SAKI_CI_RUNNERS == 'standard'
+          && 'ubuntu-latest'
+          || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
           || 'ubuntu-latest' }}

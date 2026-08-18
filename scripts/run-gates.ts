@@ -438,6 +438,9 @@ function ciWindowsCompleteGates(): Gate[] {
   return [
     pnpmScript('build', 'build'),
     pnpmScript('windows-site', 'docs:build', { label: 'production site' }),
+    pnpmScript('saki-powershell-bootstrap', 'test:saki-powershell-bootstrap', {
+      label: 'Saki PowerShell bootstrap',
+    }),
     ...coverageGates(),
     ...observational,
   ]

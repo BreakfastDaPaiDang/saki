@@ -129,6 +129,10 @@ Real-API tests and demos read `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`, 
 - TODO markers: `FIXME`/`TODO`/`XXX` by urgency ([semantics](docs/development.md)).
 - Files end with exactly one trailing newline; `git diff --cached --check` (pre-commit) gates it.
 
+## Saki agent workflow
+
+Track work through [GitHub Issues](docs/agents/issue-tracker.md) and its [triage roles](docs/agents/triage-labels.md); navigate terminology through [CONTEXT-MAP.md](CONTEXT-MAP.md) and the [domain-doc rules](docs/agents/domain.md).
+
 ## Defensive patterns
 
 Read [docs/defensive-patterns.md](docs/defensive-patterns.md) before lifecycle, concurrency, subprocess, or teardown work.
