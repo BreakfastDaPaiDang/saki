@@ -44,7 +44,11 @@ import { Document, parseDocument, type YAMLError } from 'yaml'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { canonicalizeWatchPath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
-import { CredentialProvider, credentialRef } from '@deepseek-ai/dsh-credentials'
+import {
+  CREDENTIAL_PROTECTION_PLAINTEXT,
+  CredentialProvider,
+  credentialRef,
+} from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import type { LaunchEnvironmentEntry } from '@deepseek-ai/dsh-launch-environment'
 
@@ -308,11 +312,21 @@ export class LocalCredentialProvider extends CredentialProvider {
 
   override resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
     const inherited = this.inherited(ref)
-    if (inherited !== undefined) return Promise.resolve({ value: inherited, source: 'env' })
+    if (inherited !== undefined) {
+      return Promise.resolve({ value: inherited, source: 'env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT })
+    }
     const stored = this.values.get(ref)
-    if (stored !== undefined) return Promise.resolve({ value: stored, source: 'file' })
+    if (stored !== undefined) {
+      return Promise.resolve({ value: stored, source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT })
+    }
     const fallback = this.dotenvFallback(ref)
-    if (fallback !== undefined) return Promise.resolve({ value: fallback.value, source: fallback.source })
+    if (fallback !== undefined) {
+      return Promise.resolve({
+        value: fallback.value,
+        source: fallback.source,
+        protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
+    }
     return Promise.resolve(undefined)
   }
 
@@ -321,13 +335,27 @@ export class LocalCredentialProvider extends CredentialProvider {
     // process cannot edit. A user `.env` value is writable in the sense that
     // matters — storing a key replaces it as the effective one.
     if (this.inherited(ref) !== undefined) {
-      return Promise.resolve({ configured: true, source: 'env', writable: false })
+      return Promise.resolve(this.description(ref, 'env', false))
     }
     const stored = this.values.get(ref)
-    if (stored !== undefined) return Promise.resolve({ configured: true, source: 'file', writable: true })
+    if (stored !== undefined) return Promise.resolve(this.description(ref, 'file', true))
     const fallback = this.dotenvFallback(ref)
-    if (fallback !== undefined) return Promise.resolve({ configured: true, source: fallback.source, writable: true })
-    return Promise.resolve({ configured: false, writable: true })
+    if (fallback !== undefined) return Promise.resolve(this.description(ref, fallback.source, true))
+    return Promise.resolve(this.description(ref, undefined, true))
+  }
+
+  /** Build one safe observation for the effective plaintext source. */
+  private description(ref: CredentialRef, source: string | undefined, writable: boolean): CredentialInfo {
+    const configured = source !== undefined
+    return {
+      ref,
+      configured,
+      ...configured ? { source } : {},
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable,
+      health: configured ? 'available' : 'missing',
+      observedAt: Date.now(),
+    }
   }
 
   override async set(ref: CredentialRef, value: string): Promise<void> {

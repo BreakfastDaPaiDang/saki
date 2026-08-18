@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_PLAINTEXT, credentialRef } from '@deepseek-ai/dsh-credentials'
 import { LocalCredentialProvider } from '../src/index.ts'
 
 const fsHarness = vi.hoisted(() => ({
@@ -108,7 +108,9 @@ describe('watcher pipeline', () => {
     await writeCredentials(path, 'DSH_CRED_PIPE: arrived\n')
     instance!.watcher.emit('all', 'change', path)
     await vi.waitFor(async () => {
-      expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'arrived', source: 'file' })
+      expect(await ctx.credentials.resolve(KEY)).toEqual({
+        value: 'arrived', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
     })
   })
 
@@ -124,7 +126,9 @@ describe('watcher pipeline', () => {
     instance!.watcher.emit('all', 'change', path)
     // The warn-and-keep path is asynchronous; give the serialized refresh a turn.
     await new Promise(resolve => setTimeout(resolve, 50))
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'good', source: 'file' })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'good', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('keeps the last good snapshot when the read fails after its permission check', async () => {
@@ -139,7 +143,9 @@ describe('watcher pipeline', () => {
     await vi.waitFor(() => {
       expect(fsHarness.nextReadError).toBeUndefined()
     })
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'good', source: 'file' })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'good', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('keeps the reload queue alive after an invariant violation escapes the fan-out', async () => {
@@ -158,14 +164,18 @@ describe('watcher pipeline', () => {
     // The snapshot commits before the fan-out, so the value lands even though
     // the listener threw out of the refresh.
     await vi.waitFor(async () => {
-      expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'first', source: 'file' })
+      expect(await ctx.credentials.resolve(KEY)).toEqual({
+        value: 'first', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
     })
 
     arm = false
     await writeCredentials(path, 'DSH_CRED_PIPE: second\n')
     instance!.watcher.emit('all', 'change', path)
     await vi.waitFor(async () => {
-      expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'second', source: 'file' })
+      expect(await ctx.credentials.resolve(KEY)).toEqual({
+        value: 'second', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
     })
   })
 
@@ -233,14 +243,18 @@ describe('watcher pipeline', () => {
     const [instance] = await fakeInstances()
     instance!.watcher.emit('all', 'change', path)
     await new Promise(resolve => setTimeout(resolve, 50))
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'a', source: 'file' })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'a', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
     expect(seen).toEqual([])
 
     // Repairing the document resumes publishing.
     await writeCredentials(path, 'DSH_CRED_PIPE: b\n')
     instance!.watcher.emit('all', 'change', path)
     await vi.waitFor(async () => {
-      expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'b', source: 'file' })
+      expect(await ctx.credentials.resolve(KEY)).toEqual({
+        value: 'b', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
     })
     expect(seen).toEqual([KEY])
   })
@@ -266,7 +280,9 @@ describe('watcher pipeline', () => {
     const [instance] = await fakeInstances()
     instance!.watcher.emit('ready')
     await vi.waitFor(async () => {
-      expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'written-before-ready', source: 'file' })
+      expect(await ctx.credentials.resolve(KEY)).toEqual({
+        value: 'written-before-ready', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
     })
   })
 })

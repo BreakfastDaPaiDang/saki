@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_PLAINTEXT, credentialRef } from '@deepseek-ai/dsh-credentials'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { LocalCredentialProvider, resolveSpec } from '../src/index.ts'
@@ -64,7 +64,16 @@ describe('layering and reads', () => {
     const dir = await tempDir()
     const ctx = await boot({ path: join(dir, '.credentials.yaml'), watch: false })
     expect(await ctx.credentials.resolve(KEY)).toBeUndefined()
-    expect(await ctx.credentials.describe(KEY)).toEqual({ configured: false, writable: true })
+    const info = await ctx.credentials.describe(KEY)
+    expect(info.observedAt).toBeGreaterThan(0)
+    expect(info).toEqual({
+      ref: KEY,
+      configured: false,
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true,
+      health: 'missing',
+      observedAt: info.observedAt,
+    })
   })
 
   it('serves file entries alongside comments and quoted values', async () => {
@@ -72,9 +81,25 @@ describe('layering and reads', () => {
     const path = join(dir, '.credentials.yaml')
     await writeCredentials(path, '# notes\nDSH_CRED_TEST: plain\nDSH_CRED_OTHER: "with space"\n')
     const ctx = await boot({ path, watch: false })
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'plain', source: 'file' })
-    expect(await ctx.credentials.resolve(OTHER)).toEqual({ value: 'with space', source: 'file' })
-    expect(await ctx.credentials.describe(KEY)).toEqual({ configured: true, source: 'file', writable: true })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'plain',
+      source: 'file',
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    expect(await ctx.credentials.resolve(OTHER)).toEqual({
+      value: 'with space', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    const info = await ctx.credentials.describe(KEY)
+    expect(info.observedAt).toBeGreaterThan(0)
+    expect(info).toEqual({
+      ref: KEY,
+      configured: true,
+      source: 'file',
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true,
+      health: 'available',
+      observedAt: info.observedAt,
+    })
   })
 
   it('lets a non-empty process environment win read-only over the file', async () => {
@@ -83,8 +108,13 @@ describe('layering and reads', () => {
     await writeCredentials(path, 'DSH_CRED_TEST: from-file\n')
     const ctx = await boot({ path, watch: false })
     vi.stubEnv('DSH_CRED_TEST', 'from-env')
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'from-env', source: 'env' })
-    expect(await ctx.credentials.describe(KEY)).toEqual({ configured: true, source: 'env', writable: false })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'from-env', source: 'env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    expect(await ctx.credentials.describe(KEY)).toMatchObject({
+      ref: KEY, configured: true, source: 'env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: false, health: 'available',
+    })
   })
 
   it('treats an empty environment value as absent, falling through to the file', async () => {
@@ -93,8 +123,13 @@ describe('layering and reads', () => {
     await writeCredentials(path, 'DSH_CRED_TEST: stored\n')
     const ctx = await boot({ path, watch: false })
     vi.stubEnv('DSH_CRED_TEST', '')
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'stored', source: 'file' })
-    expect(await ctx.credentials.describe(KEY)).toEqual({ configured: true, source: 'file', writable: true })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'stored', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    expect(await ctx.credentials.describe(KEY)).toMatchObject({
+      ref: KEY, configured: true, source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true, health: 'available',
+    })
   })
 
   it('fails boot loud when the document exists but cannot be read', async () => {
@@ -129,12 +164,19 @@ describe('layer ladder', () => {
       { source: 'process', values: {} },
       { source: 'user-env', path: '/home/.dsh/.env', values: { DSH_CRED_TEST: 'older-user-env' } },
     ])
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'stored', source: 'file' })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'stored', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
     // A key sitting in the user's .env does not make the stored one
     // unwritable.
-    expect(await ctx.credentials.describe(KEY)).toEqual({ configured: true, source: 'file', writable: true })
+    expect(await ctx.credentials.describe(KEY)).toMatchObject({
+      ref: KEY, configured: true, source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true, health: 'available',
+    })
     await expect(ctx.credentials.set(KEY, 'rotated')).resolves.toBeUndefined()
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'rotated', source: 'file' })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'rotated', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('serves the user .env only when nothing is stored', async () => {
@@ -143,9 +185,14 @@ describe('layer ladder', () => {
       { source: 'process', values: {} },
       { source: 'user-env', path: '/home/.dsh/.env', values: { DSH_CRED_TEST: 'from-user-env' } },
     ])
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'from-user-env', source: 'user-env' })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'from-user-env', source: 'user-env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
     // Writable: storing a key replaces it as the effective one.
-    expect(await ctx.credentials.describe(KEY)).toEqual({ configured: true, source: 'user-env', writable: true })
+    expect(await ctx.credentials.describe(KEY)).toMatchObject({
+      ref: KEY, configured: true, source: 'user-env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true, health: 'available',
+    })
   })
 
   it('serves the invoking project .env over the user one, but never over the store', async () => {
@@ -160,12 +207,19 @@ describe('layer ladder', () => {
       { source: 'user-env' as const, path: '/home/.dsh/.env', values: { DSH_CRED_TEST: 'from-user' } },
     ]
     const bare = await bootLayered(path, layers)
-    expect(await bare.credentials.resolve(KEY)).toEqual({ value: 'from-project', source: 'project-env' })
-    expect(await bare.credentials.describe(KEY)).toEqual({ configured: true, source: 'project-env', writable: true })
+    expect(await bare.credentials.resolve(KEY)).toEqual({
+      value: 'from-project', source: 'project-env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    expect(await bare.credentials.describe(KEY)).toMatchObject({
+      ref: KEY, configured: true, source: 'project-env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true, health: 'available',
+    })
 
     await writeCredentials(path, 'DSH_CRED_TEST: stored\n')
     const stored = await bootLayered(path, layers)
-    expect(await stored.credentials.resolve(KEY)).toEqual({ value: 'stored', source: 'file' })
+    expect(await stored.credentials.resolve(KEY)).toEqual({
+      value: 'stored', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it.skipIf(process.platform === 'win32')('refuses a document other OS users can read', async () => {
@@ -217,8 +271,13 @@ describe('layer ladder', () => {
       { source: 'process', values: { DSH_CRED_TEST: 'from-shell' } },
       { source: 'user-env', path: '/home/.dsh/.env', values: { DSH_CRED_TEST: 'from-user-env' } },
     ])
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'from-shell', source: 'env' })
-    expect(await ctx.credentials.describe(KEY)).toEqual({ configured: true, source: 'env', writable: false })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'from-shell', source: 'env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    expect(await ctx.credentials.describe(KEY)).toMatchObject({
+      ref: KEY, configured: true, source: 'env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: false, health: 'available',
+    })
     await expect(ctx.credentials.set(KEY, 'next')).rejects.toThrow(/launching environment/)
   })
 })
@@ -282,7 +341,9 @@ describe('document writes', () => {
     await ctx.credentials.set(KEY, 'sk-fresh')
     expect(await readFile(path, 'utf8')).toBe('DSH_CRED_TEST: sk-fresh\n')
     if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o600)
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'sk-fresh', source: 'file' })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'sk-fresh', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
     expect(seen).toEqual([KEY])
   })
 
@@ -306,9 +367,16 @@ describe('document writes', () => {
     await ctx.credentials.set(KEY, multiLine)
     await ctx.credentials.set(OTHER, mixedQuotes)
     const reread = await boot({ path, watch: false })
-    expect(await reread.credentials.resolve(KEY)).toEqual({ value: multiLine, source: 'file' })
-    expect(await reread.credentials.resolve(OTHER)).toEqual({ value: mixedQuotes, source: 'file' })
-    expect(await reread.credentials.describe(KEY)).toEqual({ configured: true, source: 'file', writable: true })
+    expect(await reread.credentials.resolve(KEY)).toEqual({
+      value: multiLine, source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    expect(await reread.credentials.resolve(OTHER)).toEqual({
+      value: mixedQuotes, source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    expect(await reread.credentials.describe(KEY)).toMatchObject({
+      ref: KEY, configured: true, source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true, health: 'available',
+    })
   })
 
   it('unsets only the owning entry, with its own annotation, and keeps an absent unset silent', async () => {
@@ -407,7 +475,9 @@ describe('real hot reload', () => {
 
     await writeCredentials(path, 'DSH_CRED_TEST: live\nDSH_CRED_OTHER: extra\n')
     await vi.waitFor(async () => {
-      expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'live', source: 'file' })
+      expect(await ctx.credentials.resolve(KEY)).toEqual({
+        value: 'live', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
     })
 
     // Wholesale replacement: an entry deleted on disk never lingers in memory.
@@ -422,6 +492,8 @@ describe('real hot reload', () => {
     // Exactly the committed write's own event: the watcher echo of our own
     // content is recognized by the text cache and publishes nothing extra.
     expect(seen.length).toBe(before + 1)
-    expect(await ctx.credentials.resolve(KEY)).toEqual({ value: 'self-written', source: 'file' })
+    expect(await ctx.credentials.resolve(KEY)).toEqual({
+      value: 'self-written', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 })

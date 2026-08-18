@@ -8,10 +8,12 @@ import { resolveExampleLaunch } from '@deepseek-ai/dsh-loader-smoke'
 import { createProcessInspector } from '../src/process-inspector.ts'
 import type { ProcessIdentity, ProcessInspector } from '../src/process-inspector.ts'
 import { taskkillProcessTree } from '../src/spawn.ts'
+import { readTreeState } from './fixtures/tree-state.ts'
+import type { ManagedTreeState } from './fixtures/tree-state.ts'
 
 type ExitTrigger = 'direct' | 'uncaught-exception' | 'unhandled-rejection' | 'dispose'
 type ManagedKind = 'ordinary' | 'terminal'
-interface TreeState { root: number; descendant: number }
+type TreeState = ManagedTreeState
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const hostScript = fileURLToPath(new URL('./fixtures/process-exit-host.ts', import.meta.url))
@@ -28,15 +30,7 @@ function processExists(pid: number): boolean {
 }
 
 async function readTree(path: string): Promise<TreeState> {
-  return vi.waitFor(async () => {
-    const text = await readFile(path, 'utf8')
-    const state = JSON.parse(text) as Partial<TreeState>
-    if (!Number.isSafeInteger(state.root) || !Number.isSafeInteger(state.descendant)
-      || (state.root ?? 0) <= 0 || (state.descendant ?? 0) <= 0 || state.root === state.descendant) {
-      throw new Error(`invalid managed-tree state: ${text}`)
-    }
-    return state as TreeState
-  }, { interval: 10, timeout: scenarioTimeoutMs })
+  return vi.waitUntil(() => readTreeState(path), { interval: 10, timeout: scenarioTimeoutMs })
 }
 
 async function captureIdentities(inspector: ProcessInspector, state: TreeState): Promise<ProcessIdentity[]> {
@@ -106,7 +100,12 @@ async function runScenario(kind: ManagedKind, trigger: ExitTrigger) {
   let settled = false
   let treeGone = false
   try {
-    state = await readTree(join(root, 'tree.json'))
+    state = await Promise.race([
+      readTree(join(root, 'tree.json')),
+      child.then((outcome) => {
+        throw new Error(`process-exit host exited before publishing its tree state: ${outcome.stderr}`)
+      }),
+    ])
     await vi.waitFor(() => readFile(join(root, 'ready'), 'utf8'), {
       interval: 10,
       timeout: scenarioTimeoutMs,

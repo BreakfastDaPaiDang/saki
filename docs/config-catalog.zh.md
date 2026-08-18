@@ -567,7 +567,23 @@ export interface Config {
 }
 ```
 
-来源：[`packages/credentials/credentials-local/src/index.ts:55`](../packages/credentials/credentials-local/src/index.ts)
+来源：[`packages/credentials/credentials-local/src/index.ts:59`](../packages/credentials/credentials-local/src/index.ts)
+
+<a id="deepseek-aidsh-credentials-windows-dpapi"></a>
+
+## `@deepseek-ai/dsh-credentials-windows-dpapi`
+
+```ts config-catalog
+/** Plugin config: the Host-local encrypted document location. */
+export interface Config {
+  /** Encrypted document path; defaults under the Harness home. */
+  path?: string
+  /** Harness home used when `path` is omitted; defaults to `$DSH_HOME` or `~/.dsh`. */
+  dshHome?: string
+}
+```
+
+来源：[`packages/credentials/credentials-windows-dpapi/src/index.ts:32`](../packages/credentials/credentials-windows-dpapi/src/index.ts)
 
 <a id="deepseek-aidsh-e2b"></a>
 

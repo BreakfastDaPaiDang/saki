@@ -4,7 +4,26 @@ import type { CredentialView } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ModelsSettingsState, ProviderRow } from '../src/client/store.ts'
 import { onboardingReadiness, providerUsable } from '../src/client/store.ts'
 
-const missingCredential: CredentialView = { configured: false, writable: true }
+const PLAINTEXT_PROTECTION = 'plaintext' as CredentialView['protectionLevel']
+
+function credential(
+  ref: string,
+  configured: boolean,
+  writable: boolean,
+  source?: string,
+): CredentialView {
+  return {
+    ref: ref as CredentialView['ref'],
+    configured,
+    ...source === undefined ? {} : { source },
+    protectionLevel: PLAINTEXT_PROTECTION,
+    writable,
+    health: configured ? 'available' : 'missing',
+    observedAt: 0,
+  }
+}
+
+const missingCredential: CredentialView = credential('DEEPSEEK_API_KEY', false, true)
 
 function row(overrides: Partial<ProviderRow> = {}): ProviderRow {
   return {
@@ -36,7 +55,7 @@ function otherRow(overrides: Partial<ProviderRow> = {}): ProviderRow {
     configured: true,
     removable: true,
     apiKeyEnv: 'HFAI_API_KEY',
-    credential: { configured: true, source: 'file', writable: true },
+    credential: credential('HFAI_API_KEY', true, true, 'file'),
     ...overrides,
   }
 }
@@ -95,10 +114,10 @@ describe('onboardingReadiness', () => {
 
   it('accepts file and process-environment credentials without prompting', () => {
     expect(onboardingReadiness(state({
-      rows: [row({ credential: { configured: true, source: 'file', writable: true } })],
+      rows: [row({ credential: credential('DEEPSEEK_API_KEY', true, true, 'file') })],
     }))).toEqual({ kind: 'provider-ready' })
     expect(onboardingReadiness(state({
-      rows: [row({ credential: { configured: true, source: 'env', writable: false } })],
+      rows: [row({ credential: credential('DEEPSEEK_API_KEY', true, false, 'env') })],
     }))).toEqual({ kind: 'provider-ready' })
   })
 
@@ -120,7 +139,7 @@ describe('onboardingReadiness', () => {
       rows: [row({ credential: undefined })],
     }))).toEqual({ kind: 'unavailable', reason: 'credentials-unavailable' })
     expect(onboardingReadiness(state({
-      rows: [row({ credential: { configured: false, writable: false } })],
+      rows: [row({ credential: credential('DEEPSEEK_API_KEY', false, false) })],
     }))).toEqual({ kind: 'unavailable', reason: 'credential-read-only' })
     expect(onboardingReadiness(state({ writable: false }))).toEqual({
       kind: 'unavailable',

@@ -9,11 +9,12 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import type { CredentialRef } from './types.ts'
+import type { CredentialHealth, CredentialProtectionLevel, CredentialRef } from './types.ts'
 
-export type { CredentialRef } from './types.ts'
+export type { CredentialHealth, CredentialProtectionLevel, CredentialRef } from './types.ts'
 
 const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
+const PROTECTION_LEVEL_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 
 /**
  * Brand a raw string as a {@link CredentialRef}.
@@ -27,22 +28,51 @@ export function credentialRef(value: string): CredentialRef {
   return value as CredentialRef
 }
 
+/**
+ * Brand a provider-defined credential protection identifier.
+ * @param value - lowercase kebab-case identifier describing one recovery trust model.
+ * @returns the branded protection identifier.
+ */
+export function credentialProtectionLevel(value: string): CredentialProtectionLevel {
+  if (!PROTECTION_LEVEL_PATTERN.test(value)) {
+    throw new TypeError(`credential protection level "${value}" must match ${String(PROTECTION_LEVEL_PATTERN)}`)
+  }
+  return value as CredentialProtectionLevel
+}
+
+/** Plaintext value in an ambient source or provider-managed document. */
+export const CREDENTIAL_PROTECTION_PLAINTEXT = credentialProtectionLevel('plaintext')
+/** Process-local value that has no persisted recovery path. */
+export const CREDENTIAL_PROTECTION_EPHEMERAL = credentialProtectionLevel('ephemeral')
+/** Windows current-user protection; same-user processes remain trusted. */
+export const CREDENTIAL_PROTECTION_LOCAL_USER_TRUST = credentialProtectionLevel('local-user-trust')
+
 /** One resolved credential value and the source layer that supplied it. */
 export interface ResolvedCredential {
   /** The non-empty secret value. */
   value: string
   /** Provider-defined source layer id (the local provider uses `env`, `file`, `project-env`, and `user-env`). */
   source: string
+  /** Provider-defined recovery trust model for this exact resolved value. */
+  protectionLevel: CredentialProtectionLevel
 }
 
-/** Source and writability facts for one reference, safe for configuration UIs — never the value. */
+/** Safe observation for one reference, including its recovery trust model but never its value. */
 export interface CredentialInfo {
-  /** Whether {@link CredentialProvider.resolve} would currently return a value. */
+  /** Reference this observation describes. */
+  ref: CredentialRef
+  /** Whether the provider has a record or effective source assigned to this reference. */
   configured: boolean
   /** Source layer currently supplying the value; absent while unconfigured. */
   source?: string
+  /** Recovery trust model of the effective source, or the provider's writable source while missing. */
+  protectionLevel: CredentialProtectionLevel
   /** Whether {@link CredentialProvider.set} would currently succeed for this reference. */
   writable: boolean
+  /** Whether the value is available, absent, or present but unusable. */
+  health: CredentialHealth
+  /** Unix epoch milliseconds at which the provider made this observation. */
+  observedAt: number
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -68,15 +98,37 @@ export abstract class CredentialProvider extends Service {
    * operations — that per-operation read is what makes a changed credential
    * reach the next operation without a restart.
    * @param ref - the reference to resolve.
-   * @returns the value and its source, or `undefined` while unconfigured.
+   * @returns the value, source, and protection level, or `undefined` while unconfigured.
    */
   abstract resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined>
+
+  /**
+   * Resolve one reference and require an exact provider-defined protection
+   * level on the same typed result. Missing values and every non-matching level
+   * fail before the caller receives the value. Protection identifiers are
+   * descriptive, not an ordered scale.
+   * @param ref - the reference to resolve.
+   * @param required - the exact protection level the consumer accepts.
+   * @returns the resolved credential after its metadata satisfies the requirement.
+   */
+  async resolveRequired(ref: CredentialRef, required: CredentialProtectionLevel): Promise<ResolvedCredential> {
+    const resolved = await this.resolve(ref)
+    if (resolved === undefined) {
+      throw new Error(`credential "${ref}" requires protection level "${required}" but is not configured`)
+    }
+    if (resolved.protectionLevel !== required) {
+      throw new Error(
+        `credential "${ref}" requires protection level "${required}" but source "${resolved.source}" reported "${resolved.protectionLevel}"`,
+      )
+    }
+    return resolved
+  }
 
   /**
    * Describe one reference for configuration surfaces without exposing the
    * value.
    * @param ref - the reference to describe.
-   * @returns configured state, supplying source, and writability.
+   * @returns safe source, protection, health, and writability metadata observed at call time.
    */
   abstract describe(ref: CredentialRef): Promise<CredentialInfo>
 

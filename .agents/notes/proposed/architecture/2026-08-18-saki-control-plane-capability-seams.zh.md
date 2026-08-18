@@ -22,7 +22,7 @@ Workspace、Session、Agent、LLM、compaction、credential reference、attachme
 
 Host transport 只暴露公共 `SakiAccess` 与 `SakiControlPlane` 操作。Host API 从 HTTP state 取得请求呈现的 cookie，并使用只对该 trusted Consumer 可用的 package-private SakiAccess resolver 构造 `AuthenticationContext`；resolver 与 context 都不是 wire API。它把该 context 显式传给每次受保护 `query(authentication, query, signal)` 与 `submit(authentication, intent, signal)`，后两者重新验证 Browser Session、Installation generation、Principal lifecycle，以及当前 Grant scope 与 revision。Bootstrap exchange 与 logout 是仅有的两个不经过 Control Intent 的产品 mutation，并且只修改 Installation Access aggregate。Principal 或 Grant 变化会使受影响 Projection 失效。Web client 不接收 Provider object、storage handle、必需的本地路径、活动 DSH handle、secret 或 provider-specific response object。未来远程 Host 实现 Host Execution，但不获得 Work Item、policy、模型选择或恢复所有权。
 
-把已安装 Cordis 与 npm plugin 视为有特权的 Host 代码，而不是沙箱扩展。模型动态生成的 plugin 在操作者审查与安装前保持一次性。原始 credential value 留在目标 Host 的 capability Provider 内；控制面保存不透明 reference 与观测。[DPAPI 凭据 proposal](2026-08-18-saki-local-user-trust-dpapi-credentials.md)进一步细化 0.1.0 的这项规则，但不声称具备同用户 Agent 隔离。浏览器 client、GitHub 用户、仓库内容、模型输出和外部事件 payload 都位于 Host 信任边界之外。
+把已安装 Cordis 与 npm plugin 视为有特权的 Host 代码，而不是沙箱扩展。模型动态生成的 plugin 在操作者审查与安装前保持一次性。原始 credential value 留在目标 Host 的 capability Provider 内；控制面保存不透明 reference 与观测。[已实现的 DPAPI 凭据决策](../../implemented/architecture/2026-08-18-saki-local-user-trust-dpapi-credentials.md)进一步细化 0.1.0 的这项规则，但不声称具备同用户 Agent 隔离。浏览器 client、GitHub 用户、仓库内容、模型输出和外部事件 payload 都位于 Host 信任边界之外。
 
 ## 考虑过的方案
 

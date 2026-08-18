@@ -17,7 +17,7 @@ import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SettingsProvider, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
-import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_PLAINTEXT, CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import type { HostFrame } from '../src/api/index.ts'
 import type { RpcRequest, RpcResponse } from '../src/api/rpc.ts'
@@ -99,15 +99,43 @@ class MemoryCredentials extends CredentialProvider {
   private readonly shadowed: Set<string>
 
   resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
-    if (this.shadowed.has(ref)) return Promise.resolve({ value: 'from-env', source: 'env' })
+    if (this.shadowed.has(ref)) {
+      return Promise.resolve({
+        value: 'from-env',
+        source: 'env',
+        protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
+    }
     const value = this.values.get(ref)
-    return Promise.resolve(value === undefined ? undefined : { value, source: 'file' })
+    return Promise.resolve(value === undefined ? undefined : {
+      value,
+      source: 'file',
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   }
 
   describe(ref: CredentialRef): Promise<CredentialInfo> {
-    if (this.shadowed.has(ref)) return Promise.resolve({ configured: true, source: 'env', writable: false })
+    if (this.shadowed.has(ref)) {
+      return Promise.resolve({
+        ref,
+        configured: true,
+        source: 'env',
+        protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+        writable: false,
+        health: 'available',
+        observedAt: 0,
+      })
+    }
     const configured = this.values.has(ref)
-    return Promise.resolve({ configured, ...configured ? { source: 'file' } : {}, writable: true })
+    return Promise.resolve({
+      ref,
+      configured,
+      ...configured ? { source: 'file' } : {},
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true,
+      health: configured ? 'available' : 'missing',
+      observedAt: 0,
+    })
   }
 
   set(ref: CredentialRef, value: string): Promise<void> {
@@ -590,11 +618,30 @@ describe('credentials domain', () => {
     const ctx = await harness()
     const api = createApiProxy(ctx, DEFAULTS)
     const before = expectOk(await api.credentials.describe(request({ refs: ['OPENAI_API_KEY'] })))
-    expect(before.credentials).toEqual({ OPENAI_API_KEY: { configured: false, writable: true } })
+    expect(before.credentials).toEqual({
+      OPENAI_API_KEY: {
+        ref: 'OPENAI_API_KEY',
+        configured: false,
+        protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+        writable: true,
+        health: 'missing',
+        observedAt: 0,
+      },
+    })
     const frames = await collectHost(api, ['host/remote-event'], 2, async () => {
       expectOk(await api.credentials.set(request({ ref: 'OPENAI_API_KEY', value: 'sk-secret' })))
       const after = expectOk(await api.credentials.describe(request({ refs: ['OPENAI_API_KEY'] })))
-      expect(after.credentials).toEqual({ OPENAI_API_KEY: { configured: true, source: 'file', writable: true } })
+      expect(after.credentials).toEqual({
+        OPENAI_API_KEY: {
+          ref: 'OPENAI_API_KEY',
+          configured: true,
+          source: 'file',
+          protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+          writable: true,
+          health: 'available',
+          observedAt: 0,
+        },
+      })
       expect(JSON.stringify(after)).not.toContain('sk-secret')
       expectOk(await api.credentials.unset(request({ ref: 'OPENAI_API_KEY' })))
     })
@@ -604,11 +651,44 @@ describe('credentials domain', () => {
     ])
   })
 
+  it('projects only safe credential metadata onto the wire', async () => {
+    const ctx = await harness()
+    const describe = ctx.credentials.describe.bind(ctx.credentials)
+    const plaintext = 'same-process-provider-plaintext'
+    const ciphertext = 'same-process-provider-ciphertext'
+    ctx.credentials.describe = async (ref) => {
+      const unsafeProviderResult = { ...await describe(ref), plaintext, ciphertext }
+      return unsafeProviderResult
+    }
+    const api = createApiProxy(ctx, DEFAULTS)
+
+    const response = expectOk(await api.credentials.describe(request({ refs: ['OPENAI_API_KEY'] })))
+
+    expect(JSON.stringify(response)).not.toContain(plaintext)
+    expect(JSON.stringify(response)).not.toContain(ciphertext)
+    expect(response.credentials.OPENAI_API_KEY).toEqual({
+      ref: 'OPENAI_API_KEY',
+      configured: false,
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true,
+      health: 'missing',
+      observedAt: 0,
+    })
+  })
+
   it('maps a shadowed write onto credential-rejected for set and unset alike', async () => {
     const ctx = await harness({ credentials: { shadowed: ['DEEPSEEK_API_KEY'] } })
     const api = createApiProxy(ctx, DEFAULTS)
     const described = expectOk(await api.credentials.describe(request({ refs: ['DEEPSEEK_API_KEY'] })))
-    expect(described.credentials['DEEPSEEK_API_KEY']).toEqual({ configured: true, source: 'env', writable: false })
+    expect(described.credentials['DEEPSEEK_API_KEY']).toEqual({
+      ref: 'DEEPSEEK_API_KEY',
+      configured: true,
+      source: 'env',
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: false,
+      health: 'available',
+      observedAt: 0,
+    })
     const setError = expectErr(await api.credentials.set(request({ ref: 'DEEPSEEK_API_KEY', value: 'x' })))
     expect(setError.code).toBe('credential-rejected')
     expect(setError.details).toEqual({ ref: 'DEEPSEEK_API_KEY' })

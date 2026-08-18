@@ -55,6 +55,7 @@ const windowsUnsupportedCoveragePackages = process.platform === 'win32'
 // per-file 100% gate must not fail on their Linux-uncovered paths.
 const windowsOnlyCoverageExclusions = process.platform !== 'win32'
   ? [
+      'packages/credentials/credentials-windows-dpapi/src/**/*.ts',
       'packages/sandbox/sandbox-windows-acl/src/**/*.ts',
     ]
   : []

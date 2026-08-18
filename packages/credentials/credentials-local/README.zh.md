@@ -4,12 +4,12 @@
 
 文件型[凭据](../credentials/README.md)提供方：四层来源，一套明确的优先级。
 
-| 层 | 来源 id | 可写 | 优先 |
-|---|---|---|---|
-| 继承的进程环境 | `env` | 否 | 始终优先 |
-| `$DSH_HOME/.credentials.yaml` 文档 | `file` | 是（`set`/`unset`） | 高于两个 `.env` 层 |
-| `<invocation cwd>/.env` | `project-env` | 不在此处 | 高于用户 `.env` |
-| `$DSH_HOME/.env` | `user-env` | 不在此处 | 其余情况 |
+| 层 | 来源 id | Credential Protection Level | 可写 | 优先 |
+|---|---|---|---|---|
+| 继承的进程环境 | `env` | `plaintext` | 否 | 始终优先 |
+| `$DSH_HOME/.credentials.yaml` 文档 | `file` | `plaintext` | 是（`set`/`unset`） | 高于两个 `.env` 层 |
+| `<invocation cwd>/.env` | `project-env` | `plaintext` | 不在此处 | 高于用户 `.env` |
+| `$DSH_HOME/.env` | `user-env` | `plaintext` | 不在此处 | 其余情况 |
 
 启动环境优先，因为按次覆盖（`DEEPSEEK_API_KEY=… dsh`、CI 机密、容器 `-e`）代表本次运行的操作者意图——而它无法从进程内部修改，就必须*可见地*只读：`describe()` 报告 `source: 'env', writable: false`，`set`/`unset` 直接拒绝，而不是写下一个读取方永远看不到的变更。
 
@@ -55,7 +55,7 @@ OPENAI_API_KEY: sk-…
 
 文档在 `0700` 目录下以 `0600` 权限存放，这挡得住其他 OS 用户，**挡不住**模型。工具进程（bash、文件系统工具）以同一用户身份运行，而已交付的 `workspace-write` 文件策略限制的是修改而非读取，因此它们读这个文件与读该用户拥有的任何其他文件毫无二致；也没有任何沙箱模式会把它单独挑出来。harness 真正守住的更窄：它绝不把该文档的解析后路径交给模型，也绝不把它载入进程环境——这与用户的普通环境层 `$DSH_HOME/.env` 不同（见 [app-boot 的 Harness home 各层](../../boot/app-boot/README.md#profiles)）——因此要拿到这个值，需要刻意去读一条并未交给 agent（智能体）的路径。
 
-这是审慎，不是边界。必须让提供方密钥远离自身 agent 的部署无法靠文件权限做到；OS 钥匙串提供方——一种模型运行所在进程根本无法读取的存储——才是延后的答案，它应当作为平级包与本提供方并列。
+这是审慎，不是边界。[`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.md) 是在 Windows 上提供静态加密的平级包，但当前用户作用域仍然信任以同一 Windows 用户身份刻意运行的进程。要让这些进程也无法取得提供方密钥，需要独立隔离的凭据代理或外部机密管理器。
 
 ## 模型体验
 
@@ -68,6 +68,6 @@ OPENAI_API_KEY: sk-…
 ## 已知限制与暂缓事项
 
 - **同一引用的并发写入是后写胜出**——写锁加读-改-写让并发写入者不会丢掉彼此的条目，但两个写入者编辑同一个引用时仍以较后的写入为准；没有修订检查。
-- **同 UID 进程可以读取该文档**——见[安全边界](#security-boundary)：文件效果沙箱模式不会拒绝读取，OS 钥匙串提供方仍是延后项。
+- **同 UID 进程可以读取该文档**——见[安全边界](#security-boundary)：文件效果沙箱模式不会拒绝读取。Windows DPAPI 平级包能移除静态明文，但不会建立同用户进程隔离。
 - **环境变化不可见**：快照在启动时冻结，因此启动之后 export 的变量既不会进入解析，也不会进入 `describe`；要更换来自环境的凭据需要重启。
 - **原子但不具备崩溃持久性**——继承自 `dsh-atomic-write`；存储在启动时重新读取。
