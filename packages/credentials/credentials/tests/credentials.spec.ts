@@ -53,14 +53,10 @@ describe('the credentials seam through the memory provider', () => {
       .rejects.toThrow(/requires protection level "local-user-trust".*reported "ephemeral"/)
   })
 
-  it('fails a protection requirement for missing values and legacy provider results', async () => {
+  it('fails a protection requirement for a missing value', async () => {
     const ctx = await boot()
     await expect(ctx.credentials.resolveRequired(REF, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST))
       .rejects.toThrow(/is not configured/)
-
-    ctx.credentials.resolve = () => Promise.resolve({ value: 'legacy-secret', source: 'legacy' } as never)
-    await expect(ctx.credentials.resolveRequired(REF, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST))
-      .rejects.toThrow(/reported no valid protection metadata/)
   })
 
   it('mounts as ctx.credentials and resolves a seeded reference with its source', async () => {

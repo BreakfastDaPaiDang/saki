@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import koffi from 'koffi'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,6 +25,88 @@ vi.mock('../src/dpapi.ts', async (importOriginal) => {
 const REF = credentialRef('DSH_DPAPI_TEST')
 const OTHER = credentialRef('DSH_DPAPI_OTHER')
 const cleanups: Array<() => Promise<void>> = []
+
+type NativePtr = bigint
+
+/** Create the counterexample that classic DPAPI lets every local user decrypt. */
+function protectClassicLocalMachine(value: string): string {
+  const pbyte = koffi.pointer('uint8')
+  const pvoid = koffi.pointer('void')
+  const blob = koffi.struct('DSH_TEST_LOCAL_MACHINE_DATA_BLOB', {
+    cbData: 'uint32',
+    pbData: pbyte,
+  })
+  const crypt32 = koffi.load('crypt32.dll')
+  const kernel32 = koffi.load('kernel32.dll')
+  const protect = crypt32.func('__stdcall', 'CryptProtectData', 'int', [
+    koffi.pointer(blob), 'str16', koffi.pointer(blob), pvoid, pvoid, 'uint32', koffi.out(koffi.pointer(blob)),
+  ]) as unknown as (
+    input: { cbData: number; pbData: Buffer }, description: null, entropy: null,
+    reserved: null, prompt: null, flags: number, output: { cbData: number; pbData: NativePtr | null },
+  ) => number
+  const localFree = kernel32.func('__stdcall', 'LocalFree', pvoid, [pvoid]) as unknown as
+    (pointer: NativePtr) => NativePtr | null
+  const clear = Buffer.from(value, 'utf8')
+  const output: { cbData: number; pbData: NativePtr | null } = { cbData: 0, pbData: null }
+  try {
+    const succeeded = protect(
+      { cbData: clear.length, pbData: clear },
+      null,
+      null,
+      null,
+      null,
+      0x1 | 0x4,
+      output,
+    )
+    if (succeeded === 0 || output.pbData === null || output.pbData === 0n || output.cbData === 0) {
+      throw new Error('test could not create a machine-scoped DPAPI blob')
+    }
+    return Buffer.from(koffi.view(output.pbData, output.cbData)).toString('base64')
+  } finally {
+    clear.fill(0)
+    if (output.pbData !== null && output.pbData !== 0n) localFree(output.pbData)
+  }
+}
+
+/** Create a CNG DPAPI blob whose authenticated descriptor is `LOCAL=machine`. */
+function protectCngLocalMachine(value: string): string {
+  const pbyte = koffi.pointer('uint8')
+  const pvoid = koffi.pointer('void')
+  const ncrypt = koffi.load('ncrypt.dll')
+  const kernel32 = koffi.load('kernel32.dll')
+  const createDescriptor = ncrypt.func('__stdcall', 'NCryptCreateProtectionDescriptor', 'int32', [
+    'str16', 'uint32', koffi.out(koffi.pointer('void', 2)),
+  ]) as unknown as (rule: string, flags: number, output: [NativePtr | null]) => number
+  const protect = ncrypt.func('__stdcall', 'NCryptProtectSecret', 'int32', [
+    pvoid, 'uint32', pbyte, 'uint32', pvoid, pvoid,
+    koffi.out(koffi.pointer('uint8', 2)), koffi.out(koffi.pointer('uint32')),
+  ]) as unknown as (
+    descriptor: NativePtr, flags: number, input: Buffer, length: number,
+    allocation: null, window: null, output: [NativePtr | null], outputLength: [number],
+  ) => number
+  const closeDescriptor = ncrypt.func('__stdcall', 'NCryptCloseProtectionDescriptor', 'int32', [pvoid]) as unknown as
+    (descriptor: NativePtr) => number
+  const localFree = kernel32.func('__stdcall', 'LocalFree', pvoid, [pvoid]) as unknown as
+    (pointer: NativePtr) => NativePtr | null
+  const descriptor: [NativePtr | null] = [null]
+  const clear = Buffer.from(value, 'utf8')
+  const output: [NativePtr | null] = [null]
+  const length: [number] = [0]
+  try {
+    if (createDescriptor('LOCAL=machine', 0, descriptor) !== 0 || descriptor[0] === null || descriptor[0] === 0n) {
+      throw new Error('test could not create a machine protection descriptor')
+    }
+    if (protect(descriptor[0], 0x40, clear, clear.length, null, null, output, length) !== 0
+      || output[0] === null || output[0] === 0n || length[0] === 0) {
+      throw new Error('test could not create a CNG machine-scoped DPAPI blob')
+    }
+    return Buffer.from(koffi.view(output[0], length[0])).toString('base64')
+  } finally {
+    clear.fill(0)
+    if (output[0] !== null && output[0] !== 0n) localFree(output[0])
+    if (descriptor[0] !== null && descriptor[0] !== 0n) closeDescriptor(descriptor[0])
+  }
+}
 
 afterEach(async () => {
   dpapiHarness.protectError = undefined
@@ -79,7 +162,7 @@ describe.runIf(process.platform === 'win32')('Windows current-user DPAPI credent
       version: 1,
       records: {
         [REF]: {
-          kind: 'dpapi-current-user',
+          kind: 'dpapi-ng-local-user',
           ciphertext,
         },
       },
@@ -123,7 +206,7 @@ describe.runIf(process.platform === 'win32')('Windows current-user DPAPI credent
     const ciphertext = Buffer.from('not-a-dpapi-blob').toString('base64')
     await writeFile(path, `${JSON.stringify({
       version: 1,
-      records: { [REF]: { kind: 'dpapi-current-user', ciphertext } },
+      records: { [REF]: { kind: 'dpapi-ng-local-user', ciphertext } },
     }, null, 2)}\n`)
     const ctx = await boot(path)
 
@@ -143,6 +226,23 @@ describe.runIf(process.platform === 'win32')('Windows current-user DPAPI credent
     expect(failure?.message).toContain(`cannot decrypt "${REF}" for the current Windows user`)
     expect(failure?.message).not.toContain(ciphertext)
     expect(failure?.cause).toBeUndefined()
+  })
+
+  it('rejects real classic and CNG machine-scoped blobs even when their kind claims current user', async () => {
+    const secret = 'machine-scope-must-not-satisfy-local-user-trust'
+    for (const ciphertext of [protectClassicLocalMachine(secret), protectCngLocalMachine(secret)]) {
+      const path = await tempStore()
+      await writeFile(path, `${JSON.stringify({
+        version: 1,
+        records: { [REF]: { kind: 'dpapi-ng-local-user', ciphertext } },
+      }, null, 2)}\n`)
+      const ctx = await boot(path)
+
+      const info = await ctx.credentials.describe(REF)
+      expect(info.health).toBe('unavailable')
+      await expect(ctx.credentials.resolveRequired(REF, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST))
+        .rejects.toThrow(/cannot decrypt/)
+    }
   })
 
   it('sanitizes a protection failure without creating a record', async () => {
@@ -196,14 +296,14 @@ describe.runIf(process.platform === 'win32')('Windows current-user DPAPI credent
       JSON.stringify({ version: 2, records: {} }),
       JSON.stringify({ version: 1, records: {}, extra: true }),
       JSON.stringify({ version: 1, records: [] }),
-      JSON.stringify({ version: 1, records: { [secret]: { kind: 'dpapi-current-user', ciphertext: 'YQ==' } } }),
+      JSON.stringify({ version: 1, records: { [secret]: { kind: 'dpapi-ng-local-user', ciphertext: 'YQ==' } } }),
       JSON.stringify({ version: 1, records: { [REF]: null } }),
       JSON.stringify({ version: 1, records: { [REF]: { kind: 'dpapi-local-machine', ciphertext: 'YQ==' } } }),
-      JSON.stringify({ version: 1, records: { [REF]: { kind: 'dpapi-current-user', ciphertext: '' } } }),
-      JSON.stringify({ version: 1, records: { [REF]: { kind: 'dpapi-current-user', ciphertext: 'not base64' } } }),
+      JSON.stringify({ version: 1, records: { [REF]: { kind: 'dpapi-ng-local-user', ciphertext: '' } } }),
+      JSON.stringify({ version: 1, records: { [REF]: { kind: 'dpapi-ng-local-user', ciphertext: 'not base64' } } }),
       JSON.stringify({
         version: 1,
-        records: { [REF]: { kind: 'dpapi-current-user', ciphertext: 'YQ==', plaintext: secret } },
+        records: { [REF]: { kind: 'dpapi-ng-local-user', ciphertext: 'YQ==', plaintext: secret } },
       }),
     ]
 

@@ -1,6 +1,6 @@
 /**
- * Windows current-user DPAPI Credential Provider. The provider persists a
- * versioned JSON document containing only opaque DPAPI ciphertext records,
+ * Windows CNG DPAPI `LOCAL=user` Credential Provider. The provider persists a
+ * versioned JSON document containing only opaque DPAPI-NG ciphertext records,
  * resolves each value at its operation boundary, and never falls back to an
  * ambient, plaintext, or machine-scoped source.
  * @module @deepseek-ai/dsh-credentials-windows-dpapi
@@ -24,7 +24,7 @@ import { probeCurrentUser, protectCurrentUser, unprotectCurrentUser } from './dp
 export const WINDOWS_DPAPI_CREDENTIALS_FILENAME = '.credentials.dpapi.json'
 
 const DOCUMENT_VERSION = 1
-const RECORD_KIND = 'dpapi-current-user'
+const RECORD_KIND = 'dpapi-ng-local-user'
 const SOURCE = 'windows-dpapi-current-user'
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
 
@@ -101,7 +101,7 @@ function parseCredentialDocument(text: string, filename: string): Map<Credential
     }
     const record = rawRecord as { kind?: unknown; ciphertext?: unknown }
     if (record.kind !== RECORD_KIND) {
-      throw new Error(`credentials-windows-dpapi: record "${ref}" in ${filename} is not current-user DPAPI`)
+      throw new Error(`credentials-windows-dpapi: record "${ref}" in ${filename} is not CNG DPAPI LOCAL=user`)
     }
     if (typeof record.ciphertext !== 'string' || record.ciphertext.length === 0
       || !BASE64_PATTERN.test(record.ciphertext)
@@ -133,7 +133,7 @@ async function readCredentialDocument(filename: string): Promise<Map<CredentialR
   return parseCredentialDocument(text, filename)
 }
 
-/** Windows current-user DPAPI implementation of `ctx.credentials`. */
+/** Windows CNG DPAPI `LOCAL=user` implementation of `ctx.credentials`. */
 export class WindowsDpapiCredentialProvider extends CredentialProvider {
   static Config: z<Config> = z.object({
     path: z.string(),

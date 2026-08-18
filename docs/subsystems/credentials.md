@@ -29,7 +29,7 @@ type CredentialHealth = 'available' | 'missing' | 'unavailable'
 
 ## Resolution
 
-`resolve(ref)` returns the value with the provider-defined source layer and protection level that supplied it, or `undefined` while unconfigured. Consumers re-resolve at each operation and never cache across operations — that per-operation read is the hot-update mechanism. `resolveRequired(ref, level)` enforces one exact protection identifier on the same result and fails closed for a missing value, legacy provider without valid metadata, or non-matching source before the caller receives the value.
+`resolve(ref)` returns the value with the provider-defined source layer and protection level that supplied it, or `undefined` while unconfigured. Consumers re-resolve at each operation and never cache across operations — that per-operation read is the hot-update mechanism. The typed Provider interface requires the protection field; parsers validate it when constructing results from untyped input. `resolveRequired(ref, level)` enforces one exact protection identifier on the same result and fails closed for a missing value or non-matching source before the caller receives the value.
 
 ```ts type-equiv
 /** One resolved credential value and the source layer that supplied it. */
@@ -100,9 +100,9 @@ abstract resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined>
 
 /**
  * Resolve one reference and require an exact provider-defined protection
- * level on the same result. Missing values, missing metadata from an older
- * provider, and every non-matching level fail before the caller receives the
- * value. Protection identifiers are descriptive, not an ordered scale.
+ * level on the same typed result. Missing values and every non-matching level
+ * fail before the caller receives the value. Protection identifiers are
+ * descriptive, not an ordered scale.
  * @param ref - the reference to resolve.
  * @param required - the exact protection level the consumer accepts.
  * @returns the resolved credential after its metadata satisfies the requirement.

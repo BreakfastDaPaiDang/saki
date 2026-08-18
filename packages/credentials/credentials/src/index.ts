@@ -104,9 +104,9 @@ export abstract class CredentialProvider extends Service {
 
   /**
    * Resolve one reference and require an exact provider-defined protection
-   * level on the same result. Missing values, missing metadata from an older
-   * provider, and every non-matching level fail before the caller receives the
-   * value. Protection identifiers are descriptive, not an ordered scale.
+   * level on the same typed result. Missing values and every non-matching level
+   * fail before the caller receives the value. Protection identifiers are
+   * descriptive, not an ordered scale.
    * @param ref - the reference to resolve.
    * @param required - the exact protection level the consumer accepts.
    * @returns the resolved credential after its metadata satisfies the requirement.
@@ -116,13 +116,9 @@ export abstract class CredentialProvider extends Service {
     if (resolved === undefined) {
       throw new Error(`credential "${ref}" requires protection level "${required}" but is not configured`)
     }
-    const actual: unknown = resolved.protectionLevel
-    if (typeof actual !== 'string' || !PROTECTION_LEVEL_PATTERN.test(actual)) {
-      throw new Error(`credential "${ref}" requires protection level "${required}" but its source reported no valid protection metadata`)
-    }
-    if (actual !== required) {
+    if (resolved.protectionLevel !== required) {
       throw new Error(
-        `credential "${ref}" requires protection level "${required}" but source "${resolved.source}" reported "${actual}"`,
+        `credential "${ref}" requires protection level "${required}" but source "${resolved.source}" reported "${resolved.protectionLevel}"`,
       )
     }
     return resolved

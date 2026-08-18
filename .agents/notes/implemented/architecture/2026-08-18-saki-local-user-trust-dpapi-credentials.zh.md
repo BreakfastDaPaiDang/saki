@@ -12,17 +12,19 @@ Saki 的无人值守账号功能需要跨 Host 重启保留 refresh token 与 pr
 
 [ADR 0011](../../../../docs/adr/0011-dpapi-local-user-trust-credentials.md) 已在通用 [`@deepseek-ai/dsh-credentials-windows-dpapi`](../../../../packages/credentials/credentials-windows-dpapi/README.md) Service Provider 和共享凭据 Service Definition 中实现。该包保持独立于 Provider Account Profile 与 Saki 包。Saki 单独拥有把特定 reference 分类为高价值并要求其保护等级的策略。
 
-`ResolvedCredential` 与安全的 `CredentialInfo` 观测都携带由 Provider 定义的 `protectionLevel`。这些标识符描述恢复信任模型，不构成有序强度等级。`CredentialProvider.resolveRequired(ref, required)` 只解析一次，并比较该结果上的确切等级；值缺失、旧 Provider 结果没有有效元数据，或等级不同，都会在调用方获得值之前失败。明文 environment、Project `.env`、用户 `.env` 和 `.credentials.yaml` 来源明确报告 `plaintext`，不会继承安全默认值。
+`ResolvedCredential` 与安全的 `CredentialInfo` 观测都携带由 Provider 定义的 `protectionLevel`。这些标识符描述恢复信任模型，不构成有序强度等级。同一进程内的类型化接口要求每个 Provider 构造该字段；parser 和其他无类型输入则在构造 Provider 结果前完成校验。`CredentialProvider.resolveRequired(ref, required)` 只解析一次，并比较该结果上的确切等级；值缺失或等级不同时，都会在调用方获得值之前失败。明文 environment、Project `.env`、用户 `.env` 和 `.credentials.yaml` 来源明确报告 `plaintext`，不会继承安全默认值。
 
-Windows Provider 报告 source `windows-dpapi-current-user` 和保护等级 `local-user-trust`。它的 version 1 文档只包含 `version` 与 `records`；每条记录只包含 kind `dpapi-current-user` 和 canonical-base64 密文。解析会拒绝未知字段、无效 reference、不支持的版本、空或非 canonical 密文，以及所有其他记录 kind。Provider 不提供 ambient、明文或机器范围回退。
+Windows Provider 报告 source `windows-dpapi-current-user` 和保护等级 `local-user-trust`。它的 version 1 文档只包含 `version` 与 `records`；每条记录只包含 kind `dpapi-ng-local-user` 和 canonical-base64 密文。解析会拒绝未知字段、无效 reference、不支持的版本、空或非 canonical 密文，以及所有其他记录 kind。Provider 不提供 ambient、明文、经典 DPAPI 或机器作用域回退。
 
-原生适配器使用 `CRYPTPROTECT_UI_FORBIDDEN`、null description、null optional entropy、null reserved data 和 null prompt structure 调用 `CryptProtectData` 与 `CryptUnprotectData`。它绝不传递 `CRYPTPROTECT_LOCAL_MACHINE`，因此 Windows 的当前用户范围保持生效。DPAPI 拥有的输出在复制后通过 `LocalFree` 释放；临时 byte buffer 会被清零，同时包文档明确说明 JavaScript string 无法可靠清零。
+经典 `CryptUnprotectData` 不返回保护 blob 时所用的作用域，因此可写的记录 kind 无法证明当前用户保护。原生适配器改用 CNG DPAPI。保护操作创建 `LOCAL=user` 描述符并调用 `NCryptProtectSecret`；解密操作通过 `NCryptUnprotectSecret` 取得 blob 携带的描述符，再通过 `NCryptGetProtectionDescriptorInfo` 读取完整规则，并在把明文复制到 JavaScript 前要求该字符串严格等于 `LOCAL=user`。经典 blob、`LOCAL=machine`、缺失描述符和未知规则都会失败关闭。
+
+每个描述符句柄都通过 `NCryptCloseProtectionDescriptor` 关闭。Windows 拥有的描述符字符串与数据分配通过 `LocalFree` 释放；无论原生调用成功或失败，每个返回的数据分配都会在释放前被覆写，包括非 null 的零长度结果。临时 JavaScript 字节缓冲区会被清零，同时包文档明确说明 JavaScript 字符串无法可靠清零。
 
 每项操作都会重新读取并验证 Host-local 文档。写入在一个 Provider 实例内串行化，在跨进程 `dsh-atomic-write` 锁内重新读取，对记录排序，并通过原子操作提交。dispose 会等待活动写入，并拒绝尚未开始的排队写入或已捕获 service 的写入。对不存在 reference 执行 `unset` 不会发出更新事件。
 
-`describe(ref)` 返回 reference、配置状态、source、保护等级、可写性、健康和观测时间，不返回明文或密文。复制、损坏或范围不同的记录仍是 configured，但报告 `unavailable`。Host API 通过显式允许列表映射这些字段；Provider 对象上的额外字段不会跨越 wire。原生层与 Provider 的失败会丢弃任意底层异常，因此 diagnostic 与 error cause 无法保留凭据输入。
+`describe(ref)` 返回 reference、配置状态、source、保护等级、可写性、健康和观测时间，不返回明文或密文。复制、损坏、采用经典 DPAPI 或作用域不同的记录仍是 configured，但报告 `unavailable`。Host API 通过显式允许列表映射这些字段；Provider 对象上的额外字段不会进入读取响应。具名的只写 `credentials.set` 请求会把明文传给 Provider，但绝不会回显。原生层与 Provider 的失败会丢弃任意底层异常，因此 diagnostic 与 error cause 无法保留凭据输入。
 
-只有有特权的 Host 消费方能获得 `ResolvedCredential.value`。该 Provider 不注册包含凭据材料的 Agent tool、Projection、Session event、export record 或模型上下文。其密文文档属于 Host-local data，按约定排除在可迁移 Installation Export 和 Host 替换 backup 之外。`local-user-trust` 这一名称刻意保留一项负面保证：任何有意以相同 Windows 用户身份运行的进程都可能对复制的 blob 调用 DPAPI。
+只有有特权的 Host 消费方能获得 `ResolvedCredential.value`。该 Provider 不注册包含凭据材料的 Agent tool、Projection、Session event、export record 或模型上下文。其密文文档属于 Host-local data。通用 package 不实现进程崩溃收集、可携带 Installation Export 或 Host 替换 backup；Saki composition 拥有这些场景的排除规则。`local-user-trust` 这一名称刻意保留一项负面保证：任何有意以相同 Windows 用户身份运行的进程都可能对复制的 blob 调用 DPAPI。
 
 ## Deferred Saki composition
 
@@ -44,7 +46,7 @@ Windows Provider 报告 source `windows-dpapi-current-user` 和保护等级 `loc
 
 ## Verification
 
-共享凭据测试固定显式保护元数据和快速失败的确切等级解析，其中包括缺失值与旧版元数据。Windows integration 测试使用真实的当前用户 DPAPI API 验证静态密文和跨重启往返；确定性适配器测试覆盖原生失败、清理、无效 UTF-8、空明文和 diagnostic 脱敏。严格文档测试拒绝机器范围与格式错误记录。Host API 测试向 Provider 观测注入额外明文与密文字段，并证明两者都不会进入响应。受影响的凭据包在 Windows 上保持 statement、branch、function 与 line 全覆盖。
+共享凭据测试固定显式保护元数据，以及缺失值和等级不同时失败关闭的精确解析。确定性原生适配器测试固定描述符校验、句柄与分配清理、释放前覆写顺序、零长度输出、原生失败、无效 UTF-8、空明文和 diagnostic 脱敏。真实 Windows 测试固定 CNG DPAPI `LOCAL=user` 静态密文和跨重启往返，再给真正的 CNG `LOCAL=machine` 与经典 LocalMachine blob 换上受支持的记录 kind，并证明两者仍保持不可用且无法解析。真实 Loader composition 从源码与构建 package 运行；无密钥可运行快照固定 Host 安全 View 的响应字段。严格文档测试拒绝格式错误的记录和不支持的 kind。Host API 测试向 Provider 观测注入额外明文与密文字段，并证明两者都不会进入读取响应。受影响的凭据 package 在 Windows 上保持 statement、branch、function 与 line 全覆盖。
 
 ## Consequences
 

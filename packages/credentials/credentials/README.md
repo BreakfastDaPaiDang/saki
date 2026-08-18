@@ -10,7 +10,7 @@ Credential Service Definition (`ctx.credentials`). One doctrine, four consequenc
 
 **An empty stored value is absent.** Everywhere: `resolve` skips it, `describe` reports it unconfigured. A blank can never masquerade as a configured secret.
 
-**Every source names its protection model.** `resolve()` reports the protection level of the exact value it returned, while `describe()` reports the same safe metadata with availability and observation time. `resolveRequired()` compares an exact provider-defined identifier and rejects missing, legacy, or non-matching metadata before the caller receives the value. Protection levels are descriptive, not an ordered strength scale.
+**Every source names its protection model.** `resolve()` reports the protection level of the exact value it returned, while `describe()` reports the same safe metadata with availability and observation time. The typed Provider interface requires that field; parsers validate it when constructing results from untyped input. `resolveRequired()` compares one exact provider-defined identifier and rejects a missing value or different level before the caller receives the value. Protection levels are descriptive, not an ordered strength scale.
 
 ## Surface
 

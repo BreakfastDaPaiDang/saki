@@ -515,7 +515,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async resolveRequired(ref: CredentialRef, required: CredentialProtectionLevel): Promise<ResolvedCredential>',
-        description: 'Resolve one reference and require an exact provider-defined protection level on the same result. Missing values, missing metadata from an older provider, and every non-matching level fail before the caller receives the value. Protection identifiers are descriptive, not an ordered scale.',
+        description: 'Resolve one reference and require an exact provider-defined protection level on the same typed result. Missing values and every non-matching level fail before the caller receives the value. Protection identifiers are descriptive, not an ordered scale.',
         parameters: [{ name: 'ref', description: 'the reference to resolve.' }, { name: 'required', description: 'the exact protection level the consumer accepts.' }],
         returns: 'the resolved credential after its metadata satisfies the requirement.',
       },
