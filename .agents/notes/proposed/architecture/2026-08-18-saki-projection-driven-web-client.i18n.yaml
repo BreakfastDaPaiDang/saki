@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-projection-driven-web-client.md
+2026-08-18-saki-projection-driven-web-client.md: b9483e5f6eebefa5a13c358d6055103581494ef6
+2026-08-18-saki-projection-driven-web-client.zh.md: 9529c2e072850db051674e64340b4551048537d7

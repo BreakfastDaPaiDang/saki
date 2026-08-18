@@ -26,9 +26,13 @@ Work Management defines how Saki organizes intended work, delivery progress, mil
 
 **Blockage**: A condition preventing progress without replacing the Work Item Status. _Avoid_: Blocked as a Work Item Status
 
+**Outcome Evidence**: A located observation or artifact used to establish whether a Work Item's acceptance conditions are satisfied, such as a test result, commit, pull request, CI result, release, deployment state, log, or business metric. _Avoid_: Agent success message
+
 **Triage Role**: The routing decision that identifies the next human or Agent action before a Work Item is claimed.
 
 **Board**: A view of Work Items grouped by Work Item Status.
+
+**GitHub Sync Checkpoint**: The durable confirmation that one complete GitHub Project and Repository scan was atomically published for a specific mapping revision. Pagination cursors and optimistic client state are not checkpoints. _Avoid_: GraphQL cursor, webhook offset
 
 **Milestone**: A named delivery target that groups Work Items and measures scope completion. A Milestone describes planned delivery, not shipped code. _Avoid_: Release, version
 

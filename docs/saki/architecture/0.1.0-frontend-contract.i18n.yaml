@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/saki/architecture/0.1.0-frontend-contract.md
+0.1.0-frontend-contract.md: ddb4ead70e98cfc575ebbb5073038461c142e155
+0.1.0-frontend-contract.zh.md: 5d415a8065a4b5cc351093190042cfced8c2db43

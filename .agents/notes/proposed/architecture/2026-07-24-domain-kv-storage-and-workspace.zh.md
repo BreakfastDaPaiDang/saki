@@ -158,7 +158,7 @@ export interface KvTable<K extends string, V> {
 - **一级 mapping**：key → 记录，不做嵌套表；层级需求用复合 key 或值内字段。两后端因此同构（JSON object 一层 ↔ SQLite 一行）。
 - **记录是纯数据**：可直接 JSON 序列化的不可变 POJO；`get`/`entries` 返回值不得原地改（TypeScript readonly 投影，不做运行时冻结）。带行为的领域对象属于消费方包。
 - **写串行**：域内一条 promise 链，`put`/`delete`/`update`/`global.set` 全排队；`update` 的 fn 在链上执行，并发不交错。不做 active-record（取出可变对象自动落盘——落盘时机不可控，与整域原子覆写冲突）。
-- **版本 fail loud**：盘上版本与 spec 不符直接报错，不迁移不重建（数据不可再生，pre-release 拒绝旧格式）。
+- **版本默认 fail loud**：磁盘版本与 spec 不同时直接报错，除非 owning domain 通过 [Saki migration proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.md)登记完整可选向前序列。没有该序列时不迁移也不重建。
 - **变更事件**：每次写落盘 resolve 后 emit `domain/changed`（`@mode emit`），逐条发、不带旧值（对齐仓库"新快照 + 操作判别"惯例，范本 `goal/changed`）；payload `DomainChanged` 是 put/deleted 判别联合——域名 + 表名 + key（global 变更两者为 `''`）+ operation，put 支带新快照 value、deleted 支无 value（`packages/storage/storage-domain/src/events.ts`）。此为下期 RPC 推帧的事件源。错误词汇 `DomainError`，码表：`already-open` / `facet-unsupported` / `invalid-record`（带 `{ table, key }`）/ `missing-key` / `closed`。
 
 ### Future work：session 侧删除（设计定案，本期不实施）
@@ -291,7 +291,7 @@ export class WorkspaceRegistry extends Service {
 | `log` facet 与 session 后端迁移 | 本期后任意期启动 | 介质操作下沉（复用审计表即施工清单） | facet 结构已留位；两后端介质代码本期即按可下沉形状组织 |
 | 多进程并发写保护 | 两 host 进程同写一介质 | JSON 后端文件锁；SQLite WAL 天然多进程 | 写全经 domain 单点串行，加锁只动后端 |
 | 跨进程变更观测 | GUI 断线重连感知 | revision 模式（抄 session-persistence） | 进程内已有 `domain/changed` |
-| 数据迁移 | 首个 tagged release 后模型再变 | 版本号驱动逐域迁移 | 版本号自第一天入介质 |
+| 数据迁移 | 持久 consumer 承诺跨版本兼容 | 通过 [Saki migration proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.md)实现可选、版本驱动的逐 domain migration | 版本号从第一天进入 medium；没有完整 chain 的 domain 仍然 fail loud |
 | 大表性能 | 千级记录域挂 json | `routes` 改指 sqlite，数据手工导一次 | 路由即配置，消费方零改动 |
 | 多段 key | 两段 key 消费方出现（每 workspace 每 session 维度数据） | key 泛型换 tuple、SQLite 复合主键、JSON 嵌套层 | 一级表 = 段数 1 特例；不做任意深度嵌套；不拼字符串 key |
 | scope 维度 | "每 workspace 一份"的域出现且复合 key 表达不动 | DomainSpec 加 scope + 文件名 scope 段（encodeSegment） | 名字字符集已收紧，文件名不冲突 |
