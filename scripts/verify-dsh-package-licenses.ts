@@ -1,17 +1,17 @@
 /**
- * Enforce the MIT license declaration for repository-owned DSH npm packages.
+ * Enforce the MIT license declaration for repository-owned product packages.
  * @module scripts/verify-dsh-package-licenses
  */
 
 import { globSync, readFileSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
+import { classifyProductPackage } from './repository-package-policy.ts'
 
 const ROOT = resolve(import.meta.dirname, '..')
-const DSH_PACKAGE_NAME = /^@deepseek-ai\/dsh(?:-|$)/
 
-/** Result of checking every DSH package reachable through the root workspace list. */
+/** Result of checking every DSH and Saki package reachable through the root workspace list. */
 export interface DshPackageLicenseReport {
-  /** Number of DSH package manifests checked. */
+  /** Number of product package manifests checked. */
   packageCount: number
   /** Repository-relative diagnostics for non-MIT declarations. */
   failures: string[]
@@ -50,7 +50,7 @@ function printable(value: unknown): string {
 }
 
 /**
- * Check every DSH npm package declared by the repository workspace.
+ * Check every DSH and Saki npm package declared by the repository workspace.
  * @param root - absolute repository root containing the workspace package.json.
  * @returns the checked package count and every non-MIT declaration.
  */
@@ -61,7 +61,7 @@ export function inspectDshPackageLicenses(root: string): DshPackageLicenseReport
   for (const file of workspaceManifestPaths(root)) {
     const manifest = readManifest(root, file)
     const name = manifest.name
-    if (typeof name !== 'string' || !DSH_PACKAGE_NAME.test(name)) continue
+    if (typeof name !== 'string' || classifyProductPackage(name) === undefined) continue
 
     packageCount++
     if (manifest.license !== 'MIT') {
@@ -78,12 +78,12 @@ export function inspectDshPackageLicenses(root: string): DshPackageLicenseReport
 if (process.argv[1] && import.meta.filename === resolve(process.argv[1])) {
   const report = inspectDshPackageLicenses(ROOT)
   if (report.failures.length > 0) {
-    process.stderr.write('verify-dsh-package-licenses: non-MIT DSH package declarations found:\n')
+    process.stderr.write('verify-dsh-package-licenses: non-MIT product package declarations found:\n')
     for (const failure of report.failures) process.stderr.write(`  ${failure}\n`)
     process.exitCode = 1
   } else {
     process.stdout.write(
-      `verify-dsh-package-licenses: ${String(report.packageCount)} DSH package(s) checked; all declare MIT.\n`,
+      `verify-dsh-package-licenses: ${String(report.packageCount)} product package(s) checked; all declare MIT.\n`,
     )
   }
 }

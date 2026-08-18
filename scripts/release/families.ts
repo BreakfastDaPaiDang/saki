@@ -12,6 +12,7 @@
 import { globSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { validateTarballPayload } from '../publication-payload.ts'
+import { isPrivateSakiPackage } from '../repository-package-policy.ts'
 
 /**
  * Dependency sections a consumer must publish after, because npm resolves them
@@ -127,6 +128,7 @@ export abstract class ReleaseFamily {
       const manifest = readManifest(resolve(root, manifestPath))
       const name = requireString(manifest, 'name', normalized)
       const version = requireString(manifest, 'version', normalized)
+      if (!this.includesManifest(name)) continue
       if (name === WORKSPACE_ROOT_PACKAGE) throw new Error(`${normalized} selected the workspace root`)
       if (!name.startsWith('@deepseek-ai/')) throw new Error(`${normalized} must name an @deepseek-ai package`)
       if (seen.has(name)) throw new Error(`${name} appears twice in release family ${this.id}`)
@@ -139,6 +141,15 @@ export abstract class ReleaseFamily {
       })
     }
     return members
+  }
+
+  /**
+   * Whether a manifest selected by the family's broad filesystem patterns belongs to the family.
+   * @param _name - package name from the selected manifest.
+   * @returns true unless a family narrows its filesystem selection by package namespace.
+   */
+  protected includesManifest(_name: string): boolean {
+    return true
   }
 
   /**
@@ -310,6 +321,11 @@ class DshFamily extends ReleaseFamily {
   readonly id = 'dsh'
   readonly patterns = ['packages/*/*/package.json', 'apps/*/package.json'] as const
   readonly tagPrefix = 'dsh-v'
+
+  /** Keep private Saki packages out of the published DSH sequence. */
+  protected override includesManifest(name: string): boolean {
+    return !isPrivateSakiPackage(name)
+  }
 
   /**
    * Require one version across the family, the way a single tag can name it.

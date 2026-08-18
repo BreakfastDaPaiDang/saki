@@ -225,6 +225,9 @@
       "@deepseek-ai/dsh-sdk-client": ["./packages/sdk/client/src"],
       "@deepseek-ai/dsh-sdk-protocol": ["./packages/sdk/protocol/src"],
       "@deepseek-ai/dsh-sdk-jsonrpc-server": ["./packages/sdk/server/src"],
+      "@breakfastdapaidang/saki-*/invariant": ["./packages/saki/*/src/invariant.ts"],
+      "@breakfastdapaidang/saki-*/bin": ["./packages/saki/*/src/bin.ts"],
+      "@breakfastdapaidang/saki-*": ["./packages/saki/*/src"],
       "@deepseek-ai/dsh-*": [
         "./packages/core/*/src",
         "./packages/prompt/*/src",

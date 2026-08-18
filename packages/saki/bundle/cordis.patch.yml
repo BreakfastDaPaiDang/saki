@@ -1,0 +1,3 @@
+- insert:
+    - id: saki-readiness
+      name: '@breakfastdapaidang/saki-bundle'

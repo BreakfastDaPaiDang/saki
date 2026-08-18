@@ -23,6 +23,7 @@ interface JsExpr {
 interface PackageManifest {
   name?: string
   dependencies?: Record<string, string>
+  dsh?: { bundle?: { patch?: string } }
 }
 
 interface PluginReference {
@@ -272,9 +273,9 @@ function validateAppResolution(): string[] {
     .map(file => `apps/cli/config/${file}`))
   const appReferences = pluginReferences.filter(reference => shipped.has(reference.file) || appOverlayFiles.has(reference.file))
   violations.push(...missingPluginDependencies(appReferences, appDependencies, 'apps/cli/package.json or a bundle manifest'))
-  // Each bundle's patch rows must resolve from that bundle's own dependencies:
+  // Each DSH or private Saki bundle's patch rows must resolve from that bundle's own dependencies:
   // per-layer resolution anchors on the bundle package directory.
-  for (const manifestPath of globSync('packages/bundle/*/package.json', { cwd: root })) {
+  for (const manifestPath of bundleManifestPaths()) {
     const bundleDir = manifestPath.replace(/\/package\.json$/, '')
     const manifest = readManifest(manifestPath)
     const references = pluginReferences.filter(reference => reference.file.startsWith(`${bundleDir}/`))
@@ -286,6 +287,13 @@ function validateAppResolution(): string[] {
     ))
   }
   return violations
+}
+
+/** Every workspace manifest that declares a bundle patch layer. */
+function bundleManifestPaths(): string[] {
+  return globSync('packages/*/*/package.json', { cwd: root })
+    .filter(manifestPath => readManifest(manifestPath).dsh?.bundle?.patch !== undefined)
+    .sort()
 }
 
 /**

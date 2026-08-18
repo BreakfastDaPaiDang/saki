@@ -27,13 +27,17 @@ function createWorkspace(): string {
   return root
 }
 
-describe('DSH package license gate', () => {
-  it('checks root, unhyphenated CLI, and dsh-prefixed package names while ignoring other families', () => {
+describe('repository product package license gate', () => {
+  it('checks DSH and private Saki package names while ignoring other families', () => {
     const root = createWorkspace()
     writeManifest(root, 'apps/cli/package.json', { name: '@deepseek-ai/dsh', license: 'MIT' })
     writeManifest(root, 'packages/core/agent/package.json', {
       name: '@deepseek-ai/dsh-agent',
       license: 'BSD-3-Clause',
+    })
+    writeManifest(root, 'packages/saki/bundle/package.json', {
+      name: '@breakfastdapaidang/saki-bundle',
+      license: 'Apache-2.0',
     })
     writeManifest(root, 'vendor/cordis/package.json', {
       name: '@deepseek-ai/cordis',
@@ -41,9 +45,10 @@ describe('DSH package license gate', () => {
     })
 
     expect(inspectDshPackageLicenses(root)).toEqual({
-      packageCount: 3,
+      packageCount: 4,
       failures: [
         'packages/core/agent/package.json: @deepseek-ai/dsh-agent must declare "license": "MIT"; found "BSD-3-Clause".',
+        'packages/saki/bundle/package.json: @breakfastdapaidang/saki-bundle must declare "license": "MIT"; found "Apache-2.0".',
       ],
     })
   })
