@@ -475,7 +475,7 @@ index 41749a9..3a70dcf 100644
 -- question 1
 -- question 2
 -```
-+Stop before mutation when a capability, command, authentication, permission, or role label is missing, and state the corrective action. Use `-R BreakfastDaPaiDang/saki` on every `gh` command.
++Stop before mutation when a capability, command, authentication, permission, or role label is missing, and state the corrective action. Run non-repository commands such as `gh auth status` without `-R`; pass `-R BreakfastDaPaiDang/saki` to every repository-scoped `gh` command.
 
 -Capture everything resolved during grilling under "established so far" so the work isn't lost. Questions must be specific and actionable, not "please provide more info".
 +## Process

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/development-skill-pack.md
-development-skill-pack.md: 036c00e44bb85fda90f8622e2a5a731763a35031
-development-skill-pack.zh.md: 2114174adf8191e3c5cff2fbed274c497fe7aa0d
+development-skill-pack.md: bb7141eccb49073ba52584264997430f805fce65
+development-skill-pack.zh.md: 62949a485cb8dd0a2664c47df7554bae3da47f32

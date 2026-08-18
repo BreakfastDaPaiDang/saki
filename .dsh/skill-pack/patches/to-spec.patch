@@ -48,7 +48,7 @@ index 54dbc4b..b6b4503 100644
 +5. Read `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`.
 
 -Check with the user that these seams match their expectations.
-+If any check fails, stop before mutation and report the missing capability, command, authentication, repository permission, or label. Never publish a partial specification. Every `gh` command for this repository must include `-R BreakfastDaPaiDang/saki`.
++If any check fails, stop before mutation and report the missing capability, command, authentication, repository permission, or label. Never publish a partial specification. Run non-repository commands such as `gh auth status` without `-R`; every repository-scoped `gh` command must include `-R BreakfastDaPaiDang/saki`.
 
 -3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
 +## Specification

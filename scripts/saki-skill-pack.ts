@@ -4,8 +4,8 @@
  */
 
 import { createHash } from 'node:crypto'
-import { lstat, readFile, readdir } from 'node:fs/promises'
-import { dirname, posix, resolve } from 'node:path'
+import { cp, lstat, mkdtemp, readFile, readdir, rename, rm } from 'node:fs/promises'
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 import { load } from 'js-yaml'
 
 /** Skill names frozen for the first Saki Development Skill Pack. */
@@ -96,6 +96,12 @@ export interface SkillPackUpdateArgs {
   write: boolean
 }
 
+/** Filesystem operation boundary for publishing the candidate directory. */
+export interface SkillPackPublishOptions {
+  /** Rename one directory without crossing a filesystem. */
+  rename?: (from: string, to: string) => Promise<void>
+}
+
 /**
  * Parse updater arguments without accepting a moving source ref.
  * @param args - CLI arguments after the script name.
@@ -137,6 +143,24 @@ function requiredString(record: Record<string, unknown>, key: string, location: 
   return value
 }
 
+function relativePath(record: Record<string, unknown>, key: string, location: string): string {
+  const value = requiredString(record, key, location)
+  const normalized = posix.normalize(value)
+  if (
+    value.includes('\\')
+    || value.includes('\0')
+    || /^[A-Za-z]:/.test(value)
+    || normalized !== value
+    || normalized === '.'
+    || normalized === '..'
+    || normalized.startsWith('../')
+    || normalized.startsWith('/')
+  ) {
+    throw new Error(`${location}.${key} must be a normalized repository-relative path`)
+  }
+  return value
+}
+
 function stringArray(record: Record<string, unknown>, key: string, location: string): string[] {
   const value = record[key]
   if (!Array.isArray(value)) throw new Error(`${location}.${key} must be a string array`)
@@ -152,7 +176,7 @@ function stringArray(record: Record<string, unknown>, key: string, location: str
 function parsePinnedFile(value: unknown, location: string): PinnedFile {
   const record = asRecord(value, location)
   return {
-    path: requiredString(record, 'path', location),
+    path: relativePath(record, 'path', location),
     sha256: requiredString(record, 'sha256', location),
   }
 }
@@ -177,21 +201,21 @@ function parseManifest(text: string): SkillPackManifest {
     return {
       name: requiredString(record, 'name', location),
       category: requiredString(record, 'category', location),
-      upstreamDirectory: requiredString(record, 'upstreamDirectory', location),
+      upstreamDirectory: relativePath(record, 'upstreamDirectory', location),
       sourceFiles: record.sourceFiles.map((file, fileIndex) => {
         const fileLocation = `${location}.sourceFiles[${String(fileIndex)}]`
         const source = asRecord(file, fileLocation)
         return {
-          path: requiredString(source, 'path', fileLocation),
+          path: relativePath(source, 'path', fileLocation),
           blob: requiredString(source, 'blob', fileLocation),
-          target: requiredString(source, 'target', fileLocation),
+          target: relativePath(source, 'target', fileLocation),
         }
       }),
       ignoredUpstreamFiles: record.ignoredUpstreamFiles.map((file, fileIndex) => {
         const fileLocation = `${location}.ignoredUpstreamFiles[${String(fileIndex)}]`
         const ignored = asRecord(file, fileLocation)
         return {
-          path: requiredString(ignored, 'path', fileLocation),
+          path: relativePath(ignored, 'path', fileLocation),
           blob: requiredString(ignored, 'blob', fileLocation),
           reason: requiredString(ignored, 'reason', fileLocation),
         }
@@ -216,9 +240,9 @@ function parseManifest(text: string): SkillPackManifest {
     },
     license: {
       spdx: requiredString(license, 'spdx', 'manifest.license'),
-      sourcePath: requiredString(license, 'sourcePath', 'manifest.license'),
+      sourcePath: relativePath(license, 'sourcePath', 'manifest.license'),
       blob: requiredString(license, 'blob', 'manifest.license'),
-      vendoredPath: requiredString(license, 'vendoredPath', 'manifest.license'),
+      vendoredPath: relativePath(license, 'vendoredPath', 'manifest.license'),
       sha256: requiredString(license, 'sha256', 'manifest.license'),
     },
     skills,
@@ -252,17 +276,62 @@ export function skillPackGitBlobHash(content: Buffer): string {
   return createHash('sha1').update(`blob ${String(content.byteLength)}\0`).update(content).digest('hex')
 }
 
+/**
+ * Materialize one upstream commit in an adapted skill's Saki metadata.
+ * @param text - complete adapted `SKILL.md` text after its reviewed patch is applied.
+ * @param commit - full upstream commit represented by the candidate pack.
+ * @param path - repository-relative path used in diagnostics.
+ * @returns the skill text with its single pinned commit updated.
+ */
+export function pinSkillMetadataCommit(text: string, commit: string, path: string): string {
+  if (!FULL_COMMIT.test(commit)) throw new Error(`${path}: pinned metadata commit must be a full 40-character commit`)
+  const lines = text.split('\n')
+  const frontmatterEnd = lines.indexOf('---', 1)
+  if (lines[0] !== '---' || frontmatterEnd < 0) throw new Error(`${path}: SKILL.md frontmatter is not closed`)
+  const matches: number[] = []
+  for (let index = 1; index < frontmatterEnd; index += 1) {
+    if (/^ {4}commit: [0-9a-f]{40}\r?$/.test(lines[index] ?? '')) matches.push(index)
+  }
+  if (matches.length !== 1) throw new Error(`${path}: expected exactly one metadata.saki.commit field`)
+  const index = matches[0] as number
+  const carriageReturn = lines[index]?.endsWith('\r') === true ? '\r' : ''
+  lines[index] = `    commit: ${commit}${carriageReturn}`
+  return lines.join('\n')
+}
+
 function repositoryPath(root: string, relativePath: string): string {
   const normalized = posix.normalize(relativePath.replaceAll('\\', '/'))
   if (normalized.startsWith('../') || normalized.startsWith('/') || normalized === '..') {
     throw new Error(`${relativePath}: path escapes repository`)
   }
-  return resolve(root, ...normalized.split('/'))
+  const repositoryRoot = resolve(root)
+  const target = resolve(repositoryRoot, ...normalized.split('/'))
+  const relationship = relative(repositoryRoot, target)
+  if (relationship === '..' || relationship.startsWith(`..${sep}`) || isAbsolute(relationship)) {
+    throw new Error(`${relativePath}: path escapes repository`)
+  }
+  return target
 }
 
 async function inventory(root: string, relativeRoot: string, violations: string[]): Promise<string[]> {
   const absoluteRoot = repositoryPath(root, relativeRoot)
   const files: string[] = []
+  let rootStat
+  try {
+    rootStat = await lstat(absoluteRoot)
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return files
+    throw error
+  }
+  if (rootStat.isSymbolicLink()) {
+    violations.push(`${relativeRoot}: symbolic links are forbidden`)
+    return files
+  }
+  if (!rootStat.isDirectory()) {
+    violations.push(`${relativeRoot}: tracked root must be a directory`)
+    return files
+  }
   let entries
   try {
     entries = await readdir(absoluteRoot, { withFileTypes: true })
@@ -458,4 +527,101 @@ export async function verifySakiSkillPack(root: string): Promise<string[]> {
   }
 
   return [...new Set(violations)].sort()
+}
+
+/**
+ * Validate and publish a complete candidate pack as one update transaction.
+ * @param root - repository root whose current pack is replaced.
+ * @param candidateRoot - isolated root containing the candidate skill and provenance trees.
+ * @param options - filesystem operation used to publish and roll back the directory transaction.
+ * @returns resolution after the candidate is published and temporary state is removed.
+ */
+export async function publishSakiSkillPackCandidate(
+  root: string,
+  candidateRoot: string,
+  options: SkillPackPublishOptions = {},
+): Promise<void> {
+  const currentViolations = await verifySakiSkillPack(root)
+  if (currentViolations.length > 0) {
+    throw new Error(`current skill pack is invalid:\n${currentViolations.map(item => `- ${item}`).join('\n')}`)
+  }
+  const violations = await verifySakiSkillPack(candidateRoot)
+  if (violations.length > 0) {
+    throw new Error(`candidate skill pack is invalid:\n${violations.map(item => `- ${item}`).join('\n')}`)
+  }
+
+  const repositoryRoot = resolve(root)
+  const candidate = resolve(candidateRoot)
+  if (repositoryRoot === candidate) throw new Error('candidate skill pack must use an isolated root')
+  const transactionRoot = await mkdtemp(join(dirname(repositoryRoot), '.saki-skill-pack-publish-'))
+  const staged = join(transactionRoot, '.dsh')
+  const previous = join(transactionRoot, 'previous.dsh')
+  const current = join(repositoryRoot, '.dsh')
+  const move = options.rename ?? rename
+  let previousMoved = false
+  let published = false
+  let operationError: Error | undefined
+  try {
+    await cp(current, staged, { recursive: true })
+    await rm(join(staged, 'skills'), { force: true, recursive: true })
+    await rm(join(staged, 'skill-pack'), { force: true, recursive: true })
+    await cp(join(candidate, '.dsh/skills'), join(staged, 'skills'), { recursive: true })
+    await cp(join(candidate, '.dsh/skill-pack'), join(staged, 'skill-pack'), { recursive: true })
+    const stagedViolations = await verifySakiSkillPack(transactionRoot)
+    if (stagedViolations.length > 0) {
+      throw new Error(`staged skill pack is invalid:\n${stagedViolations.map(item => `- ${item}`).join('\n')}`)
+    }
+    await move(current, previous)
+    previousMoved = true
+    await move(staged, current)
+    previousMoved = false
+    published = true
+  }
+  catch (error) {
+    operationError = error instanceof Error ? error : new Error(String(error))
+    if (previousMoved) {
+      try {
+        await move(previous, current)
+        previousMoved = false
+      }
+      catch (rollbackError) {
+        try {
+          await rm(current, { force: true, recursive: true })
+          await cp(previous, current, { recursive: true })
+          const recoveryViolations = await verifySakiSkillPack(repositoryRoot)
+          if (recoveryViolations.length > 0) {
+            throw new Error(`copied recovery tree is invalid:\n${recoveryViolations.map(item => `- ${item}`).join('\n')}`)
+          }
+          previousMoved = false
+          operationError = new AggregateError(
+            [error, rollbackError],
+            'candidate publication failed; restored the previous .dsh tree by copy after rename rollback failed',
+          )
+        }
+        catch (recoveryError) {
+          operationError = new AggregateError(
+            [error, rollbackError, recoveryError],
+            `candidate publication and automatic recovery failed; previous .dsh tree remains at ${previous}`,
+          )
+        }
+      }
+    }
+  }
+
+  if (!previousMoved) {
+    try {
+      await rm(transactionRoot, { force: true, recursive: true })
+    }
+    catch (cleanupError) {
+      if (!published || operationError !== undefined) {
+        operationError = operationError === undefined
+          ? cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))
+          : new AggregateError([operationError, cleanupError], 'skill-pack publication and cleanup both failed')
+      }
+      else {
+        console.warn(`update-saki-skill-pack: candidate published but temporary cleanup failed for ${transactionRoot}: ${String(cleanupError)}`)
+      }
+    }
+  }
+  if (operationError !== undefined) throw operationError
 }

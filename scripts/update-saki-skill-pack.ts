@@ -5,6 +5,8 @@ import { dirname, join, posix, resolve } from 'node:path'
 import { isDeepStrictEqual, promisify } from 'node:util'
 import {
   parseSkillPackUpdateArgs,
+  pinSkillMetadataCommit,
+  publishSakiSkillPackCandidate,
   readSakiSkillPackManifest,
   skillPackGitBlobHash,
   skillPackSha256,
@@ -85,6 +87,14 @@ async function stageCandidate(
     await git(candidate, ['apply', patch])
   }
 
+  const resolvedCommit = await git(upstream, ['rev-parse', 'HEAD'])
+  for (const skill of manifest.skills) {
+    const skillPath = `.dsh/skills/${skill.name}/SKILL.md`
+    const absolutePath = resolve(candidate, ...skillPath.split('/'))
+    const adapted = await readFile(absolutePath, 'utf8')
+    await writeFile(absolutePath, pinSkillMetadataCommit(adapted, resolvedCommit, skillPath))
+  }
+
   const license = await readFile(resolve(upstream, manifest.license.sourcePath))
   const reviewedLicense = await readFile(resolve(repositoryRoot, manifest.license.vendoredPath))
   if (!license.equals(reviewedLicense)) {
@@ -97,7 +107,7 @@ async function stageCandidate(
 
   return {
     ...manifest,
-    upstream: { ...manifest.upstream, commit: await git(upstream, ['rev-parse', 'HEAD']), commitDate },
+    upstream: { ...manifest.upstream, commit: resolvedCommit, commitDate },
     license: {
       ...manifest.license,
       blob: skillPackGitBlobHash(license),
@@ -151,18 +161,6 @@ async function changedCandidatePaths(candidate: string, manifest: SkillPackManif
   return changed
 }
 
-async function writeCandidate(candidate: string, manifest: SkillPackManifest): Promise<void> {
-  for (const path of [manifest.license.vendoredPath, ...manifest.skills.flatMap(skill => skill.outputs.map(output => output.path))]) {
-    const target = resolve(repositoryRoot, ...path.split('/'))
-    await mkdir(dirname(target), { recursive: true })
-    await cp(resolve(candidate, ...path.split('/')), target)
-  }
-  await writeFile(
-    resolve(repositoryRoot, '.dsh/skill-pack/manifest.json'),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  )
-}
-
 async function main(): Promise<void> {
   const args = parseSkillPackUpdateArgs(process.argv.slice(2))
   const violations = await verifySakiSkillPack(repositoryRoot)
@@ -175,14 +173,23 @@ async function main(): Promise<void> {
     const upstream = await prepareUpstream(args.ref, temporaryRoot)
     const candidate = join(temporaryRoot, 'candidate')
     await mkdir(candidate)
+    await cp(
+      resolve(repositoryRoot, '.dsh/skill-pack'),
+      resolve(candidate, '.dsh/skill-pack'),
+      { recursive: true },
+    )
     const next = await stageCandidate(upstream, candidate, current)
     await writeFile(resolve(candidate, '.dsh/skill-pack/manifest.json'), `${JSON.stringify(next, null, 2)}\n`)
+    const candidateViolations = await verifySakiSkillPack(candidate)
+    if (candidateViolations.length > 0) {
+      throw new Error(`candidate skill pack is invalid:\n${candidateViolations.map(item => `- ${item}`).join('\n')}`)
+    }
     const changed = await changedCandidatePaths(candidate, next)
     if (!args.write) {
       console.log(changed.length === 0 ? 'Dry run: the pinned pack is unchanged.' : `Dry run; changed files:\n${changed.map(path => `- ${path}`).join('\n')}`)
       return
     }
-    await writeCandidate(candidate, next)
+    await publishSakiSkillPackCandidate(repositoryRoot, candidate)
     console.log(`Updated ${changed.length} file(s) from mattpocock/skills@${args.ref}.`)
   }
   finally {

@@ -33,18 +33,18 @@ pnpm run test:saki-skill-pack
 
 ## Compatibility preflight
 
-Every included `SKILL.md` declares the required DSH capabilities, alternative capabilities, optional capabilities, host commands, and mutation class in frontmatter and repeats the user-facing check under `DSH compatibility preflight`. A skill must stop with an actionable diagnostic before mutation when a required capability or command is absent. Tracker workflows name `BreakfastDaPaiDang/saki` explicitly in every `gh` command.
+Every included `SKILL.md` declares the required DSH capabilities, alternative capabilities, optional capabilities, host commands, and mutation class in frontmatter and repeats the user-facing check under `DSH compatibility preflight`. A skill must stop with an actionable diagnostic before mutation when a required capability or command is absent. Tracker workflows run non-repository commands such as `gh auth status` without `-R` and pass `-R BreakfastDaPaiDang/saki` to every repository-scoped `gh` command.
 
 ## Updating the pin
 
-The updater accepts only a full 40-character commit and performs a dry run by default. It fetches the exact commit from `mattpocock/skills`, rejects additions or removals outside the reviewed source and ignored-file allowlists, applies the checked-in per-skill patches, and reports changed outputs without modifying the repository.
+The updater accepts only a full 40-character commit and performs a dry run by default. It fetches the exact commit from `mattpocock/skills`, rejects additions or removals outside the reviewed source and ignored-file allowlists, applies the checked-in per-skill patches, writes the exact commit into every adapted skill's provenance metadata, and verifies the complete candidate offline. A dry run reports changed outputs without modifying the repository.
 
 ```sh
 pnpm run update-saki-skill-pack -- --ref <40-character-commit>
 pnpm run update-saki-skill-pack -- --ref <40-character-commit> --write
 ```
 
-`--write` also requires clean `.dsh/skills` and `.dsh/skill-pack` trees. Review every rewritten instruction and patch before committing, then run the verifier, discovery test, assembled snapshots, and documentation checks.
+`--write` also requires clean `.dsh/skills` and `.dsh/skill-pack` trees. It stages the current `.dsh` directory, replaces only the verified skill and provenance subtrees, then publishes the result through a same-filesystem directory transaction that restores the previous tree if publication fails. Review every rewritten instruction against its checked-in patch before committing, then run the verifier, discovery test, assembled snapshots, and documentation checks.
 
 ## Provenance
 

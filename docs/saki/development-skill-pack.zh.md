@@ -33,18 +33,18 @@ pnpm run test:saki-skill-pack
 
 ## 兼容性预检
 
-每个纳入的 `SKILL.md` 都在 frontmatter 中声明所需 DSH 能力、替代能力、可选能力、宿主命令和变更类别，并在 `DSH compatibility preflight` 下重复面向用户的检查。所需能力或命令缺失时，skill 必须在任何变更之前停止并给出可操作诊断。tracker 工作流中的每条 `gh` 命令都显式指定 `BreakfastDaPaiDang/saki`。
+每个纳入的 `SKILL.md` 都在 frontmatter 中声明所需 DSH 能力、替代能力、可选能力、宿主命令和变更类别，并在 `DSH compatibility preflight` 下重复面向用户的检查。所需能力或命令缺失时，skill 必须在任何变更之前停止并给出可操作诊断。tracker 工作流运行 `gh auth status` 等非仓库作用域命令时不传 `-R`，每条仓库作用域 `gh` 命令都显式传入 `-R BreakfastDaPaiDang/saki`。
 
 ## 更新固定版本
 
-更新器只接受完整的 40 字符 commit，且默认执行 dry-run。它从 `mattpocock/skills` 获取该精确 commit，拒绝已审阅来源与忽略文件允许列表之外的增删，应用签入仓库的逐 skill 补丁，并在不修改仓库的情况下报告有变化的输出。
+更新器只接受完整的 40 字符 commit，且默认执行 dry-run。它从 `mattpocock/skills` 获取该精确 commit，拒绝已审阅来源与忽略文件允许列表之外的增删，应用签入仓库的逐 skill 补丁，把精确 commit 写入每个适配 skill 的来源元数据，并离线校验完整候选项。dry-run 会在不修改仓库的情况下报告有变化的输出。
 
 ```sh
 pnpm run update-saki-skill-pack -- --ref <40-character-commit>
 pnpm run update-saki-skill-pack -- --ref <40-character-commit> --write
 ```
 
-`--write` 还要求 `.dsh/skills` 和 `.dsh/skill-pack` 目录树保持 clean。提交之前逐项审阅所有重写的指令与补丁，然后运行校验器、发现测试、装配快照和文档检查。
+`--write` 还要求 `.dsh/skills` 和 `.dsh/skill-pack` 目录树保持 clean。它暂存当前 `.dsh` 目录，只替换其中已校验的 skill 与来源记录子树，再通过同一文件系统内的目录事务发布结果；发布失败时恢复原目录树。提交之前根据签入仓库的补丁逐项审阅所有重写的指令，然后运行校验器、发现测试、装配快照和文档检查。
 
 ## 来源记录
 

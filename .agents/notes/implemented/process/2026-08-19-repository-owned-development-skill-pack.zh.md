@@ -14,9 +14,9 @@ Saki 依赖可重复的规划、实现、审阅和 handoff 实践，但用户全
 
 [manifest（元数据清单）](../../../../.dsh/skill-pack/manifest.json)固定一个完整的 `mattpocock/skills` commit，并记录每个选中的来源 blob、明确忽略的上游文件、适配补丁、输出 hash、兼容性声明以及保留的 MIT 许可证。每个 skill 都有一份仓库拥有的补丁，使 DSH 特有变更可被审阅，同时不会把本地安装冒充为来源。冻结集合包含 `ask-matt`、`grill-with-docs`、`grilling`、`domain-modeling`、`to-spec`、`to-tickets`、`triage`、`implement`、`tdd`、`code-review` 和 `handoff`；`codebase-design` 与别名包装器不在其中。
 
-每份指令声明其所需、替代和可选能力、宿主命令与变更类别。缺少所需设施时，其兼容性预检会在变更前停止。tracker 工作流始终向 `gh` 传递 `-R BreakfastDaPaiDang/saki`，handoff 工作流只写入 `.scratch/handoffs/`。
+每份指令声明其所需、替代和可选能力、宿主命令与变更类别。缺少所需设施时，其兼容性预检会在变更前停止。tracker 工作流运行 `gh auth status` 等非仓库作用域命令时不传 `-R`，每条仓库作用域 `gh` 命令都传入 `-R BreakfastDaPaiDang/saki`；handoff 工作流只写入 `.scratch/handoffs/`。
 
-更新命令要求完整 commit，默认执行 dry-run，校验当前 skill 包，只获取具名上游 revision，拒绝已审阅允许列表之外的上游文件清单，并重新应用签入仓库的补丁。`--write` 拒绝 dirty 的 skill 包目录树，而且只有所有补丁成功应用之后才会写入候选输出。
+更新命令要求完整 commit，默认执行 dry-run，校验当前 skill 包，只获取具名上游 revision，拒绝已审阅允许列表之外的上游文件清单，并重新应用签入仓库的补丁。它把所请求的 commit 写入每个适配 skill，并离线校验完整候选项。发布过程暂存当前 `.dsh` 目录，只替换其中由本功能拥有的 skill 与来源记录子树，再以回滚保护交换该目录。`--write` 拒绝 dirty 的 skill 包目录树；候选项被拒绝时不会改变 checkout 中的 skill 包。
 
 ## 验证
 

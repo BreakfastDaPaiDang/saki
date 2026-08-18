@@ -36,7 +36,7 @@ Perform this preflight before writing a local artifact or changing GitHub:
 4. Run `gh auth status`, `gh repo view -R BreakfastDaPaiDang/saki --json viewerPermission`, and `gh label list -R BreakfastDaPaiDang/saki --limit 200`.
 5. Read `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`.
 
-If any check fails, stop before mutation and report the missing capability, command, authentication, repository permission, or label. Never publish a partial specification. Every `gh` command for this repository must include `-R BreakfastDaPaiDang/saki`.
+If any check fails, stop before mutation and report the missing capability, command, authentication, repository permission, or label. Never publish a partial specification. Run non-repository commands such as `gh auth status` without `-R`; every repository-scoped `gh` command must include `-R BreakfastDaPaiDang/saki`.
 
 ## Specification
 

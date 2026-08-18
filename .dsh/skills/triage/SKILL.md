@@ -43,7 +43,7 @@ Before posting, labeling, closing, or writing an out-of-scope record:
 3. Run `gh repo view -R BreakfastDaPaiDang/saki --json viewerPermission` and `gh label list -R BreakfastDaPaiDang/saki --limit 200`.
 4. Read the tracker and triage-role documentation.
 
-Stop before mutation when a capability, command, authentication, permission, or role label is missing, and state the corrective action. Use `-R BreakfastDaPaiDang/saki` on every `gh` command.
+Stop before mutation when a capability, command, authentication, permission, or role label is missing, and state the corrective action. Run non-repository commands such as `gh auth status` without `-R`; pass `-R BreakfastDaPaiDang/saki` to every repository-scoped `gh` command.
 
 ## Process
 

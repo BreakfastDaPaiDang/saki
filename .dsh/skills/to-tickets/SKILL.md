@@ -28,7 +28,7 @@ Turn an approved specification into tracer-bullet Work Items. Each Work Item mus
 
 ## DSH compatibility preflight
 
-Before creating or editing any Work Item, perform the complete tracker preflight from `to-spec`: verify the filesystem capabilities, one shell capability, `git`, `gh`, the intended checkout, GitHub authentication, `viewerPermission`, and the repository's current labels. Read `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`. Use `-R BreakfastDaPaiDang/saki` on every `gh` command.
+Before creating or editing any Work Item, perform the complete tracker preflight from `to-spec`: verify the filesystem capabilities, one shell capability, `git`, `gh`, the intended checkout, GitHub authentication, `viewerPermission`, and the repository's current labels. Read `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`. Run non-repository commands such as `gh auth status` without `-R`; pass `-R BreakfastDaPaiDang/saki` to every repository-scoped `gh` command.
 
 Determine before the first create whether the available GitHub API and token can write native dependency relationships. If they cannot, use a `## Blocked by` section with issue references for the entire batch. Do not discover this limitation after creating a partial dependency graph. On any preflight failure, stop without mutation and give the exact corrective action.
 

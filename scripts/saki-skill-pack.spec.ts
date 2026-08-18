@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rename as renamePath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   EXPECTED_SAKI_SKILLS,
   parseSkillPackUpdateArgs,
+  pinSkillMetadataCommit,
+  publishSakiSkillPackCandidate,
   verifySakiSkillPack,
 } from './saki-skill-pack.ts'
 
@@ -59,12 +61,44 @@ describe('Saki Development Skill Pack verifier', () => {
     expect(violations).toContain('.dsh/skills/handoff/SKILL.md: missing DSH compatibility preflight')
   })
 
+  it('rejects manifest paths that can escape a repository on Windows', async () => {
+    const root = await copyPack()
+    const manifestPath = resolve(root, '.dsh/skill-pack/manifest.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      license: { vendoredPath: string }
+    }
+    manifest.license.vendoredPath = 'C:/Windows/win.ini'
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+
+    await expect(verifySakiSkillPack(root)).resolves.toContain(
+      '.dsh/skill-pack/manifest.json: manifest.license.vendoredPath must be a normalized repository-relative path',
+    )
+  })
+
   it.skipIf(process.platform === 'win32')('rejects symbolic links inside the tracked pack', async () => {
     const root = await copyPack()
     const target = resolve(root, '.dsh/skills/handoff/linked.md')
     await symlink(resolve(root, '.dsh/skills/handoff/SKILL.md'), target)
 
     expect(await verifySakiSkillPack(root)).toContain('.dsh/skills/handoff/linked.md: symbolic links are forbidden')
+  })
+
+  it.skipIf(process.platform !== 'win32')('rejects Windows directory junctions inside the tracked pack', async () => {
+    const root = await copyPack()
+    const target = resolve(root, '.dsh/skills/handoff/linked')
+    await symlink(resolve(root, '.dsh/skills/handoff'), target, 'junction')
+
+    expect(await verifySakiSkillPack(root)).toContain('.dsh/skills/handoff/linked: symbolic links are forbidden')
+  })
+
+  it.skipIf(process.platform !== 'win32')('rejects a Windows junction used as a tracked root', async () => {
+    const root = await copyPack()
+    const outside = await copyPack()
+    const skills = resolve(root, '.dsh/skills')
+    await rm(skills, { recursive: true })
+    await symlink(resolve(outside, '.dsh/skills'), skills, 'junction')
+
+    expect(await verifySakiSkillPack(root)).toContain('.dsh/skills: symbolic links are forbidden')
   })
 })
 
@@ -81,6 +115,91 @@ describe('Saki Development Skill Pack update arguments', () => {
     expect(() => parseSkillPackUpdateArgs(['--ref', 'main'])).toThrow('must be a full 40-character commit')
     expect(() => parseSkillPackUpdateArgs([])).toThrow('requires --ref')
   })
+
+  it('rejects an invalid candidate without changing the current pack', async () => {
+    const current = await copyPack()
+    const candidate = await copyPack()
+    const currentSkill = resolve(current, '.dsh/skills/ask-matt/SKILL.md')
+    const before = await readFile(currentSkill, 'utf8')
+    const candidateSkill = resolve(candidate, '.dsh/skills/ask-matt/SKILL.md')
+    await writeFile(candidateSkill, `${await readFile(candidateSkill, 'utf8')}drift\n`)
+
+    await expect(publishSakiSkillPackCandidate(current, candidate)).rejects.toThrow(
+      'candidate skill pack is invalid',
+    )
+
+    expect(await readFile(currentSkill, 'utf8')).toBe(before)
+    expect(await verifySakiSkillPack(current)).toEqual([])
+  })
+
+  it('publishes a verified pack and preserves unrelated DSH files', async () => {
+    const current = await copyPack()
+    const candidate = await copyPack()
+    const unrelated = resolve(current, '.dsh/runtime.json')
+    await writeFile(unrelated, '{"preserved":true}\n')
+    const candidateManifest = resolve(candidate, '.dsh/skill-pack/manifest.json')
+    const manifest = JSON.parse(await readFile(candidateManifest, 'utf8')) as {
+      upstream: { commitDate: string }
+    }
+    manifest.upstream.commitDate = '2026-08-18T07:54:22.000Z'
+    await writeFile(candidateManifest, `${JSON.stringify(manifest, null, 2)}\n`)
+
+    await publishSakiSkillPackCandidate(current, candidate)
+
+    expect(JSON.parse(await readFile(resolve(current, '.dsh/skill-pack/manifest.json'), 'utf8'))).toMatchObject({
+      upstream: { commitDate: '2026-08-18T07:54:22.000Z' },
+    })
+    expect(await readFile(unrelated, 'utf8')).toBe('{"preserved":true}\n')
+    expect(await verifySakiSkillPack(current)).toEqual([])
+  })
+
+  it('restores the current pack when candidate publication fails', async () => {
+    const current = await copyPack()
+    const candidate = await copyPack()
+    const currentManifest = resolve(current, '.dsh/skill-pack/manifest.json')
+    const before = await readFile(currentManifest, 'utf8')
+    let renameCount = 0
+
+    await expect(publishSakiSkillPackCandidate(current, candidate, {
+      async rename(from, to) {
+        renameCount += 1
+        if (renameCount === 2) throw new Error('simulated candidate publication failure')
+        await renamePath(from, to)
+      },
+    })).rejects.toThrow('simulated candidate publication failure')
+
+    expect(await readFile(currentManifest, 'utf8')).toBe(before)
+    expect(await verifySakiSkillPack(current)).toEqual([])
+  })
+
+  it('restores by copy when publication and rename rollback both fail', async () => {
+    const current = await copyPack()
+    const candidate = await copyPack()
+    const currentManifest = resolve(current, '.dsh/skill-pack/manifest.json')
+    const before = await readFile(currentManifest, 'utf8')
+    let renameCount = 0
+
+    await expect(publishSakiSkillPackCandidate(current, candidate, {
+      async rename(from, to) {
+        renameCount += 1
+        if (renameCount === 2 || renameCount === 3) throw new Error(`simulated rename failure ${String(renameCount)}`)
+        await renamePath(from, to)
+      },
+    })).rejects.toThrow('restored the previous .dsh tree by copy')
+
+    expect(await readFile(currentManifest, 'utf8')).toBe(before)
+    expect(await verifySakiSkillPack(current)).toEqual([])
+  })
+
+  it('materializes the requested full commit in one adapted skill', async () => {
+    const skill = await readFile(resolve(REPOSITORY_ROOT, '.dsh/skills/ask-matt/SKILL.md'), 'utf8')
+    const nextCommit = '068b6e0c62393147daf03530149cdce209c93da8'
+
+    const materialized = pinSkillMetadataCommit(skill, nextCommit, '.dsh/skills/ask-matt/SKILL.md')
+
+    expect(materialized).toContain(`    commit: ${nextCommit}`)
+    expect(materialized).not.toContain('    commit: 9c9f36ccd3995266cd675468af71639c8dde1ec5')
+  })
 })
 
 describe('repository-owned skill discovery', () => {
@@ -95,6 +214,7 @@ describe('repository-owned skill discovery', () => {
     await execFile('git', [
       '-c', 'user.name=Saki fixture',
       '-c', 'user.email=saki-fixture@example.invalid',
+      '-c', 'commit.gpgsign=false',
       'commit', '--quiet', '-m', 'Add repository skill pack',
     ], { cwd: project })
     expect((await execFile('git', ['status', '--porcelain'], { cwd: project })).stdout).toBe('')

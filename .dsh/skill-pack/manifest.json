@@ -219,7 +219,7 @@
       "upstreamDirectory": "skills/engineering/to-spec",
       "patch": {
         "path": ".dsh/skill-pack/patches/to-spec.patch",
-        "sha256": "e4ef3a68b341fca9dca97ccc926711d0f32f4cbabd81b34018ce5d2203c59565"
+        "sha256": "aa41c671028ab988d0f814ce161e3051035a458823b9756a437592db66bc2c5b"
       },
       "name": "to-spec",
       "sourceFiles": [
@@ -240,7 +240,7 @@
       "outputs": [
         {
           "path": ".dsh/skills/to-spec/SKILL.md",
-          "sha256": "24955cf91bf226634c56ad83a115849c50ed1a1adc8c22983a07de73f0986a49"
+          "sha256": "72395c33acc27f0aa2289d89f1269fd3aabd81fc12891396097518a22c26b62b"
         }
       ]
     },
@@ -267,7 +267,7 @@
       "upstreamDirectory": "skills/engineering/to-tickets",
       "patch": {
         "path": ".dsh/skill-pack/patches/to-tickets.patch",
-        "sha256": "eb2eafaf8ad44730bdd15ad5c5cf09e44a45502025e9a3d29819a821cf51c546"
+        "sha256": "0128bb864155d3a235a26a849dc8698846611f51720dd20008c4f62118581099"
       },
       "name": "to-tickets",
       "sourceFiles": [
@@ -288,7 +288,7 @@
       "outputs": [
         {
           "path": ".dsh/skills/to-tickets/SKILL.md",
-          "sha256": "1b740304b74ccad39f0e7eb49829b97614cb89dd63a173c756f9f8824c734d88"
+          "sha256": "e7ced7e3f8fb96b97cf67120a6f41ac8e74a54a90b07c746aa27a02142795e52"
         }
       ]
     },
@@ -318,7 +318,7 @@
       "upstreamDirectory": "skills/engineering/triage",
       "patch": {
         "path": ".dsh/skill-pack/patches/triage.patch",
-        "sha256": "3f038c9832a3d39b43efa25ebd66b9a240ba0f1a89482b2de4892d502cf0dad3"
+        "sha256": "73418b9e99317c1a476a764a7c6a856d91b160a9a3ecee14c7e497c2aed645ee"
       },
       "name": "triage",
       "sourceFiles": [
@@ -357,7 +357,7 @@
         },
         {
           "path": ".dsh/skills/triage/SKILL.md",
-          "sha256": "fbb88dc21fd9533a2a34e7a5a6228d9450b349068c6b8062cd2ba9f1f9c61c98"
+          "sha256": "3485cea4d1a081f83bbbbb6eea900c1ffc2d96c60a7d8c3d943c1773e02afecb"
         }
       ]
     },
