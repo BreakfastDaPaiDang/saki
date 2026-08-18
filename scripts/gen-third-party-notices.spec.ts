@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   CLAUDE_AGENT_SDK_PACKAGE,
   claudeDistributionFromManifest,
+  collectSakiSkillPack,
   collectPythonDependencies,
   isOwnerAuthorizedRuntime,
   isPermissive,
@@ -27,6 +28,8 @@ describe('THIRD_PARTY_NOTICES.md', () => {
   it('matches what the generator produces from the current manifests', () => {
     const generated = render()
     expect(generated).toContain('It depends on the third-party software listed below.')
+    expect(generated).toContain('## Repository-owned development instructions')
+    expect(generated).toContain(collectSakiSkillPack().commit)
     expect(readFileSync(resolve(root, 'THIRD_PARTY_NOTICES.md'), 'utf8'), 'stale notices — run `pnpm run gen-third-party-notices`').toBe(generated)
   })
 })

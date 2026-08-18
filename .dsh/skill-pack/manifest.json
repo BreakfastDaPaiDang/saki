@@ -1,0 +1,564 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "repository": "https://github.com/mattpocock/skills",
+    "commit": "9c9f36ccd3995266cd675468af71639c8dde1ec5",
+    "commitDate": "2026-08-17T08:54:22+01:00"
+  },
+  "license": {
+    "spdx": "MIT",
+    "sourcePath": "LICENSE",
+    "blob": "f1dd2c09108dde1a5f56097cee8461b3ea834499",
+    "vendoredPath": ".dsh/skill-pack/LICENSE.mattpocock-skills",
+    "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+  },
+  "skills": [
+    {
+      "requirements": {
+        "mutation": "none",
+        "optionalCapabilities": [],
+        "oneOfCapabilities": [],
+        "dshCapabilities": [
+          "skill"
+        ],
+        "hostCommands": []
+      },
+      "upstreamDirectory": "skills/engineering/ask-matt",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/ask-matt.patch",
+        "sha256": "80a837b3d59681609d0c5b2fed2755dd761febbe9ea9de20c7e90832b6acb799"
+      },
+      "name": "ask-matt",
+      "sourceFiles": [
+        {
+          "blob": "cb31e6abf5c3fce903f1f4ed554cf541c9354977",
+          "path": "skills/engineering/ask-matt/PHASE-BOUNDARIES.md",
+          "target": ".dsh/skills/ask-matt/PHASE-BOUNDARIES.md"
+        },
+        {
+          "blob": "7f3ab7829fba2321ac9e5b2ff9d58b8321734aa8",
+          "path": "skills/engineering/ask-matt/SKILL.md",
+          "target": ".dsh/skills/ask-matt/SKILL.md"
+        }
+      ],
+      "category": "engineering",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "5c60d51b5b1248d7210bff8c6b42a5a06524b8a4",
+          "path": "skills/engineering/ask-matt/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/ask-matt/PHASE-BOUNDARIES.md",
+          "sha256": "93de808f76c02d5b1153fc2335781f7e64c174c69c6c2106d7cad8a4dfa66e82"
+        },
+        {
+          "path": ".dsh/skills/ask-matt/SKILL.md",
+          "sha256": "f0ce15e0e91c6b169de5aa2b32d41b82c314170701aa47b513ff7a0e3cc6c04e"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "workspace",
+        "optionalCapabilities": [],
+        "oneOfCapabilities": [],
+        "dshCapabilities": [
+          "skill"
+        ],
+        "hostCommands": []
+      },
+      "upstreamDirectory": "skills/engineering/grill-with-docs",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/grill-with-docs.patch",
+        "sha256": "15122de11e7481a563b3dadf0126dc76e44cf341f76077c33ab197314f727c02"
+      },
+      "name": "grill-with-docs",
+      "sourceFiles": [
+        {
+          "blob": "62b9efb6f991d1b229adee7506962f13ced0c499",
+          "path": "skills/engineering/grill-with-docs/SKILL.md",
+          "target": ".dsh/skills/grill-with-docs/SKILL.md"
+        }
+      ],
+      "category": "engineering",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "5dbe2780a51be3e9b118bd7758a73e54a9384e11",
+          "path": "skills/engineering/grill-with-docs/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/grill-with-docs/SKILL.md",
+          "sha256": "bd05a032918f1b99ebe0b096ed501fea336c8d5669e1e7178750005ace56d492"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "none",
+        "optionalCapabilities": [
+          "subagent"
+        ],
+        "oneOfCapabilities": [],
+        "dshCapabilities": [],
+        "hostCommands": []
+      },
+      "upstreamDirectory": "skills/productivity/grilling",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/grilling.patch",
+        "sha256": "296f1797fc7ed71273293bfa6f32611bddb7fa18d5c3ea68fc428178c8b43be0"
+      },
+      "name": "grilling",
+      "sourceFiles": [
+        {
+          "blob": "1c2bb7bffed8386f51ae138b3c1348341e19616b",
+          "path": "skills/productivity/grilling/SKILL.md",
+          "target": ".dsh/skills/grilling/SKILL.md"
+        }
+      ],
+      "category": "productivity",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "ddbdb96139c0c1dfe6bca698f39d0465674b8a39",
+          "path": "skills/productivity/grilling/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/grilling/SKILL.md",
+          "sha256": "af460e3626ce4f9840934b3d15bcc05611c62cb2611e5effa9bbb6c933793e5a"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "workspace",
+        "optionalCapabilities": [],
+        "oneOfCapabilities": [],
+        "dshCapabilities": [
+          "read",
+          "write",
+          "edit",
+          "glob",
+          "grep"
+        ],
+        "hostCommands": []
+      },
+      "upstreamDirectory": "skills/engineering/domain-modeling",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/domain-modeling.patch",
+        "sha256": "50f3c1026d6f6bdba88498e10f6a57ddc5072d937284d9a8574f345095f88fad"
+      },
+      "name": "domain-modeling",
+      "sourceFiles": [
+        {
+          "blob": "da7e78ec1c220cd0aedf7ad36424c9398034f375",
+          "path": "skills/engineering/domain-modeling/ADR-FORMAT.md",
+          "target": ".dsh/skills/domain-modeling/ADR-FORMAT.md"
+        },
+        {
+          "blob": "eaf2a18573f0a2d8c69ed53e29e4d9e21baf81d8",
+          "path": "skills/engineering/domain-modeling/CONTEXT-FORMAT.md",
+          "target": ".dsh/skills/domain-modeling/CONTEXT-FORMAT.md"
+        },
+        {
+          "blob": "e660e8cca0a97f1924016eeb8a504cac8f96a120",
+          "path": "skills/engineering/domain-modeling/SKILL.md",
+          "target": ".dsh/skills/domain-modeling/SKILL.md"
+        }
+      ],
+      "category": "engineering",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "7f1522d2f11506ee205275ab7c282aa52366ecf6",
+          "path": "skills/engineering/domain-modeling/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/domain-modeling/ADR-FORMAT.md",
+          "sha256": "ff934879e98b3551e08121a54ccdc45d7e962991775dd862598b514c32dfcdfa"
+        },
+        {
+          "path": ".dsh/skills/domain-modeling/CONTEXT-FORMAT.md",
+          "sha256": "37bf76879fcbed383f0b9180f2bbe7da13ed38d3674694f78c5fa004bf834c44"
+        },
+        {
+          "path": ".dsh/skills/domain-modeling/SKILL.md",
+          "sha256": "b7a539bb5597b78174e527d2b27e85a848fec9b9660a66c73cab0a2b783a565a"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "tracker",
+        "optionalCapabilities": [],
+        "oneOfCapabilities": [
+          "bash",
+          "pwsh"
+        ],
+        "dshCapabilities": [
+          "read",
+          "write",
+          "edit",
+          "glob",
+          "grep"
+        ],
+        "hostCommands": [
+          "git",
+          "gh"
+        ]
+      },
+      "upstreamDirectory": "skills/engineering/to-spec",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/to-spec.patch",
+        "sha256": "e4ef3a68b341fca9dca97ccc926711d0f32f4cbabd81b34018ce5d2203c59565"
+      },
+      "name": "to-spec",
+      "sourceFiles": [
+        {
+          "blob": "54dbc4bfea178525d64ac8e7b95791326aff4659",
+          "path": "skills/engineering/to-spec/SKILL.md",
+          "target": ".dsh/skills/to-spec/SKILL.md"
+        }
+      ],
+      "category": "engineering",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "549e6f76f020a1b9ba65f52ccda336566ee6222a",
+          "path": "skills/engineering/to-spec/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/to-spec/SKILL.md",
+          "sha256": "24955cf91bf226634c56ad83a115849c50ed1a1adc8c22983a07de73f0986a49"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "tracker",
+        "optionalCapabilities": [],
+        "oneOfCapabilities": [
+          "bash",
+          "pwsh"
+        ],
+        "dshCapabilities": [
+          "read",
+          "write",
+          "edit",
+          "glob",
+          "grep"
+        ],
+        "hostCommands": [
+          "git",
+          "gh"
+        ]
+      },
+      "upstreamDirectory": "skills/engineering/to-tickets",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/to-tickets.patch",
+        "sha256": "eb2eafaf8ad44730bdd15ad5c5cf09e44a45502025e9a3d29819a821cf51c546"
+      },
+      "name": "to-tickets",
+      "sourceFiles": [
+        {
+          "blob": "4a21285cbd01c7d2c6e97d8406d6d23e21b4b850",
+          "path": "skills/engineering/to-tickets/SKILL.md",
+          "target": ".dsh/skills/to-tickets/SKILL.md"
+        }
+      ],
+      "category": "engineering",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "24605a5db64e4fc750b999aa94aea126bee814ee",
+          "path": "skills/engineering/to-tickets/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/to-tickets/SKILL.md",
+          "sha256": "1b740304b74ccad39f0e7eb49829b97614cb89dd63a173c756f9f8824c734d88"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "tracker",
+        "optionalCapabilities": [
+          "subagent"
+        ],
+        "oneOfCapabilities": [
+          "bash",
+          "pwsh"
+        ],
+        "dshCapabilities": [
+          "read",
+          "write",
+          "edit",
+          "glob",
+          "grep",
+          "skill"
+        ],
+        "hostCommands": [
+          "git",
+          "gh"
+        ]
+      },
+      "upstreamDirectory": "skills/engineering/triage",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/triage.patch",
+        "sha256": "3f038c9832a3d39b43efa25ebd66b9a240ba0f1a89482b2de4892d502cf0dad3"
+      },
+      "name": "triage",
+      "sourceFiles": [
+        {
+          "blob": "6535c9bd00e81266e03fc257348aa02405ee3d10",
+          "path": "skills/engineering/triage/AGENT-BRIEF.md",
+          "target": ".dsh/skills/triage/AGENT-BRIEF.md"
+        },
+        {
+          "blob": "fc0e39f529146883d23d0dd315f55af05a39cbdf",
+          "path": "skills/engineering/triage/OUT-OF-SCOPE.md",
+          "target": ".dsh/skills/triage/OUT-OF-SCOPE.md"
+        },
+        {
+          "blob": "41749a9c458b91c3bf41aef480e93d229b316853",
+          "path": "skills/engineering/triage/SKILL.md",
+          "target": ".dsh/skills/triage/SKILL.md"
+        }
+      ],
+      "category": "engineering",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "acb366cf0f2527e8925ff1223b77610ac0b1be4c",
+          "path": "skills/engineering/triage/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/triage/AGENT-BRIEF.md",
+          "sha256": "00aeae534390f283b4fb67923f495a4a3f846e75c93e84d48c1180df5e2ffe61"
+        },
+        {
+          "path": ".dsh/skills/triage/OUT-OF-SCOPE.md",
+          "sha256": "1299c94f2eaed3429d3b37fb9a1c7c1b20a0e7d303de38d28f8b771f6190cd6b"
+        },
+        {
+          "path": ".dsh/skills/triage/SKILL.md",
+          "sha256": "fbb88dc21fd9533a2a34e7a5a6228d9450b349068c6b8062cd2ba9f1f9c61c98"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "git",
+        "optionalCapabilities": [],
+        "oneOfCapabilities": [
+          "bash",
+          "pwsh"
+        ],
+        "dshCapabilities": [
+          "read",
+          "write",
+          "edit",
+          "glob",
+          "grep",
+          "skill",
+          "subagent"
+        ],
+        "hostCommands": [
+          "git"
+        ]
+      },
+      "upstreamDirectory": "skills/engineering/implement",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/implement.patch",
+        "sha256": "80ffb783a5660957d4b36ec117946784835b53146609ce4ba628315038dcfa60"
+      },
+      "name": "implement",
+      "sourceFiles": [
+        {
+          "blob": "7a0b11f5f4fe9505ea5c7983c3083ba1bf754f69",
+          "path": "skills/engineering/implement/SKILL.md",
+          "target": ".dsh/skills/implement/SKILL.md"
+        }
+      ],
+      "category": "engineering",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "f8794dc153b409052a9167baf10858cf01b36175",
+          "path": "skills/engineering/implement/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/implement/SKILL.md",
+          "sha256": "7c93fc4f62fcaa982d3e6fb4d976445638cb2006a83da21f7711fa5728949997"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "workspace",
+        "optionalCapabilities": [],
+        "oneOfCapabilities": [
+          "bash",
+          "pwsh"
+        ],
+        "dshCapabilities": [
+          "read",
+          "write",
+          "edit",
+          "glob",
+          "grep"
+        ],
+        "hostCommands": []
+      },
+      "upstreamDirectory": "skills/engineering/tdd",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/tdd.patch",
+        "sha256": "c401df4cbe6af92fc399b526497cc3f6110f46994b8fc2ce56eab98a2e9950e1"
+      },
+      "name": "tdd",
+      "sourceFiles": [
+        {
+          "blob": "71cbfee674d93244ce81d1830b930ca9a69200bd",
+          "path": "skills/engineering/tdd/mocking.md",
+          "target": ".dsh/skills/tdd/mocking.md"
+        },
+        {
+          "blob": "d8a646611ed9d2a9d2e5ea1f9b9b82d4f0821774",
+          "path": "skills/engineering/tdd/SKILL.md",
+          "target": ".dsh/skills/tdd/SKILL.md"
+        },
+        {
+          "blob": "7ab86479f925a1f9e8ba680af33cb3b12e015381",
+          "path": "skills/engineering/tdd/tests.md",
+          "target": ".dsh/skills/tdd/tests.md"
+        }
+      ],
+      "category": "engineering",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "651b838a7663e027b1b8884491e867f26bb9a021",
+          "path": "skills/engineering/tdd/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/tdd/mocking.md",
+          "sha256": "a7d4f0ba95eb674693112f1ec156dacac0e5258b3fbe481e31caf31d48854871"
+        },
+        {
+          "path": ".dsh/skills/tdd/SKILL.md",
+          "sha256": "dd34080af297ed6817444876e895a8e35f6ab47003aad038df0d34c3db96f7de"
+        },
+        {
+          "path": ".dsh/skills/tdd/tests.md",
+          "sha256": "03018c810c7174fb3079f4788cbc3b55d3b2ce8215989a52200dc749b3a2e472"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "none",
+        "optionalCapabilities": [
+          "skill"
+        ],
+        "oneOfCapabilities": [
+          "bash",
+          "pwsh"
+        ],
+        "dshCapabilities": [
+          "read",
+          "glob",
+          "grep",
+          "subagent"
+        ],
+        "hostCommands": [
+          "git"
+        ]
+      },
+      "upstreamDirectory": "skills/engineering/code-review",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/code-review.patch",
+        "sha256": "e456a2999915451677d5dc3dc7dfc0af2ce333e1ec83d5eb9c4aa83d1b7718ee"
+      },
+      "name": "code-review",
+      "sourceFiles": [
+        {
+          "blob": "8ff164acd5f343ed02f361ff796732c31c72f878",
+          "path": "skills/engineering/code-review/SKILL.md",
+          "target": ".dsh/skills/code-review/SKILL.md"
+        }
+      ],
+      "category": "engineering",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "9076774ba327f49068db9273feceda03bfe940fa",
+          "path": "skills/engineering/code-review/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/code-review/SKILL.md",
+          "sha256": "f709b623859e801bcd92ffad5823633489b3f9cdf80f89bbf32f87498c127e45"
+        }
+      ]
+    },
+    {
+      "requirements": {
+        "mutation": "workspace",
+        "optionalCapabilities": [],
+        "oneOfCapabilities": [],
+        "dshCapabilities": [
+          "read",
+          "write"
+        ],
+        "hostCommands": []
+      },
+      "upstreamDirectory": "skills/productivity/handoff",
+      "patch": {
+        "path": ".dsh/skill-pack/patches/handoff.patch",
+        "sha256": "5757a5e3a7467e9d7932213a43cd415974b3772dea14b97e62b048c8864beb52"
+      },
+      "name": "handoff",
+      "sourceFiles": [
+        {
+          "blob": "2eb98a51b97bb5bac461a26ad14828eeac827909",
+          "path": "skills/productivity/handoff/SKILL.md",
+          "target": ".dsh/skills/handoff/SKILL.md"
+        }
+      ],
+      "category": "productivity",
+      "ignoredUpstreamFiles": [
+        {
+          "reason": "DSH does not consume product-specific agents/openai.yaml metadata",
+          "blob": "6e1d8da121beceddc2f9ec7fa8714c1d914dd11a",
+          "path": "skills/productivity/handoff/agents/openai.yaml"
+        }
+      ],
+      "outputs": [
+        {
+          "path": ".dsh/skills/handoff/SKILL.md",
+          "sha256": "93b82e42edbb24d4686e11e9ed6f2d15add23196871db4e8fa81c53d58f35b5e"
+        }
+      ]
+    }
+  ]
+}

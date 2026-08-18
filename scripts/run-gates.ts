@@ -253,6 +253,7 @@ function ciSharedStaticGates(): Gate[] {
       label: 'optional dependency imports',
     }),
     pnpmScript('issue-management', 'test:issue-management', { label: 'Issue management policy' }),
+    pnpmScript('saki-skill-pack-tests', 'test:saki-skill-pack', { label: 'Saki Development Skill Pack tests' }),
   ]
 }
 
@@ -426,6 +427,7 @@ function ciWindowsBlockingGates(): Gate[] {
   return [
     pnpmScript('windows-build', 'build', { label: 'build' }),
     pnpmScript('windows-site', 'docs:build', { label: 'production site' }),
+    pnpmScript('saki-skill-pack-tests', 'test:saki-skill-pack', { label: 'Saki Development Skill Pack tests' }),
   ]
 }
 
@@ -625,6 +627,7 @@ function docSyncLeafGates(options: {
     pnpmScript('archived-agent-notes', 'verify-archived-agent-notes', { label: 'archived agent notes' }),
     pnpmScript('type-equivalence', 'verify-type-equiv', { label: 'type equivalence' }),
     pnpmScript('skill-invocation-metadata', 'verify-skill-invocation-metadata', { label: 'skill invocation metadata' }),
+    pnpmScript('saki-skill-pack', 'verify-saki-skill-pack', { label: 'Saki Development Skill Pack' }),
     pnpmScript('translation-prompt', 'verify-translation-prompt', { label: 'translation prompt' }),
     pnpmScript('translation-pairing', 'verify-translation-pairing', { label: 'translation pairing' }),
     pnpmScript('doc-budgets', 'verify-doc-budgets', { label: 'doc budgets' }),

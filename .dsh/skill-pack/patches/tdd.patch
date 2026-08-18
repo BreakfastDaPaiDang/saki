@@ -1,0 +1,229 @@
+diff --git a/.dsh/skills/tdd/SKILL.md b/.dsh/skills/tdd/SKILL.md
+index d8a6466..6ecd7df 100644
+--- a/.dsh/skills/tdd/SKILL.md
++++ b/.dsh/skills/tdd/SKILL.md
+@@ -1,38 +1,40 @@
+ ---
+ name: tdd
+-description: Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions "red-green-refactor", or wants integration tests.
++description: Implement Saki behavior test-first through agreed public interfaces, one red-green tracer bullet at a time.
++metadata:
++  saki:
++    upstream: https://github.com/mattpocock/skills
++    commit: 9c9f36ccd3995266cd675468af71639c8dde1ec5
++    dsh-capabilities:
++      - read
++      - write
++      - edit
++      - glob
++      - grep
++    one-of-capabilities:
++      - bash
++      - pwsh
++    optional-capabilities: []
++    host-commands: []
++    mutation: workspace
+ ---
+
+-# Test-Driven Development
++# Test-driven development
+
+-TDD is the red → green loop. This skill is the reference that makes that loop produce tests worth keeping: what a good test is, where tests go, the anti-patterns, and the rules of the loop. Every section applies on every cycle — consult them before and during the loop, not after.
++TDD is a red–green loop through an agreed public interface. Tests observe behavior callers, users, or assembled applications rely on; they do not reach through private collaborators.
+
+-When exploring the codebase, read `CONTEXT.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
++Read `CONTEXT-MAP.md`, the relevant context glossary, ADRs, and testing instructions before naming tests or selecting evidence. See [tests.md](tests.md) and [mocking.md](mocking.md).
+
+-## What a good test is
++## DSH compatibility preflight
+
+-Tests verify behavior through public interfaces, not implementation details. Code can change entirely; tests shouldn't. A good test reads like a specification — "user can checkout with valid cart" tells you exactly what capability exists — and survives refactors because it doesn't care about internal structure.
++Before writing a test, confirm `read`, `write`, `edit`, `glob`, and `grep`, plus one of `bash` or `pwsh`. Resolve any repository-specific test command before mutation. If a capability or executable required by the selected test is absent, stop and report the missing item and the command that would have run.
+
+-See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
++## Loop
+
+-## Seams — where tests go
++1. State the public interface and one observable behavior fixed by the approved specification.
++2. Write one test and run it to capture the expected failure.
++3. Add only enough implementation to make that test pass.
++4. Repeat with the next behavior, informed by the preceding slice.
++5. Refactor only while green and rerun the narrow affected evidence after each structural change.
+
+-A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals.
+-
+-**Test only at pre-agreed seams.** Before writing any test, write down the seams under test and confirm them with the user. No test is written at an unconfirmed seam. You can't test everything — agreeing the seams up front is how testing effort lands on the critical paths and complex logic instead of every edge case.
+-
+-Ask: "What's the public interface, and which seams should we test?"
+-
+-When the shape of that interface is itself in question — how deep the module is, where the seam belongs, what the interface should expose — call the Skill tool with "codebase-design" for the vocabulary. It is the shared source of the module, interface, depth, seam, adapter, leverage and locality terms, and it is a reference to consult, not a session to run.
+-
+-## Anti-patterns
+-
+-- **Implementation-coupled** — mocks internal collaborators, tests private methods, or verifies through a side channel (querying the database instead of using the interface). The tell: the test breaks when you refactor but behavior hasn't changed.
+-- **Tautological** — the assertion recomputes the expected value the way the code does (`expect(add(a, b)).toBe(a + b)`, a snapshot derived by hand the same way, a constant asserted equal to itself), so it passes by construction and can never disagree with the code. Expected values must come from an independent source of truth — a known-good literal, a worked example, the spec.
+-- **Horizontal slicing** — writing all tests first, then all implementation. Bulk tests verify _imagined_ behavior: you test the _shape_ of things rather than user-facing behavior, the tests go insensitive to real changes, and you commit to test structure before understanding the implementation. Work in **vertical slices** instead — one test → one implementation → repeat, each test a **tracer bullet** that responds to what the last cycle taught you.
+-
+-## Rules of the loop
+-
+-- **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
+-- **One slice at a time.** One seam, one test, one minimal implementation per cycle.
+-- **Refactoring is not part of the loop.** It belongs to the review stage (see the `code-review` skill), not the red → green implementation cycle.
++Avoid implementation-coupled mocks, tautological expected values, and horizontal batches of tests written ahead of implementation. Use the repository's defined term `seam` only for a complete capability seam containing Service Definition, Service Provider, and Consumer roles; ordinary test locations are public interfaces or assembled entry paths.
+diff --git a/.dsh/skills/tdd/mocking.md b/.dsh/skills/tdd/mocking.md
+index 71cbfee..a613905 100644
+--- a/.dsh/skills/tdd/mocking.md
++++ b/.dsh/skills/tdd/mocking.md
+@@ -1,59 +1,7 @@
+-# When to Mock
++# Mocking
+
+-Mock at **system boundaries** only:
++Mock nondeterministic or external systems such as remote APIs, time, randomness, and unavailable operating-system resources. Prefer a real test database or filesystem when it remains deterministic and affordable.
+
+-- External APIs (payment, email, etc.)
+-- Databases (sometimes - prefer test DB)
+-- Time/randomness
+-- File system (sometimes)
++Do not mock code owned by the interface under test. Supply a narrow typed provider at the external boundary instead of a generic conditional fetcher, and assert the caller-visible outcome rather than the mock's internal call count.
+
+-Don't mock:
+-
+-- Your own classes/modules
+-- Internal collaborators
+-- Anything you control
+-
+-## Designing for Mockability
+-
+-At system boundaries, design interfaces that are easy to mock:
+-
+-**1. Use dependency injection**
+-
+-Pass external dependencies in rather than creating them internally:
+-
+-```typescript
+-// Easy to mock
+-function processPayment(order, paymentClient) {
+-  return paymentClient.charge(order.total);
+-}
+-
+-// Hard to mock
+-function processPayment(order) {
+-  const client = new StripeClient(process.env.STRIPE_KEY);
+-  return client.charge(order.total);
+-}
+-```
+-
+-**2. Prefer SDK-style interfaces over generic fetchers**
+-
+-Create specific functions for each external operation instead of one generic function with conditional logic:
+-
+-```typescript
+-// GOOD: Each function is independently mockable
+-const api = {
+-  getUser: (id) => fetch(`/users/${id}`),
+-  getOrders: (userId) => fetch(`/users/${userId}/orders`),
+-  createOrder: (data) => fetch('/orders', { method: 'POST', body: data }),
+-};
+-
+-// BAD: Mocking requires conditional logic inside the mock
+-const api = {
+-  fetch: (endpoint, options) => fetch(endpoint, options),
+-};
+-```
+-
+-The SDK approach means:
+-- Each mock returns one specific shape
+-- No conditional logic in test setup
+-- Easier to see which endpoints a test exercises
+-- Type safety per endpoint
++An assembled snapshot may replay a model or external provider while retaining the real Loader, plugins, persistence, tools, and presentation path. Record which external dependency is replaced and which product path remains real.
+diff --git a/.dsh/skills/tdd/tests.md b/.dsh/skills/tdd/tests.md
+index 7ab8647..a71ef8b 100644
+--- a/.dsh/skills/tdd/tests.md
++++ b/.dsh/skills/tdd/tests.md
+@@ -1,77 +1,7 @@
+-# Good and Bad Tests
++# Observable tests
+
+-## Good Tests
++A durable test names behavior and exercises a public interface or real assembled entry path. It survives internal renames and refactors because its expected result comes from a specification, worked example, protocol, or other independent authority.
+
+-**Integration-style**: Test through real interfaces, not mocks of internal parts.
++Avoid tests that mock an internal collaborator, inspect private methods, assert incidental call order, or query storage behind the interface merely to prove the implementation wrote something. Avoid recomputing the expected value with the same algorithm under test.
+
+-```typescript
+-// GOOD: Tests observable behavior
+-test("user can checkout with valid cart", async () => {
+-  const cart = createCart();
+-  cart.add(product);
+-  const result = await checkout(cart, paymentMethod);
+-  expect(result.status).toBe("confirmed");
+-});
+-```
+-
+-Characteristics:
+-
+-- Tests behavior users/callers care about
+-- Uses public API only
+-- Survives internal refactors
+-- Describes WHAT, not HOW
+-- One logical assertion per test
+-
+-## Bad Tests
+-
+-**Implementation-detail tests**: Coupled to internal structure.
+-
+-```typescript
+-// BAD: Tests implementation details
+-test("checkout calls paymentService.process", async () => {
+-  const mockPayment = jest.mock(paymentService);
+-  await checkout(cart, payment);
+-  expect(mockPayment.process).toHaveBeenCalledWith(cart.total);
+-});
+-```
+-
+-Red flags:
+-
+-- Mocking internal collaborators
+-- Testing private methods
+-- Asserting on call counts/order
+-- Test breaks when refactoring without behavior change
+-- Test name describes HOW not WHAT
+-- Verifying through external means instead of interface
+-
+-```typescript
+-// BAD: Bypasses interface to verify
+-test("createUser saves to database", async () => {
+-  await createUser({ name: "Alice" });
+-  const row = await db.query("SELECT * FROM users WHERE name = ?", ["Alice"]);
+-  expect(row).toBeDefined();
+-});
+-
+-// GOOD: Verifies through interface
+-test("createUser makes user retrievable", async () => {
+-  const user = await createUser({ name: "Alice" });
+-  const retrieved = await getUser(user.id);
+-  expect(retrieved.name).toBe("Alice");
+-});
+-```
+-
+-**Tautological tests**: Expected value restates the implementation, so the test passes by construction.
+-
+-```typescript
+-// BAD: Expected value is recomputed the way the code computes it
+-test("calculateTotal sums line items", () => {
+-  const items = [{ price: 10 }, { price: 5 }];
+-  const expected = items.reduce((sum, i) => sum + i.price, 0);
+-  expect(calculateTotal(items)).toBe(expected);
+-});
+-
+-// GOOD: Expected value is an independent, known literal
+-test("calculateTotal sums line items", () => {
+-  expect(calculateTotal([{ price: 10 }, { price: 5 }])).toBe(15);
+-});
+-```
++Prefer the narrowest real path that would fail for the regression. Add broader assembled evidence when the behavior is model-visible, user-visible, configuration-driven, dynamically loaded, process-bound, or otherwise invisible to a package-only test.
+warning: in the working copy of '.dsh/skills/tdd/SKILL.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.dsh/skills/tdd/mocking.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.dsh/skills/tdd/tests.md', LF will be replaced by CRLF the next time Git touches it

@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { mkdir, utimes, writeFile } from 'node:fs/promises'
+import { cp, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { expect, it } from 'vitest'
@@ -45,6 +45,7 @@ const PTY_CONFIG = fileURLToPath(new URL('../pty.cordis.yml', import.meta.url))
 const DEPTH_TWO_CONFIG = fileURLToPath(new URL('../depth-two.cordis.yml', import.meta.url))
 const CHILD_QUESTION_CONFIG = fileURLToPath(new URL('../child-question.cordis.yml', import.meta.url))
 const SESSION_SANDBOX_ROOT_CONFIG = fileURLToPath(new URL('../session-sandbox-root.cordis.yml', import.meta.url))
+const SAKI_SKILL_NO_SHELL_CONFIG = fileURLToPath(new URL('../saki-skill-no-shell.cordis.yml', import.meta.url))
 const RETRY_CONFIG = fileURLToPath(new URL('../retry.cordis.yml', import.meta.url))
 const SESSION_TITLE_CONFIG = fileURLToPath(new URL('../session-title.cordis.yml', import.meta.url))
 const SUBAGENT_REPORT_QUIET_CONFIG = fileURLToPath(
@@ -68,6 +69,7 @@ const PRODUCT_SUBAGENT_CODEX_CONFIG = fileURLToPath(new URL('../product-subagent
 const PRODUCT_SUBAGENT_BOTH_CONFIG = fileURLToPath(new URL('../product-subagent-both.cordis.yml', import.meta.url))
 const FS_DIFF_BOUND_CONFIG = fileURLToPath(new URL('./fs-diff-bound.cordis.yml', import.meta.url))
 const SNAPSHOTS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'snapshots')
+const REPOSITORY_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const PACKED_CHUNKS_SOURCE = 'hook-cc-pretool-deny'
 
 async function prepareDelimiterPathWorkspace(cwd: string): Promise<void> {
@@ -104,6 +106,11 @@ async function prepareFsSearchWorkspace(cwd: string): Promise<void> {
     await writeFile(target, 'fixture\n')
     await utimes(target, mtime, mtime)
   }
+}
+
+async function prepareSakiSkillPackWorkspace(cwd: string): Promise<void> {
+  await mkdir(join(cwd, '.git'), { recursive: true })
+  await cp(join(REPOSITORY_ROOT, '.dsh', 'skills'), join(cwd, '.dsh', 'skills'), { recursive: true })
 }
 
 // TODO(acp-snapshot-ownership): Move backend/product scenarios to headless while
@@ -288,6 +295,22 @@ const SCENARIOS: Scenario[] = [
     headerClass: 'skill',
     systemPromptSource: 'text-turn',
     toolSchemasSource: 'text-turn',
+  },
+  {
+    name: 'saki-skill-pack-handoff',
+    hasModelTurn: true,
+    recorded: false,
+    headerClass: 'skill',
+    prepareWorkspace: prepareSakiSkillPackWorkspace,
+  },
+  {
+    name: 'saki-skill-pack-missing-shell',
+    hasModelTurn: true,
+    recorded: false,
+    pinsHeader: true,
+    headerClass: 'saki-skill-no-shell',
+    configPath: SAKI_SKILL_NO_SHELL_CONFIG,
+    prepareWorkspace: prepareSakiSkillPackWorkspace,
   },
   { name: 'lsp-definition', hasModelTurn: true, recorded: false, pinsHeader: true, headerClass: 'lsp', configPath: LSP_CONFIG },
   // web_fetch markdown rendering end to end: the overlay's loopback fixture
@@ -683,4 +706,48 @@ it('packed ACP fixture retains every chunk row kind without changing the logical
     ...records.slice(1).flatMap(record => decodeStorageRecord(record)).map(withoutMessageId),
   ]
   expect(logicalRecords(packed)).toStrictEqual(logicalRecords(source))
+})
+
+it('Saki skill-pack fixtures retain the routed handoff and fail-fast preflight semantics', () => {
+  const positive = fixtureRecords('saki-skill-pack-handoff') as Array<{
+    type?: string
+    data?: {
+      name?: string
+      arguments?: string
+      message?: { content?: Array<{ type?: string; text?: string }> }
+      source?: { kind?: string; name?: string }
+    }
+  }>
+  const invocations = positive.flatMap(record =>
+    record.type === 'user/message' && record.data?.source?.kind === 'skill-invocation'
+      ? [record.data.source.name]
+      : [],
+  )
+  expect(invocations).toEqual(['ask-matt', 'handoff'])
+  const calls = positive.filter(record => record.type === 'tool/call')
+  expect(calls.map(record => record.data?.name)).toEqual(['read', 'write'])
+  const writeArguments = JSON.parse(calls[1]?.data?.arguments ?? '{}') as { content?: string; file_path?: string }
+  expect(writeArguments.file_path).toBe('.scratch/handoffs/saki-skill-pack-smoke.md')
+  expect(writeArguments.content).toContain('docs/saki/versions/0.1.0.md')
+  expect(writeArguments.content).toContain('## Suggested skills')
+
+  const negative = fixtureRecords('saki-skill-pack-missing-shell') as Array<{
+    type?: string
+    data?: {
+      message?: { content?: Array<{ type?: string; text?: string }> }
+      source?: { kind?: string; name?: string }
+    }
+  }>
+  expect(negative.some(record =>
+    record.type === 'user/message'
+    && record.data?.source?.kind === 'skill-invocation'
+    && record.data.source.name === 'to-tickets')).toBe(true)
+  expect(negative.some(record => record.type === 'tool/call')).toBe(false)
+  const assistantText = negative.flatMap(record =>
+    record.type === 'assistant/message'
+      ? record.data?.message?.content?.flatMap(block => block.type === 'text' ? [block.text ?? ''] : []) ?? []
+      : [],
+  ).join('\n')
+  expect(assistantText).toContain('requires either the DSH bash or pwsh capability')
+  expect(assistantText).toContain('No Work Item was created or edited')
 })

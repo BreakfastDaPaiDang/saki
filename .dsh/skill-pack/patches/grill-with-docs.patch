@@ -1,0 +1,33 @@
+diff --git a/.dsh/skills/grill-with-docs/SKILL.md b/.dsh/skills/grill-with-docs/SKILL.md
+index 62b9efb..0a7f09d 100644
+--- a/.dsh/skills/grill-with-docs/SKILL.md
++++ b/.dsh/skills/grill-with-docs/SKILL.md
+@@ -1,7 +1,25 @@
+ ---
+ name: grill-with-docs
+-description: A relentless interview to sharpen a plan or design, which also creates docs (ADR's and glossary) as we go.
++description: Sharpen a Saki plan through structured questions while recording resolved terminology and decisions in the repository.
+ disable-model-invocation: true
++metadata:
++  saki:
++    upstream: https://github.com/mattpocock/skills
++    commit: 9c9f36ccd3995266cd675468af71639c8dde1ec5
++    dsh-capabilities:
++      - skill
++    one-of-capabilities: []
++    optional-capabilities: []
++    host-commands: []
++    mutation: workspace
+ ---
+
+-Call the Skill tool twice, for "grilling" and "domain-modeling".
++# Grill with docs
++
++Load `grilling` and `domain-modeling` with the DSH `skill` capability, then follow both instruction bodies together. The interview owns the decision frontier; domain modeling records only terminology and decisions that the user actually settles.
++
++## DSH compatibility preflight
++
++Confirm that the `skill` capability is available before asking the first question. If it is absent, stop and say: "This flow requires the DSH skill capability to load grilling and domain-modeling. Select a Saki development preset and retry."
++
++Do not create or edit a domain document until `domain-modeling` has loaded successfully and its repository-specific instructions have been read.
+warning: in the working copy of '.dsh/skills/grill-with-docs/SKILL.md', LF will be replaced by CRLF the next time Git touches it

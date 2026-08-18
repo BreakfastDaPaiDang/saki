@@ -1,0 +1,120 @@
+diff --git a/.dsh/skills/to-spec/SKILL.md b/.dsh/skills/to-spec/SKILL.md
+index 54dbc4b..b6b4503 100644
+--- a/.dsh/skills/to-spec/SKILL.md
++++ b/.dsh/skills/to-spec/SKILL.md
+@@ -1,75 +1,53 @@
+ ---
+ name: to-spec
+-description: Turn the current conversation into a spec and publish it to the project issue tracker — no interview, just synthesis of what you've already discussed.
++description: Synthesize the settled conversation into a Saki specification and publish it to the configured GitHub repository.
+ disable-model-invocation: true
++metadata:
++  saki:
++    upstream: https://github.com/mattpocock/skills
++    commit: 9c9f36ccd3995266cd675468af71639c8dde1ec5
++    dsh-capabilities:
++      - read
++      - write
++      - edit
++      - glob
++      - grep
++    one-of-capabilities:
++      - bash
++      - pwsh
++    optional-capabilities: []
++    host-commands:
++      - git
++      - gh
++    mutation: tracker
+ ---
+
+-This skill takes the current conversation context and codebase understanding and produces a spec. Do NOT interview the user — just synthesize what you already know.
++# To spec
+
+-The issue tracker and triage label vocabulary should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
++Synthesize the current conversation and repository state. Do not restart the requirements interview. Use the canonical terms from `CONTEXT-MAP.md` and the relevant context glossaries, and honor applicable ADRs.
+
+-## Process
++## DSH compatibility preflight
+
+-1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary throughout the spec, and respect any ADRs in the area you're touching.
++Perform this preflight before writing a local artifact or changing GitHub:
+
+-2. Sketch out the seams at which you're going to test the feature. Existing seams should be preferred to new ones. Use the highest seam possible. If new seams are needed, propose them at the highest point you can. The fewer seams across the codebase, the better - the ideal number is one.
++1. Confirm `read`, `write`, `edit`, `glob`, and `grep`, plus one of `bash` or `pwsh`.
++2. In PowerShell, resolve `git` and `gh` with `Get-Command`; in Bash, use `command -v`.
++3. Run `git rev-parse --show-toplevel` and confirm this is the intended checkout.
++4. Run `gh auth status`, `gh repo view -R BreakfastDaPaiDang/saki --json viewerPermission`, and `gh label list -R BreakfastDaPaiDang/saki --limit 200`.
++5. Read `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`.
+
+-Check with the user that these seams match their expectations.
++If any check fails, stop before mutation and report the missing capability, command, authentication, repository permission, or label. Never publish a partial specification. Every `gh` command for this repository must include `-R BreakfastDaPaiDang/saki`.
+
+-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
++## Specification
+
+-<spec-template>
++Produce one issue with these sections:
+
+-## Problem Statement
++1. **Problem statement** — the user's problem and observable impact.
++2. **Outcome** — the user-visible result, without implementation choreography.
++3. **User stories** — numbered actors, outcomes, and benefits covering normal, failure, recovery, and permission cases.
++4. **Implementation decisions** — agreed module responsibilities, public interfaces, data and API obligations, and relevant ADR links. Do not include volatile line numbers.
++5. **Testing decisions** — observable behaviors, public interfaces, prior repository examples, and required assembled evidence.
++6. **Out of scope** — explicit exclusions.
++7. **Open questions** — only genuinely unresolved decisions; omit the section when empty.
+
+-The problem that the user is facing, from the user's perspective.
+-
+-## Solution
+-
+-The solution to the problem, from the user's perspective.
+-
+-## User Stories
+-
+-A LONG, numbered list of user stories. Each user story should be in the format of:
+-
+-1. As an <actor>, I want a <feature>, so that <benefit>
+-
+-<user-story-example>
+-1. As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending
+-</user-story-example>
+-
+-This list of user stories should be extremely extensive and cover all aspects of the feature.
+-
+-## Implementation Decisions
+-
+-A list of implementation decisions that were made. This can include:
+-
+-- The modules that will be built/modified
+-- The interfaces of those modules that will be modified
+-- Technical clarifications from the developer
+-- Architectural decisions
+-- Schema changes
+-- API contracts
+-- Specific interactions
+-
+-Do NOT include specific file paths or code snippets. They may end up being outdated very quickly.
+-
+-Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it within the relevant decision and note briefly that it came from a prototype. Trim to the decision-rich parts — not a working demo, just the important bits.
+-
+-## Testing Decisions
+-
+-A list of testing decisions that were made. Include:
+-
+-- A description of what makes a good test (only test external behavior, not implementation details)
+-- Which modules will be tested
+-- Prior art for the tests (i.e. similar types of tests in the codebase)
+-
+-## Out of Scope
+-
+-A description of the things that are out of scope for this spec.
+-
+-## Further Notes
+-
+-Any further notes about the feature.
+-
+-</spec-template>
++Confirm that the synthesis matches the settled conversation before publishing. Publish through a body file with `gh issue create -R BreakfastDaPaiDang/saki`. Apply `ready-for-agent` only when the issue is independently implementable and unblocked; otherwise use the repository's current triage role.
+warning: in the working copy of '.dsh/skills/to-spec/SKILL.md', LF will be replaced by CRLF the next time Git touches it

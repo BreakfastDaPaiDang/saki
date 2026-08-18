@@ -25,6 +25,14 @@ The Cordis framework and its foundation libraries are source-vendored into this 
 | `@deepseek-ai/cordis-plugin-hmr` | `@cordisjs/plugin-hmr` | [github.com/deepseek-harness/cordis](https://github.com/deepseek-harness/cordis) | MIT |
 | `@deepseek-ai/cordis-plugin-logger-console` | `@cordisjs/plugin-logger-console` | [github.com/deepseek-harness/cordis](https://github.com/deepseek-harness/cordis) | MIT |
 
+## Repository-owned development instructions
+
+The Saki Development Skill Pack adapts selected agent instructions from a pinned third-party source. The adapted files, reviewed patches, exact source blobs, and compatibility declarations are tracked in [`.dsh/skill-pack/manifest.json`](.dsh/skill-pack/manifest.json); the original license is preserved in [`.dsh/skill-pack/LICENSE.mattpocock-skills`](.dsh/skill-pack/LICENSE.mattpocock-skills). These development instructions are not runtime npm dependencies.
+
+| Source | Commit | License | Role |
+| --- | --- | --- | --- |
+| [`mattpocock/skills`](https://github.com/mattpocock/skills/tree/9c9f36ccd3995266cd675468af71639c8dde1ec5) | `9c9f36ccd3995266cd675468af71639c8dde1ec5` | MIT | repository-owned development workflow instructions |
+
 ## Runtime npm dependencies
 
 External packages that a workspace package resolves at runtime. The tier covers every plugin a user can mount from `cordis.yml` — not only what the `dsh` CLI, Web UI, and Python SDK runtime load by default.

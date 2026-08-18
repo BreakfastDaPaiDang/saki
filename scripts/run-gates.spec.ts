@@ -83,6 +83,21 @@ describe('gate graph validation', () => {
     expect(ids).toContain('public-repository-links')
   })
 
+  it.each(['ci-primary', 'ci-static', 'ci-windows-blocking'] as const)(
+    'keeps the repository-owned skill-pack behavior in %s',
+    (mode) => {
+      const ids = withPnpmEntrypoint(() => gatesForMode(mode).map(subject => subject.id))
+
+      expect(ids).toContain('saki-skill-pack-tests')
+    },
+  )
+
+  it('keeps the repository-owned skill-pack provenance in documentation checks', () => {
+    const ids = withPnpmEntrypoint(() => gatesForMode('doc-sync').map(subject => subject.id))
+
+    expect(ids).toContain('saki-skill-pack')
+  })
+
   it.each(['ci-primary', 'ci-static', 'check-all'] as const)(
     'keeps the DSH package license policy in %s',
     (mode) => {

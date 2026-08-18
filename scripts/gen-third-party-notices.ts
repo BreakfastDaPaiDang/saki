@@ -16,6 +16,7 @@ import parseSpdx from 'spdx-expression-parse'
 
 const root = resolve(import.meta.dirname, '..')
 const OUT = 'THIRD_PARTY_NOTICES.md'
+const SAKI_SKILL_PACK_MANIFEST = '.dsh/skill-pack/manifest.json'
 
 /** Dependency-declaration kinds a consumer resolves at runtime. */
 const RUNTIME_KINDS = ['dependencies', 'optionalDependencies'] as const
@@ -120,6 +121,40 @@ interface ExternalDep {
   repo: string
   /** True when some shipped workspace consumer reaches it through runtime dependency edges. */
   runtime: boolean
+}
+
+/** Third-party source embedded as repository-owned agent instructions. */
+export interface SakiSkillPackDisclosure {
+  repository: string
+  commit: string
+  license: string
+  licensePath: string
+}
+
+/**
+ * Read the pinned source identity for the Saki Development Skill Pack.
+ * @returns the identity disclosed in `THIRD_PARTY_NOTICES.md`.
+ */
+export function collectSakiSkillPack(): SakiSkillPackDisclosure {
+  const manifest = JSON.parse(readFileSync(resolve(root, SAKI_SKILL_PACK_MANIFEST), 'utf8')) as {
+    upstream?: { repository?: unknown; commit?: unknown }
+    license?: { spdx?: unknown; vendoredPath?: unknown }
+  }
+  const repository = manifest.upstream?.repository
+  const commit = manifest.upstream?.commit
+  const license = manifest.license?.spdx
+  const licensePath = manifest.license?.vendoredPath
+  if (
+    repository !== 'https://github.com/mattpocock/skills'
+    || typeof commit !== 'string'
+    || !/^[0-9a-f]{40}$/.test(commit)
+    || license !== 'MIT'
+    || licensePath !== '.dsh/skill-pack/LICENSE.mattpocock-skills'
+    || !existsSync(resolve(root, licensePath))
+  ) {
+    throw new Error(`gen-third-party-notices: ${SAKI_SKILL_PACK_MANIFEST} has an unsupported source or license declaration.`)
+  }
+  return { repository, commit, license, licensePath }
 }
 
 /** Read and parse a workspace-relative `package.json`. */
@@ -666,6 +701,7 @@ export function render(): string {
   const runtimeDeps = npm.filter(dep => dep.runtime)
   const devDeps = npm.filter(dep => !dep.runtime)
   const vendored = collectVendored()
+  const sakiSkillPack = collectSakiSkillPack()
   const python = collectPython()
   const patched = collectPatched()
   const claudeDistribution = runtimeDeps.some(
@@ -704,6 +740,14 @@ The Cordis framework and its foundation libraries are source-vendored into this 
 | Package | Upstream name | Upstream | License |
 | --- | --- | --- | --- |
 ${vendored.map(row => `| \`${row.npmName}\` | \`${row.upstreamName}\` | [${row.upstream.replace('https://', '')}](${row.upstream}) | MIT |`).join('\n')}
+
+## Repository-owned development instructions
+
+The Saki Development Skill Pack adapts selected agent instructions from a pinned third-party source. The adapted files, reviewed patches, exact source blobs, and compatibility declarations are tracked in [\`.dsh/skill-pack/manifest.json\`](.dsh/skill-pack/manifest.json); the original license is preserved in [\`${sakiSkillPack.licensePath}\`](${sakiSkillPack.licensePath}). These development instructions are not runtime npm dependencies.
+
+| Source | Commit | License | Role |
+| --- | --- | --- | --- |
+| [\`mattpocock/skills\`](${sakiSkillPack.repository}/tree/${sakiSkillPack.commit}) | \`${sakiSkillPack.commit}\` | ${sakiSkillPack.license} | repository-owned development workflow instructions |
 
 ## Runtime npm dependencies
 
