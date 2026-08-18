@@ -14,7 +14,7 @@ Saki must absorb continuing DeepSeek Harness development without treating a clea
 
 `master` requires the aggregate `all checks passed` status. A merge candidate without textual conflicts is marked ready and has merge-commit auto-merge enabled, so GitHub merges it only after required CI succeeds. A textual conflict or unsuccessful CI creates or updates one `ready-for-agent` compatibility Issue containing the upstream commit, pull request, evidence, and acceptance conditions. Successful CI closes an existing compatibility Issue.
 
-The synchronization branch mirrors the upstream commit rather than containing a pre-resolved merge. GitHub therefore tests and merges the same combined tree presented by the pull request, while the merge commit records both the Saki and official upstream histories.
+The synchronization branch mirrors the upstream commit rather than containing a pre-resolved merge. GitHub therefore tests and merges the same combined tree presented by the pull request, while the merge commit records both the Saki and official upstream histories. Before its uncommitted probe merge, the workflow sets a repository-local automation identity so a fresh runner can report textual conflicts without requiring global Git configuration.
 
 ## Alternatives considered
 

@@ -14,7 +14,7 @@ Saki 必须持续吸收 DeepSeek Harness 开发成果，同时不能把 Git 文�
 
 `master` 要求汇总状态 `all checks passed`。没有文本冲突的合并候选会被标为 Ready 并启用 merge commit 自动合并，因此 GitHub 只在必需 CI 成功后合并。文本冲突或 CI 未成功时，工作流创建或更新一个 `ready-for-agent` 兼容性 Issue，其中包含上游 commit、Pull Request、证据和验收条件。CI 成功时关闭现有兼容性 Issue。
 
-同步分支镜像上游 commit，而不包含预先解决的合并。GitHub 因此会测试并合并 Pull Request 所展示的同一棵组合树，而 merge commit 同时记录 Saki 和官方上游历史。
+同步分支镜像上游 commit，而不包含预先解决的合并。GitHub 因此会测试并合并 Pull Request 所展示的同一棵组合树，而 merge commit 同时记录 Saki 和官方上游历史。工作流在执行不提交的探测合并前设置仓库级自动化身份，使全新 runner 无需全局 Git 配置也能报告文本冲突。
 
 ## Alternatives considered
 

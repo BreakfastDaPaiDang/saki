@@ -76,6 +76,16 @@ describe('Saki upstream sync workflow', () => {
     })
   })
 
+  it('sets a repository-local identity before probing the upstream merge', () => {
+    const script = jobScript(loadWorkflow(), 'sync')
+    const identityOffset = script.indexOf("git config --local user.name 'Saki upstream automation'")
+    const emailOffset = script.indexOf("git config --local user.email 'saki-upstream-automation@users.noreply.github.com'")
+    const mergeOffset = script.indexOf('git merge --no-commit --no-ff')
+    expect(identityOffset).toBeGreaterThanOrEqual(0)
+    expect(emailOffset).toBeGreaterThan(identityOffset)
+    expect(mergeOffset).toBeGreaterThan(emailOffset)
+  })
+
   it('routes conflicts and failed CI to one Agent-ready compatibility issue', () => {
     const workflow = loadWorkflow()
     const syncScript = jobScript(workflow, 'sync')

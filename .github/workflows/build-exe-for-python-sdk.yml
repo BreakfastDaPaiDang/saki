@@ -199,7 +199,7 @@ jobs:
           # Run the dependency's lifecycle in its real package directory so a
           # workspace-level rebuild cannot silently skip this transitive package.
           # The manylinux make below then replaces only the release objects.
-          npm_config_build_from_source=true pnpm --dir "$addon_dir" run install
+          (cd "$addon_dir" && npm_config_build_from_source=true pnpm run install)
           addon="$addon_dir/build/Release/pty.node"
           [ -f "$addon_dir/build/Makefile" ] || {
             echo "::error::node-pty install did not generate $addon_dir/build/Makefile"
