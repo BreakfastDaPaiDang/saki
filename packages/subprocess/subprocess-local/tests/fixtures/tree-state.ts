@@ -7,6 +7,8 @@ export interface ManagedTreeState {
   readonly root: number
   /** Descendant process id. */
   readonly descendant: number
+  /** Source module selected for the nested fixture's workspace import. */
+  readonly atomicWriteModuleUrl: string
   readonly [key: string]: unknown
 }
 
@@ -31,7 +33,8 @@ export async function readTreeState(path: string): Promise<ManagedTreeState | un
   }
   const state = JSON.parse(text) as Partial<ManagedTreeState>
   if (!Number.isSafeInteger(state.root) || !Number.isSafeInteger(state.descendant)
-    || (state.root ?? 0) <= 0 || (state.descendant ?? 0) <= 0 || state.root === state.descendant) {
+    || (state.root ?? 0) <= 0 || (state.descendant ?? 0) <= 0 || state.root === state.descendant
+    || typeof state.atomicWriteModuleUrl !== 'string') {
     throw new Error(`invalid managed-tree state: ${text}`)
   }
   return state as ManagedTreeState
