@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/package-governance.md
-package-governance.md: d87fdd0708965d3cebe6778f20f62ec79f3fcb7f
-package-governance.zh.md: fedbd98942950a9d45c64d274638ef4f26821998
+package-governance.md: 36850c4cfa27c7cc00e1790f39a52cdae0c8666d
+package-governance.zh.md: 4d56da3bce8d3d23e9007392c14c5fd29db75bcb

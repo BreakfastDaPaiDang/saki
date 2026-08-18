@@ -235,15 +235,17 @@ class DetachedWorktree {
   }
 }
 
-/** Discovers and stages every package published in one repository baseline. */
-class WorkspacePackageSet {
+/** Discovers, stages, and packs every package published in one repository baseline. */
+export class WorkspacePackageSet {
   private constructor(
     readonly packages: PackageTarget[],
     readonly baseVersion: string,
   ) {}
 
   static discover(root: string): WorkspacePackageSet {
-    const manifestPaths = globSync(PACKAGE_PATTERNS, { cwd: root }).sort()
+    const manifestPaths = globSync(PACKAGE_PATTERNS, { cwd: root })
+      .map(path => path.split(sep).join('/'))
+      .sort()
     if (manifestPaths.length === 0) {
       throw new Error('no package manifests found under vendor/, packages/, or apps/')
     }
@@ -277,11 +279,14 @@ class WorkspacePackageSet {
       names.add(name)
       packages.push({
         name,
-        directory: dirname(manifestPath),
+        directory: dirname(manifestPath).split(sep).join('/'),
         origin: isVendored ? 'vendor' : 'harness',
       })
     }
     packages.sort((left, right) => left.name.localeCompare(right.name))
+    if (packages.length === 0) {
+      throw new Error('no DSH or vendored packages selected for npm baseline')
+    }
     return new WorkspacePackageSet(packages, baseVersion)
   }
 
@@ -294,6 +299,22 @@ class WorkspacePackageSet {
       delete manifest.private
       stageInternalDependencies(manifest, internalNames, releaseVersion, manifestPath)
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    }
+  }
+
+  /**
+   * Pack the workspace paths selected for this baseline.
+   * @param root - detached worktree root.
+   * @param artifactDirectory - destination for the generated tarballs.
+   * @param runner - process runner used by the release command.
+   */
+  pack(root: string, artifactDirectory: string, runner: Pick<CommandRunner, 'run'>): void {
+    for (const target of this.packages) {
+      runner.run('pnpm', [
+        '--filter', `./${target.directory}`,
+        'pack',
+        '--pack-destination', artifactDirectory,
+      ], root)
     }
   }
 }
@@ -571,14 +592,7 @@ class BaselinePackager {
       this.runner.run('pnpm', ['run', 'build'], worktree.path)
       this.runner.run('pnpm', ['run', 'publint'], worktree.path)
       this.runner.run('pnpm', ['run', 'verify-built-package-invariants'], worktree.path)
-      this.runner.run('pnpm', [
-        '--filter', './vendor/**',
-        '--filter', './packages/**',
-        '--filter', './apps/**',
-        '--recursive',
-        'pack',
-        '--pack-destination', artifactDirectory,
-      ], worktree.path)
+      packageSet.pack(worktree.path, artifactDirectory, this.runner)
 
       const bundle = ReleaseBundle.create(
         artifactDirectory,
@@ -1079,9 +1093,11 @@ async function main(): Promise<void> {
   throw new Error(`unknown command: ${command}`)
 }
 
-try {
-  await main()
-} catch (error: unknown) {
-  console.error(`publish-npm-baseline: ${error instanceof Error ? error.message : String(error)}`)
-  process.exitCode = 1
+if (process.argv[1] && import.meta.filename === resolve(process.argv[1])) {
+  try {
+    await main()
+  } catch (error: unknown) {
+    console.error(`publish-npm-baseline: ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  }
 }

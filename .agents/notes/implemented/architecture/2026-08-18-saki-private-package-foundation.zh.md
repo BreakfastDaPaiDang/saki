@@ -10,13 +10,13 @@
 
 ## 决策
 
-**集中执行产品 family 分类。** `classifyProductPackage` 只识别既有 DSH family 与 `@breakfastdapaidang/saki-*`；`privateSakiPackageViolations` 把 Saki 命名空间与 `packages/saki/<pkg>`、`private: true`、缺少 npm 发布元数据和 package 自有的有效 SemVer 绑定。manifest 校验把 SemVer 语法交给维护中的 `semver` parser。工作区约束、许可证检查、依赖图与发布工具消费同一个分类器，不再各自复制前缀规则。
+**集中执行产品 family 分类。** `classifyProductPackage` 只识别既有 DSH family 与 `@breakfastdapaidang/saki-*`；`privateSakiPackageViolations` 把 Saki 命名空间与 suffix 相同的 `packages/saki/<pkg>`、`private: true`、缺少 npm 发布元数据和 package 自有的有效 SemVer 绑定。manifest 校验把 SemVer 语法交给维护中的 `semver` parser。工作区约束、许可证检查、依赖图与发布工具消费同一个分类器，不再各自复制前缀规则。
 
-**明确决定发布成员。** DSH `ReleaseFamily` 与旧 npm-baseline 命令即使扫描到 `packages/saki/*`，也会排除 Saki family。既有 DSH 发布语义继续由 [npm 发布序列](../process/2026-08-10-npm-release-sequences.md)拥有；发布 Saki 必须另行决定 release family，不能因宽泛 glob 而继承 DSH 成员身份。
+**明确决定发布成员。** DSH `ReleaseFamily` 与旧 npm-baseline 命令即使在发现扫描中包含 `packages/saki/*`，也会排除 Saki family；baseline 打包只消费已发现发布集合中的准确 DSH 与 vendor 目录。既有 DSH 发布语义继续由 [npm 发布序列](../process/2026-08-10-npm-release-sequences.md)拥有；发布 Saki 必须另行决定 release family，不能因宽泛 glob 而继承 DSH 成员身份。
 
 **让工程检查保持 family-neutral。** 共享 package 规则、源码平面 mapping、project reference、许可证与 invariant 检查、生成 catalog、模块图和 bundle resolution 接受两个已分类产品 family。[package 治理参考](../../../../docs/saki/package-governance.md)拥有完整的当前 package 与发布规则。
 
-**只证明第一个 composition root。** `@breakfastdapaidang/saki-bundle` 拥有空 Cordis root、一层 patch 和仓库本地启动器。它唯一的配置行等待 Loader 结算、输出一条稳定 readiness 记录，并请求由启动器拥有的正常退出。后续 package 随可独立验证的产品切片加入；规划中的名称不足以支持提前创建占位目录。
+**只证明第一个 composition root。** `@breakfastdapaidang/saki-bundle` 拥有空 Cordis root、一层 patch 和仓库本地启动器。它唯一的配置行提供稳定的 readiness 记录。启动器只在 `boot()` 完成 entry activation audit 后输出该记录并请求正常退出；报告失败会先处置应用，再进入启动器失败路径。后续 package 随可独立验证的产品切片加入；规划中的名称不足以支持提前创建占位目录。
 
 ## 后果
 

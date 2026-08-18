@@ -1,44 +1,61 @@
 /**
- * Empty Saki application readiness row.
+ * Empty Saki application readiness provider and post-boot announcer.
  * @module @breakfastdapaidang/saki-bundle
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/cordis-plugin-loader'
-import type {} from '@deepseek-ai/dsh-cmdline'
 
 /** Stable Cordis plugin name. */
 export const name = 'saki-readiness'
-/** Loader settlement is the readiness precondition. */
-export const inject = ['loader']
+/** The readiness provider has no service prerequisites. */
+export const inject: readonly string[] = []
 
 /** Deterministic repository-launch readiness record. */
 export const SAKI_READY_RECORD = Object.freeze({ product: 'saki', status: 'ready' } as const)
 
-/** Process stream used by the readiness row; tests replace it with a capture. */
-export const internals: { stdout: { write(chunk: string): unknown } } = {
-  stdout: process.stdout,
+/** Process effects used only after the complete plugin tree passes activation audit. */
+export interface SakiReadinessIo {
+  /** Destination for the one-line readiness record. */
+  stdout: { write(chunk: string): unknown }
+  /** Launcher-owned clean-exit request. */
+  exit(code: number): void
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Record contributed by the activated Saki composition. */
+    sakiReadiness: typeof SAKI_READY_RECORD
+  }
 }
 
 /**
- * Announce the settled empty application and request a clean process exit.
- * @param ctx - plugin context carrying Loader and the launcher-owned exit request.
+ * Publish the readiness record while this plugin fiber remains active.
+ * @param ctx - plugin context that owns the provided record.
  */
 export function apply(ctx: Context): void {
-  const loader = ctx.get('loader')
-  const exit = ctx.get('appExit')
-  if (loader === undefined || exit === undefined) {
-    throw new Error('saki-readiness: the launcher must provide ctx.appExit and Loader before the tree mounts')
-  }
+  ctx.provide('sakiReadiness', SAKI_READY_RECORD)
+}
 
-  let active = true
-  ctx.effect(() => () => { active = false })
-  void loader.await().then(() => {
-    if (!active || ctx.get('loader') === undefined) return
-    internals.stdout.write(`${JSON.stringify(SAKI_READY_RECORD)}\n`)
-    exit(0)
-  }).catch(() => {
-    // boot() owns Loader-settlement diagnostics and process failure; this
-    // observer only prevents its duplicate await from becoming unhandled.
-  })
+/**
+ * Announce readiness only after boot and its final entry-activation audit succeed.
+ * A reporting failure disposes the booted tree before it is returned to the launcher.
+ * @param startup - complete application boot, including the activation audit.
+ * @param io - launcher-owned stdout and clean-exit request.
+ * @returns the audited application context after readiness is requested.
+ */
+export async function announceSakiReadiness(
+  startup: Promise<Context>,
+  io: SakiReadinessIo,
+): Promise<Context> {
+  const ctx = await startup
+  try {
+    const record = ctx.get('sakiReadiness')
+    if (record === undefined) throw new Error('saki: activated bundle did not provide sakiReadiness')
+    io.stdout.write(`${JSON.stringify(record)}\n`)
+    io.exit(0)
+    return ctx
+  } catch (error) {
+    await ctx.fiber.dispose()
+    throw error
+  }
 }

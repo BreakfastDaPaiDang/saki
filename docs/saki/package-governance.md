@@ -6,9 +6,9 @@ English | [中文](package-governance.zh.md)
 
 ## Namespace and location
 
-Published Harness packages keep the `@deepseek-ai/dsh-*` namespace and existing release rules. Saki product packages live exactly at `packages/saki/<pkg>`, use `@breakfastdapaidang/saki-<pkg>`, set `private: true`, and omit npm `publishConfig` and repository metadata. Their package versions are valid SemVer values independent of the DSH workspace release version.
+Published Harness packages keep the `@deepseek-ai/dsh-*` namespace and existing release rules. Saki product packages live exactly at `packages/saki/<pkg>`, use `@breakfastdapaidang/saki-<pkg>` with the same `<pkg>` suffix, set `private: true`, and omit npm `publishConfig` and repository metadata. Their package versions are valid SemVer values independent of the DSH workspace release version.
 
-The shared classifier is used by workspace constraints, license checks, dependency graphs, and release tooling. A Saki name outside `packages/saki/`, or a different name inside that group, fails the workspace gate. The current DSH release family and the legacy npm-baseline command explicitly exclude Saki; publishing Saki requires a future, deliberate release-family decision.
+The shared classifier is used by workspace constraints, license checks, dependency graphs, and release tooling. A Saki name outside `packages/saki/`, a different namespace inside that group, or a directory leaf that differs from its package-name suffix fails the workspace gate. The current DSH release family and the legacy npm-baseline command explicitly exclude Saki; baseline packing uses only the exact DSH and vendor directories in its selected set. Publishing Saki requires a future, deliberate release-family decision.
 
 ## Shared repository standards
 
@@ -18,9 +18,9 @@ The second namespace changes classification only. Existing `@deepseek-ai/dsh-*` 
 
 ## First bundle and local entry
 
-`@breakfastdapaidang/saki-bundle` is the only initial Saki package. Its empty root plus declared patch mounts one readiness row, proving workspace discovery, source and artifact resolution, Loader settlement, deterministic output, and clean shutdown without credentials. `pnpm run saki` is a repository development entry; it does not read or replace a user's `start-dsh-with-clash.ps1` or other host-local startup wrapper.
+`@breakfastdapaidang/saki-bundle` is the only initial Saki package. Its empty root plus declared patch mounts one readiness row, proving workspace discovery, source and artifact resolution, complete boot activation, deterministic output, and clean shutdown without credentials. `pnpm run saki` is a repository development entry; it does not read or replace a user's `start-dsh-with-clash.ps1` or other host-local startup wrapper.
 
-The readiness process emits one JSON line only after the Loader settles, then exits zero. A keyless snapshot covers the source entry, and a plain-Node smoke covers the built executable when artifacts exist.
+The readiness row provides the stable record, and the launcher emits its one JSON line and exits zero only after `boot()` completes the entry-activation audit. A readiness output or exit-callback failure disposes the application and enters the launcher's failure path. A keyless snapshot covers the source entry, and a plain-Node smoke covers the built executable when artifacts exist.
 
 ## Expansion rule
 

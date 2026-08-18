@@ -256,7 +256,8 @@
     "packages/saki/bundle": {
       "entry": [
         "tests/**/*.spec.ts",
-        "tests/**/*.e2e.ts"
+        "tests/**/*.e2e.ts",
+        "tests/fixtures/pending-readiness.ts"
       ],
       "project": [
         "src/**/*.ts",

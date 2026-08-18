@@ -73,6 +73,11 @@ export function privateSakiPackageViolations(
     problems.push('@breakfastdapaidang/saki-* packages must live under packages/saki/')
   }
   if (!inSakiGroup || classification?.family !== 'saki') return problems
+  const directoryLeaf = directory.slice('packages/saki/'.length)
+  const packageSuffix = classification.short.slice('saki/'.length)
+  if (directoryLeaf !== packageSuffix) {
+    problems.push('Saki package directory leaf must match its npm name suffix')
+  }
   if (manifest.private !== true) problems.push('Saki package must set "private": true')
   if (manifest.publishConfig !== undefined) problems.push('private Saki package must not declare publishConfig')
   if (manifest.repository !== undefined) problems.push('private Saki package must not declare npm repository metadata')

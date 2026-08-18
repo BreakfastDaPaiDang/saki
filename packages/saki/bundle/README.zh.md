@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-私有 Saki 组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)，该 patch 在空的 [`cordis.yml`](cordis.yml) 上插入唯一的 `saki-readiness` 启动行。启动行等待真实 Loader 树完成结算，向 stdout 写入 `{"product":"saki","status":"ready"}`，再通过启动器提供的 `ctx.appExit` 钩子请求正常退出。
+私有 Saki 组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)，该 patch 在空的 [`cordis.yml`](cordis.yml) 上插入唯一的 `saki-readiness` 启动行。该行提供稳定的 `{"product":"saki","status":"ready"}` 记录。启动器只在 `boot()` 完成 entry activation audit 后将其写入 stdout 并请求正常退出；报告失败会处置应用并进入启动器失败路径。
 
 在仓库根目录运行：
 

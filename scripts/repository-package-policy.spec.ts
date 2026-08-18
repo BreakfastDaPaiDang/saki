@@ -50,6 +50,13 @@ describe('repository product package policy', () => {
       'packages/saki packages must use the @breakfastdapaidang/saki-* namespace',
     ])
     expect(privateSakiPackageViolations('packages/saki/bundle', {
+      name: '@breakfastdapaidang/saki-control-plane',
+      version: '0.1.0',
+      private: true,
+    })).toEqual([
+      'Saki package directory leaf must match its npm name suffix',
+    ])
+    expect(privateSakiPackageViolations('packages/saki/bundle', {
       ...valid,
       version: 'next',
       private: false,

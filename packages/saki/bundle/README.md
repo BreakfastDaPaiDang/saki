@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-The private Saki composition root. Its [`dsh.bundle`](package.json) declaration points at [`cordis.patch.yml`](cordis.patch.yml), which inserts the single `saki-readiness` startup row over an empty [`cordis.yml`](cordis.yml). The startup row waits for the real Loader tree to settle, writes `{"product":"saki","status":"ready"}` to stdout, and requests clean exit through the launcher's `ctx.appExit` hook.
+The private Saki composition root. Its [`dsh.bundle`](package.json) declaration points at [`cordis.patch.yml`](cordis.patch.yml), which inserts the single `saki-readiness` startup row over an empty [`cordis.yml`](cordis.yml). The row provides the stable `{"product":"saki","status":"ready"}` record. The launcher writes it to stdout and requests clean exit only after `boot()` completes its entry-activation audit; a reporting failure disposes the application and enters the launcher failure path.
 
 From the repository root, run:
 

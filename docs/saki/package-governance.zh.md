@@ -6,9 +6,9 @@
 
 ## 命名空间与位置
 
-可发布的 Harness 包继续使用 `@deepseek-ai/dsh-*` 命名空间和现有发布规则。Saki 产品包严格位于 `packages/saki/<pkg>`，使用 `@breakfastdapaidang/saki-<pkg>`，设置 `private: true`，并省略 npm `publishConfig` 与 repository 元数据。其包版本使用有效 SemVer，独立于 DSH 工作区发布版本。
+可发布的 Harness 包继续使用 `@deepseek-ai/dsh-*` 命名空间和现有发布规则。Saki 产品包严格位于 `packages/saki/<pkg>`，使用 suffix 相同的 `@breakfastdapaidang/saki-<pkg>`，设置 `private: true`，并省略 npm `publishConfig` 与 repository 元数据。其包版本使用有效 SemVer，独立于 DSH 工作区发布版本。
 
-工作区约束、许可证检查、依赖图与发布工具共享同一个分类器。Saki 名称出现在 `packages/saki/` 之外，或者该组内的包使用其他名称，都会使工作区门禁失败。当前 DSH 发布族与旧 npm-baseline 命令明确排除 Saki；发布 Saki 必须经过未来单独、明确的发布族决策。
+工作区约束、许可证检查、依赖图与发布工具共享同一个分类器。Saki 名称出现在 `packages/saki/` 之外、该组内使用其他命名空间，或者目录 leaf 与 package name suffix 不同，都会使工作区门禁失败。当前 DSH 发布族与旧 npm-baseline 命令明确排除 Saki；baseline 打包只使用其已选择集合中的准确 DSH 与 vendor 目录。发布 Saki 必须经过未来单独、明确的发布族决策。
 
 ## 共享仓库标准
 
@@ -18,9 +18,9 @@
 
 ## 首个 bundle 与本地入口
 
-`@breakfastdapaidang/saki-bundle` 是初始阶段唯一的 Saki 包。它用空根配置与声明的 patch 挂载一条 readiness 行，在不使用凭据的情况下证明工作区发现、源码与产物解析、Loader 结算、确定性输出和正常关停。`pnpm run saki` 是仓库开发入口；它不会读取或替代用户的 `start-dsh-with-clash.ps1` 或其他宿主本地启动包装层。
+`@breakfastdapaidang/saki-bundle` 是初始阶段唯一的 Saki 包。它用空根配置与声明的 patch 挂载一条 readiness 行，在不使用凭据的情况下证明工作区发现、源码与产物解析、完整启动激活、确定性输出和正常关停。`pnpm run saki` 是仓库开发入口；它不会读取或替代用户的 `start-dsh-with-clash.ps1` 或其他宿主本地启动包装层。
 
-Readiness 进程只在 Loader 结算后输出一行 JSON，随后以零退出。无密钥 snapshot 覆盖源码入口；构建产物存在时，plain-Node smoke 覆盖构建后的可执行文件。
+Readiness 行提供稳定记录，启动器只在 `boot()` 完成 entry activation audit 后输出一行 JSON 并以零退出。Readiness 输出或退出 callback 失败会处置应用并进入启动器失败路径。无密钥 snapshot 覆盖源码入口；构建产物存在时，plain-Node smoke 覆盖构建后的可执行文件。
 
 ## 扩展规则
 
