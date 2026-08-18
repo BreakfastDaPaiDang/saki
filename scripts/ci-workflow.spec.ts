@@ -354,4 +354,20 @@ describe('Git hooks', () => {
       expect(pairing).toMatchObject({ exclude: ['.agents/notes/archived/**'] })
     }
   })
+
+  it('regenerates third-party notices when skill-pack provenance changes', () => {
+    const lefthook = loadWorkflow('lefthook.yml')
+    const preCommit = lefthook['pre-commit']
+    if (!isRecord(preCommit) || !Array.isArray(preCommit.jobs)) {
+      throw new TypeError('lefthook must define pre-commit jobs')
+    }
+    const notices: unknown = (preCommit.jobs as unknown[]).find(
+      (job: unknown) => isRecord(job) && job.name === 'third-party notices (staged)',
+    )
+    if (!isRecord(notices) || typeof notices.glob !== 'string') {
+      throw new TypeError('lefthook must define the third-party notices input glob')
+    }
+
+    expect(notices.glob).toContain('.dsh/skill-pack/manifest.json')
+  })
 })
