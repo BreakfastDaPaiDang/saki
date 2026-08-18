@@ -6,7 +6,7 @@ status: accepted
 
 [English](0005-recoverable-control-intents.md) | 中文
 
-Saki 把每次会改变状态的控制面请求持久化为幂等 Control Intent，并通过可恢复的生命周期推进它。带版本的领域记录拥有当前事实，Execution Lease 以原子方式把工作树的写入权授予一个 Agent Run，产品 View 则读取显式投影。0.1.0 使用 DSH `storageDomain` 保存这些记录，不引入完整事件溯源或独立事务数据库。
+除 bootstrap exchange 与 logout 外，Saki 把每个产品 mutation 持久化为幂等 Control Intent，并通过可恢复的生命周期推进它。两个 access 操作只通过专属认证协议修改单一 Installation Access aggregate。带版本的领域记录拥有当前事实，Execution Lease 以原子方式把工作树的写入权授予一个 Agent Run，产品 View 则读取显式投影。0.1.0 使用 DSH `storageDomain` 保存这些记录，不引入完整事件溯源或独立事务数据库。
 
 ## 为什么这样决定
 
@@ -30,7 +30,7 @@ Control Intent 让未完成操作成为显式状态。Saki 在派发前记录请
 
 ## 影响
 
-控制面对写入暴露统一的 Intent 提交接口，对读取暴露显式 Projection 接口。提交后的通知只用于使投影失效；它不是第二条持久事件流，也不能授权外部工作。
+控制面把用于 Access、bootstrap exchange 与 logout 的 `SakiAccess` 和用于 Intent 提交、受保护 Projection query 与 invalidation 的 `SakiControlPlane` 并列暴露。Bootstrap 与 logout 无法触及产品或外部副作用状态。提交后的通知只用于使投影失效；它不是第二条持久事件流，也不能授权外部工作。
 
 每个外部 adapter 必须接受稳定 Intent 标识，并支持幂等派发或显式对账。adapter 返回稳定标识与普通数据，不返回活进程句柄或凭据内容。无法自动确定结果的 Control Intent 保持可见，并标记为需要对账。
 

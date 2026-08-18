@@ -16,7 +16,7 @@ Status: proposed
 
 0.1.0 版本登记、rebind 和退役 Project，但不实际创建、移动、repair、移除或 prune worktree。自动模式要求 clean tree。手动接管已有变更会记录其有界指纹与归因限制；任何歧义混合都会继续使自动 staging 和 completion 不可用。[ADR 0014](../../../../docs/adr/0014-stable-resource-bindings-over-canonical-worktrees.md)拥有该生命周期。
 
-取代检查发现与提议中的 [domain KV 存储与 Workspace](2026-07-24-domain-kv-storage-and-workspace.md) Agent Note 有部分重叠。该 Agent Note 继续拥有 DSH Workspace 的 `fs.realpath` 唯一性与不可变记录；本提案拥有 Saki 更高层的绑定身份、Git 观察、rebind 与 lease 语义。提议中的 [Installation 维护](2026-08-18-saki-forward-migrations-and-installation-maintenance.md) Agent Note 继续拥有替换 Host 恢复，并把 `needs-rebind` 接入该生命周期。
+提议中的 [domain KV 存储与 Workspace](2026-07-24-domain-kv-storage-and-workspace.md) Agent Note 拥有 DSH Workspace 的 `fs.realpath` 唯一性与不可变记录；本提案拥有 Saki 更高层的绑定身份、Git 观察、rebind 与 lease 语义。提议中的 [Installation 维护](2026-08-18-saki-forward-migrations-and-installation-maintenance.md) Agent Note 拥有替换 Host 恢复，并把 `needs-rebind` 接入该生命周期。
 
 ## 考虑过的方案
 

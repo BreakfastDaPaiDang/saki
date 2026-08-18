@@ -14,6 +14,10 @@ Saki 控制面 Module 通过一个接收幂等 Control Intent request 与可信�
 
 Principal 与 Grant 保持为持久版本化记录。Grant 标明签发者、目标主体、操作、资源范围、有效期、委派限制、可选父级、revision 和撤销状态。启用自动模式的 Project 通过独立 Project Automation Principal 行动，并且必须同时具备 Grant 与满足 Automation Policy。一次性 Agent Run 接收父级子集授权，不会成为 Principal；持久 Agent Identity 可以接收自己的 Grant。环境中的 DSH initiator 或 Session lineage 仍是来源信息，不是权限；这与 [Agent initiator scope](../../implemented/architecture/2026-07-15-agent-initiator-scope.md)一致。
 
+单一 Installation Access aggregate 拥有不同的 branded、revisioned Bootstrap Challenge 与 Browser Session entry。一次 expected-revision record update 验证 `issued` challenge，并在 transport 发出 `Set-Cookie` 前原子记录终态 `consumed` 与一个 `active` session。响应丢失不会证明 cookie 已送达、重新打开 challenge 或创建另一个 session。终态按服务端时钟保持单调；重启只 reconcile 已经过期的 entry，generation 替换与 Principal 退役会使受影响 session 失效，retained terminal entry 可以进入 cleanup，但绝不让 id 或 secret 可复用。
+
+明文 bootstrap secret 只存在于 launcher handoff 与准确的 exchange POST body 中；raw cookie 只存在于 `Set-Cookie` 与 Cookie header 和浏览器 HttpOnly jar 中；派生 request token 只存在于已认证 Access 与请求防伪 header 中。持久存储保存 bootstrap 与 cookie digest，以及非秘密 request-token derivation version 与 domain metadata。服务端通过 constant-time digest compare 认证请求呈现的 raw cookie，再使用版本化加密 HMAC 或 KDF，通过 domain separation 从同一个 cookie 派生 Access request token；mutation 会重新计算并与 header 做 constant-time compare。系统不存在独立 verifier secret，重启也不需要在存储中保留 raw token。除具名 transport 外，明文 secret 与 token 绝不进入持久记录、receipt、snapshot、无关 wire payload 或 Projection、URL、analytics、log、diagnostic、trace、event、error text、crash artifact、adapter error 或 export。未认证 Access 读取不会泄漏 Installation、安全 object identifier 或 secret failure class。
+
 撤销会阻止新 Intent、新委派，以及任何需要被撤销 Grant 但尚未开始的外部副作用。对于可能已经发生的副作用，仍允许检查、取消、对账和补偿。活动 Host capability 边界检查当前 Grant revision，不把 Intent 的历史 Actor 快照当作永久权限。
 
 Module 在跨越 capability seam 前持久化 Intent。Intent 生命周期记录区分 prepared、reserved、dispatched、waiting、completed、failed、canceled 和 reconciliation-required 结果。每个外部 adapter 都接收 Intent id，返回稳定外部标识与普通数据，并支持幂等重新派发，或者提供足以对账的检查能力。外部调用不得在 `storageDomain` update callback 内运行。
@@ -22,11 +26,11 @@ Module 在跨越 capability seam 前持久化 Intent。Intent 生命周期记录
 
 以 Resource Binding 为键的 Execution Lease 记录拥有可写工作的唯一强准入事实。它通过原子读改写授予一个 Agent Run 工作树使用权，或者返回当前持有者。Intent 先于 Lease 获取写入；两次写入之间崩溃会留下可重试的 prepared Intent，获取 Lease 后崩溃则会在 Lease 上留下 Intent id 与拟创建 Run 的事实，使恢复逻辑能完成或释放它，而不允许竞争写入者进入。
 
-Principal、Grant、Development Project、Work Item 控制元数据、Work Session、Agent Run、Provider Account Profile、Context Policy、Generation Job、Control Intent 和 Execution Lease 保持为独立的版本化记录。每条记录只有一个拥有 Module，并以来源和观察时间标记缓存的外部事实。跨记录引用通过 Intent 恢复逐步收敛；任何代码都不得宣称多条记录已原子提交。
+Installation Access、Principal、Grant、Development Project、Work Item 控制元数据、Work Session、Agent Run、Provider Account Profile、Context Policy、Generation Job、Control Intent 和 Execution Lease 保持为独立的版本化记录。Bootstrap Challenge 与 Browser Session 是同一 aggregate 内的 entry，因此 challenge 消费与 session 插入共享一次 record commit；其他跨记录引用都不得声称具有原子性。每条记录只有一个拥有 Module，并以来源和观察时间标记缓存的外部事实。跨记录引用通过 Intent 恢复逐步收敛。
 
-控制面 Interface 暴露 Intent 提交以及显式 Project、Work Item、Agent Run 和 Model Supply 投影。提交后变更通知携带标识与失效范围，使客户端重新读取投影；它们不是持久命令或事件溯源事实日志。Project 级进程内串行可以减少争用，但不能取代持久 revision、Intent 恢复或 Execution Lease。
+控制面 Module 把 `SakiAccess.readAccess(presentedSession?, signal)`、`exchangeBootstrap(transportContext, request, signal)` 与 `logoutCurrentSession(authentication, requestToken, signal)` 和 `SakiControlPlane.submit(authentication, intent, signal)`、`query(authentication, query, signal)` 与 `onChanged` 并列暴露。只有 Host API 使用 package-private SakiAccess resolver，把 HTTP cookie 与 transport 事实转换为可信 `AuthenticationContext`；resolver 与 context 都不是 wire API。Bootstrap exchange 与 logout 是仅有的两个不经过 Control Intent 的产品 mutation，并且只修改 Installation Access。每次受保护 query 与 submit 都重新验证 active session 与 Installation generation、Principal lifecycle，以及当前 Grant revision 与 resource scope。Principal 或 Grant 变化会使受影响 Projection 失效。提交后变更通知携带标识与失效范围，使客户端重新读取投影；它们不是持久命令或事件溯源事实日志。Project 级进程内串行可以减少争用，但不能取代持久 revision、Intent 恢复或 Execution Lease。
 
-启动恢复会在接受自动工作前扫描非终态 Intent 与已占用 Lease。只有 adapter 接口保证操作幂等时才重新派发，否则检查外部标识。缺少证据或证据矛盾时，Intent 进入 reconciliation required，相关资源保持不可用，直到人工或确定性修复完成对账。
+启动恢复先 reconcile 按服务端时钟已经过期的 access entry，并拒绝来自其他 Installation State Generation 或 inactive Principal 的 session，然后才会在接受自动工作前扫描非终态 Intent 与已占用 Lease。只有 adapter 接口保证操作幂等时才重新派发，否则检查外部标识。缺少证据或证据矛盾时，Intent 进入 reconciliation required，相关资源保持不可用，直到人工或确定性修复完成对账。
 
 ## 考虑过的方案
 
@@ -42,6 +46,8 @@ Principal、Grant、Development Project、Work Item 控制元数据、Work Sessi
 
 **信任调用方提供的 Actor 或权限字段。** 浏览器、Agent、webhook 或 adapter 将可以冒充其他身份或省略委派关系。可信控制面必须根据认证上下文和持久 Grant 派生归因与权限。
 
+**使用 GitHub OAuth、本地密码或持久浏览器 bearer 完成 bootstrap。** 外部登录会让本地恢复依赖网络身份，并诱使 membership 变成 Host authority；密码会增加 verifier 与重置生命周期；浏览器存储会让 client code 接触 bearer 材料。一次性本地 challenge 与可撤销 HttpOnly Browser Session 在不改变 Principal 与 Grant 模型的情况下提供有界单操作者 transport。
+
 **用 Automation Policy 作为权限。** Policy 拥有执行资格、预算与证据，但若把它作为权限记录，修改触发条件就会授予 Host 访问。Project Automation Principal 必须同时具备显式 Grant 并满足 policy。
 
 **为每个 Agent Run 创建 Principal。** 一次性 Run 没有独立持续身份，会产生无意义的持久安全记录。父级子集授权可以记录其权限，而不会混淆 attempt identity 与 security identity。
@@ -55,6 +61,10 @@ Principal、Grant、Development Project、Work Item 控制元数据、Work Sessi
 - 已提交 Execution Dispatch 或 Intervention Request 可以独立于任何实时 Agent、scheduler、浏览器连接或待处理 Promise 跨重启存在。
 - 产品 View 区分 requested、externally observed、completed、failed 和 reconciliation-required 状态，不把 `domain/changed` 当作持久证据。
 - Client 不能通过提供 Actor、Principal、Grant、Session lineage 或 GitHub 成员声明获得权限；已接受 Intent 保存控制面派生的 Actor 和准确 Grant revision。
+- Installation Access 证明 issued-to-consumed challenge 转换与 active-session 插入在一个 record commit 中原子完成，并且发生在 `Set-Cookie` 前；响应丢失不能重新打开 challenge 或创建另一个 session。
+- Challenge 与 session 测试覆盖服务端时钟 expiry、终态单调性、普通重启、登出、撤销、Principal 退役、generation 替换、retained-terminal cleanup，以及 id 或 secret 不可复用。
+- 每种明文认证材料只出现在具名 handoff、cookie 或 request-token transport 中，绝不进入持久记录、receipt、snapshot、URL、analytics、log、diagnostic、trace、event、无关 wire payload 或 Projection、error text、crash artifact、adapter error 或 export；系统不存在独立 verifier secret。
+- 未认证 Access 与 bootstrap 失败不会泄漏 Installation、challenge、Principal、Grant、Host 或 Project identifier；浏览器中改变状态的请求需要准确 Origin 与 session-bound 请求防伪保护。
 - 撤销 Grant 会拒绝新 Intent、委派和尚未 dispatch 的副作用，同时保留安全检查、取消、对账和补偿。
 - 自动工作必须同时具有 Project Automation Principal、显式 Grant 和满足 Automation Policy；一次性 Agent Run 只能接收父级子集授权。
 - 控制面 Interface 不暴露存储 handle、Host 路径、活 DSH handle、提供方 token 或 adapter 专用响应对象。

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/architecture/0.1.0-web-ui-baseline.md
-0.1.0-web-ui-baseline.md: 5576afc51afb3617d4b2cb46c07aa30e805c472d
-0.1.0-web-ui-baseline.zh.md: 65747370ad27c7961ab5bdf720c3ad44e7fb2127
+0.1.0-web-ui-baseline.md: 82340d2c6e0cd6360d09951a007b581cb2f88436
+0.1.0-web-ui-baseline.zh.md: ef9e2be2cec2cbc9cdee8e38f09ce1416442f4b8

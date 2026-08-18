@@ -16,7 +16,7 @@ Version 0.1.0 hard limits concurrent Runs, wall time, model requests, input and 
 
 For each route, policy chooses `pause-on-unknown` or `local-limits-only`. The latter requires all local hard limits to be finite and no observed provider exhaustion or denial; audit retains that provider-wide cost or quota was unknown. A one-time Host Operator exception is an attributed, exact-scope Intent and does not widen the underlying Grant. [ADR 0015](../../../../docs/adr/0015-reserved-automation-budgets-and-usage-ledger.md) owns the record and enforcement semantics.
 
-The supersession audit found no active note owning Saki automation budgeting. DSH token-usage and timeout notes remain evidence mechanisms rather than product budget authority; the proposed [recoverable Control Intents](2026-08-18-saki-recoverable-control-intents.md) and [fenced dispatch admission](2026-08-18-saki-fenced-idempotent-dispatch-admission.md) notes remain independent owners of write admission and delivery safety.
+DSH token-usage and timeout notes own evidence mechanisms rather than product budget authority; the proposed [recoverable Control Intents](2026-08-18-saki-recoverable-control-intents.md) and [fenced dispatch admission](2026-08-18-saki-fenced-idempotent-dispatch-admission.md) notes independently own write admission and delivery safety.
 
 ## Alternatives considered
 

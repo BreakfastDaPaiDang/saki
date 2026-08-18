@@ -10,7 +10,7 @@ Saki 需要一个位置协调 Work Item、Work Session、Agent Run、模型账�
 
 ## 提案
 
-以 plugin-composed modular monolith 实现 [ADR 0006](../../../../docs/adr/0006-modular-control-plane-and-four-capability-seams.md)、[ADR 0007](../../../../docs/adr/0007-single-control-plane-and-enrolled-hosts.md)、[ADR 0012](../../../../docs/adr/0012-forward-migrations-and-installation-maintenance.md)和 [0.1.0 后端架构](../../../../docs/saki/architecture/0.1.0-backend.md)。Saki 自有 package 位于 `packages/saki/`，使用 `@breakfastdapaidang/saki-*` 命名空间。一个深 `saki-control-plane` package 把 Work Management、Agent Operations、Model Supply 和恢复保持为私有 module，只暴露 Intent 提交、类型化 Projection 查询与失效通知。
+以 plugin-composed modular monolith 实现 [ADR 0006](../../../../docs/adr/0006-modular-control-plane-and-four-capability-seams.md)、[ADR 0007](../../../../docs/adr/0007-single-control-plane-and-enrolled-hosts.md)、[ADR 0012](../../../../docs/adr/0012-forward-migrations-and-installation-maintenance.md)和 [0.1.0 后端架构](../../../../docs/saki/architecture/0.1.0-backend.md)。Saki 自有 package 位于 `packages/saki/`，使用 `@breakfastdapaidang/saki-*` 命名空间。一个深 `saki-control-plane` package 把 Work Management、Agent Operations、Model Supply 和恢复保持为私有 module。它把 `SakiAccess.readAccess`、`exchangeBootstrap` 与 `logoutCurrentSession` 和 `SakiControlPlane.submit`、`query` 与 `onChanged` 并列暴露；Host API 发布这两个 Interface。
 
 持久化稳定 Saki Installation identity 与已登记 Saki Host registry。0.1.0 在同一进程运行一个活动控制面写入者和一个具有独立身份的 Local Host；迁移前让旧写入者完全停稳，不支持活动—活动控制面。每个 Host 回报可重新验证的 capability inventory，并拥有机器本地资源解析。Resource Binding 与 Host operation 指向 Host identity，而不是隐式本机。
 
@@ -20,7 +20,7 @@ Workspace、Session、Agent、LLM、compaction、credential reference、attachme
 
 把 Saki 权威控制状态通过 `storageDomain` 路由到专用 SQLite 数据库。通用可选 schema migration 继续由 `storage-domain` 拥有；Saki 专属 generation 切换、Recovery Backup、加密 Installation Export、restore、retention 与替换 Host 恢复属于 `installation-maintenance` 产品 plugin。[Migration 与维护 proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.md)定义这项所有权分离，但不增加第五个外部 capability seam。
 
-Host transport 只暴露控制面 Interface。Web client 提交 Intent 并读取 Projection；它不接收 Provider object、storage handle、必需的本地路径、活动 DSH handle、secret 或 provider-specific response object。未来远程 Host 实现 Host Execution，但不获得 Work Item、policy、模型选择或恢复所有权。
+Host transport 只暴露公共 `SakiAccess` 与 `SakiControlPlane` 操作。Host API 从 HTTP state 取得请求呈现的 cookie，并使用只对该 trusted Consumer 可用的 package-private SakiAccess resolver 构造 `AuthenticationContext`；resolver 与 context 都不是 wire API。它把该 context 显式传给每次受保护 `query(authentication, query, signal)` 与 `submit(authentication, intent, signal)`，后两者重新验证 Browser Session、Installation generation、Principal lifecycle，以及当前 Grant scope 与 revision。Bootstrap exchange 与 logout 是仅有的两个不经过 Control Intent 的产品 mutation，并且只修改 Installation Access aggregate。Principal 或 Grant 变化会使受影响 Projection 失效。Web client 不接收 Provider object、storage handle、必需的本地路径、活动 DSH handle、secret 或 provider-specific response object。未来远程 Host 实现 Host Execution，但不获得 Work Item、policy、模型选择或恢复所有权。
 
 把已安装 Cordis 与 npm plugin 视为有特权的 Host 代码，而不是沙箱扩展。模型动态生成的 plugin 在操作者审查与安装前保持一次性。原始 credential value 留在目标 Host 的 capability Provider 内；控制面保存不透明 reference 与观测。[DPAPI 凭据 proposal](2026-08-18-saki-local-user-trust-dpapi-credentials.md)进一步细化 0.1.0 的这项规则，但不声称具备同用户 Agent 隔离。浏览器 client、GitHub 用户、仓库内容、模型输出和外部事件 payload 都位于 Host 信任边界之外。
 
@@ -42,7 +42,7 @@ Host transport 只暴露控制面 Interface。Web client 提交 Intent 并读取
 
 ## 验收条件
 
-- 每个产品 mutation 都通过控制面 `submit` Interface 进入，并在外部副作用前拥有一条持久 Control Intent。
+- 除 bootstrap exchange 与 logout 外，每个产品 mutation 都通过 `SakiControlPlane.submit` 进入，并在外部副作用前拥有一条持久 Control Intent；两个 access 例外只能通过 `SakiAccess` 修改 Installation Access。
 - 控制面测试只在四个 Saki capability seam 替换依赖；现有 DSH Service 使用真实 definition 或上游 test Provider。
 - 每个 seam 都以完整 Definition、Provider 与 Consumer 切片落地，而不是成为未使用的抽象。
 - 公共 Interface 与 wire payload 不暴露 storage handle、必需 Host 路径、活动 DSH handle、secret value 或 provider SDK response object。

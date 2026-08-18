@@ -16,7 +16,7 @@ Status: proposed
 
 策略为每条 route 选择 `pause-on-unknown` 或 `local-limits-only`。后者要求所有本地硬 limit 都有限，且没有观察到提供方耗尽或拒绝；审计会保留提供方全局成本或 quota 未知这一事实。Host Operator 一次性例外是带归因、精确 scope 的 Intent，不会扩张底层 Grant。[ADR 0015](../../../../docs/adr/0015-reserved-automation-budgets-and-usage-ledger.md)拥有记录与执行语义。
 
-取代检查没有发现拥有 Saki 自动化预算的活动 Agent Note。DSH token 用量与 timeout Agent Note 继续作为证据机制，而不是产品预算权威；提议中的[可恢复 Control Intent](2026-08-18-saki-recoverable-control-intents.md)与[带 fencing 的 dispatch 准入](2026-08-18-saki-fenced-idempotent-dispatch-admission.md) Agent Note 继续分别拥有写入准入与交付安全。
+DSH token 用量与 timeout Agent Note 拥有证据机制，而不是产品预算权威；提议中的[可恢复 Control Intent](2026-08-18-saki-recoverable-control-intents.md)与[带 fencing 的 dispatch 准入](2026-08-18-saki-fenced-idempotent-dispatch-admission.md) Agent Note 分别拥有写入准入与交付安全。
 
 ## 考虑过的方案
 

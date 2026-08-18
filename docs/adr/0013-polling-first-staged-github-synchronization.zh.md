@@ -22,9 +22,17 @@ GitHub mutation 不暴露通用的 compare-and-set revision。Saki 可以在 mut
 
 每个绑定存储一条 GitHub Sync Checkpoint，其中包含 Installation、GitHub Project、Repository、映射 revision、本地扫描 generation、最近一次成功完整扫描时间、已确认远端指纹，以及当前 rate-limit 或失败观察。页面 cursor 只存在于一次进行中的扫描内，并在完成或失败时丢弃。
 
-一次 Board 扫描会验证持久 node-id 映射，按 API 顺序读取所有已配置 Project item 页面及其 Status 值，读取关联 Repository 中用于确定 Inbox 成员关系的开放 Issue，并构造候选快照。只有所有页面与不变量均成功后，控制面才原子发布候选快照并推进检查点。部分响应、映射失败、权限失败、取消或 rate limit 都不会改变既有检查点和已确认快照，而会单独暴露新的失败。
+一次 Board 扫描会验证持久 node-id 映射，按 API 顺序读取所有已配置 Project item 页面及其 Status 值，读取关联 Repository 中用于确定 Inbox 成员关系的开放 Issue，并构造候选快照。只有所有页面与不变量均成功后，控制面才原子发布候选快照并推进检查点。部分响应、映射失败、权限失败、取消或 rate limit 都不会改变已确认快照、扫描 generation 与时间或远端指纹；它只更新检查点当前的 rate-limit 或失败观察，不会推进已确认扫描。
 
 活动 Board 默认每 30 秒轮询一次，后台 Project 默认每五分钟轮询一次。启动、手动刷新、本地 mutation、重连和未来 webhook 会请求立即扫描。两个间隔与后台 rate-limit 保留量都是经过验证的 Cordis 插件配置，而不是固定协议常量。
+
+### 定向交付观察
+
+Board checkpoint 与 PR、CI、Milestone、tag、Release、Commit 和祖先关系观察保持独立。只有受影响 View 处于活动状态，或相关 Intent、Run、delivery、reconciliation 仍在 pending 时，这些事实才按可配置 polling 定向读取。每个 Projection 都携带自己的最近确认 observation、failure、staleness 与 invalidation 状态；刷新失败时保留此前确认的事实，且不能推进 Board checkpoint。
+
+Tag 观察从 `refs/tags/saki-v*` 开始，递归 peel annotated tag，直至得到 Commit。GitHub Release `target_commitish` 既不是 tag identity，也不是 release-commit evidence。因此 Product App 需要 Repository Contents read，但不需要 Contents write 或 Workflows write。
+
+GitHub 拥有 Milestone scope、title、due date 与 open 或 closed state。单一版本化 Saki Milestone Delivery record 拥有 Planned、In Progress、Ready to Release 或 Canceled metadata，以及可选不可变 Release Evidence。Phase update 与 finalization 都使用 expected revision。Finalization 验证准确官方 Upstream Baseline 存在于配置的 upstream repository，且是 peeled Release Commit 的祖先，然后在该 record 中原子嵌入 tag、Release、Commit、baseline、此前 metadata revision、PR、CI、Actor 与 Intent mapping。Released 只从匹配的内嵌 evidence 派生。外部关闭或并发 GitHub 变化若没有已分类结果，就进入 repair、conflict 或 reconciliation，且不发布局部 phase 或 evidence mapping。
 
 ### 乐观 mutation
 
@@ -52,10 +60,12 @@ mutation 前，GitHub 适配器执行定向读取。若已确认远端状态已�
 
 **按 option 名称修复映射。** 重命名或重建的 field 可以复用同一个人类可读名称，却具有不同身份或含义。建议很有用，但必须由带归因的修复决策选择新 node id。
 
+**使用 Release `target_commitish` 或单独保存 release evidence。** `target_commitish` 可能指向 branch，不能证明 tag target。单独 evidence record 会增加不必要的跨记录 commit 与恢复状态，因此系统先完成准确 tag peeling 与祖先关系验证，再通过 expected-revision update 把不可变 evidence 内嵌到 Milestone Delivery。
+
 ## 后果
 
 Board 新鲜度受配置的轮询间隔约束，而非实时交付。UI 始终区分最近一次已确认快照、乐观 overlay、扫描时效与当前同步失败。若 Project 所需映射无效，或其已确认状态对策略而言过于陈旧，自动模式不能领取或完成工作。
 
-GitHub Service Definition 暴露完整扫描、定向读取、mutation、确认和 rate-limit 事实；Saki 控制面拥有 Board 映射、分阶段发布、冲突规则与检查点持久化。测试覆盖多页扫描、移除、不完整页面、映射重建、乐观移动期间的远端编辑、mutation 回复丢失、secondary limit、进程重启，以及只唤醒而不直接应用状态的 webhook。
+GitHub Service Definition 暴露完整扫描、定向读取、mutation、确认和 rate-limit 事实；Saki 控制面拥有 Board 映射、分阶段发布、Milestone Delivery、release finalization、冲突规则与检查点持久化。测试覆盖多页扫描、移除、不完整页面、映射重建、乐观移动期间的远端编辑、mutation 回复丢失、secondary limit、进程重启、只唤醒而不直接应用状态的 webhook、annotated-tag peeling、upstream 祖先关系、外部 Milestone 关闭，以及 Release Evidence 原子内嵌。
 
 该协议的外部参考资料是 GitHub 的 [GraphQL 分页](https://docs.github.com/en/graphql/guides/using-pagination-in-the-graphql-api)、[GraphQL rate limit](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api)、[REST API 最佳实践](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)和[失败 webhook 交付行为](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries)。

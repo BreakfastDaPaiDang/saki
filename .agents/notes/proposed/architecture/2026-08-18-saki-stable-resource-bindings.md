@@ -16,7 +16,7 @@ Binding health is `active`, `missing`, `repair-required`, `needs-rebind`, or `re
 
 Version 0.1.0 registers, rebinds, and retires Projects but does not physically create, move, repair, remove, or prune worktrees. Automatic mode requires a clean tree. Manual takeover of existing changes records their bounded fingerprint and attribution limits; any ambiguous mixture keeps automatic staging and completion unavailable. [ADR 0014](../../../../docs/adr/0014-stable-resource-bindings-over-canonical-worktrees.md) owns the lifecycle.
 
-The supersession audit found partial overlap with the proposed [domain KV storage and Workspace](2026-07-24-domain-kv-storage-and-workspace.md) note. That note continues to own DSH Workspace `fs.realpath` uniqueness and immutable records; this proposal owns Saki's higher-level binding identity, Git observation, rebind, and lease semantics. The proposed [Installation maintenance](2026-08-18-saki-forward-migrations-and-installation-maintenance.md) note continues to own replacement-Host restore and links `needs-rebind` into this lifecycle.
+The proposed [domain KV storage and Workspace](2026-07-24-domain-kv-storage-and-workspace.md) note owns DSH Workspace `fs.realpath` uniqueness and immutable records; this proposal owns Saki's higher-level binding identity, Git observation, rebind, and lease semantics. The proposed [Installation maintenance](2026-08-18-saki-forward-migrations-and-installation-maintenance.md) note owns replacement-Host restore and links `needs-rebind` into this lifecycle.
 
 ## Alternatives considered
 

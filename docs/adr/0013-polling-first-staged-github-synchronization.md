@@ -22,9 +22,17 @@ GitHub mutations do not expose a general compare-and-set revision. Saki can dete
 
 Each binding stores a GitHub Sync Checkpoint containing the Installation, GitHub Project, Repository, mapping revision, local scan generation, last successful complete-scan time, confirmed remote fingerprints, and current rate-limit or failure observation. Page cursors exist only inside one in-progress scan and are discarded on completion or failure.
 
-A Board scan validates the persisted node-id mapping, reads every configured Project item page in API order with its Status value, reads open Issues from the associated Repository for Inbox membership, and constructs a candidate snapshot. The control plane atomically publishes the candidate and advances the checkpoint only after all pages and invariants succeed. A partial response, mapping failure, permission failure, cancellation, or rate limit leaves the prior checkpoint and confirmed snapshot unchanged while exposing the new failure separately.
+A Board scan validates the persisted node-id mapping, reads every configured Project item page in API order with its Status value, reads open Issues from the associated Repository for Inbox membership, and constructs a candidate snapshot. The control plane atomically publishes the candidate and advances the checkpoint only after all pages and invariants succeed. A partial response, mapping failure, permission failure, cancellation, or rate limit leaves the confirmed snapshot, scan generation and time, and remote fingerprints unchanged; it updates only the checkpoint's current rate-limit or failure observation without advancing the confirmed scan.
 
 The active Board polls by default every 30 seconds and background Projects every five minutes. Startup, manual refresh, a local mutation, reconnect, and a future webhook request an immediate scan. Both intervals and the background rate-limit reserve are validated Cordis plugin configuration, not fixed protocol constants.
+
+### Targeted delivery observations
+
+The Board checkpoint remains independent from PR, CI, Milestone, tag, Release, Commit, and ancestry observations. Those facts use targeted reads with configurable polling only while an affected View is active or a related Intent, Run, delivery, or reconciliation remains pending. Each Projection carries its own last-confirmed observation, failure, staleness, and invalidation state; a failed refresh preserves prior confirmed facts and cannot advance the Board checkpoint.
+
+Tag observation starts from `refs/tags/saki-v*` and recursively peels annotated tags until a Commit is reached. GitHub Release `target_commitish` is neither tag identity nor release-commit evidence. The Product App therefore needs Repository Contents read, but no Contents write or Workflows write.
+
+GitHub owns Milestone scope, title, due date, and open or closed state. One versioned Saki Milestone Delivery record owns Planned, In Progress, Ready to Release, or Canceled metadata plus optional immutable Release Evidence. Phase updates and finalization use expected revision. Finalization verifies that the exact official Upstream Baseline exists in the configured upstream repository and is an ancestor of the peeled Release Commit, then atomically embeds the tag, Release, Commit, baseline, prior metadata revision, PR, CI, Actor, and Intent mapping in that record. Released derives only from matching embedded evidence. External closure or a concurrent GitHub change that lacks a classified result enters repair, conflict, or reconciliation without publishing a partial phase or evidence mapping.
 
 ### Optimistic mutations
 
@@ -52,10 +60,12 @@ One serialized API queue serves each GitHub App installation token. Targeted mut
 
 **Repair mappings by option name.** A renamed or recreated field can reuse a human-readable name while having different identity or meaning. Suggestions are useful, but an attributed repair decision must select the new node ids.
 
+**Use Release `target_commitish` or store release evidence separately.** `target_commitish` may name a branch and does not prove the tag target. A separate evidence record would add an avoidable cross-record commit and recovery state, so immutable evidence is embedded by expected-revision update in Milestone Delivery after exact tag peeling and ancestry validation.
+
 ## Consequences
 
 Board freshness is bounded by configured polling intervals rather than real-time delivery. The UI always distinguishes the last confirmed snapshot, an optimistic overlay, scan age, and the current synchronization failure. Automatic mode cannot claim or complete work from a Project whose required mapping is invalid or whose confirmed state is too stale for its policy.
 
-The GitHub Service Definition exposes complete scans, targeted reads, mutations, confirmation, and rate-limit facts; the Saki control plane owns Board mapping, staged publication, conflict rules, and checkpoint persistence. Tests cover multi-page scans, removal, incomplete pages, mapping recreation, remote edits during an optimistic move, lost mutation replies, secondary limits, process restart, and webhook wake-up without direct state application.
+The GitHub Service Definition exposes complete scans, targeted reads, mutations, confirmation, and rate-limit facts; the Saki control plane owns Board mapping, staged publication, Milestone Delivery, release finalization, conflict rules, and checkpoint persistence. Tests cover multi-page scans, removal, incomplete pages, mapping recreation, remote edits during an optimistic move, lost mutation replies, secondary limits, process restart, webhook wake-up without direct state application, annotated-tag peeling, upstream ancestry, external Milestone closure, and atomic Release Evidence embedding.
 
 The external protocol references are GitHub's [GraphQL pagination](https://docs.github.com/en/graphql/guides/using-pagination-in-the-graphql-api), [GraphQL rate limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api), [REST API best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api), and [failed webhook delivery behavior](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries).

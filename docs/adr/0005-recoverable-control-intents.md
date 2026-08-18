@@ -6,7 +6,7 @@ status: accepted
 
 English | [中文](0005-recoverable-control-intents.zh.md)
 
-Saki persists every state-changing control-plane request as an idempotent Control Intent and advances it through a recoverable lifecycle. Versioned domain records own current facts, an Execution Lease atomically grants one writable Agent Run access to a worktree, and product Views read explicit projections. Version 0.1.0 uses DSH `storageDomain` for these records and does not introduce full event sourcing or a separate transactional database.
+Saki persists every product mutation except bootstrap exchange and logout as an idempotent Control Intent and advances it through a recoverable lifecycle. The two access operations modify only one Installation Access aggregate through their dedicated authentication protocol. Versioned domain records own current facts, an Execution Lease atomically grants one writable Agent Run access to a worktree, and product Views read explicit projections. Version 0.1.0 uses DSH `storageDomain` for these records and does not introduce full event sourcing or a separate transactional database.
 
 ## Why this decision
 
@@ -30,7 +30,7 @@ The one safety fact that must reject concurrent admission is narrower: one workt
 
 ## Consequences
 
-The control plane exposes one Intent submission interface for writes and explicit Projection interfaces for reads. Post-commit notifications invalidate projections; they are not a second durable event stream and cannot authorize external work.
+The control plane exposes `SakiAccess` for Access, bootstrap exchange, and logout beside `SakiControlPlane` for Intent submission, protected Projection queries, and invalidation. Bootstrap and logout cannot reach product or external-effect state. Post-commit notifications invalidate projections; they are not a second durable event stream and cannot authorize external work.
 
 Every external adapter must accept stable Intent identifiers and support idempotent dispatch or explicit reconciliation. An adapter returns stable identifiers and ordinary data rather than live process handles or credential contents. A Control Intent that cannot be resolved automatically remains visible as reconciliation required.
 

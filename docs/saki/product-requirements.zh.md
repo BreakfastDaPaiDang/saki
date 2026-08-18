@@ -292,4 +292,4 @@ Development Agent 通常从 Workspace、`AGENTS.md`、Work Item 和仓库状态�
 - [GitHub 同步决定](../adr/0013-polling-first-staged-github-synchronization.md)定义完整分阶段扫描、乐观 conflict、mapping repair 与 rate-limit 行为。
 - [Resource Binding 生命周期决定](../adr/0014-stable-resource-bindings-over-canonical-worktrees.md)把稳定 Project 资源身份与规范 worktree 位置、历史 Session 路径分离。
 - [自动化预算决定](../adr/0015-reserved-automation-budgets-and-usage-ledger.md)定义类型化预留、结算、未知用量与一次性例外。
-- [0.1.0 前端约定](architecture/0.1.0-frontend-contract.md)定义客户端信息与交互语义。拆分前端实现 Issue 前仍需完成低保真 prototype 并复核视觉方向；这些 artifact 都不会把长期 PRD 变成固定页面布局。
+- [0.1.0 前端约定](architecture/0.1.0-frontend-contract.md)定义客户端信息与交互语义。前端工作可以预先拆成 K0 至 K7，以便明确所有权与依赖；K1 至 K7 必须保持非 Ready，并且只有 K0 的低保真 prototype 获得产品确认、该切片需要的后端 Projection 与 Intent fixture 可用后，才可以开始生产实现。Prototype 与视觉复核都不会把长期 PRD 变成固定页面布局。

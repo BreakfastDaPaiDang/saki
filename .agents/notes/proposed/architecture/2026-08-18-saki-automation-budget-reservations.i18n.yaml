@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-automation-budget-reservations.md
-2026-08-18-saki-automation-budget-reservations.md: 432209fecc1e87f0ac25223dc0e84fded47a31db
-2026-08-18-saki-automation-budget-reservations.zh.md: 94c040abc973d5da5347eb544dae69021f15a7f1
+2026-08-18-saki-automation-budget-reservations.md: 03921037de0d37ff1ec2d3cf840f2b337352f9b0
+2026-08-18-saki-automation-budget-reservations.zh.md: eb73678763fd2bf51d43c67cbc243cd7f6a59430
