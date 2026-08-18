@@ -12,7 +12,7 @@ Status: implemented
 
 ## 决策
 
-每个协议形态的包各有一个由 `fast-check`（根 devDependency）驱动的 `tests/properties.spec.ts`。生成器调优为*逼真但对抗性*的输入（而非均匀噪声），`numRuns` 控制在本地套件总耗时远低于约 10 秒。失败时打印可复现的 seed。（以 100 倍迭代运行的夜间 CI job 未交付——属性测试套件仅在常规的 `push`/`pull_request` CI 中运行；定时高迭代 job 仍属可能的后续工作。）
+每个协议形态的包各有一个由 `fast-check`（根 devDependency）驱动的 `tests/properties.spec.ts`。生成器调优为*逼真但对抗性*的输入（而非均匀噪声），`numRuns` 控制在本地套件总耗时远低于约 10 秒。失败时打印可复现的 seed。以 100 倍迭代运行的夜间 CI job 尚未交付：属性测试套件会在已就绪 PR 的必需门禁中运行；定时高迭代 job 仍属可能的后续工作。
 
 - **dsh-llm / BlockAssembler：** 任意分片流（合法 + 畸形：重复索引、滞后分片、缺少 block-start）。不变式：`blocks()` 计数 ≤ 已见到的不同索引数；重组幂等（`blocks()` 在重复调用间稳定，且 `message().content` 与之一致）；`blocks()` 从不抛异常且仅产出合法的内容块标签；`finish` 反映最后一个 `finish` 分片，无此类分片时默认为 `{kind:'stop'}`。
 - **dsh-session：** 任意事件日志。不变式：`deriveMessages` 确定性；从 seed 回放结果一致；seq 严格单调递增；非消息事件不影响推导出的历史；推导出的内容与日志解耦。

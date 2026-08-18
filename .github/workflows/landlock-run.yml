@@ -6,15 +6,7 @@ name: Landlock Run
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/landlock-run.yml'
-      - '.github/workflows/landlock-run-release.yml'
-      - 'native/landlock-run/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-  push:
-    branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - '.github/workflows/landlock-run.yml'
       - '.github/workflows/landlock-run-release.yml'
@@ -42,6 +34,7 @@ defaults:
 
 jobs:
   matrix:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     name: Matrix
     runs-on: ubuntu-24.04
     outputs:
@@ -108,6 +101,7 @@ jobs:
           NALR_REQUIRE_LANDLOCK: 1
 
   darwin:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     name: darwin (no platform package — degradation proof)
     runs-on: macos-latest
     steps:

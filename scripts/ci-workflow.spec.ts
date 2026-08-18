@@ -27,24 +27,20 @@ describe('CI workflow', () => {
     }
   })
 
-  it('keeps a required Wine Windows job, a non-blocking native Windows job with failover, and a master-only standby', () => {
+  it('keeps required Wine coverage and makes native Windows an explicit standard-runner suite', () => {
     const workflow = loadWorkflow('.github/workflows/ci.yml')
     if (!isRecord(workflow.jobs)
       || !isRecord(workflow.jobs.windows)
       || !isRecord(workflow.jobs['windows-native'])
-      || !isRecord(workflow.jobs['wine-apt-cache'])
-      || !isRecord(workflow.jobs['serial-windows'])
       || !isRecord(workflow.jobs['node-24'])
       || !isRecord(workflow.jobs['node-24-coverage'])
       || !isRecord(workflow.jobs['node-24-consumers'])
       || !isRecord(workflow.jobs['all-checks-passed'])) {
-      throw new TypeError('CI workflow must define windows, windows-native, wine-apt-cache, serial-windows, node-24, node-24-coverage, node-24-consumers, and all-checks-passed jobs')
+      throw new TypeError('CI workflow must define windows, windows-native, node-24, node-24-coverage, node-24-consumers, and all-checks-passed jobs')
     }
 
     const windows = workflow.jobs.windows
     const windowsNative = workflow.jobs['windows-native']
-    const wineAptCache = workflow.jobs['wine-apt-cache']
-    const serialWindows = workflow.jobs['serial-windows']
     const node24 = workflow.jobs['node-24']
     const node24Coverage = workflow.jobs['node-24-coverage']
     const node24Consumers = workflow.jobs['node-24-consumers']
@@ -56,22 +52,14 @@ describe('CI workflow', () => {
       isRecord(step) && typeof step.run === 'string'
     ))
 
-    // Required PR job: Wine on ubuntu-latest, runs wine-windows-gates.sh.
     expect(windows['runs-on']).toBe('ubuntu-latest')
     expect(windows.name).toBe('windows node 24 / wine blocking')
-    expect(windows.if).toBe("github.event_name == 'pull_request'")
+    expect(windows.if).toBe("github.event_name == 'pull_request' && github.event.pull_request.draft == false")
     expect(commandSteps.some(step => step.run.includes('wine-windows-gates.sh'))).toBe(true)
 
-    // windows-native: non-blocking native job with failover, runs windows-complete.
-    // Its pool is resolved by the Windows-specific switch.
-    expect(typeof windowsNative['runs-on']).toBe('string')
-    expect(windowsNative['runs-on']).toContain('DSH_CI_FAILOVER_WINDOWS')
-    expect(windowsNative['runs-on']).not.toContain('DSH_CI_FAILOVER_LINUX')
-    expect(windowsNative['runs-on']).toContain('self-hosted')
-    expect(windowsNative['runs-on']).toContain('dsh-win-ci')
-    expect(windowsNative['runs-on']).toContain('dsh-windows-2025-16core')
+    expect(windowsNative['runs-on']).toBe('windows-latest')
     expect(windowsNative.name).toBe('windows node 24 / native complete')
-    expect(windowsNative.if).toBe("github.event_name == 'pull_request'")
+    expect(windowsNative.if).toBe("github.event_name == 'workflow_dispatch' && inputs.suite == 'windows-native'")
     expect(windowsNative.env).toMatchObject({
       DSH_COVERAGE_TEST_TIMEOUT_MS: '30000',
     })
@@ -80,23 +68,12 @@ describe('CI workflow', () => {
     ))
     expect(nativeCommandSteps.map(step => step.run)).toContain('pnpm run check:ci:windows-complete')
 
-    // wine-apt-cache: master-only, seeds the Wine apt cache.
-    expect(wineAptCache.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
-    expect(wineAptCache['runs-on']).toBe('ubuntu-latest')
-
-    // serial-windows: master-only standby, self-hosted, non-blocking.
-    expect(serialWindows.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
-    expect(serialWindows['runs-on']).toEqual(['self-hosted', 'dsh-win-ci', 'windows'])
-    expect(serialWindows.name).toBe('serial / windows (self-hosted standby)')
-
-    // Aggregate: Wine `windows` required, native `windows-native` excluded.
     expect(aggregate.needs).toContain('windows')
     expect(aggregate.needs).not.toContain('windows-native')
-    expect(aggregate.needs).not.toContain('serial-windows')
+    expect(workflow.jobs).not.toHaveProperty('wine-apt-cache')
+    expect(workflow.jobs).not.toHaveProperty('serial-linux-selfhosted')
+    expect(workflow.jobs).not.toHaveProperty('serial-windows')
 
-    // Linux failover is a separate switch: the three required Linux workers
-    // and the verdict job resolve their pool through DSH_CI_FAILOVER_LINUX,
-    // never the Windows switch.
     for (const [jobName, job] of [['node-24', node24], ['node-24-coverage', node24Coverage], ['node-24-consumers', node24Consumers]] as const) {
       expect(typeof job['runs-on']).toBe('string')
       expect(job['runs-on'], `${jobName} must allow Saki to select standard runners`).toContain('SAKI_CI_RUNNERS')
@@ -120,63 +97,14 @@ describe('CI workflow', () => {
     expect(aggregate['runs-on']).toContain('vm-backup')
   })
 
-  it('exempts push from cancellation, so one master merge does not cancel the running drill', () => {
+  it('cancels superseded validation and bounds every manual benchmark', () => {
     const workflow = loadWorkflow('.github/workflows/ci.yml')
     if (!isRecord(workflow.jobs) || !isRecord(workflow.concurrency)) {
       throw new TypeError('CI workflow must define jobs and a workflow-level concurrency block')
     }
 
-    // Cancellation applies to the whole superseded RUN, so this has to be
-    // decided at workflow level and gated on the event: a job-level group
-    // cannot exempt its job from its run being cancelled. Only push is exempt —
-    // a drill takes longer than the interval between master merges. The negated
-    // form is load-bearing: `== 'pull_request'` would also stop cancelling
-    // workflow_dispatch, and a re-dispatched runner benchmark holds up to 12
-    // larger runners for 15 minutes in this same group on master. The
-    // expression is evaluated against the NEWLY TRIGGERED run, so a dispatch on
-    // master still cancels a mid-flight drill; the runbook records that bound.
-    expect(workflow.concurrency['cancel-in-progress']).toBe("${{ github.event_name != 'push' }}")
+    expect(workflow.concurrency['cancel-in-progress']).toBe(true)
 
-    // Neither drill may carry a job-level group: it would not exempt the job
-    // from run-scoped cancellation.
-    for (const name of ['serial-linux-selfhosted', 'serial-windows']) {
-      const job = workflow.jobs[name]
-      if (!isRecord(job)) throw new TypeError(`${name} must be defined`)
-      expect(job.concurrency).toBeUndefined()
-      // Both stay master-push-only; that is what makes the push carve-out safe.
-      expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/master'")
-    }
-
-    // What bounds the cost of exempting push: a master push may only carry the
-    // cache seeder and the two drills. Any job reachable on push would start
-    // accumulating uncancelled runs, so the set is pinned here.
-    //
-    // Classification is an exact allowlist of the conditions in use, not a
-    // substring match: `github.event_name != 'pull_request'` mentions
-    // `pull_request` yet IS push-reachable, so matching on the event name alone
-    // would silently misclassify it as gated.
-    const NOT_PUSH_REACHABLE = new Set([
-      "github.event_name == 'pull_request'",
-      "always() && github.event_name == 'pull_request'",
-      "github.event_name == 'workflow_dispatch' && inputs.suite == 'larger-runner-benchmark'",
-      "github.event_name == 'workflow_dispatch' && inputs.suite == 'consolidated-runner-benchmark'",
-    ])
-    const pushReachable = Object.entries(workflow.jobs)
-      .filter(([, job]) => {
-        if (!isRecord(job)) return false
-        if (job.if === undefined) return true // unconditional: runs on every event
-        if (job.if === false) return false // `if: false` parses as a boolean
-        if (typeof job.if !== 'string') return true // unrecognized shape: surface it
-        return !NOT_PUSH_REACHABLE.has(job.if.trim())
-      })
-      .map(([name]) => name)
-      .sort()
-    expect(pushReachable).toEqual(['serial-linux-selfhosted', 'serial-windows', 'wine-apt-cache'])
-
-    // Why workflow_dispatch must keep cancelling: each benchmark fans out to a
-    // dozen larger runners at once, in this same group on master. If it stopped
-    // cancelling, a re-dispatch would queue ahead of a drill instead of
-    // replacing the stale measurement.
     for (const name of ['larger-runner-benchmark', 'consolidated-runner-benchmark']) {
       const job = workflow.jobs[name]
       if (!isRecord(job) || !isRecord(job.strategy)) {
@@ -195,7 +123,7 @@ describe('CI workflow', () => {
     expect(config).not.toContain('packages/lsp/lsp-stdio/src/instance.ts')
   })
 
-  it('requires one release-shaped Python runtime target on every pull request', () => {
+  it('requires one release-shaped Python runtime target on every ready pull request', () => {
     const workflow = loadWorkflow('.github/workflows/ci.yml')
     const pythonRuntime = workflowJob(workflow, 'python-runtime')
     const aggregate = workflowJob(workflow, 'all-checks-passed')
@@ -204,7 +132,7 @@ describe('CI workflow', () => {
     }
 
     expect(pythonRuntime).toMatchObject({
-      if: "github.event_name == 'pull_request'",
+      if: "github.event_name == 'pull_request' && github.event.pull_request.draft == false",
       name: 'python runtime / release-shaped Linux x64',
       uses: './.github/workflows/build-exe-for-python-sdk.yml',
       with: {

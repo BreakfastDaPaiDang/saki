@@ -26,7 +26,7 @@ The projector parses Markdown links without reserializing the document. A link t
 
 Mermaid renders the canonical diagrams. The website workspace explicitly declares the five packages that `vitepress-plugin-mermaid` asks Vite to prebundle because pnpm's strict dependency isolation otherwise makes those transitive packages unavailable to the local development server; Knip records this runtime-only use as an intentional dependency exception.
 
-Site publication remains separate from site construction. A dedicated GitHub Actions workflow runs the existing documentation gates, uploads `website/.dist` as a Pages artifact, and deploys only after the build succeeds. `actions/configure-pages` supplies the destination's base path to VitePress at build time, so the private Pages origin, a later public project path, and a custom domain do not require distinct checked-in configurations. Pages visibility remains a repository hosting setting rather than a workflow permission.
+Site publication remains separate from site construction. A dedicated GitHub Actions workflow runs the existing documentation gates, uploads `website/.dist` as a Pages artifact, and deploys only after the build succeeds. Under the [Saki Actions policy](2026-08-18-saki-actions-cost-policy.md), that workflow starts for `saki-v*` tags or manual dispatch, and both jobs require `SAKI_DOCS_PAGES_ENABLED == 'true'`. `actions/configure-pages` supplies the destination's base path to VitePress at build time, so the private Pages origin, a later public project path, and a custom domain do not require distinct checked-in configurations. Pages visibility remains a repository hosting setting rather than a workflow permission.
 
 ## Alternatives considered
 
@@ -44,6 +44,6 @@ Site publication remains separate from site construction. A dedicated GitHub Act
 
 ## Consequences
 
-Documentation facts have one editable home, public routes remain stable across source moves, and the site can include generated references without committing another generated copy. Local development watches canonical inputs and regenerates the disposable projection. The layout gate makes an obsolete site-specific Markdown tree a merge failure instead of ignored build input. Merges that affect the documentation site deploy the checked result to Pages, while manual dispatch provides a recovery and validation entry point.
+Documentation facts have one editable home, public routes remain stable across source moves, and the site can include generated references without committing another generated copy. Local development watches canonical inputs and regenerates the disposable projection. The layout gate makes an obsolete site-specific Markdown tree a merge failure instead of ignored build input. A `saki-v*` tag or manual dispatch deploys the checked result only after Pages is configured and `SAKI_DOCS_PAGES_ENABLED` is enabled.
 
 The publication manifest is a maintained allowlist, and link projection adds a small repository-specific build adapter. A new kind of Markdown link behavior needs a projector test. Mermaid support also increases the client bundle size, but preserves diagrams already used by the canonical documentation.
