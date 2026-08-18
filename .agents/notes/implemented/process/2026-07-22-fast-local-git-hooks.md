@@ -33,4 +33,4 @@ This decision supersedes the local-hook portion of [Parallel pre-push gates](202
 
 Normal commits take the project-free staged Oxlint fix-and-validate critical path, and warm pushes take the prepared incremental typecheck critical path. Contributors retain a one-command opt-in rehearsal without widening the hook critical paths or the agent-required validation set. Hook latency is observed in development and PR evidence rather than enforced by a timing test whose result would depend on host load and cache state.
 
-Local publication no longer proves the exhaustive repository matrix. Agents must select relevant behavioral evidence, reviewers must evaluate whether that selection matches the diff, and CI supplies the comprehensive signal once per pushed revision.
+Local publication no longer proves the exhaustive repository matrix. Agents must select relevant behavioral evidence, reviewers must evaluate whether that selection matches the diff, and CI supplies the comprehensive signal for every ready pull-request revision.
