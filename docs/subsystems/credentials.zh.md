@@ -29,7 +29,7 @@ type CredentialHealth = 'available' | 'missing' | 'unavailable'
 
 ## 解析
 
-`resolve(ref)` 返回值以及提供该值的来源层和保护级别（由提供方定义）；未配置期间返回 `undefined`。消费方在每个操作中重新解析，绝不跨操作缓存——这种按操作进行的读取正是热更新机制。类型化 Provider 接口要求保护字段；parser 从无类型输入构造结果时校验它。`resolveRequired(ref, level)` 在同一结果上强制一个精确保护标识符；值缺失或来源不匹配时，都会在调用方拿到值之前失败关闭。
+`resolve(ref)` 返回值以及提供该值的来源层和保护级别（由提供方定义）；未配置期间返回 `undefined`。消费方在每个操作中重新解析，绝不跨操作缓存——这种按操作进行的读取正是热更新机制。类型化提供方接口要求保护字段；解析器从无类型输入构造提供方结果时校验它。`resolveRequired(ref, level)` 在同一结果上强制一个精确保护标识符；值缺失或来源不匹配时，都会在调用方拿到值之前失败关闭。
 
 ```ts type-equiv
 /** One resolved credential value and the source layer that supplied it. */

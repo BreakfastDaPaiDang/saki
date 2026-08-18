@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/architecture/0.1.0-backend.md
 0.1.0-backend.md: e856fdb567b00f2004ff66ba8fec22ff0f3fc921
-0.1.0-backend.zh.md: 30e878f034faf3dae7a12588a86a8633b5f18698
+0.1.0-backend.zh.md: 9e23edde8351bf6be6f2496829d2a2928512e56c
