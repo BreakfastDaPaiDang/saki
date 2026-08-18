@@ -3262,9 +3262,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const entries = await Promise.all(request.payload.refs.map(async (ref) => {
           const info = await credentials.describe(credentialRef(ref))
           const view: CredentialView = {
+            ref: info.ref,
             configured: info.configured,
             ...info.source === undefined ? {} : { source: info.source },
+            protectionLevel: info.protectionLevel,
             writable: info.writable,
+            health: info.health,
+            observedAt: info.observedAt,
           }
           return [ref, view] as const
         }))

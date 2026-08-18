@@ -514,10 +514,16 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the value and its source, or `undefined` while unconfigured.',
       },
       {
+        signature: 'async resolveRequired(ref: CredentialRef, required: CredentialProtectionLevel): Promise<ResolvedCredential>',
+        description: 'Resolve one reference and require an exact provider-defined protection level on the same result. Missing values, missing metadata from an older provider, and every non-matching level fail before the caller receives the value. Protection identifiers are descriptive, not an ordered scale.',
+        parameters: [{ name: 'ref', description: 'the reference to resolve.' }, { name: 'required', description: 'the exact protection level the consumer accepts.' }],
+        returns: 'the resolved credential after its metadata satisfies the requirement.',
+      },
+      {
         signature: 'abstract describe(ref: CredentialRef): Promise<CredentialInfo>',
         description: 'Describe one reference for configuration surfaces without exposing the value.',
         parameters: [{ name: 'ref', description: 'the reference to describe.' }],
-        returns: 'configured state, supplying source, and writability.',
+        returns: 'safe source, protection, health, and writability metadata observed at call time.',
       },
       {
         signature: 'abstract set(ref: CredentialRef, value: string): Promise<void>',
@@ -2920,8 +2926,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface CreateSessionOptions {\n    readonly seed?: readonly SessionEvent[];\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly createdAt?: number;\n        readonly seedLength?: number;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n    };\n}',
   },
   {
+    name: 'CredentialHealth',
+    declaration: 'export type CredentialHealth = \'available\' | \'missing\' | \'unavailable\';',
+  },
+  {
     name: 'CredentialInfo',
-    declaration: 'export interface CredentialInfo {\n    configured: boolean;\n    source?: string;\n    writable: boolean;\n}',
+    declaration: 'export interface CredentialInfo {\n    ref: CredentialRef;\n    configured: boolean;\n    source?: string;\n    protectionLevel: CredentialProtectionLevel;\n    writable: boolean;\n    health: CredentialHealth;\n    observedAt: number;\n}',
+  },
+  {
+    name: 'CredentialProtectionLevel',
+    declaration: 'export type CredentialProtectionLevel = Branded<\'CredentialProtectionLevel\'>;',
   },
   {
     name: 'CredentialRef',
@@ -3609,7 +3623,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ResolvedCredential',
-    declaration: 'export interface ResolvedCredential {\n    value: string;\n    source: string;\n}',
+    declaration: 'export interface ResolvedCredential {\n    value: string;\n    source: string;\n    protectionLevel: CredentialProtectionLevel;\n}',
   },
   {
     name: 'ResolvedNormalRetryPolicy',

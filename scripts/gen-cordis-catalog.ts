@@ -447,6 +447,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   SettingsDescribeOptions: 'settings.md',
   SettingsUpdateSource: 'settings.md',
   CredentialRef: 'credentials.md',
+  CredentialProtectionLevel: 'credentials.md',
+  CredentialHealth: 'credentials.md',
   CredentialInfo: 'credentials.md',
   ResolvedCredential: 'credentials.md',
   AskUserQuestionAnswer: 'user-questions.md',

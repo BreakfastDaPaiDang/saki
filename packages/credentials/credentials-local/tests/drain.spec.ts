@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_PLAINTEXT, credentialRef } from '@deepseek-ai/dsh-credentials'
 import { LocalCredentialProvider } from '../src/index.ts'
 
 // The atomic write is the gated asynchronous hold point inside a queued
@@ -65,7 +65,9 @@ describe('write-drain teardown', () => {
 
     await expect(first).resolves.toBeUndefined()
     await secondRejects
-    expect(await service.resolve(KEY)).toEqual({ value: 'one', source: 'file' })
+    expect(await service.resolve(KEY)).toEqual({
+      value: 'one', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
     expect(await service.resolve(OTHER)).toBeUndefined()
   })
 })

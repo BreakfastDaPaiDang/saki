@@ -12,6 +12,12 @@ import type { Branded } from '@deepseek-ai/dsh-brand'
 /** Nominal reference to one credential: a POSIX-style environment-variable name. */
 export type CredentialRef = Branded<'CredentialRef'>
 
+/** Provider-defined description of the identities and processes that may recover a credential value. */
+export type CredentialProtectionLevel = Branded<'CredentialProtectionLevel'>
+
+/** Safe observation of whether a credential can be used without exposing its value. */
+export type CredentialHealth = 'available' | 'missing' | 'unavailable'
+
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /**

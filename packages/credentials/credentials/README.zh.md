@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-凭据 Service Definition（`ctx.credentials`）。一条准则，三个推论：
+凭据 Service Definition（`ctx.credentials`）。一条准则，四个推论：
 
 **配置只携带对机密的引用，绝不携带机密本身。** settings 分节或 `cordis.yml` 条目写 `apiKeyEnv: DEEPSEEK_API_KEY`，引用背后的值存放在凭据提供方处。于是设置文档可以放心同步、放心渲染进配置界面；`describe()` 无需持有值就能回答「配置了吗、来自哪层、能否写入」；轮换机密不触碰任何配置文件。
 
@@ -10,17 +10,20 @@
 
 **空的存储值等于不存在。** 处处如此：`resolve` 跳过它，`describe` 报告未配置。空白永远不会伪装成已配置的机密。
 
+**每个来源都要声明自身的保护模型。** `resolve()` 报告它这次实际返回值的保护级别，`describe()` 则在不含值的安全元数据中报告同一信息、可用性和观察时间。`resolveRequired()` 对提供方定义的标识符做精确比较，在调用方拿到值之前拒绝缺失、旧版或不匹配的元数据。保护级别用于描述，不构成有序强度等级。
+
 ## 接口
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_LOCAL_USER_TRUST, credentialRef } from '@deepseek-ai/dsh-credentials'
 
 declare const ctx: Context
 
 const ref = credentialRef('DEEPSEEK_API_KEY')            // POSIX shell identifier, branded
-const hit = await ctx.credentials.resolve(ref)           // { value, source } | undefined
-const info = await ctx.credentials.describe(ref)         // { configured, source?, writable } — never the value
+const hit = await ctx.credentials.resolve(ref)           // { value, source, protectionLevel } | undefined
+const protectedHit = await ctx.credentials.resolveRequired(ref, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST)
+const info = await ctx.credentials.describe(ref)         // safe identity/source/protection/health metadata — never the value
 await ctx.credentials.set(ref, 'sk-…')                   // rejects while a read-only source shadows the ref
 await ctx.credentials.unset(ref)                         // no-op when absent; same shadowing rule
 ```
@@ -31,7 +34,7 @@ await ctx.credentials.unset(ref)                         // no-op when absent; s
 
 ## 提供方
 
-[`dsh-credentials-local`](../credentials-local/README.md) 把继承的进程环境叠加在其受管 `$DSH_HOME/.credentials.yaml` 文档之上，并以启动器的项目和用户 `.env` 层作为后备。该 seam 的接口为 keyring、辅助命令和 KMS 后端提供方预留了扩展空间；远端设置提供方永远不必携带机密。
+[`dsh-credentials-local`](../credentials-local/README.md) 把继承的进程环境叠加在其受管明文 `$DSH_HOME/.credentials.yaml` 文档之上，并以启动器的项目和用户 `.env` 层作为后备。[`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.md) 则独占一个带版本号的 Windows 当前用户 DPAPI 密文文档，绝不回退到环境或明文来源。该 seam 为 keyring、辅助命令和 KMS 后端提供方预留了扩展空间；远端设置提供方永远不必携带机密。
 
 ## 模型体验
 
@@ -46,3 +49,4 @@ await ctx.credentials.unset(ref)                         // no-op when absent; s
 - **不提供枚举**——seam 只回答被问到的引用；配置界面从 settings schema 得知引用集合，`list()` 没有当前消费方。
 - **引用限定为环境变量形状**——在有提供方需要更丰富的寻址方式前，保持单一扁平的 POSIX 标识符命名空间。
 - **进程环境变化不可见**——不可能为其发事件；界面只能在自身导航时重新读取 `describe()`。
+- **保护标识符不存在顺序**——消费方明确指定自己接受的恢复模型；seam 不推断某个提供方在所有场景下都强于另一个。
