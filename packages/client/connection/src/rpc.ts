@@ -11,12 +11,53 @@ export interface ConnectionRpcHandlerOptions {
   readonly authority: ConnectionRpcAuthority
 }
 
-/** Handler invoked after Connection has decoded the transport envelope. */
+/** Read-only header access from the request received by the Host transport. */
+export interface ConnectionRpcRequestHeaders {
+  /**
+   * Read one header value using case-insensitive HTTP matching.
+   * @param name - HTTP header name.
+   * @returns the joined header value, or null when absent.
+   */
+  get(name: string): string | null
+
+  /**
+   * Test whether one header is present using case-insensitive HTTP matching.
+   * @param name - HTTP header name.
+   * @returns whether the header is present.
+   */
+  has(name: string): boolean
+}
+
+/** Trusted HTTP metadata supplied separately from a channel-owned JSON payload. */
+export interface ConnectionRpcRequestMetadata {
+  /** Absolute URL reconstructed by the active Host transport. */
+  readonly url: string
+  /** Read-only request headers. */
+  readonly headers: ConnectionRpcRequestHeaders
+}
+
+/** Complete Host reply before Connection adds correlation and JSON framing. */
+export interface ConnectionRpcReply {
+  /** Channel-owned RPC outcome. */
+  readonly result: RpcResult<unknown>
+  /** HTTP response headers carried outside the JSON envelope; Connection replaces Content-Type. */
+  readonly headers?: Readonly<Record<string, string>>
+}
+
+/**
+ * Handle one decoded request after Connection has enforced the channel trust policy.
+ * @param endpoint - channel-relative endpoint selected from the request URL.
+ * @param payload - channel-owned JSON payload.
+ * @param signal - transport cancellation signal.
+ * @param request - trusted URL and read-only headers kept outside the payload.
+ * @returns RPC result and optional HTTP response headers.
+ */
 export type ConnectionRpcHandler = (
   endpoint: string,
   payload: unknown,
   signal: AbortSignal,
-) => Promise<RpcResult<unknown>>
+  request: ConnectionRpcRequestMetadata,
+) => Promise<ConnectionRpcReply>
 
 /** Synchronous ownership test for one endpoint on a shared RPC channel. */
 export type ConnectionRpcEndpointMatcher = (endpoint: string) => boolean
@@ -26,7 +67,7 @@ export interface HostConnectionRpc {
   /**
    * Register one absolute channel prefix and its trust policy.
    * @param channel - absolute logical channel such as `/rpc`.
-   * @param handler - decoded endpoint handler returning the existing RPC result shape.
+   * @param handler - decoded endpoint handler returning the channel reply.
    * @param options - channel trust policy.
    * @returns asynchronous disposer removing the channel and its physical route.
    */
@@ -40,7 +81,7 @@ export interface HostConnectionRpc {
    * Intercept owned endpoints on the shared `/api` channel before its fallback.
    * @param channel - reserved shared channel; currently `/api`.
    * @param matches - synchronous endpoint ownership test.
-   * @param handler - decoded endpoint handler returning the existing RPC result shape.
+   * @param handler - decoded endpoint handler returning the channel reply.
    * @param options - trust policy for every endpoint claimed by this interceptor.
    * @returns asynchronous disposer removing the interceptor.
    */
@@ -65,13 +106,23 @@ export interface ClientConnectionRpc {
    * @param channel - absolute logical channel such as `/api`.
    * @param endpoint - channel-relative endpoint such as `goals/create`.
    * @param payload - channel-owned request payload.
-   * @param signal - optional caller cancellation.
+   * @param options - optional cancellation, credential policy, and operation headers.
    * @returns the existing RPC success/error result; correlation stays inside Connection.
    */
   call(
     channel: string,
     endpoint: string,
     payload: unknown,
-    signal?: AbortSignal,
+    options?: ConnectionRpcCallOptions,
   ): Promise<RpcResult<unknown>>
+}
+
+/** Browser transport options for one generic Connection RPC call. */
+export interface ConnectionRpcCallOptions {
+  /** Optional caller cancellation. */
+  readonly signal?: AbortSignal
+  /** Browser credential policy; same-origin is the default. */
+  readonly credentials?: RequestCredentials
+  /** Operation-specific headers; Connection always owns JSON Content-Type. */
+  readonly headers?: Readonly<Record<string, string>>
 }

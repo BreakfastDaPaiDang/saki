@@ -56,12 +56,19 @@ function fakeRawPost(headers: Record<string, string>, url: string, body: string)
 }
 
 /** Response recorder compatible with both the fence's short-circuit and the bridge. */
-function fakeResponse(): { response: ServerResponse; state: { status?: number; body?: unknown } } {
-  const state: { status?: number; body?: unknown } = {}
+function fakeResponse(): {
+  response: ServerResponse
+  state: { status?: number; headers?: Record<string, string>; body?: unknown }
+} {
+  const state: { status?: number; headers?: Record<string, string>; body?: unknown } = {}
   const chunks: Buffer[] = []
   const response = Object.assign(new EventEmitter(), {
     writableEnded: false,
-    writeHead(value: number) { state.status = value; return this },
+    writeHead(value: number, headers?: Record<string, string>) {
+      state.status = value
+      if (headers !== undefined) state.headers = headers
+      return this
+    },
     write(value: string | Uint8Array) { chunks.push(Buffer.from(value)); return true },
     end(this: { writableEnded: boolean }, value?: unknown) {
       if (typeof value === 'string' || value instanceof Uint8Array) chunks.push(Buffer.from(value))
@@ -226,7 +233,7 @@ describe('connection node half', () => {
     const calls: unknown[] = []
     const remove = connection.rpc.handle('/rpc', async (endpoint, payload) => {
       calls.push({ endpoint, payload })
-      return { ok: true, value: { accepted: true } }
+      return { result: { ok: true, value: { accepted: true } } }
     }, { authority: 'trusted-host' })
     const route = routes.find(candidate => candidate.path === '/rpc')
     expect(route).toBeDefined()
@@ -250,13 +257,67 @@ describe('connection node half', () => {
       payload: { args: { agentId: 'agent-1' } },
     }])
 
-    expect(() => connection.rpc.handle('/rpc', async () => ({ ok: true, value: null }), {
+    expect(() => connection.rpc.handle('/rpc', async () => ({ result: { ok: true, value: null } }), {
       authority: 'trusted-host',
     })).toThrow(/duplicate route/)
     await remove()
     expect(routes.map(candidate => candidate.path)).toEqual([API_PATH])
     await fiber.dispose()
     expect(routes).toHaveLength(0)
+  })
+
+  it('passes read-only request metadata to a channel and carries reply headers outside JSON', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    const connection = ctx.get('connection') as HostConnectionHandle
+    const observed: unknown[] = []
+    const remove = connection.rpc.handle('/rpc', async (endpoint, payload, _signal, request) => {
+      observed.push({
+        endpoint,
+        payload,
+        url: request.url,
+        cookie: request.headers.get('cookie'),
+        origin: request.headers.get('origin'),
+      })
+      return {
+        result: { ok: true, value: { accepted: true } },
+        headers: {
+          'content-type': 'text/plain',
+          'set-cookie': 'opaque=value; HttpOnly; SameSite=Strict',
+        },
+      }
+    }, { authority: 'loopback' })
+    const route = routes.find(candidate => candidate.path === '/rpc')!
+    const response = fakeResponse()
+    await route.handler(fakePost({
+      host: '127.0.0.1:3080',
+      cookie: 'opaque=request',
+      origin: 'http://127.0.0.1:3080',
+    }, '/rpc/access/exchange', {
+      type: 'client-request', rpcId: 'rpc-metadata', method: 'access/exchange', payload: {},
+    }), response.response)
+
+    expect(observed).toEqual([{
+      endpoint: 'access/exchange',
+      payload: {},
+      url: 'http://127.0.0.1:3080/rpc/access/exchange',
+      cookie: 'opaque=request',
+      origin: 'http://127.0.0.1:3080',
+    }])
+    expect(response.state.headers).toMatchObject({
+      'content-type': 'application/json',
+      'set-cookie': 'opaque=value; HttpOnly; SameSite=Strict',
+    })
+    expect(JSON.parse(String(response.state.body))).toEqual({
+      type: 'server-response',
+      rpcId: 'rpc-metadata',
+      result: { ok: true, value: { accepted: true } },
+    })
+    await remove()
+    await fiber.dispose()
   })
 
   it('dispatches claimed /api endpoints before the API Proxy fallback and withdraws the claim', async () => {
@@ -273,20 +334,20 @@ describe('connection node half', () => {
       endpoint => endpoint === 'goals/create',
       async (endpoint, payload) => {
         calls.push({ endpoint, payload })
-        return { ok: true, value: { accepted: true } }
+        return { result: { ok: true, value: { accepted: true } } }
       },
       { authority: 'trusted-host' },
     )
     expect(() => connection.rpc.intercept(
       '/api',
       () => true,
-      async () => ({ ok: true, value: null }),
+      async () => ({ result: { ok: true, value: null } }),
       { authority: 'trusted-host' },
     )).toThrow('already has an interceptor')
     expect(() => connection.rpc.intercept(
       '/rpc' as '/api',
       () => true,
-      async () => ({ ok: true, value: null }),
+      async () => ({ result: { ok: true, value: null } }),
       { authority: 'trusted-host' },
     )).toThrow('invalid shared RPC channel')
     const route = routes.find(candidate => candidate.path === API_PATH)!
@@ -327,7 +388,7 @@ describe('connection node half', () => {
     const removeLoopback = connection.rpc.intercept(
       '/api',
       endpoint => endpoint === 'goals/create',
-      async () => ({ ok: true, value: null }),
+      async () => ({ result: { ok: true, value: null } }),
       { authority: 'loopback' },
     )
     const loopbackOnly = fakeResponse()
@@ -346,7 +407,7 @@ describe('connection node half', () => {
     const connection = ctx.get('connection') as HostConnectionHandle
     const remove = connection.rpc.handle('/rpc', async (endpoint) => {
       if (endpoint === 'fail') throw new Error('handler broke')
-      return { ok: true, value: null }
+      return { result: { ok: true, value: null } }
     }, {
       authority: 'trusted-host',
     })
@@ -397,14 +458,14 @@ describe('connection node half', () => {
     }), failed.response)
     expect(failed.state).toMatchObject({ status: 500, body: 'handler failure: Error: handler broke' })
 
-    expect(() => connection.rpc.handle('/api', async () => ({ ok: true, value: null }), {
+    expect(() => connection.rpc.handle('/api', async () => ({ result: { ok: true, value: null } }), {
       authority: 'loopback',
     })).toThrow('invalid or reserved RPC channel')
-    expect(() => connection.rpc.handle('api3', async () => ({ ok: true, value: null }), {
+    expect(() => connection.rpc.handle('api3', async () => ({ result: { ok: true, value: null } }), {
       authority: 'loopback',
     })).toThrow('invalid or reserved RPC channel')
 
-    const removeLoopback = connection.rpc.handle('/loopback', async () => ({ ok: true, value: null }), {
+    const removeLoopback = connection.rpc.handle('/loopback', async () => ({ result: { ok: true, value: null } }), {
       authority: 'loopback',
     })
     const loopbackRoute = routes.find(candidate => candidate.path === '/loopback')!

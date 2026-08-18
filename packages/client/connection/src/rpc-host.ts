@@ -18,6 +18,7 @@ import type {
   ConnectionRpcEndpointMatcher,
   ConnectionRpcHandler,
   ConnectionRpcHandlerOptions,
+  ConnectionRpcRequestMetadata,
   HostConnectionHandle,
   HostConnectionRpc,
 } from './rpc.ts'
@@ -178,8 +179,8 @@ function rpcFetchHandler(
       }
 
       try {
-        const result = await handler(endpoint, message.payload, request.signal)
-        return fullResponse(message.rpcId, result)
+        const reply = await handler(endpoint, message.payload, request.signal, requestMetadata(request))
+        return fullResponse(message.rpcId, reply.result, reply.headers)
       } catch (error) {
         return new Response(`handler failure: ${String(error)}`, { status: 500 })
       }
@@ -212,9 +213,25 @@ function errorResponse(rpcId: RpcIdType, error: RpcError): Response {
   return fullResponse(rpcId, { ok: false, error })
 }
 
-function fullResponse(rpcId: RpcIdType, result: RpcServerResponse['result']): Response {
+function fullResponse(
+  rpcId: RpcIdType,
+  result: RpcServerResponse['result'],
+  headers?: Readonly<Record<string, string>>,
+): Response {
   const body: RpcServerResponse = { type: 'server-response', rpcId, result }
-  return Response.json(body)
+  const responseHeaders = new Headers(headers)
+  responseHeaders.set('content-type', 'application/json')
+  return Response.json(body, { headers: responseHeaders })
+}
+
+function requestMetadata(request: Request): ConnectionRpcRequestMetadata {
+  return Object.freeze({
+    url: request.url,
+    headers: Object.freeze({
+      get: (name: string) => request.headers.get(name),
+      has: (name: string) => request.headers.has(name),
+    }),
+  })
 }
 
 function assertChannel(channel: string): void {

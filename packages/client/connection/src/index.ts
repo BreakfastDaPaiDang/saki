@@ -13,9 +13,13 @@ import { rejectWebSocketUpgrade, WebSocketDownlinks } from './websocket-downlink
 
 export type {
   ConnectionRpcAuthority,
+  ConnectionRpcCallOptions,
   ConnectionRpcEndpointMatcher,
   ConnectionRpcHandler,
   ConnectionRpcHandlerOptions,
+  ConnectionRpcReply,
+  ConnectionRpcRequestHeaders,
+  ConnectionRpcRequestMetadata,
   HostConnectionHandle,
   HostConnectionRpc,
 } from './rpc.ts'

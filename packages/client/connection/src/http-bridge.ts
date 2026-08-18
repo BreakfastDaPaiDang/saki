@@ -66,7 +66,7 @@ export async function bridge(
   }
   /* v8 ignore next 3 -- `??` arms: node:http always sets url/method on server
   requests; the fields are only optional on the client-side IncomingMessage type */
-  const request = new Request(new URL(req.url ?? '/', 'http://dsh.internal'), {
+  const request = new Request(new URL(req.url ?? '/', requestOrigin(req)), {
     method: req.method ?? 'GET',
     headers: Object.fromEntries(Object.entries(req.headers).filter(([, v]) => typeof v === 'string') as [string, string][]),
     ...chunks.length > 0 ? { body: Buffer.concat(chunks) } : {},
@@ -96,4 +96,10 @@ export async function bridge(
     }
   }
   res.end()
+}
+
+function requestOrigin(req: IncomingMessage): string {
+  const encrypted = (req.socket as { readonly encrypted?: boolean } | undefined)?.encrypted === true
+  const authority = typeof req.headers.host === 'string' ? req.headers.host : 'dsh.internal'
+  return `${encrypted ? 'https' : 'http'}://${authority}`
 }
