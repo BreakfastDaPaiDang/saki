@@ -32,7 +32,7 @@ const GIT_BLOB = /^[0-9a-f]{40}$/
 type MutationClass = 'none' | 'workspace' | 'tracker' | 'git'
 
 /** Host and DSH requirements declared for one adapted skill. */
-export interface SkillRequirements {
+interface SkillRequirements {
   dshCapabilities: string[]
   oneOfCapabilities: string[]
   optionalCapabilities: string[]
@@ -41,27 +41,27 @@ export interface SkillRequirements {
 }
 
 /** One pinned source or generated output file. */
-export interface PinnedFile {
+interface PinnedFile {
   path: string
   sha256: string
 }
 
 /** One selected upstream file and its repository target. */
-export interface UpstreamFile {
+interface UpstreamFile {
   path: string
   blob: string
   target: string
 }
 
 /** One deliberately excluded upstream file. */
-export interface IgnoredUpstreamFile {
+interface IgnoredUpstreamFile {
   path: string
   blob: string
   reason: string
 }
 
 /** Provenance and compatibility declaration for one adapted skill. */
-export interface SkillPackEntry {
+interface SkillPackEntry {
   name: string
   category: string
   upstreamDirectory: string
