@@ -32,6 +32,8 @@ Work Management 定义 Saki 如何组织预期工作、交付进度、里程碑�
 
 **Board**：按 Work Item Status 分组显示 Work Item 的视图。
 
+**GitHub Sync Checkpoint**：对特定 mapping revision 的一次完整 GitHub Project 与 Repository 扫描已经原子发布的持久确认。分页 cursor 与乐观客户端状态都不是 checkpoint。_避免_：GraphQL cursor、webhook offset
+
 **Milestone**：对 Work Item 分组并衡量范围完成度的具名交付目标。Milestone 描述计划交付内容，而非已发布代码。_避免_：Release、version
 
 **Milestone Phase**：Milestone 的交付阶段：Planned、In Progress、Ready to Release、Released 或 Canceled。

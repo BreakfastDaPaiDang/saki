@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/product-requirements.md
-product-requirements.md: 96882e3363dfadfbfd4c412fc2d9de7f8e1d4cfd
-product-requirements.zh.md: 037b4eee0501403f2421e9ef27f18302d5dfa7d6
+product-requirements.md: 9819c839f76f26b5aadc1d46469413133a9ec989
+product-requirements.zh.md: 03228dcc096208cb4931407bcd744b5730e8fe72

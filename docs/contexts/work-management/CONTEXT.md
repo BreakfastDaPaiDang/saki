@@ -32,6 +32,8 @@ Work Management defines how Saki organizes intended work, delivery progress, mil
 
 **Board**: A view of Work Items grouped by Work Item Status.
 
+**GitHub Sync Checkpoint**: The durable confirmation that one complete GitHub Project and Repository scan was atomically published for a specific mapping revision. Pagination cursors and optimistic client state are not checkpoints. _Avoid_: GraphQL cursor, webhook offset
+
 **Milestone**: A named delivery target that groups Work Items and measures scope completion. A Milestone describes planned delivery, not shipped code. _Avoid_: Release, version
 
 **Milestone Phase**: The delivery stage of a Milestone: Planned, In Progress, Ready to Release, Released, or Canceled.
