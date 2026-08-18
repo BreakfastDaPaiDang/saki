@@ -18,6 +18,7 @@ const refreshing = process.env.DSH_SNAPSHOT === 'record' || process.env.DSH_SNAP
 
 interface StartedSaki {
   readonly child: ChildProcessByStdio<null, Readable, Readable>
+  readonly bootstrapPurpose?: 'initial-bootstrap' | 'local-reauthentication'
   readonly bootstrapSecret?: string
   readonly stop: () => Promise<void>
 }
@@ -61,6 +62,7 @@ async function startSaki(
   child.stderr.on('data', (chunk: string) => { stderr += chunk })
   const lines = createInterface({ input: child.stdout })
   let ready = false
+  let bootstrapPurpose: 'initial-bootstrap' | 'local-reauthentication' | undefined
   let bootstrapSecret: string | undefined
   await new Promise<void>((resolveReady, reject) => {
     const timeout = setTimeout(() => { reject(new Error('Saki snapshot startup timed out')) }, 20_000)
@@ -81,6 +83,8 @@ async function startSaki(
       if ((value as { status?: unknown }).status === 'ready') ready = true
       const secret = (value as { bootstrapSecret?: unknown }).bootstrapSecret
       if (typeof secret === 'string') bootstrapSecret = secret
+      const purpose = (value as { bootstrapPurpose?: unknown }).bootstrapPurpose
+      if (purpose === 'initial-bootstrap' || purpose === 'local-reauthentication') bootstrapPurpose = purpose
       complete()
     })
     child.once('exit', () => {
@@ -90,6 +94,7 @@ async function startSaki(
   })
   return {
     child,
+    ...(bootstrapPurpose === undefined ? {} : { bootstrapPurpose }),
     ...(bootstrapSecret === undefined ? {} : { bootstrapSecret }),
     stop: async () => {
       if (child.exitCode !== null) return
@@ -147,6 +152,7 @@ async function transcript(entry: string): Promise<string> {
     if (cookie === undefined) throw new Error('Saki snapshot exchange returned no session cookie')
     const query = await rpc(port, 'control/query', { type: 'project-index' }, { cookie })
     const records: unknown[] = [
+      { step: 'first-launcher', purpose: first.bootstrapPurpose },
       { step: 'first-access', access: initial.value },
       { step: 'bootstrap-exchange', ok: exchangeValue.ok, cookie: 'set' },
       { step: 'project-index', result: query.value },
@@ -154,7 +160,7 @@ async function transcript(entry: string): Promise<string> {
     await first.stop()
     first = undefined
 
-    second = await startSaki(entry, databasePath, port, false)
+    second = await startSaki(entry, databasePath, port, true)
     const restoredAccess = await rpc(port, 'access/read', {}, { cookie })
     const restoredQuery = await rpc(port, 'control/query', { type: 'project-index' }, { cookie })
     const safeAccess = restoredAccess.value as {
@@ -164,6 +170,7 @@ async function transcript(entry: string): Promise<string> {
       requestToken?: string
     }
     records.push(
+      { step: 'restart-launcher', purpose: second.bootstrapPurpose },
       {
         step: 'restart-access',
         access: {

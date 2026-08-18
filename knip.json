@@ -266,7 +266,6 @@
       ],
       "ignoreDependencies": [
         "@breakfastdapaidang/saki-host-api",
-        "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-storage-sqlite"
       ]
     },

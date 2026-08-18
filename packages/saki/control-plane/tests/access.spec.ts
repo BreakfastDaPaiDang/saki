@@ -10,21 +10,31 @@ import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
 import * as StorageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import SakiControlPlane, {
   type AccessProjection,
+  type Config,
   type SakiControlPlaneModule,
 } from '../src/index.ts'
+import { SakiAuthenticationContext } from '../src/authentication.ts'
 import {
   resolveSakiAuthentication,
   takeSakiCookieHeader,
 } from '../src/host.ts'
 import {
-  FOUNDATION_KEY,
+  CONTROL_STATE_KEY,
   sakiControlPlaneDomainSpec,
 } from '../src/spec.ts'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
+import type { InstallationAccessRecord } from '../src/spec.ts'
 
 const ORIGIN = 'http://127.0.0.1:43119'
 const COOKIE_NAME = 'saki_session'
 const tempDirectories: string[] = []
+const CONTROL_PLANE_CONFIG = {
+  origin: ORIGIN,
+  challengeTtlMs: 60_000,
+  sessionTtlMs: 3_600_000,
+  terminalRetentionMs: 86_400_000,
+  cookieName: COOKIE_NAME,
+} as const
 
 interface RunningHarness {
   readonly ctx: Context
@@ -32,18 +42,40 @@ interface RunningHarness {
   readonly close: () => Promise<void>
 }
 
-async function start(databasePath: string): Promise<RunningHarness> {
+interface FailureHarness extends RunningHarness {
+  readonly failNextAccessWrite: (failure: 'before-commit' | 'after-commit') => void
+}
+
+interface PauseHandle {
+  readonly entered: Promise<void>
+  readonly release: () => void
+}
+
+interface PauseHarness extends RunningHarness {
+  readonly pauseNextAccessWrite: () => PauseHandle
+}
+
+interface PutHooks {
+  readonly beforePut?: (table: string) => Promise<void> | void
+  readonly afterPut?: (table: string) => Promise<void> | void
+}
+
+async function start(
+  databasePath: string,
+  config: Required<Config> = CONTROL_PLANE_CONFIG,
+): Promise<RunningHarness> {
   const ctx = new Context()
   await ctx.plugin(Storage)
   await ctx.plugin(StorageSqlite, { path: databasePath, journalMode: 'delete' })
   await ctx.plugin(StorageDomain, { backend: 'sqlite' })
-  const fiber = await ctx.plugin(SakiControlPlane, {
-    origin: ORIGIN,
-    challengeTtlMs: 60_000,
-    sessionTtlMs: 3_600_000,
-    terminalRetentionMs: 86_400_000,
-    cookieName: COOKIE_NAME,
-  })
+  return startControlPlane(ctx, config)
+}
+
+async function startControlPlane(
+  ctx: Context,
+  config: Required<Config> = CONTROL_PLANE_CONFIG,
+): Promise<RunningHarness> {
+  const fiber = await ctx.plugin(SakiControlPlane, config)
   return {
     ctx,
     controlPlane: ctx.sakiControlPlane,
@@ -54,15 +86,10 @@ async function start(databasePath: string): Promise<RunningHarness> {
   }
 }
 
-async function startWithExchangeWriteFailure(
-  databasePath: string,
-  failure: 'before-commit' | 'after-commit',
-): Promise<RunningHarness> {
+async function interceptedContext(databasePath: string, hooks: PutHooks): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(Storage)
   const inner = new StorageSqlite.SqliteStorageBackend({ path: databasePath, journalMode: 'delete' })
-  let puts = 0
-  let injected = false
   const backend: StorageBackend = {
     kv: {
       open: async (descriptor) => {
@@ -70,17 +97,9 @@ async function startWithExchangeWriteFailure(
         return {
           loadAll: () => unit.loadAll(),
           putRecord: async (table, key, value) => {
-            puts += 1
-            const selected = puts === 3 && !injected
-            if (selected && failure === 'before-commit') {
-              injected = true
-              throw new Error('selected access durability interruption')
-            }
+            await hooks.beforePut?.(table)
             await unit.putRecord(table, key, value)
-            if (selected && failure === 'after-commit') {
-              injected = true
-              throw new Error('selected access durability interruption')
-            }
+            await hooks.afterPut?.(table)
           },
           deleteRecord: (table, key) => unit.deleteRecord(table, key),
           setGlobal: value => unit.setGlobal(value),
@@ -98,26 +117,101 @@ async function startWithExchangeWriteFailure(
     await facility.closeAll()
     await backend.close()
   })
-  const fiber = await ctx.plugin(SakiControlPlane, {
-    origin: ORIGIN,
-    challengeTtlMs: 60_000,
-    sessionTtlMs: 3_600_000,
-    terminalRetentionMs: 86_400_000,
-    cookieName: COOKIE_NAME,
+  return ctx
+}
+
+async function startWithArmableAccessWriteFailure(databasePath: string): Promise<FailureHarness> {
+  let nextFailure: 'before-commit' | 'after-commit' | undefined
+  const fail = (table: string, phase: 'before-commit' | 'after-commit'): void => {
+    if (table !== 'installation_access' || nextFailure !== phase) return
+    nextFailure = undefined
+    throw new Error('selected access durability interruption')
+  }
+  const ctx = await interceptedContext(databasePath, {
+    beforePut: (table) => { fail(table, 'before-commit') },
+    afterPut: (table) => { fail(table, 'after-commit') },
   })
+  const running = await startControlPlane(ctx)
   return {
-    ctx,
-    controlPlane: ctx.sakiControlPlane,
-    close: async () => {
-      await fiber.dispose()
-      await ctx.fiber.dispose()
+    ...running,
+    failNextAccessWrite: (failure) => { nextFailure = failure },
+  }
+}
+
+async function startWithPausableAccessWrite(databasePath: string): Promise<PauseHarness> {
+  let pending: {
+    readonly entered: () => void
+    readonly released: Promise<void>
+  } | undefined
+  const ctx = await interceptedContext(databasePath, {
+    beforePut: async (table) => {
+      if (table !== 'installation_access' || pending === undefined) return
+      const selected = pending
+      pending = undefined
+      selected.entered()
+      await selected.released
     },
+  })
+  const running = await startControlPlane(ctx)
+  return {
+    ...running,
+    pauseNextAccessWrite: () => {
+      const entered = Promise.withResolvers<undefined>()
+      const released = Promise.withResolvers<undefined>()
+      pending = { entered: () => { entered.resolve(undefined) }, released: released.promise }
+      return { entered: entered.promise, release: () => { released.resolve(undefined) } }
+    },
+  }
+}
+
+async function interruptProvisioning(
+  databasePath: string,
+  writeOrdinal: number,
+  failure: 'before-commit' | 'after-commit',
+): Promise<void> {
+  let writes = 0
+  const fail = (phase: 'before-commit' | 'after-commit'): void => {
+    writes += phase === 'before-commit' ? 1 : 0
+    if (writes === writeOrdinal && failure === phase) {
+      throw new Error(`selected provisioning ${failure} interruption`)
+    }
+  }
+  const ctx = await interceptedContext(databasePath, {
+    beforePut: () => { fail('before-commit') },
+    afterPut: () => { fail('after-commit') },
+  })
+  try {
+    await expect(startControlPlane(ctx)).rejects.toThrow(`selected provisioning ${failure} interruption`)
+  } finally {
+    await ctx.fiber.dispose()
   }
 }
 
 function accessDomain(running: RunningHarness): Domain<typeof sakiControlPlaneDomainSpec> {
   return running.ctx.storageDomain.get(sakiControlPlaneDomainSpec.name) as unknown as
     Domain<typeof sakiControlPlaneDomainSpec>
+}
+
+function controlState(running: RunningHarness) {
+  return accessDomain(running).table('control_state').get(CONTROL_STATE_KEY)!
+}
+
+function accessRecord(running: RunningHarness) {
+  const control = controlState(running)
+  return accessDomain(running).table('installation_access').get(control.installationAccessId)!
+}
+
+function replaceAccessBeforeNextUpdate(
+  running: RunningHarness,
+  transform: (record: InstallationAccessRecord) => InstallationAccessRecord,
+): void {
+  const table = accessDomain(running).table('installation_access')
+  const update = table.update.bind(table)
+  vi.spyOn(table, 'update').mockImplementationOnce((key, mutate) => {
+    const stored = table.get(key)!
+    Object.assign(stored, transform(structuredClone(stored)))
+    return update(key, mutate)
+  })
 }
 
 async function database(): Promise<string> {
@@ -165,6 +259,38 @@ afterEach(async () => {
 })
 
 describe('Saki Installation access', () => {
+  it.each([
+    ['before-commit', 1],
+    ['before-commit', 2],
+    ['before-commit', 3],
+    ['before-commit', 4],
+    ['before-commit', 5],
+    ['before-commit', 6],
+    ['before-commit', 7],
+    ['after-commit', 1],
+    ['after-commit', 2],
+    ['after-commit', 3],
+    ['after-commit', 4],
+    ['after-commit', 5],
+    ['after-commit', 6],
+    ['after-commit', 7],
+  ] as const)('resumes provisioning after a %s interruption at write %i', async (failure, writeOrdinal) => {
+    const path = await database()
+    await interruptProvisioning(path, writeOrdinal, failure)
+
+    const recovered = await start(path)
+    const domain = accessDomain(recovered)
+    expect(controlState(recovered).phase).toBe('ready')
+    expect(domain.table('control_state').size).toBe(1)
+    expect(domain.table('installations').size).toBe(1)
+    expect(domain.table('hosts').size).toBe(1)
+    expect(domain.table('principals').size).toBe(1)
+    expect(domain.table('grants').size).toBe(1)
+    expect(domain.table('installation_access').size).toBe(1)
+    expect(recovered.controlPlane.bootstrap.take()?.purpose).toBe('initial-bootstrap')
+    await recovered.close()
+  })
+
   it('redacts the process-local Bootstrap handoff from diagnostics', async () => {
     const running = await start(await database())
     const handoff = running.controlPlane.bootstrap.take()!
@@ -180,6 +306,12 @@ describe('Saki Installation access', () => {
     expect(rendered).not.toContain(secret)
   })
 
+  it('withdraws an unclaimed launcher handoff when the service is disposed', async () => {
+    const running = await start(await database())
+    await running.close()
+    expect(running.controlPlane.bootstrap.take()).toBeUndefined()
+  })
+
   it('persists independent Installation and Local Host identities across restart', async () => {
     const path = await database()
     const first = await start(path)
@@ -190,23 +322,52 @@ describe('Saki Installation access', () => {
 
     const second = await start(path)
     expect(second.controlPlane.identity()).toEqual(firstIdentity)
-    expect(second.controlPlane.bootstrap.take()).toBeUndefined()
+    expect(second.controlPlane.bootstrap.take()?.purpose).toBe('local-reauthentication')
     await second.close()
   })
 
-  it('preserves an unexpired issued challenge across a normal restart', async () => {
+  it('issues a fresh startup challenge while preserving earlier issued challenges', async () => {
     const path = await database()
     const first = await start(path)
     const oldSecret = first.controlPlane.bootstrap.take()!.consume()
     await first.close()
 
     const second = await start(path)
-    const access = accessDomain(second).table('installation_access').get('installation-access')!
-    expect(access.challenges.map(challenge => challenge.state)).toEqual(['issued'])
-    expect(second.controlPlane.bootstrap.take()).toBeUndefined()
+    const newSecret = second.controlPlane.bootstrap.take()!.consume()
+    expect(newSecret).not.toBe(oldSecret)
+    const access = accessRecord(second)
+    expect(access.challenges.map(challenge => [challenge.purpose, challenge.state])).toEqual([
+      ['initial-bootstrap', 'issued'],
+      ['initial-bootstrap', 'issued'],
+    ])
     expect(await second.controlPlane.access.exchangeBootstrap(
       { origin: ORIGIN }, { secret: oldSecret }, AbortSignal.timeout(1_000),
     )).toMatchObject({ ok: true })
+    expect(accessRecord(second)
+      .challenges.map(challenge => challenge.state)).toEqual(['consumed', 'revoked'])
+    await second.close()
+  })
+
+  it('does not issue or exchange a launcher challenge for an inactive Installation', async () => {
+    const path = await database()
+    const first = await start(path)
+    const secret = first.controlPlane.bootstrap.take()!.consume()
+    const owner = controlState(first)
+    await accessDomain(first).table('installations').update(owner.installationId, current => ({
+      ...current,
+      revision: current.revision + 1,
+      state: 'retired',
+    }))
+    expect(await first.controlPlane.access.exchangeBootstrap(
+      { origin: ORIGIN },
+      { secret },
+      AbortSignal.timeout(1_000),
+    )).toEqual({ ok: false, reason: 'unavailable' })
+    expect(accessRecord(first).challenges[0]?.state).toBe('revoked')
+    await first.close()
+
+    const second = await start(path)
+    expect(second.controlPlane.bootstrap.take()).toBeUndefined()
     await second.close()
   })
 
@@ -226,7 +387,7 @@ describe('Saki Installation access', () => {
     expect(await running.controlPlane.access.exchangeBootstrap(
       { origin: ORIGIN }, { secret }, AbortSignal.timeout(1_000),
     )).toEqual({ ok: false, reason: 'unavailable' })
-    const stored = accessDomain(running).table('installation_access').get('installation-access')!
+    const stored = accessRecord(running)
     expect(stored.challenges).toHaveLength(1)
     expect(stored.sessions).toHaveLength(1)
     expect(stored.challenges[0]).toMatchObject({
@@ -239,29 +400,125 @@ describe('Saki Installation access', () => {
     await running.close()
   })
 
-  it('survives response loss and restart without reopening the consumed challenge', async () => {
+  it.each([
+    ['missing', (record: InstallationAccessRecord) => ({ ...record, challenges: [] })],
+    ['terminal', (record: InstallationAccessRecord) => ({
+      ...record,
+      challenges: record.challenges.map(challenge => ({
+        ...challenge,
+        revision: 1,
+        state: 'revoked' as const,
+        terminalAt: Date.now(),
+      })),
+    })],
+    ['expired', (record: InstallationAccessRecord) => ({
+      ...record,
+      challenges: record.challenges.map(challenge => ({ ...challenge, expiresAt: 0 })),
+    })],
+    ['digest', (record: InstallationAccessRecord) => ({
+      ...record,
+      challenges: record.challenges.map(challenge => ({ ...challenge, verifierDigest: 'f'.repeat(64) })),
+    })],
+    ['authority', (record: InstallationAccessRecord) => ({
+      ...record,
+      challenges: record.challenges.map(challenge => ({
+        ...challenge,
+        installationGenerationId: `${challenge.installationGenerationId}-other` as typeof challenge.installationGenerationId,
+      })),
+    })],
+    ['purpose', (record: InstallationAccessRecord) => ({
+      ...record,
+      challenges: record.challenges.map(challenge => ({
+        ...challenge,
+        purpose: 'local-reauthentication' as const,
+      })),
+    })],
+  ] as const)('contains a concurrent %s challenge change during exchange', async (_scenario, transform) => {
+    const running = await start(await database())
+    const secret = running.controlPlane.bootstrap.take()!.consume()
+    replaceAccessBeforeNextUpdate(running, transform)
+    expect(await running.controlPlane.access.exchangeBootstrap(
+      { origin: ORIGIN },
+      { secret },
+      AbortSignal.timeout(1_000),
+    )).toEqual({ ok: false, reason: 'unavailable' })
+    await running.close()
+  })
+
+  it('recovers from a lost Set-Cookie response with a fresh local reauthentication challenge', async () => {
     const path = await database()
     const first = await start(path)
-    const { cookie, secret } = await bootstrap(first.controlPlane)
+    const firstSecret = first.controlPlane.bootstrap.take()!.consume()
+    const lostExchange = await first.controlPlane.access.exchangeBootstrap(
+      { origin: ORIGIN }, { secret: firstSecret }, AbortSignal.timeout(1_000),
+    )
+    expect(lostExchange.ok).toBe(true)
     await first.close()
 
     const second = await start(path)
-    expect(second.controlPlane.bootstrap.take()).toBeUndefined()
+    const recovery = second.controlPlane.bootstrap.take()!
+    expect(recovery.purpose).toBe('local-reauthentication')
+    const recoverySecret = recovery.consume()
     expect(await second.controlPlane.access.exchangeBootstrap(
-      { origin: ORIGIN }, { secret }, AbortSignal.timeout(1_000),
+      { origin: ORIGIN }, { secret: firstSecret }, AbortSignal.timeout(1_000),
     )).toEqual({ ok: false, reason: 'unavailable' })
-    expect(await second.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)))
-      .toMatchObject({ kind: 'authenticated' })
+    const recovered = await second.controlPlane.access.exchangeBootstrap(
+      { origin: ORIGIN }, { secret: recoverySecret }, AbortSignal.timeout(1_000),
+    )
+    expect(recovered).toMatchObject({ ok: true, access: { kind: 'authenticated' } })
+    const stored = accessRecord(second)
+    expect(stored.sessions).toHaveLength(2)
+    expect(stored.bootstrapCompletion).toMatchObject({
+      challengeId: stored.challenges[0]!.id,
+      sessionId: stored.sessions[0]!.id,
+    })
     await second.close()
   })
 
+  it('does not consume a challenge when cancellation arrives during reconciliation', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-19T00:00:00.000Z'))
+    const path = await database()
+    const first = await start(path)
+    first.controlPlane.bootstrap.take()!.consume()
+    await first.close()
+
+    vi.advanceTimersByTime(30_000)
+    const second = await start(path)
+    const selectedSecret = second.controlPlane.bootstrap.take()!.consume()
+    await second.close()
+
+    const third = await startWithPausableAccessWrite(path)
+    third.controlPlane.bootstrap.take()!.consume()
+    const pause = third.pauseNextAccessWrite()
+    vi.advanceTimersByTime(30_001)
+    const controller = new AbortController()
+    const exchange = third.controlPlane.access.exchangeBootstrap(
+      { origin: ORIGIN },
+      { secret: selectedSecret },
+      controller.signal,
+    )
+    await pause.entered
+    controller.abort()
+    pause.release()
+    await expect(exchange).rejects.toMatchObject({ name: 'AbortError' })
+    expect(accessRecord(third).challenges.map(challenge => challenge.state)).toEqual([
+      'expired',
+      'issued',
+      'issued',
+    ])
+    expect(accessRecord(third).sessions).toEqual([])
+    await third.close()
+  })
+
   it('keeps the challenge issued on a pre-commit interruption and consumes it on retry', async () => {
-    const running = await startWithExchangeWriteFailure(await database(), 'before-commit')
+    const running = await startWithArmableAccessWriteFailure(await database())
     const secret = running.controlPlane.bootstrap.take()!.consume()
+    running.failNextAccessWrite('before-commit')
     await expect(running.controlPlane.access.exchangeBootstrap(
       { origin: ORIGIN }, { secret }, AbortSignal.timeout(1_000),
     )).rejects.toThrow('selected access durability interruption')
-    expect(accessDomain(running).table('installation_access').get('installation-access')!
+    expect(accessRecord(running)
       .challenges.at(-1)?.state).toBe('issued')
     expect((await running.controlPlane.access.exchangeBootstrap(
       { origin: ORIGIN }, { secret }, AbortSignal.timeout(1_000),
@@ -271,20 +528,21 @@ describe('Saki Installation access', () => {
 
   it('keeps the committed challenge consumed after a post-commit interruption and restart', async () => {
     const path = await database()
-    const first = await startWithExchangeWriteFailure(path, 'after-commit')
+    const first = await startWithArmableAccessWriteFailure(path)
     const secret = first.controlPlane.bootstrap.take()!.consume()
+    first.failNextAccessWrite('after-commit')
     await expect(first.controlPlane.access.exchangeBootstrap(
       { origin: ORIGIN }, { secret }, AbortSignal.timeout(1_000),
     )).rejects.toThrow('selected access durability interruption')
     await first.close()
 
     const second = await start(path)
-    expect(second.controlPlane.bootstrap.take()).toBeUndefined()
+    expect(second.controlPlane.bootstrap.take()?.purpose).toBe('local-reauthentication')
     expect(await second.controlPlane.access.exchangeBootstrap(
       { origin: ORIGIN }, { secret }, AbortSignal.timeout(1_000),
     )).toEqual({ ok: false, reason: 'unavailable' })
-    const stored = accessDomain(second).table('installation_access').get('installation-access')!
-    expect(stored.challenges.at(-1)?.state).toBe('consumed')
+    const stored = accessRecord(second)
+    expect(stored.challenges.map(challenge => challenge.state)).toEqual(['consumed', 'issued'])
     expect(stored.sessions).toHaveLength(1)
     expect(stored.sessions[0]!.state).toBe('active')
     await second.close()
@@ -310,12 +568,11 @@ describe('Saki Installation access', () => {
       projection: { type: 'project-index', revision: 0, projects: [] },
     })
 
-    const domain = running.ctx.storageDomain.get(sakiControlPlaneDomainSpec.name) as
-      | Domain<typeof sakiControlPlaneDomainSpec>
-      | undefined
-    await domain!.table('foundation').update(FOUNDATION_KEY, current => ({
+    const control = controlState(running)
+    await accessDomain(running).table('grants').update(control.hostOperatorGrantId, current => ({
       ...current,
-      grant: { ...current.grant, revision: current.grant.revision + 1, state: 'revoked' },
+      revision: current.revision + 1,
+      state: 'revoked',
     }))
     expect(await running.controlPlane.query(
       resolution.authentication,
@@ -332,31 +589,144 @@ describe('Saki Installation access', () => {
     await running.close()
   })
 
+  it('rejects operations carrying a context that the access service did not mint', async () => {
+    const running = await start(await database())
+    const foreign = {} as SakiAuthenticationContext
+    expect(await running.controlPlane.query(
+      foreign,
+      { type: 'project-index' },
+      AbortSignal.timeout(1_000),
+    )).toEqual({ ok: false, reason: 'denied' })
+    expect(await running.controlPlane.submit(
+      foreign,
+      undefined,
+      AbortSignal.timeout(1_000),
+    )).toEqual({ ok: false, reason: 'denied' })
+    expect(await running.controlPlane.access.logoutCurrentSession(
+      foreign,
+      'foreign-token',
+      AbortSignal.timeout(1_000),
+    )).toEqual({ ok: false, reason: 'unavailable' })
+    await running.close()
+  })
+
+  it('contains concurrent logout attempts to the one current Browser Session', async () => {
+    const running = await start(await database())
+    const { cookie, access } = await bootstrap(running.controlPlane)
+    const resolution = await resolveSakiAuthentication(
+      running.controlPlane,
+      cookie,
+      { origin: ORIGIN, mutation: true, requestToken: access.requestToken },
+      AbortSignal.timeout(1_000),
+    )
+    if (!resolution.ok) throw new Error('authentication unexpectedly failed')
+    const results = await Promise.all([
+      running.controlPlane.access.logoutCurrentSession(
+        resolution.authentication,
+        access.requestToken,
+        AbortSignal.timeout(1_000),
+      ),
+      running.controlPlane.access.logoutCurrentSession(
+        resolution.authentication,
+        access.requestToken,
+        AbortSignal.timeout(1_000),
+      ),
+    ])
+    expect(results.filter(result => result.ok)).toHaveLength(1)
+    expect(results.filter(result => !result.ok)).toEqual([{ ok: false, reason: 'unavailable' }])
+    await running.close()
+  })
+
+  it.each(['missing', 'terminal'] as const)(
+    'contains a concurrent %s Browser Session change during logout',
+    async (scenario) => {
+      const running = await start(await database())
+      const { cookie, access } = await bootstrap(running.controlPlane)
+      const resolution = await resolveSakiAuthentication(
+        running.controlPlane,
+        cookie,
+        { origin: ORIGIN, mutation: true, requestToken: access.requestToken },
+        AbortSignal.timeout(1_000),
+      )
+      if (!resolution.ok) throw new Error('authentication unexpectedly failed')
+      replaceAccessBeforeNextUpdate(running, record => ({
+        ...record,
+        sessions: scenario === 'missing'
+          ? []
+          : record.sessions.map(session => ({
+            ...session,
+            revision: session.revision + 1,
+            state: 'revoked' as const,
+            terminalAt: Date.now(),
+          })),
+      }))
+      expect(await running.controlPlane.access.logoutCurrentSession(
+        resolution.authentication,
+        access.requestToken,
+        AbortSignal.timeout(1_000),
+      )).toEqual({ ok: false, reason: 'unavailable' })
+      await running.close()
+    },
+  )
+
+  it('propagates an unexpected access-storage failure during logout', async () => {
+    const running = await startWithArmableAccessWriteFailure(await database())
+    const { cookie, access } = await bootstrap(running.controlPlane)
+    const resolution = await resolveSakiAuthentication(
+      running.controlPlane,
+      cookie,
+      { origin: ORIGIN, mutation: true, requestToken: access.requestToken },
+      AbortSignal.timeout(1_000),
+    )
+    if (!resolution.ok) throw new Error('authentication unexpectedly failed')
+    running.failNextAccessWrite('before-commit')
+    await expect(running.controlPlane.access.logoutCurrentSession(
+      resolution.authentication,
+      access.requestToken,
+      AbortSignal.timeout(1_000),
+    )).rejects.toThrow('selected access durability interruption')
+    await running.close()
+  })
+
   it('contains Projection listener failures and continues notifying later subscribers', async () => {
     const running = await start(await database())
     const observed: (readonly string[])[] = []
     const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {})
-    running.controlPlane.onChanged(() => { throw new Error('selected listener failure') })
-    running.controlPlane.onChanged((keys) => { observed.push(keys) })
+    const disposeFailing = running.controlPlane.onChanged(() => { throw new Error('listener-secret-sentinel') })
+    const disposeObserved = running.controlPlane.onChanged((keys) => { observed.push(keys) })
+    running.ctx.emit('domain/changed', {
+      domain: 'unrelated-domain',
+      table: 'records',
+      key: 'record',
+      operation: 'put',
+      value: {},
+    })
 
-    await accessDomain(running).table('foundation').update(FOUNDATION_KEY, current => ({
+    const control = controlState(running)
+    await accessDomain(running).table('grants').update(control.hostOperatorGrantId, current => ({
       ...current,
-      grant: { ...current.grant, revision: current.grant.revision + 1 },
+      revision: current.revision + 1,
+    }))
+    disposeFailing()
+    disposeObserved()
+    await accessDomain(running).table('grants').update(control.hostOperatorGrantId, current => ({
+      ...current,
+      revision: current.revision + 1,
     }))
 
     await running.close()
     expect(observed).toEqual([['access', 'project-index']])
-    expect(diagnostic).toHaveBeenCalledWith(
-      '[saki-control-plane] Projection listener threw:',
-      expect.objectContaining({ message: 'selected listener failure' }),
-    )
+    expect(diagnostic).toHaveBeenCalledTimes(1)
+    expect(diagnostic).toHaveBeenCalledWith('[saki-control-plane] Projection listener failed')
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('listener-secret-sentinel')
   })
 
   it('keeps an explicitly revoked Browser Session unavailable across restart', async () => {
     const path = await database()
     const first = await start(path)
     const { cookie } = await bootstrap(first.controlPlane)
-    await accessDomain(first).table('installation_access').update('installation-access', current => ({
+    const accessId = controlState(first).installationAccessId
+    await accessDomain(first).table('installation_access').update(accessId, current => ({
       ...current,
       revision: current.revision + 1,
       sessions: current.sessions.map(session => ({
@@ -381,18 +751,25 @@ describe('Saki Installation access', () => {
     async (scenario) => {
       const running = await start(await database())
       const { cookie } = await bootstrap(running.controlPlane)
-      await accessDomain(running).table('foundation').update(FOUNDATION_KEY, current => scenario === 'principal-retirement'
-        ? { ...current, principal: { ...current.principal, state: 'retired' } }
-        : {
-          ...current,
-          installation: {
-            ...current.installation,
-            generationId: `${current.installation.generationId}-replacement` as typeof current.installation.generationId,
-          },
-        })
+      const control = controlState(running)
+      if (scenario === 'principal-retirement') {
+        await accessDomain(running).table('principals').update(
+          control.hostOperatorPrincipalId,
+          current => ({ ...current, revision: current.revision + 1, state: 'retired' }),
+        )
+      } else {
+        await accessDomain(running).table('installations').update(
+          control.installationId,
+          current => ({
+            ...current,
+            revision: current.revision + 1,
+            currentInstallationGenerationId: `${current.currentInstallationGenerationId}-replacement` as typeof current.currentInstallationGenerationId,
+          }),
+        )
+      }
       expect(await running.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)))
         .toEqual({ kind: 'session-required', message: 'A local browser session is required.' })
-      expect(accessDomain(running).table('installation_access').get('installation-access')!
+      expect(accessRecord(running)
         .sessions.at(-1)?.state).toBe('revoked')
       await running.close()
     },
@@ -411,6 +788,12 @@ describe('Saki Installation access', () => {
       running.controlPlane,
       cookie,
       { origin: ORIGIN, mutation: true, requestToken: `${access.requestToken}x` },
+      AbortSignal.timeout(1_000),
+    )).toEqual({ ok: false, reason: 'unavailable' })
+    expect(await resolveSakiAuthentication(
+      running.controlPlane,
+      cookie,
+      { origin: ORIGIN, mutation: true },
       AbortSignal.timeout(1_000),
     )).toEqual({ ok: false, reason: 'unavailable' })
 
@@ -433,6 +816,35 @@ describe('Saki Installation access', () => {
     await running.close()
   })
 
+  it('recovers a logged-out operator through the next local launcher challenge', async () => {
+    const path = await database()
+    const first = await start(path)
+    const { cookie, access } = await bootstrap(first.controlPlane)
+    const resolution = await resolveSakiAuthentication(
+      first.controlPlane,
+      cookie,
+      { origin: ORIGIN, mutation: true, requestToken: access.requestToken },
+      AbortSignal.timeout(1_000),
+    )
+    if (!resolution.ok) throw new Error('authentication unexpectedly failed')
+    expect(await first.controlPlane.access.logoutCurrentSession(
+      resolution.authentication,
+      access.requestToken,
+      AbortSignal.timeout(1_000),
+    )).toMatchObject({ ok: true })
+    await first.close()
+
+    const second = await start(path)
+    const recovery = second.controlPlane.bootstrap.take()!
+    expect(recovery.purpose).toBe('local-reauthentication')
+    expect(await second.controlPlane.access.exchangeBootstrap(
+      { origin: ORIGIN },
+      { secret: recovery.consume() },
+      AbortSignal.timeout(1_000),
+    )).toMatchObject({ ok: true, access: { kind: 'authenticated' } })
+    await second.close()
+  })
+
   it('uses the server clock for terminal expiry and never revives an expired session', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-19T00:00:00.000Z'))
@@ -450,19 +862,57 @@ describe('Saki Installation access', () => {
     const second = await start(path)
     expect(await second.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)))
       .toEqual({ kind: 'session-required', message: 'A local browser session is required.' })
+    const recovery = second.controlPlane.bootstrap.take()!
+    expect(recovery.purpose).toBe('local-reauthentication')
+    expect(await second.controlPlane.access.exchangeBootstrap(
+      { origin: ORIGIN },
+      { secret: recovery.consume() },
+      AbortSignal.timeout(1_000),
+    )).toMatchObject({ ok: true })
     await second.close()
+  })
+
+  it('contains a competing reconciliation that commits the same expiry first', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-19T00:00:00.000Z'))
+    const running = await start(await database())
+    const { cookie } = await bootstrap(running.controlPlane)
+    vi.advanceTimersByTime(3_600_001)
+    const results = await Promise.all([
+      running.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)),
+      running.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)),
+    ])
+    expect(results).toEqual([
+      { kind: 'session-required', message: 'A local browser session is required.' },
+      { kind: 'session-required', message: 'A local browser session is required.' },
+    ])
+    expect(accessRecord(running).sessions[0]?.state).toBe('expired')
+    await running.close()
+  })
+
+  it('propagates an unexpected access-storage failure during reconciliation', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-19T00:00:00.000Z'))
+    const running = await startWithArmableAccessWriteFailure(await database())
+    running.controlPlane.bootstrap.take()!.consume()
+    vi.advanceTimersByTime(60_001)
+    running.failNextAccessWrite('before-commit')
+    await expect(running.controlPlane.access.readAccess(undefined, AbortSignal.timeout(1_000)))
+      .rejects.toThrow('selected access durability interruption')
+    await running.close()
   })
 
   it('expires a Bootstrap Challenge by server time and rejects it after clock rollback', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-19T00:00:00.000Z'))
-    const running = await start(await database())
+    const path = await database()
+    const running = await start(path)
     const secret = running.controlPlane.bootstrap.take()!.consume()
     vi.advanceTimersByTime(60_001)
     expect(await running.controlPlane.access.exchangeBootstrap(
       { origin: ORIGIN }, { secret }, AbortSignal.timeout(1_000),
     )).toEqual({ ok: false, reason: 'unavailable' })
-    expect(accessDomain(running).table('installation_access').get('installation-access')!
+    expect(accessRecord(running)
       .challenges.at(-1)?.state).toBe('expired')
     vi.setSystemTime(new Date('2026-08-18T23:59:00.000Z'))
     expect(await running.controlPlane.access.exchangeBootstrap(
@@ -474,7 +924,8 @@ describe('Saki Installation access', () => {
   it('cleans only terminal access evidence after the retention interval', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-19T00:00:00.000Z'))
-    const running = await start(await database())
+    const path = await database()
+    const running = await start(path)
     const { cookie, access } = await bootstrap(running.controlPlane)
     const resolution = await resolveSakiAuthentication(
       running.controlPlane,
@@ -490,11 +941,30 @@ describe('Saki Installation access', () => {
     )
     vi.advanceTimersByTime(86_400_001)
     await running.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000))
-    const stored = accessDomain(running).table('installation_access').get('installation-access')!
+    const stored = accessRecord(running)
     expect(stored.sessions).toEqual([])
     expect(stored.challenges).toEqual([])
-    expect(stored.bootstrapCompleted).toBe(true)
+    expect(stored.bootstrapCompletion).toBeDefined()
+    const completion = stored.bootstrapCompletion!
+    expect(stored.nextChallengeOrdinal).toBe(1)
+    expect(stored.nextSessionOrdinal).toBe(1)
     await running.close()
+
+    const restarted = await start(path)
+    const recovery = restarted.controlPlane.bootstrap.take()!
+    expect(recovery.purpose).toBe('local-reauthentication')
+    expect(accessRecord(restarted).challenges[0]?.ordinal).toBe(1)
+    expect(await restarted.controlPlane.access.exchangeBootstrap(
+      { origin: ORIGIN },
+      { secret: recovery.consume() },
+      AbortSignal.timeout(1_000),
+    )).toMatchObject({ ok: true })
+    const recovered = accessRecord(restarted)
+    expect(recovered.nextChallengeOrdinal).toBe(2)
+    expect(recovered.nextSessionOrdinal).toBe(2)
+    expect(recovered.sessions[0]?.ordinal).toBe(1)
+    expect(recovered.bootstrapCompletion).toEqual(completion)
+    await restarted.close()
   })
 
   it('keeps clear credentials and derived request tokens out of durable storage', async () => {
@@ -507,6 +977,36 @@ describe('Saki Installation access', () => {
     for (const value of forbidden) {
       expect(bytes.includes(Buffer.from(value))).toBe(false)
     }
+  })
+
+  it('marks session and logout cookies Secure for an HTTPS origin', async () => {
+    const secureOrigin = 'https://127.0.0.1:43119'
+    const running = await start(await database(), { ...CONTROL_PLANE_CONFIG, origin: secureOrigin })
+    const secret = running.controlPlane.bootstrap.take()!.consume()
+    const exchange = await running.controlPlane.access.exchangeBootstrap(
+      { origin: secureOrigin },
+      { secret },
+      AbortSignal.timeout(1_000),
+    )
+    expect(exchange).toMatchObject({ ok: true })
+    const cookieHeader = takeSakiCookieHeader(exchange)!
+    expect(cookieHeader).toContain('; Secure')
+    const cookie = rawCookie(cookieHeader)
+    const access = (exchange as Extract<typeof exchange, { readonly ok: true }>).access
+    const resolution = await resolveSakiAuthentication(
+      running.controlPlane,
+      cookie,
+      { origin: secureOrigin, mutation: true, requestToken: access.requestToken },
+      AbortSignal.timeout(1_000),
+    )
+    if (!resolution.ok) throw new Error('authentication unexpectedly failed')
+    const logout = await running.controlPlane.access.logoutCurrentSession(
+      resolution.authentication,
+      access.requestToken,
+      AbortSignal.timeout(1_000),
+    )
+    expect(takeSakiCookieHeader(logout)).toContain('; Secure')
+    await running.close()
   })
 
   it('keeps the derived request token out of AuthenticationContext diagnostics', async () => {

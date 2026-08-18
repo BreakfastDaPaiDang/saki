@@ -12,7 +12,7 @@ pnpm run saki
 
 The command launches the TypeScript source through the repository's ESM hook and path mappings. After `pnpm run build:lib:host`, the artifact-plane equivalent is `node packages/saki/bundle/lib/bin.js`. Both resolve the same package-declared patch and stay alive until `SIGINT` or `SIGTERM`. `SAKI_ONESHOT=1` retains a ready-and-exit mode for assembled smokes and snapshots.
 
-The first start also writes one launcher-handoff JSON line containing `bootstrapSecret` and the loopback base `url`. The clear secret is intended only for immediate local bootstrap: do not redirect, persist, or publish that line. Later starts emit no secret after bootstrap succeeds. If a process stops before exchange, use the earlier still-unexpired handoff; a normal restart does not revoke its durable challenge.
+Every non-oneshot start also writes one launcher-handoff JSON line containing `bootstrapPurpose`, `bootstrapSecret`, and the loopback base `url`. The purpose is `initial-bootstrap` before first completion and `local-reauthentication` thereafter. The clear secret is intended only for immediate local sign-in: do not redirect, persist, or publish that line. A restart preserves older unexpired challenges while issuing a fresh one; exchanging any issued challenge consumes it and revokes the others.
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |

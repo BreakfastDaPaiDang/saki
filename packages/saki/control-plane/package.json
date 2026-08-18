@@ -41,12 +41,14 @@
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-brand": "workspace:^",
+    "@deepseek-ai/dsh-client-connection": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-storage-domain": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-brand": "workspace:^",
+    "@deepseek-ai/dsh-client-connection": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
     "@deepseek-ai/dsh-storage-domain": "workspace:^",

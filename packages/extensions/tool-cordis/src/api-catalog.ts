@@ -992,7 +992,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'identity(): SakiInstallationIdentity',
-        description: 'Read trusted local Installation and Host identities.',
+        description: 'Read trusted local Installation and current Host identities.',
         parameters: [],
         returns: 'stable independent identities.',
       },
@@ -3740,7 +3740,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiAuthenticationContext',
-    declaration: 'export class SakiAuthenticationContext {\n    constructor(readonly sessionId: SakiBrowserSessionId, readonly principalId: SakiPrincipalId, readonly generationId: SakiInstallationGenerationId, requestToken: string);\n    isAuthentic(): boolean;\n    matchesRequestToken(presented: string): boolean;\n    projectRequestToken(): string;\n    toJSON(): {\n        readonly kind: \'saki-authentication-context\';\n    };\n}',
+    declaration: 'export class SakiAuthenticationContext {\n    constructor(readonly sessionId: SakiBrowserSessionId, readonly principalId: SakiPrincipalId, readonly installationGenerationId: SakiInstallationGenerationId, requestToken: string);\n    isAuthentic(): boolean;\n    matchesRequestToken(presented: string): boolean;\n    projectRequestToken(): string;\n    toJSON(): {\n        readonly kind: \'saki-authentication-context\';\n    };\n}',
+  },
+  {
+    name: 'SakiBootstrapChallengePurpose',
+    declaration: 'export type SakiBootstrapChallengePurpose = \'initial-bootstrap\' | \'local-reauthentication\';',
   },
   {
     name: 'SakiBootstrapExchangeRequest',
@@ -3748,7 +3752,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiBootstrapHandoff',
-    declaration: 'export class SakiBootstrapHandoff {\n    constructor(secret: string);\n    consume(): string;\n    toJSON(): {\n        readonly kind: \'saki-bootstrap-handoff\';\n    };\n    toString(): string;\n}',
+    declaration: 'export class SakiBootstrapHandoff {\n    constructor(readonly purpose: SakiBootstrapChallengePurpose, secret: string);\n    consume(): string;\n    toJSON(): {\n        readonly kind: \'saki-bootstrap-handoff\';\n        readonly purpose: SakiBootstrapChallengePurpose;\n    };\n    toString(): string;\n}',
   },
   {
     name: 'SakiBootstrapLaunch',

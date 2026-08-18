@@ -19,6 +19,9 @@ export type SakiBootstrapChallengeId = Branded<'SakiBootstrapChallengeId'>
 /** Stable identity of one server-owned Browser Session. */
 export type SakiBrowserSessionId = Branded<'SakiBrowserSessionId'>
 
+/** Why one local launcher credential was issued. */
+export type SakiBootstrapChallengePurpose = 'initial-bootstrap' | 'local-reauthentication'
+
 /** Display-safe stable identities for local maintenance and startup diagnostics. */
 export interface SakiInstallationIdentity {
   /** Product Installation identity, retained across Host replacement. */

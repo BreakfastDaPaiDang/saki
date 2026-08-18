@@ -16,14 +16,14 @@ export class SakiAuthenticationContext {
 
   /**
    * @param sessionId - authenticated Browser Session identity.
-   * @param principalId - authenticated human Principal identity.
-   * @param generationId - Installation generation bound to the session.
+   * @param principalId - authenticated Principal identity.
+   * @param installationGenerationId - Installation Generation bound to the session.
    * @param requestToken - token freshly derived from the presented raw cookie.
    */
   constructor(
     readonly sessionId: SakiBrowserSessionId,
     readonly principalId: SakiPrincipalId,
-    readonly generationId: SakiInstallationGenerationId,
+    readonly installationGenerationId: SakiInstallationGenerationId,
     requestToken: string,
   ) {
     requestTokens.set(this, requestToken)

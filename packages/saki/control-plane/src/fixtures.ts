@@ -10,7 +10,7 @@ import type {
 } from './types.ts'
 
 /** Display-only placeholder Principal id used by authenticated fixtures. */
-const PRINCIPAL_ID = 'principal-fixture' as import('./types.ts').SakiPrincipalId
+const PRINCIPAL_ID = 'principal-00000000-0000-4000-8000-000000000001' as import('./types.ts').SakiPrincipalId
 
 /** Closed Access fixtures with no Installation or challenge identifiers. */
 export const SAKI_ACCESS_FIXTURES = Object.freeze({

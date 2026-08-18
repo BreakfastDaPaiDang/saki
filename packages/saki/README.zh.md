@@ -6,7 +6,7 @@ Saki 专属产品语义位于 `packages/saki/<pkg>`，并使用 `@breakfastdapai
 
 | 包 | 职责 | ctx key |
 | --- | --- | --- |
-| [`control-plane/`](control-plane/README.md) | Installation 基础记录、本地 Access 权限真源与受保护产品 Projection | `sakiControlPlane` |
+| [`control-plane/`](control-plane/README.md) | Installation 置备、本地 Access 权限真源与受保护产品 Projection | `sakiControlPlane` |
 | [`host-api/`](host-api/README.md) | 双侧 `/saki` Host 与浏览器传输适配器 | 浏览器侧提供 `sakiHostClient` |
 | [`bundle/`](bundle/README.md) | Saki 组合根与仓库本地 Host 启动器 | 挂载控制面、传输层与 `saki-readiness` |
 

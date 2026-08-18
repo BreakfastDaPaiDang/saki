@@ -2,15 +2,15 @@
 
 English | [中文](saki.zh.md)
 
-The Saki control plane owns product state independently from agent conversations. Its first release surface establishes one stable local Installation, one enrolled Host, one human Principal with a current Host Operator Grant, and one versioned Installation Access aggregate. The [Saki backend architecture](../saki/architecture/0.1.0-backend.md) defines the wider control-plane and execution-plane split; this page is the reference for the implemented Cordis service.
+The Saki control plane owns product state independently from agent conversations. Its first release surface establishes one stable local Installation, one enrolled Host, one human Principal with a current Host Operator Grant, and one versioned Installation Access aggregate. A versioned provisioning owner and independently revisioned entity tables retain those identities across interrupted startup. The [Saki backend architecture](../saki/architecture/0.1.0-backend.md) defines the wider control-plane and execution-plane split; this page is the reference for the implemented Cordis service.
 
 ## Installation access
 
-[`saki-control-plane`](../../packages/saki/control-plane/README.md) persists digest-only Bootstrap Challenge and Browser Session entries in SQLite through `storageDomain`. A bootstrap exchange consumes one issued challenge and creates one active session in the same compare-and-set update. The browser cookie authenticates the Principal; every protected operation still reads the current Installation generation, Principal lifecycle, and Grant authority. Raw bootstrap and cookie credentials remain in their exact launcher or HTTP carrier locations, while the authenticated Access Projection carries only the derived request-forgery token required for later mutations.
+[`saki-control-plane`](../../packages/saki/control-plane/README.md) persists digest-only Bootstrap Challenge and Browser Session entries in SQLite through `storageDomain`. A bootstrap exchange consumes one issued challenge, revokes the other issued challenges, and creates one active session in the same compare-and-set update. Monotonic ordinals allocate deterministic entry ids, and an immutable completion summary survives terminal-detail cleanup. Every privileged launcher startup issues a new initial-bootstrap or local-reauthentication challenge, so cookie expiry, logout, and a lost response recover without reopening initial completion. Configuration accepts only an exact HTTP(S) loopback Origin. The browser cookie authenticates the human Host Operator Principal; every protected operation still reads the current Installation generation, Principal lifecycle, and Grant authority. Raw bootstrap and cookie credentials remain in their exact launcher or HTTP carrier locations, while the authenticated Access Projection carries only the derived request-forgery token required for later mutations.
 
 ## Host transport
 
-[`saki-host-api`](../../packages/saki/host-api/README.md) owns strict endpoint schemas on the logical `/saki` [Connection](../../packages/client/connection/README.md) channel. The Host adapter extracts cookies and request headers outside JSON, constructs the non-wire `SakiAuthenticationContext`, and returns `Set-Cookie` outside the RPC result. B01 exposes the empty Project-index Projection and rejects every Control Intent with the stable `intent-unavailable` result; the first successful Intent belongs to B03.
+[`saki-host-api`](../../packages/saki/host-api/README.md) owns strict endpoint schemas on the logical `/saki` [Connection](../../packages/client/connection/README.md) channel. The Host adapter rejects URL queries before decoding, extracts cookies and request headers outside JSON, constructs the non-wire `SakiAuthenticationContext`, and returns `Set-Cookie` outside the RPC result. Every Saki reply uses `Cache-Control: no-store`, and every transport or RPC failure uses one fixed opaque internal error. B01 exposes the empty Project-index Projection and rejects every Control Intent with the stable `intent-unavailable` result; the first successful Intent belongs to B03.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -28,7 +28,7 @@ Public deep-module operations used by Host and future automation Consumers.
 
 ```ts cordis-catalog
 /**
- * Read trusted local Installation and Host identities.
+ * Read trusted local Installation and current Host identities.
  * @returns stable independent identities.
  */
 identity(): SakiInstallationIdentity
@@ -59,5 +59,5 @@ submit( authentication: SakiAuthenticationContext, intent: SakiIntentInput, sign
 onChanged(listener: (keys: readonly SakiProjectionKey[]) => void): SakiChangedDisposer
 ```
 
-Source: [`packages/saki/control-plane/src/service.ts:120`](../../packages/saki/control-plane/src/service.ts)
+Source: [`packages/saki/control-plane/src/service.ts:125`](../../packages/saki/control-plane/src/service.ts)
 <!-- END GENERATED cordis-surface -->

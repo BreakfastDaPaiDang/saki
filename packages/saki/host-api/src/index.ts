@@ -24,6 +24,11 @@ export * from './wire.ts'
 export const SAKI_CONNECTION_CHANNEL = '/saki'
 /** Stable request-forgery header read only from trusted transport metadata. */
 export const SAKI_REQUEST_TOKEN_HEADER = 'x-saki-request-token'
+const SAKI_UNAVAILABLE_ERROR = {
+  code: 'internal',
+  message: 'Saki request is unavailable',
+  details: {},
+} as const
 /** Stable Cordis plugin name. */
 export const name = 'saki-host-api'
 /** Host transport and control-plane services required by this adapter. */
@@ -37,7 +42,11 @@ export function apply(ctx: Context): void {
   ctx.connection.rpc.handle(
     SAKI_CONNECTION_CHANNEL,
     (endpoint, payload, signal, request) => dispatch(ctx.sakiControlPlane, endpoint, payload, signal, request),
-    { authority: 'loopback' },
+    {
+      authority: 'loopback',
+      requiredResponseHeaders: { 'cache-control': 'no-store' },
+      opaqueError: SAKI_UNAVAILABLE_ERROR,
+    },
   )
 }
 
@@ -49,6 +58,7 @@ async function dispatch(
   request: ConnectionRpcRequestMetadata,
 ): Promise<ConnectionRpcReply> {
   try {
+    if (new URL(request.url).search !== '') return reply(badRequest())
     switch (endpoint) {
       case 'access/read': return await readAccess(controlPlane, payload, signal, request)
       case 'access/exchange': return await exchangeBootstrap(controlPlane, payload, signal, request)
@@ -62,7 +72,7 @@ async function dispatch(
     // transport diagnostics must not serialize request or credential material.
     return reply({
       ok: false,
-      error: { code: 'internal', message: 'Saki operation is unavailable', details: {} },
+      error: SAKI_UNAVAILABLE_ERROR,
     })
   }
 }

@@ -21,6 +21,14 @@ export interface FetchHandler {
   fetch(request: Request): Promise<Response>
 }
 
+/** Response fields applied when the bridge rejects a request before dispatch. */
+export interface BridgeRejectionPolicy {
+  /** Headers copied to a bridge-owned rejection response. */
+  readonly headers?: Readonly<Record<string, string>>
+  /** Optional fixed body for a bridge-owned rejection response. */
+  readonly body?: string
+}
+
 /**
  * Bridge one node:http request to the fetch-shaped handler (client close
  * aborts; SSE bodies stream out chunk by chunk).
@@ -28,12 +36,14 @@ export interface FetchHandler {
  * @param res - node:http response the bridge writes and owns to completion.
  * @param apiHandler - fetch-shaped API carrier the request is dispatched to.
  * @param maxRequestBodyBytes - maximum body bytes buffered before dispatch.
+ * @param rejection - optional fields for bridge-owned rejection responses.
  */
 export async function bridge(
   req: IncomingMessage,
   res: ServerResponse,
   apiHandler: FetchHandler,
   maxRequestBodyBytes = DEFAULT_MAX_REQUEST_BODY_BYTES,
+  rejection: BridgeRejectionPolicy = {},
 ): Promise<void> {
   const abort = new AbortController()
   // Client-disconnect detection MUST hang off the response, not the request:
@@ -46,8 +56,8 @@ export async function bridge(
   })
   const declaredLength = req.headers['content-length']
   if (declaredLength !== undefined && Number(declaredLength) > maxRequestBodyBytes) {
-    res.writeHead(413, { connection: 'close' })
-    res.end()
+    res.writeHead(413, rejectionHeaders(rejection))
+    res.end(rejection.body)
     req.destroy()
     return
   }
@@ -57,8 +67,8 @@ export async function bridge(
     const buffer = chunk as Buffer
     received += buffer.byteLength
     if (received > maxRequestBodyBytes) {
-      res.writeHead(413, { connection: 'close' })
-      res.end()
+      res.writeHead(413, rejectionHeaders(rejection))
+      res.end(rejection.body)
       req.destroy()
       return
     }
@@ -96,6 +106,12 @@ export async function bridge(
     }
   }
   res.end()
+}
+
+function rejectionHeaders(policy: BridgeRejectionPolicy): Record<string, string> {
+  const headers = new Headers(policy.headers)
+  headers.set('connection', 'close')
+  return Object.fromEntries(headers.entries())
 }
 
 function requestOrigin(req: IncomingMessage): string {

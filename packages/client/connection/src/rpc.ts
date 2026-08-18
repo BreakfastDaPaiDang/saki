@@ -1,6 +1,6 @@
 /** Generic unary RPC contracts shared by the Host and Client Connection halves. */
 
-import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { RpcError, RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
 
 /** Trust fence applied before a Host RPC channel reaches its handler. */
 export type ConnectionRpcAuthority = 'trusted-host' | 'loopback'
@@ -9,6 +9,10 @@ export type ConnectionRpcAuthority = 'trusted-host' | 'loopback'
 export interface ConnectionRpcHandlerOptions {
   /** Browser authority accepted by every endpoint in this channel. */
   readonly authority: ConnectionRpcAuthority
+  /** Headers that every response path must carry; these override handler headers. */
+  readonly requiredResponseHeaders?: Readonly<Record<string, string>>
+  /** Fixed error replacing parser, routing, handler, and returned RPC error details. */
+  readonly opaqueError?: RpcError
 }
 
 /** Read-only header access from the request received by the Host transport. */

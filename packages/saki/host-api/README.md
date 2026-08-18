@@ -14,13 +14,13 @@ The private dual-face Saki Host API adapts the control plane to the shared Conne
 | `control/query` | `{ type: 'project-index' }` | Authenticated empty Project-index Projection or denial |
 | `control/submit` | `{}` plus request-token header | Stable `intent-unavailable` result after authentication |
 
-All request schemas are strict. Browser fields that attempt to supply Principal, Grant, Actor, AuthenticationContext, or lifecycle authority are rejected as `bad-request`; the adapter never ignores them. Unknown endpoints and malformed bodies expose no parser details. Unexpected implementation failures return one stable internal error without exception text.
+All request schemas are strict. `/saki` rejects a non-empty URL query before operation dispatch or body decoding. The adapter never ignores browser fields that attempt to supply Principal, Grant, Actor, AuthenticationContext, or lifecycle authority. Route-trust failures, malformed envelopes, method mismatches, invalid operation payloads, returned RPC errors, and unexpected implementation failures all use one fixed opaque internal error without parser, request, or exception details. Every pre-handler, handler, success, denial, and error reply carries `Cache-Control: no-store`; cookie headers remain outside JSON.
 
 ## Transport responsibilities
 
-Connection owns route trust, bounded JSON framing, correlation, cancellation, disposal, and JSON Content-Type. The Host adapter reads Cookie, Origin, and `x-saki-request-token` only from Connection's trusted request metadata. It asks the control plane's Host-only resolver for an AuthenticationContext and consumes the opaque post-commit cookie handoff. Neither AuthenticationContext nor raw cookie material enters browser JSON.
+Connection owns route trust, bounded JSON framing, correlation, cancellation, disposal, and JSON Content-Type. The `/saki` registration requires `Cache-Control: no-store` and the fixed opaque error on the Connection channel, so those policies also cover failures before the Host adapter runs. The Host adapter reads Cookie, Origin, and `x-saki-request-token` only from Connection's trusted request metadata. It asks the control plane's Host-only resolver for an AuthenticationContext and consumes the opaque post-commit cookie handoff. Neither AuthenticationContext nor raw cookie material enters browser JSON.
 
-The browser client uses same-origin credentials on every call. Only logout accepts a request token in B01; the successful-submit method does not exist while the Intent map is empty. Business denials remain typed successful RPC values, while carrier and schema failures use Connection's RPC error envelope.
+The browser client uses same-origin credentials on every call. Only logout accepts a request token in B01; the successful-submit method does not exist while the Intent map is empty. Business denials remain typed successful RPC values, while carrier and schema failures use the fixed opaque Connection RPC error envelope.
 
 ## Model Experience
 

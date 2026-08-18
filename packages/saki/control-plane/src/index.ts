@@ -14,6 +14,7 @@ export type {
   SakiAccessLogoutResult,
   SakiAuthenticatedAccessProjection,
   SakiBootstrapChallengeId,
+  SakiBootstrapChallengePurpose,
   SakiBootstrapExchangeRequest,
   SakiBootstrapTransportContext,
   SakiBrowserSessionId,

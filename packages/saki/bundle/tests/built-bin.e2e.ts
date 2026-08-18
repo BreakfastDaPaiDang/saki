@@ -15,6 +15,7 @@ describe.skipIf(!existsSync(bin))('built Saki executable', () => {
     delete environment.DEEPSEEK_API_KEY
     delete environment.OPENAI_API_KEY
     delete environment.CODEX_API_KEY
+    environment.SAKI_DATABASE_PATH = ':memory:'
     environment.SAKI_ONESHOT = '1'
 
     const { stdout, stderr } = await execFileAsync(process.execPath, [bin], {

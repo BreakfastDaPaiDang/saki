@@ -6,7 +6,7 @@ Saki-specific product semantics live under `packages/saki/<pkg>` and use the `@b
 
 | Package | Role | ctx key |
 | --- | --- | --- |
-| [`control-plane/`](control-plane/README.md) | Installation foundation, local Access authority, and protected product Projection | `sakiControlPlane` |
+| [`control-plane/`](control-plane/README.md) | Installation provisioning, local Access authority, and protected product Projection | `sakiControlPlane` |
 | [`host-api/`](host-api/README.md) | Dual-face `/saki` Host and browser transport adapter | `sakiHostClient` on the browser face |
 | [`bundle/`](bundle/README.md) | Saki composition root and repository-local Host launcher | mounts the control plane, transport, and `saki-readiness` |
 

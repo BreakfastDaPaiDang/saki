@@ -1,7 +1,13 @@
 /** Secret derivation and opaque transport handoffs owned by Saki access. @module @breakfastdapaidang/saki-control-plane/src/secrets */
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import type { SakiAccessExchangeResult, SakiAccessLogoutResult } from './types.ts'
+import type {
+  SakiAccessExchangeResult,
+  SakiAccessLogoutResult,
+  SakiBootstrapChallengeId,
+  SakiBootstrapChallengePurpose,
+  SakiBrowserSessionId,
+} from './types.ts'
 
 const cookieHeaders = new WeakMap<object, string>()
 
@@ -15,30 +21,49 @@ export function generateCredential(): string {
 
 /**
  * Compute a one-way Bootstrap Challenge verifier.
+ * @param challengeId - stable challenge identity that owns this verifier.
  * @param secret - clear one-time bootstrap secret.
  * @returns the domain-separated verifier digest.
  */
-export function bootstrapDigest(secret: string): string {
-  return createHash('sha256').update('saki/bootstrap-secret/v1\0').update(secret).digest('hex')
+export function bootstrapDigest(challengeId: SakiBootstrapChallengeId, secret: string): string {
+  return createHash('sha256')
+    .update('saki/bootstrap-secret/v1\0')
+    .update(challengeId)
+    .update('\0')
+    .update(secret)
+    .digest('hex')
 }
 
 /**
  * Compute a one-way Browser Session cookie verifier.
+ * @param sessionId - stable Browser Session identity that owns this verifier.
  * @param cookie - clear browser cookie credential.
  * @returns the domain-separated verifier digest.
  */
-export function cookieDigest(cookie: string): string {
-  return createHash('sha256').update('saki/browser-cookie/v1\0').update(cookie).digest('hex')
+export function cookieDigest(sessionId: SakiBrowserSessionId, cookie: string): string {
+  return createHash('sha256')
+    .update('saki/browser-cookie/v1\0')
+    .update(sessionId)
+    .update('\0')
+    .update(cookie)
+    .digest('hex')
 }
 
 /**
  * Derive the request-forgery token without persisted verifier material.
+ * @param sessionId - authenticated Browser Session identity.
  * @param cookie - clear browser cookie credential.
  * @param domain - versioned derivation domain from Installation Access.
  * @returns a base64url request token bound to the cookie.
  */
-export function deriveRequestToken(cookie: string, domain: string): string {
-  return createHmac('sha256', cookie).update(`saki/request-token/v1\0${domain}`).digest('base64url')
+export function deriveRequestToken(
+  sessionId: SakiBrowserSessionId,
+  cookie: string,
+  domain: string,
+): string {
+  return createHmac('sha256', cookie)
+    .update(`saki/request-token/v1\0${domain}\0${sessionId}`)
+    .digest('base64url')
 }
 
 /**
@@ -84,8 +109,11 @@ export function takeCookieHeader(result: SakiAccessExchangeResult | SakiAccessLo
 export class SakiBootstrapHandoff {
   #secret: string | undefined
 
-  /** @param secret - clear secret retained only until the launcher consumes it. */
-  constructor(secret: string) {
+  /**
+   * @param purpose - initial enrollment or later local reauthentication.
+   * @param secret - clear secret retained only until the launcher consumes it.
+   */
+  constructor(readonly purpose: SakiBootstrapChallengePurpose, secret: string) {
     this.#secret = secret
   }
 
@@ -104,8 +132,8 @@ export class SakiBootstrapHandoff {
    * Serialize only the handoff kind, never the secret.
    * @returns a redacted JSON representation.
    */
-  toJSON(): { readonly kind: 'saki-bootstrap-handoff' } {
-    return { kind: 'saki-bootstrap-handoff' }
+  toJSON(): { readonly kind: 'saki-bootstrap-handoff'; readonly purpose: SakiBootstrapChallengePurpose } {
+    return { kind: 'saki-bootstrap-handoff', purpose: this.purpose }
   }
 
   /**

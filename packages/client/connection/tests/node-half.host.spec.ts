@@ -280,6 +280,7 @@ describe('connection node half', () => {
         payload,
         url: request.url,
         cookie: request.headers.get('cookie'),
+        hasCookie: request.headers.has('cookie'),
         origin: request.headers.get('origin'),
       })
       return {
@@ -305,6 +306,7 @@ describe('connection node half', () => {
       payload: {},
       url: 'http://127.0.0.1:3080/rpc/access/exchange',
       cookie: 'opaque=request',
+      hasCookie: true,
       origin: 'http://127.0.0.1:3080',
     }])
     expect(response.state.headers).toMatchObject({
@@ -316,6 +318,106 @@ describe('connection node half', () => {
       rpcId: 'rpc-metadata',
       result: { ok: true, value: { accepted: true } },
     })
+    await remove()
+    await fiber.dispose()
+  })
+
+  it('applies required headers and one opaque error across every channel response path', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    const connection = ctx.get('connection') as HostConnectionHandle
+    const opaqueError = {
+      code: 'internal' as const,
+      message: 'operation unavailable',
+      details: {},
+    }
+    const remove = connection.rpc.handle('/opaque', async (endpoint) => {
+      if (endpoint === 'throw') throw new Error('handler sentinel')
+      if (endpoint === 'error') {
+        return {
+          result: {
+            ok: false,
+            error: { code: 'internal', message: 'result sentinel', details: {} },
+          },
+        }
+      }
+      return {
+        result: { ok: true, value: null },
+        headers: { 'cache-control': 'public', 'x-handler': 'retained' },
+      }
+    }, {
+      authority: 'loopback',
+      requiredResponseHeaders: { 'cache-control': 'no-store', 'x-required': 'present' },
+      opaqueError,
+    })
+    const route = routes.find(candidate => candidate.path === '/opaque')!
+
+    for (const [request, status] of [
+      [fakePost({ host: 'other.example' }, '/opaque/read', {}), 403],
+      [fakeRequest({ host: '127.0.0.1:3080' }, '/opaque/read'), 404],
+      [fakeRawPost({ host: '127.0.0.1:3080' }, '/opaque/read', '{}'), 415],
+      [fakeRawPost({ host: '127.0.0.1:3080', 'content-type': 'application/json' }, '/opaque/read', '{'), 400],
+      [fakeRawPost({
+        host: '127.0.0.1:3080',
+        'content-type': 'application/json',
+        'content-length': String(Number.MAX_SAFE_INTEGER),
+      }, '/opaque/read', '{}'), 413],
+    ] as const) {
+      const response = fakeResponse()
+      await route.handler(request, response.response)
+      expect(response.state).toMatchObject({
+        status,
+        body: 'operation unavailable',
+        headers: { 'cache-control': 'no-store', 'x-required': 'present' },
+      })
+    }
+
+    for (const request of [
+      fakePost({ host: '127.0.0.1:3080' }, '/opaque/read', { rpcId: 'opaque-envelope' }),
+      fakePost({ host: '127.0.0.1:3080' }, '/opaque/read', {
+        type: 'client-request', rpcId: 'opaque-method', method: 'method-sentinel', payload: {},
+      }),
+      fakePost({ host: '127.0.0.1:3080' }, '/opaque/error', {
+        type: 'client-request', rpcId: 'opaque-result', method: 'error', payload: {},
+      }),
+    ]) {
+      const response = fakeResponse()
+      await route.handler(request, response.response)
+      expect(response.state.headers).toMatchObject({
+        'cache-control': 'no-store',
+        'content-type': 'application/json',
+        'x-required': 'present',
+      })
+      expect(JSON.parse(String(response.state.body))).toMatchObject({
+        result: { ok: false, error: opaqueError },
+      })
+      expect(String(response.state.body)).not.toMatch(/sentinel|issues/)
+    }
+
+    const failed = fakeResponse()
+    await route.handler(fakePost({ host: '127.0.0.1:3080' }, '/opaque/throw', {
+      type: 'client-request', rpcId: 'opaque-throw', method: 'throw', payload: {},
+    }), failed.response)
+    expect(failed.state).toMatchObject({
+      status: 500,
+      body: 'operation unavailable',
+      headers: { 'cache-control': 'no-store', 'x-required': 'present' },
+    })
+
+    const succeeded = fakeResponse()
+    await route.handler(fakePost({ host: '127.0.0.1:3080' }, '/opaque/read', {
+      type: 'client-request', rpcId: 'opaque-success', method: 'read', payload: {},
+    }), succeeded.response)
+    expect(succeeded.state.headers).toMatchObject({
+      'cache-control': 'no-store',
+      'content-type': 'application/json',
+      'x-handler': 'retained',
+      'x-required': 'present',
+    })
+
     await remove()
     await fiber.dispose()
   })
@@ -336,7 +438,10 @@ describe('connection node half', () => {
         calls.push({ endpoint, payload })
         return { result: { ok: true, value: { accepted: true } } }
       },
-      { authority: 'trusted-host' },
+      {
+        authority: 'trusted-host',
+        requiredResponseHeaders: { 'cache-control': 'no-store' },
+      },
     )
     expect(() => connection.rpc.intercept(
       '/api',
@@ -365,6 +470,7 @@ describe('connection node half', () => {
       rpcId: 'rpc-shared',
       result: { ok: true, value: { accepted: true } },
     })
+    expect(claimed.state.headers).toMatchObject({ 'cache-control': 'no-store' })
     expect(calls).toEqual([{
       endpoint: 'goals/create',
       payload: { args: { agentId: 'agent-1' } },
@@ -389,11 +495,19 @@ describe('connection node half', () => {
       '/api',
       endpoint => endpoint === 'goals/create',
       async () => ({ result: { ok: true, value: null } }),
-      { authority: 'loopback' },
+      {
+        authority: 'loopback',
+        requiredResponseHeaders: { 'cache-control': 'no-store' },
+        opaqueError: { code: 'internal', message: 'operation unavailable', details: {} },
+      },
     )
     const loopbackOnly = fakeResponse()
     await route.handler(fakePost({ host: 'harness.example' }, '/api/goals/create', request), loopbackOnly.response)
-    expect(loopbackOnly.state.status).toBe(403)
+    expect(loopbackOnly.state).toMatchObject({
+      status: 403,
+      body: 'operation unavailable',
+      headers: { 'cache-control': 'no-store' },
+    })
     await removeLoopback()
     await fiber.dispose()
   })

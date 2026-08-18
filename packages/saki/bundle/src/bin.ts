@@ -58,6 +58,7 @@ try {
     if (handoff !== undefined) {
       process.stdout.write(`${JSON.stringify({
         product: 'saki',
+        bootstrapPurpose: handoff.purpose,
         bootstrapSecret: handoff.consume(),
         url: `http://127.0.0.1:${String(ctx.webServer.port)}`,
       })}\n`)

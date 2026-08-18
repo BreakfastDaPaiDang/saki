@@ -12,7 +12,7 @@ pnpm run saki
 
 该命令通过仓库的 ESM 钩子与路径映射启动 TypeScript 源码。执行 `pnpm run build:lib:host` 后，对应的产物平面命令是 `node packages/saki/bundle/lib/bin.js`。两者解析同一个由包声明的补丁，并持续运行至收到 `SIGINT` 或 `SIGTERM`。`SAKI_ONESHOT=1` 保留供组装冒烟测试与快照使用的“就绪后退出”模式。
 
-首次启动还会写出一行启动器交接 JSON，其中包含 `bootstrapSecret` 与回环基础 `url`。明文机密值只供立即执行本地 bootstrap 使用；不得重定向、持久保存或公开这行内容。Bootstrap 成功后，后续启动不再输出机密值。若进程在交换前停止，应继续使用先前尚未过期的交接值；普通重启不会撤销其持久 Bootstrap Challenge。
+每次非一次性启动还会写出一行启动器交接 JSON，其中包含 `bootstrapPurpose`、`bootstrapSecret` 与回环基础 `url`。首次完成前用途为 `initial-bootstrap`，此后为 `local-reauthentication`。明文机密值只供立即执行本机登录使用；不得重定向、持久保存或公开这行内容。重启会保留先前尚未过期的挑战并签发新挑战；交换任一状态为 `issued` 的挑战时会消费该挑战，并撤销其余挑战。
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
