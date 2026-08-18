@@ -10,7 +10,7 @@
 
 **空的存储值等于不存在。** 处处如此：`resolve` 跳过它，`describe` 报告未配置。空白永远不会伪装成已配置的机密。
 
-**每个来源都要声明自身的保护模型。** `resolve()` 报告它这次实际返回值的保护级别，`describe()` 则在不含值的安全元数据中报告同一信息、可用性和观察时间。类型化提供方接口要求这个字段；解析器从无类型输入构造提供方结果时校验它。`resolveRequired()` 对提供方定义的一个标识符做精确比较，在调用方拿到值之前拒绝缺失值或不同等级。保护级别用于描述，不构成有序强度等级。
+**每个来源都要声明自身的保护模型。** `resolve()` 报告它这次实际返回值的 Credential Protection Level，`describe()` 则在不含值的安全元数据中报告同一信息、可用性和观察时间。类型化提供方接口要求这个字段；解析器从无类型输入构造提供方结果时校验它。`resolveRequired()` 对提供方定义的 Credential Protection Level 标识符做精确比较，在调用方拿到值之前拒绝缺失值或不同的 Credential Protection Level。Credential Protection Level 用于描述，不构成有序强度等级。
 
 ## 接口
 

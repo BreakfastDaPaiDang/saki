@@ -4,7 +4,7 @@
 
 文件型[凭据](../credentials/README.md)提供方：四层来源，一套明确的优先级。
 
-| 层 | 来源 id | 保护级别 | 可写 | 优先 |
+| 层 | 来源 id | Credential Protection Level | 可写 | 优先 |
 |---|---|---|---|---|
 | 继承的进程环境 | `env` | `plaintext` | 否 | 始终优先 |
 | `$DSH_HOME/.credentials.yaml` 文档 | `file` | `plaintext` | 是（`set`/`unset`） | 高于两个 `.env` 层 |

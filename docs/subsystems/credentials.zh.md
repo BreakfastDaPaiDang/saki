@@ -15,7 +15,7 @@
 type CredentialRef = Branded<'CredentialRef'>
 ```
 
-保护级别是提供方为某个实际来源声明的恢复信任模型。标识符只作描述而不排序：策略接受一个精确标识符，而不把每种存储机制排成通用的强弱顺序。健康状态则区分「值不存在」与「记录已配置但当前 Host 无法使用」。
+Credential Protection Level 是提供方为某个实际来源声明的恢复信任模型。标识符只作描述而不排序：策略接受一个精确标识符，而不把每种存储机制排成通用的强弱顺序。健康状态则区分「值不存在」与「记录已配置但当前 Host 无法使用」。
 
 ```ts type-equiv
 /** Provider-defined description of the identities and processes that may recover a credential value. */
@@ -29,7 +29,7 @@ type CredentialHealth = 'available' | 'missing' | 'unavailable'
 
 ## 解析
 
-`resolve(ref)` 返回值以及提供该值的来源层和保护级别（由提供方定义）；未配置期间返回 `undefined`。消费方在每个操作中重新解析，绝不跨操作缓存——这种按操作进行的读取正是热更新机制。类型化提供方接口要求保护字段；解析器从无类型输入构造提供方结果时校验它。`resolveRequired(ref, level)` 在同一结果上强制一个精确保护标识符；值缺失或来源不匹配时，都会在调用方拿到值之前失败关闭。
+`resolve(ref)` 返回值以及提供该值的来源层和 Credential Protection Level（由提供方定义）；未配置期间返回 `undefined`。消费方在每个操作中重新解析，绝不跨操作缓存——这种按操作进行的读取正是热更新机制。类型化提供方接口要求 Credential Protection Level 字段；解析器从无类型输入构造提供方结果时校验它。`resolveRequired(ref, level)` 在同一结果上强制一个精确的 Credential Protection Level 标识符；值缺失或 Credential Protection Level 不匹配时，都会在调用方拿到值之前失败关闭。
 
 ```ts type-equiv
 /** One resolved credential value and the source layer that supplied it. */
@@ -45,7 +45,7 @@ interface ResolvedCredential {
 
 ## 描述
 
-`describe(ref)` 在绝不暴露值的前提下回应配置界面：引用本身、当前是否已配置、来源与保护级别、`set` 当前能否成功、健康状态以及这些事实的观察时间。本地提供方把由当前进程环境供值的引用报告为 `writable: false`——那样的写入会表面成功而解析持续返回遮蔽值，因此 seam 直接拒绝，界面也得以提前把该引用渲染为只读。Windows DPAPI 提供方会把复制而来、损坏或作用域不同的记录报告为已配置但不可用，且不会返回其密文。
+`describe(ref)` 在绝不暴露值的前提下回应配置界面：引用本身、当前是否已配置、来源与 Credential Protection Level、`set` 当前能否成功、健康状态以及这些事实的观察时间。本地提供方把由当前进程环境供值的引用报告为 `writable: false`——那样的写入会表面成功而解析持续返回遮蔽值，因此 seam 直接拒绝，界面也得以提前把该引用渲染为只读。Windows DPAPI 提供方会把复制而来、损坏或作用域不同的记录报告为已配置但不可用，且不会返回其密文。
 
 ```ts type-equiv
 /** Safe observation for one reference, including its recovery trust model but never its value. */
@@ -67,7 +67,7 @@ interface CredentialInfo {
 }
 ```
 
-`plaintext`、`ephemeral` 与 `local-user-trust` 是内置标识符。`local-user-trust` 表示 Windows 当前用户 DPAPI 存储：它保护持久化值，但不声称能隔离刻意以同一 Windows 用户身份运行的进程。要建立更强边界，需要独立隔离的凭据代理或外部机密管理器。
+`plaintext`、`ephemeral` 与 `local-user-trust` 是内置 Credential Protection Level 标识符。`local-user-trust` 表示 Windows 当前用户 DPAPI 存储：它保护持久化值，但不声称能隔离刻意以同一 Windows 用户身份运行的进程。要建立更强边界，需要独立隔离的凭据代理或外部机密管理器。
 
 ## 已提交的变更
 

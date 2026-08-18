@@ -45,9 +45,9 @@ Windows CNG DPAPI `LOCAL=user` [凭据](../credentials/README.md)提供方。它
 
 ## 解析与安全观察
 
-`resolve(ref)` 在每次操作时读取并校验当前文档，解密选中的记录，并返回非空值、来源 `windows-dpapi-current-user` 与保护级别 `local-user-trust`。`resolveRequired(ref, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST)` 是消费方的失败关闭入口：缺失值或任何不同的保护级别都会在调用方拿到值之前失败。
+`resolve(ref)` 在每次操作时读取并校验当前文档，解密选中的记录，并返回非空值、来源 `windows-dpapi-current-user` 与 Credential Protection Level `local-user-trust`。`resolveRequired(ref, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST)` 是消费方的失败关闭入口：缺失值或任何不同的 Credential Protection Level 都会在调用方拿到值之前失败。
 
-`describe(ref)` 只返回 `ref`、配置状态、来源、保护级别、可写性、健康状态和观察时间。它验证受保护描述符和明文有效性，但不会构造含凭据的 JavaScript 字符串。复制而来、损坏、采用经典 DPAPI 或作用域不同的记录报告为 `configured: true, health: 'unavailable'`；原始密文和原生输入字节绝不进入结果或诊断消息。
+`describe(ref)` 只返回 `ref`、配置状态、来源、Credential Protection Level、可写性、健康状态和观察时间。它验证受保护描述符和明文有效性，但不会构造含凭据的 JavaScript 字符串。复制而来、损坏、采用经典 DPAPI 或作用域不同的记录报告为 `configured: true, health: 'unavailable'`；原始密文和原生输入字节绝不进入结果或诊断消息。
 
 只有受信任的 Host 插件应当拿到原始凭据服务。读取响应与安全观察只携带 `CredentialRef` 和文档列出的安全字段，绝不携带明文或密文。`credentials.set` 是具名的只写 Host API 例外：明文会随请求通过协议传输，但绝不会在响应中回显。本包不注册包含凭据材料的 Agent 工具、Projection、会话事件、导出记录或模型上下文，其诊断也不包含输入或存储字节。应用组合层仍负责把凭据材料排除在进程崩溃收集与可携带导出之外。
 
