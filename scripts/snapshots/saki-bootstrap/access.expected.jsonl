@@ -1,0 +1,5 @@
+{"step":"first-access","access":{"kind":"bootstrap-required","message":"Local bootstrap is required."}}
+{"step":"bootstrap-exchange","ok":true,"cookie":"set"}
+{"step":"project-index","result":{"ok":true,"projection":{"type":"project-index","revision":0,"projects":[]}}}
+{"step":"restart-access","access":{"kind":"authenticated","principal":"Host Operator","session":"restored","requestToken":"derived"}}
+{"step":"restart-project-index","result":{"ok":true,"projection":{"type":"project-index","revision":0,"projects":[]}}}

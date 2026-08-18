@@ -263,6 +263,11 @@
       "project": [
         "src/**/*.ts",
         "tests/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "@breakfastdapaidang/saki-host-api",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-storage-sqlite"
       ]
     },
     "packages/core/tools": {

@@ -227,6 +227,10 @@
       "@deepseek-ai/dsh-sdk-jsonrpc-server": ["./packages/sdk/server/src"],
       "@breakfastdapaidang/saki-*/invariant": ["./packages/saki/*/src/invariant.ts"],
       "@breakfastdapaidang/saki-*/bin": ["./packages/saki/*/src/bin.ts"],
+      "@breakfastdapaidang/saki-*/host": ["./packages/saki/*/src/host.ts"],
+      "@breakfastdapaidang/saki-*/fixtures": ["./packages/saki/*/src/fixtures.ts"],
+      "@breakfastdapaidang/saki-*/wire": ["./packages/saki/*/src/wire.ts"],
+      "@breakfastdapaidang/saki-*/client": ["./packages/saki/*/src/client/index.ts"],
       "@breakfastdapaidang/saki-*": ["./packages/saki/*/src"],
       "@deepseek-ai/dsh-*": [
         "./packages/core/*/src",

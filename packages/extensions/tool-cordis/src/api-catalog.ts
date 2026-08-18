@@ -976,6 +976,47 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'sakiControlPlane',
+    summary: 'Public deep-module operations used by Host and future automation Consumers.',
+    description: 'Public deep-module operations used by Host and future automation Consumers.',
+    methods: [
+      {
+        signature: 'readonly access: SakiAccess',
+        description: 'Access lifecycle separated from Control Intent authority.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly bootstrap: SakiBootstrapLaunch',
+        description: 'Local clear-secret launcher channel.',
+        parameters: [],
+      },
+      {
+        signature: 'identity(): SakiInstallationIdentity',
+        description: 'Read trusted local Installation and Host identities.',
+        parameters: [],
+        returns: 'stable independent identities.',
+      },
+      {
+        signature: 'query( authentication: SakiAuthenticationContext, query: SakiQuery, signal: AbortSignal, ): Promise<SakiQueryResult>',
+        description: 'Query one protected Projection after revalidating current authority.',
+        parameters: [{ name: 'authentication', description: 'trusted server-derived AuthenticationContext.' }, { name: 'query', description: 'closed B01 Projection query.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'authorized Projection or safe denial.',
+      },
+      {
+        signature: 'submit( authentication: SakiAuthenticationContext, intent: SakiIntentInput, signal: AbortSignal, ): Promise<SakiIntentReceipt>',
+        description: 'Reject the empty B01 Intent map after revalidating current authority.',
+        parameters: [{ name: 'authentication', description: 'trusted server-derived AuthenticationContext.' }, { name: 'intent', description: 'absent only while the merge-extensible Intent map is empty.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'stable unavailable receipt.',
+      },
+      {
+        signature: 'onChanged(listener: (keys: readonly SakiProjectionKey[]) => void): SakiChangedDisposer',
+        description: 'Subscribe to contained post-commit Projection invalidations.',
+        parameters: [{ name: 'listener', description: 'listener that re-queries affected Projection keys.' }],
+        returns: 'disposer removing the listener.',
+      },
+    ],
+  },
+  {
     key: 'sandbox',
     summary: 'Abstract process-sandbox service.',
     description: 'Abstract process-sandbox service. confine must return enforcing argv or fail closed at wrap or runner-execution time; silent unconfined passthrough is forbidden. Functional probes arbitrate multi-runner chains and may be skipped for a sole candidate, whose own refusal remains the fail-closed end.',
@@ -2622,6 +2663,10 @@ export const EVENT_API: readonly EventApiEntry[] = [
 /** Shapes of every exported type the Service and Event signatures reference (transitively), sorted by name. */
 export const TYPE_API: readonly TypeApiEntry[] = [
   {
+    name: 'AccessProjection',
+    declaration: 'export type AccessProjection = SakiUnauthenticatedAccessProjection | SakiAuthenticatedAccessProjection;',
+  },
+  {
     name: 'AdapterRegistrationHandle',
     declaration: 'export interface AdapterRegistrationHandle {\n    (): void;\n    replace(providers: string[]): void;\n}',
   },
@@ -3676,6 +3721,114 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'RunnerFailureRule',
     declaration: 'export interface RunnerFailureRule {\n    allowedExitCodes?: readonly number[];\n    fatalSignatures: readonly string[];\n    informationalLines?: readonly string[];\n}',
+  },
+  {
+    name: 'SakiAccess',
+    declaration: 'export interface SakiAccess {\n    readAccess(presentedSession: string | undefined, signal: AbortSignal): Promise<AccessProjection>;\n    exchangeBootstrap(transportContext: SakiBootstrapTransportContext, request: SakiBootstrapExchangeRequest, signal: AbortSignal): Promise<SakiAccessExchangeResult>;\n    logoutCurrentSession(authentication: SakiAuthenticationContext, requestToken: string, signal: AbortSignal): Promise<SakiAccessLogoutResult>;\n}',
+  },
+  {
+    name: 'SakiAccessExchangeResult',
+    declaration: 'export type SakiAccessExchangeResult = {\n    readonly ok: true;\n    readonly access: SakiAuthenticatedAccessProjection;\n} | {\n    readonly ok: false;\n    readonly reason: \'unavailable\';\n};',
+  },
+  {
+    name: 'SakiAccessLogoutResult',
+    declaration: 'export type SakiAccessLogoutResult = {\n    readonly ok: true;\n} | {\n    readonly ok: false;\n    readonly reason: \'unavailable\';\n};',
+  },
+  {
+    name: 'SakiAuthenticatedAccessProjection',
+    declaration: 'export interface SakiAuthenticatedAccessProjection {\n    readonly kind: \'authenticated\';\n    readonly principal: {\n        readonly id: SakiPrincipalId;\n        readonly displayName: string;\n    };\n    readonly expiresAt: number;\n    readonly requestToken: string;\n}',
+  },
+  {
+    name: 'SakiAuthenticationContext',
+    declaration: 'export class SakiAuthenticationContext {\n    constructor(readonly sessionId: SakiBrowserSessionId, readonly principalId: SakiPrincipalId, readonly generationId: SakiInstallationGenerationId, requestToken: string);\n    isAuthentic(): boolean;\n    matchesRequestToken(presented: string): boolean;\n    projectRequestToken(): string;\n    toJSON(): {\n        readonly kind: \'saki-authentication-context\';\n    };\n}',
+  },
+  {
+    name: 'SakiBootstrapExchangeRequest',
+    declaration: 'export interface SakiBootstrapExchangeRequest {\n    readonly secret: string;\n}',
+  },
+  {
+    name: 'SakiBootstrapHandoff',
+    declaration: 'export class SakiBootstrapHandoff {\n    constructor(secret: string);\n    consume(): string;\n    toJSON(): {\n        readonly kind: \'saki-bootstrap-handoff\';\n    };\n    toString(): string;\n}',
+  },
+  {
+    name: 'SakiBootstrapLaunch',
+    declaration: 'export interface SakiBootstrapLaunch {\n    take(): SakiBootstrapHandoff | undefined;\n}',
+  },
+  {
+    name: 'SakiBootstrapTransportContext',
+    declaration: 'export interface SakiBootstrapTransportContext {\n    readonly origin: string | undefined;\n}',
+  },
+  {
+    name: 'SakiBrowserSessionId',
+    declaration: 'export type SakiBrowserSessionId = Branded<\'SakiBrowserSessionId\'>;',
+  },
+  {
+    name: 'SakiChangedDisposer',
+    declaration: 'export type SakiChangedDisposer = () => void;',
+  },
+  {
+    name: 'SakiHostId',
+    declaration: 'export type SakiHostId = Branded<\'SakiHostId\'>;',
+  },
+  {
+    name: 'SakiInstallationGenerationId',
+    declaration: 'export type SakiInstallationGenerationId = Branded<\'SakiInstallationGenerationId\'>;',
+  },
+  {
+    name: 'SakiInstallationId',
+    declaration: 'export type SakiInstallationId = Branded<\'SakiInstallationId\'>;',
+  },
+  {
+    name: 'SakiInstallationIdentity',
+    declaration: 'export interface SakiInstallationIdentity {\n    readonly installationId: SakiInstallationId;\n    readonly hostId: SakiHostId;\n}',
+  },
+  {
+    name: 'SakiIntent',
+    declaration: 'export type SakiIntent = SakiIntentMap[keyof SakiIntentMap];',
+  },
+  {
+    name: 'SakiIntentInput',
+    declaration: 'export type SakiIntentInput = [\n    keyof SakiIntentMap\n] extends [\n    never\n] ? undefined : SakiIntent;',
+  },
+  {
+    name: 'SakiIntentMap',
+    declaration: 'export interface SakiIntentMap {\n}',
+  },
+  {
+    name: 'SakiIntentReceipt',
+    declaration: 'export type SakiIntentReceipt = {\n    readonly ok: false;\n    readonly reason: \'intent-unavailable\' | \'denied\' | \'unavailable\';\n};',
+  },
+  {
+    name: 'SakiPrincipalId',
+    declaration: 'export type SakiPrincipalId = Branded<\'SakiPrincipalId\'>;',
+  },
+  {
+    name: 'SakiProjectIndexProjection',
+    declaration: 'export interface SakiProjectIndexProjection {\n    readonly type: \'project-index\';\n    readonly revision: 0;\n    readonly projects: readonly [\n    ];\n}',
+  },
+  {
+    name: 'SakiProjectIndexQuery',
+    declaration: 'export interface SakiProjectIndexQuery {\n    readonly type: \'project-index\';\n}',
+  },
+  {
+    name: 'SakiProjectionKey',
+    declaration: 'export type SakiProjectionKey = \'access\' | \'project-index\';',
+  },
+  {
+    name: 'SakiQuery',
+    declaration: 'export type SakiQuery = SakiQueryMap[keyof SakiQueryMap][\'request\'];',
+  },
+  {
+    name: 'SakiQueryMap',
+    declaration: 'export interface SakiQueryMap {\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly projection: SakiProjectIndexProjection;\n    };\n}',
+  },
+  {
+    name: 'SakiQueryResult',
+    declaration: 'export type SakiQueryResult = {\n    readonly ok: true;\n    readonly projection: SakiProjectIndexProjection;\n} | {\n    readonly ok: false;\n    readonly reason: \'denied\' | \'unavailable\';\n};',
+  },
+  {
+    name: 'SakiUnauthenticatedAccessProjection',
+    declaration: 'export interface SakiUnauthenticatedAccessProjection {\n    readonly kind: \'bootstrap-required\' | \'session-required\' | \'unavailable\';\n    readonly message: string;\n}',
   },
   {
     name: 'SandboxEnforcement',
