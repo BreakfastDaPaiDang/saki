@@ -45,7 +45,7 @@ interface ResolvedCredential {
 
 ## 描述
 
-`describe(ref)` 在绝不暴露值的前提下回应配置界面：引用本身、当前是否可解析、来源与保护级别、`set` 当前能否成功、健康状态以及这些事实的观察时间。本地提供方把由当前进程环境供值的引用报告为 `writable: false`——那样的写入会表面成功而解析持续返回遮蔽值，因此 seam 直接拒绝，界面也得以提前把该引用渲染为只读。Windows DPAPI 提供方会把复制而来、损坏或作用域不同的记录报告为已配置但不可用，且不会返回其密文。
+`describe(ref)` 在绝不暴露值的前提下回应配置界面：引用本身、当前是否已配置、来源与保护级别、`set` 当前能否成功、健康状态以及这些事实的观察时间。本地提供方把由当前进程环境供值的引用报告为 `writable: false`——那样的写入会表面成功而解析持续返回遮蔽值，因此 seam 直接拒绝，界面也得以提前把该引用渲染为只读。Windows DPAPI 提供方会把复制而来、损坏或作用域不同的记录报告为已配置但不可用，且不会返回其密文。
 
 ```ts type-equiv
 /** Safe observation for one reference, including its recovery trust model but never its value. */
@@ -94,7 +94,7 @@ Abstract credential service. Providers implement the four operations over their 
  * operations — that per-operation read is what makes a changed credential
  * reach the next operation without a restart.
  * @param ref - the reference to resolve.
- * @returns the value and its source, or `undefined` while unconfigured.
+ * @returns the value, source, and protection level, or `undefined` while unconfigured.
  */
 abstract resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined>
 

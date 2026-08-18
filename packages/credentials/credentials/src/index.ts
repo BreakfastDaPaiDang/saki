@@ -98,7 +98,7 @@ export abstract class CredentialProvider extends Service {
    * operations — that per-operation read is what makes a changed credential
    * reach the next operation without a restart.
    * @param ref - the reference to resolve.
-   * @returns the value and its source, or `undefined` while unconfigured.
+   * @returns the value, source, and protection level, or `undefined` while unconfigured.
    */
   abstract resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined>
 

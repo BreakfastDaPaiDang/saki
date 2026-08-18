@@ -36,7 +36,7 @@ Windows Provider 报告 source `windows-dpapi-current-user` 和保护等级 `loc
 
 **直接修改 `credentials-local`。** 该 package 的文档用途是可移植明文文件与 environment layering。把它替换为 Windows 专属加密存储会改变现有用户的配置语义，也会使通用 sibling capability 更难独立选择。
 
-**增加 DPAPI 加密，同时保留静默明文回退。** 可用性提高的代价是保护声明取决于哪一层恰好胜出。Saki 需要为高价值 reference 提供可观测、快速失败的要求。
+**增加 DPAPI 加密，同时保留静默明文回退。** 可用性提高的代价是保护声明取决于哪一层恰好胜出。Saki 需要为高价值 reference 提供可观测、失败关闭的要求。
 
 **只通过 `describe()` 暴露保护等级。** Admission 可能检查一个来源，而在并发更新后解析到另一个来源。把等级包含在解析结果中，可以让有特权 consumer 对即将使用的有效值强制要求；安全 description 仍用于 UI 与规划。
 

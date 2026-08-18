@@ -511,7 +511,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'abstract resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined>',
         description: 'Resolve one reference to its current value. Resolution is per call: consumers re-resolve at each operation and must not cache across operations — that per-operation read is what makes a changed credential reach the next operation without a restart.',
         parameters: [{ name: 'ref', description: 'the reference to resolve.' }],
-        returns: 'the value and its source, or `undefined` while unconfigured.',
+        returns: 'the value, source, and protection level, or `undefined` while unconfigured.',
       },
       {
         signature: 'async resolveRequired(ref: CredentialRef, required: CredentialProtectionLevel): Promise<ResolvedCredential>',

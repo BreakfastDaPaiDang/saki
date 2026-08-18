@@ -45,7 +45,7 @@ interface ResolvedCredential {
 
 ## Description
 
-`describe(ref)` answers configuration surfaces without ever exposing a value: the reference, whether it resolves, its source and protection level, whether `set` would currently succeed, its health, and when the provider observed those facts. The local provider reports a reference supplied by the live process environment as `writable: false` — a write would appear to succeed while resolution kept returning the shadowing value, so the seam rejects it and the UI can render the reference read-only up front. The Windows DPAPI provider reports a copied, corrupt, or differently scoped record as configured but unavailable without returning its ciphertext.
+`describe(ref)` answers configuration surfaces without ever exposing a value: the reference, whether it is configured, its source and protection level, whether `set` would currently succeed, its health, and when the provider observed those facts. The local provider reports a reference supplied by the live process environment as `writable: false` — a write would appear to succeed while resolution kept returning the shadowing value, so the seam rejects it and the UI can render the reference read-only up front. The Windows DPAPI provider reports a copied, corrupt, or differently scoped record as configured but unavailable without returning its ciphertext.
 
 ```ts type-equiv
 /** Safe observation for one reference, including its recovery trust model but never its value. */
@@ -94,7 +94,7 @@ Abstract credential service. Providers implement the four operations over their 
  * operations — that per-operation read is what makes a changed credential
  * reach the next operation without a restart.
  * @param ref - the reference to resolve.
- * @returns the value and its source, or `undefined` while unconfigured.
+ * @returns the value, source, and protection level, or `undefined` while unconfigured.
  */
 abstract resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined>
 

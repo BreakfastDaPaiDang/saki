@@ -37,7 +37,7 @@ Windows CNG DPAPI `LOCAL=user` [凭据](../credentials/README.md)提供方。它
 
 ## CNG DPAPI 参数
 
-原生适配器创建 `LOCAL=user` 保护描述符，并以 `NCRYPT_SILENT_FLAG` 调用 `NCryptProtectSecret` 和 `NCryptUnprotectSecret`。解密时，它取得受保护 blob 携带的描述符，通过 `NCryptGetProtectionDescriptorInfo` 读取完整规则，并在把明文复制到 JavaScript 前要求该字符串严格等于 `LOCAL=user`。经典 DPAPI blob 不提供 CNG 描述符，机器作用域 CNG DPAPI blob 则报告 `LOCAL=machine`；即使文件元数据声称记录类型符合要求，两者也都会快速失败。
+原生适配器创建 `LOCAL=user` 保护描述符，并以 `NCRYPT_SILENT_FLAG` 调用 `NCryptProtectSecret` 和 `NCryptUnprotectSecret`。解密时，它取得受保护 blob 携带的描述符，通过 `NCryptGetProtectionDescriptorInfo` 读取完整规则，并在把明文复制到 JavaScript 前要求该字符串严格等于 `LOCAL=user`。经典 DPAPI blob 不提供 CNG 描述符，机器作用域 CNG DPAPI blob 则报告 `LOCAL=machine`；即使文件元数据声称记录类型符合要求，两者也都会失败关闭。
 
 每个描述符句柄都通过 `NCryptCloseProtectionDescriptor` 关闭；Windows 拥有的描述符字符串与数据分配通过 `LocalFree` 释放。无论调用成功还是失败，返回的数据分配都会在释放前被覆写，包括非 null 的零长度结果。
 
