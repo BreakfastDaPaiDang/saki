@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
+import { isRecord, loadWorkflow, workflowEvent, workflowJob } from './workflow-test-support.ts'
 
 const root = resolve(import.meta.dirname, '..')
 const runnerPrivatePnpmDestination = '${{ runner.temp }}/setup-pnpm'
@@ -354,27 +355,3 @@ describe('Git hooks', () => {
     }
   })
 })
-
-function loadWorkflow(path: string): Record<string, unknown> {
-  const workflow: unknown = yaml.load(readFileSync(resolve(root, path), 'utf8'))
-  if (!isRecord(workflow)) throw new TypeError(`${path} must define a workflow`)
-  return workflow
-}
-
-function workflowEvent(workflow: Record<string, unknown>, event: string): Record<string, unknown> {
-  if (!isRecord(workflow.on) || !isRecord(workflow.on[event])) {
-    throw new TypeError(`workflow must define the ${event} event`)
-  }
-  return workflow.on[event]
-}
-
-function workflowJob(workflow: Record<string, unknown>, job: string): Record<string, unknown> {
-  if (!isRecord(workflow.jobs) || !isRecord(workflow.jobs[job])) {
-    throw new TypeError(`workflow must define the ${job} job`)
-  }
-  return workflow.jobs[job]
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}

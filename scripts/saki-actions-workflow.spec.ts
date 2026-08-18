@@ -1,9 +1,6 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
+import { isRecord, loadWorkflow, workflowEvent, workflowJob } from './workflow-test-support.ts'
 
-const root = resolve(import.meta.dirname, '..')
 const readyPullRequestTypes = ['opened', 'synchronize', 'reopened', 'ready_for_review', 'converted_to_draft']
 const readyPullRequestCondition = "github.event_name == 'pull_request' && github.event.pull_request.draft == false"
 
@@ -140,35 +137,12 @@ describe('Saki Actions cost policy', () => {
   })
 })
 
-function loadWorkflow(path: string): Record<string, unknown> {
-  const workflow: unknown = yaml.load(readFileSync(resolve(root, path), 'utf8'))
-  if (!isRecord(workflow)) throw new TypeError(`${path} must define a workflow`)
-  return workflow
-}
-
 function workflowEvents(workflow: Record<string, unknown>): Record<string, unknown> {
   if (!isRecord(workflow.on)) throw new TypeError('workflow must define events')
   return workflow.on
 }
 
-function workflowEvent(workflow: Record<string, unknown>, event: string): Record<string, unknown> {
-  const events = workflowEvents(workflow)
-  if (!isRecord(events[event])) throw new TypeError(`workflow must define the ${event} event`)
-  return events[event]
-}
-
-function workflowJob(workflow: Record<string, unknown>, job: string): Record<string, unknown> {
-  if (!isRecord(workflow.jobs) || !isRecord(workflow.jobs[job])) {
-    throw new TypeError(`workflow must define the ${job} job`)
-  }
-  return workflow.jobs[job]
-}
-
 function workflowJobNames(workflow: Record<string, unknown>): string[] {
   if (!isRecord(workflow.jobs)) throw new TypeError('workflow must define jobs')
   return Object.keys(workflow.jobs)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
