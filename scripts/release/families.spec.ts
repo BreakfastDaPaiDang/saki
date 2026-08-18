@@ -1,8 +1,17 @@
 /** Release family discovery, publish order, tag naming, and the bump judgements. */
 
-import { describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { releaseFamily, type ReleaseMember } from './families.ts'
 import { compareVersions, nextVendorVersion, reachesPayload } from './bump.ts'
+
+const roots: string[] = []
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 
 /**
  * A release member standing in for a manifest on disk.
@@ -16,6 +25,26 @@ function member(directory: string, name: string, manifest: Record<string, unknow
 }
 
 describe('release families', () => {
+  it('excludes private Saki packages from the DSH release family', () => {
+    const root = mkdtempSync(join(tmpdir(), 'saki-release-family-'))
+    roots.push(root)
+    mkdirSync(join(root, 'apps/cli'), { recursive: true })
+    mkdirSync(join(root, 'packages/saki/bundle'), { recursive: true })
+    writeFileSync(join(root, 'apps/cli/package.json'), JSON.stringify({
+      name: '@deepseek-ai/dsh',
+      version: '0.1.0',
+    }))
+    writeFileSync(join(root, 'packages/saki/bundle/package.json'), JSON.stringify({
+      name: '@breakfastdapaidang/saki-bundle',
+      version: '0.1.0',
+      private: true,
+    }))
+
+    expect(releaseFamily('dsh').members(root).map(entry => entry.name)).toEqual([
+      '@deepseek-ai/dsh',
+    ])
+  })
+
   it('names one tag for the whole dsh family and one per vendored package', () => {
     const dsh = releaseFamily('dsh')
     const vendor = releaseFamily('vendor')

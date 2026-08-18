@@ -19,6 +19,7 @@ import { createInterface } from 'node:readline/promises'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { validateTarballPayload } from './publication-payload.ts'
+import { isPrivateSakiPackage } from './repository-package-policy.ts'
 
 const DEFAULT_REGISTRY = 'https://registry.npm.harnessment.com'
 const DEFAULT_OUTPUT_DIRECTORY = '.artifacts/npm-baseline'
@@ -257,6 +258,9 @@ class WorkspacePackageSet {
       const manifest = readObject(resolve(root, manifestPath))
       const name = expectString(manifest, 'name', manifestPath)
       const version = expectString(manifest, 'version', manifestPath)
+      // Saki is a private product layer in this repository, never part of the
+      // legacy all-DSH npm baseline staged by this command.
+      if (isPrivateSakiPackage(name)) continue
       const isVendored = manifestPath.startsWith('vendor/')
       // Vendored packages are rescoped too (vendor/README.md), so publication
       // never carries an upstream name that would squat it on the registry.

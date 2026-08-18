@@ -7,12 +7,11 @@
 
 import { globSync, readFileSync } from 'node:fs'
 import { dirname, resolve, sep } from 'node:path'
+import { classifyProductPackage } from './repository-package-policy.ts'
 
-const SCOPE = '@deepseek-ai/dsh-'
-
-/** One harness package and its in-repo peer-dependency edges. */
+/** One DSH or Saki package and its in-repo peer-dependency edges. */
 export interface PackageGraphNode {
-  /** Package name with the `@deepseek-ai/dsh-` prefix removed. */
+  /** Collision-free display key: the DSH suffix or `saki/<suffix>`. */
   short: string
   /** Full npm package name. */
   name: string
@@ -38,15 +37,18 @@ export function collectPackageGraph(root: string, groupOrder: readonly string[],
       name: string
       peerDependencies?: Record<string, string>
     }
-    if (!json.name.startsWith(SCOPE)) continue
+    const classification = classifyProductPackage(json.name)
+    if (classification === undefined) continue
     const [, group, leaf] = rel.split('/')
     if (group === undefined || leaf === undefined) throw new Error(`${gate}: unexpected package path ${rel}`)
     const deps = Object.keys(json.peerDependencies ?? {})
-      .filter(dep => dep.startsWith(SCOPE))
-      .map(dep => dep.slice(SCOPE.length))
+      .flatMap((dep) => {
+        const dependency = classifyProductPackage(dep)
+        return dependency === undefined ? [] : [dependency.short]
+      })
       .sort()
     packages.push({
-      short: json.name.slice(SCOPE.length),
+      short: classification.short,
       name: json.name,
       group,
       rel: dirname(rel),
