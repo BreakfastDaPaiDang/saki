@@ -1,0 +1,61 @@
+---
+status: accepted
+---
+
+# Use polling-first staged snapshots for GitHub synchronization
+
+English | [中文](0013-polling-first-staged-github-synchronization.zh.md)
+
+Version 0.1.0 synchronizes each configured GitHub Project and Repository through complete staged scans. Polling is the baseline delivery mechanism; a webhook may later request an earlier scan but never applies a Project change directly. Saki publishes a new Board projection only after every required page and mapping check succeeds, and it retains the last confirmed projection when a scan is incomplete.
+
+## Why this decision
+
+GitHub owns shared Work Item Status and manual order, so Saki cannot recover by treating its optimistic client state as authoritative. GraphQL cursors identify positions within one paginated traversal; they are not durable change-stream offsets and do not prove that records outside the traversed pages stayed unchanged. Webhook delivery also cannot supply that proof: GitHub does not automatically redeliver every failed webhook, and Projects v2 webhook coverage remains an unsuitable release dependency for the first local product.
+
+A full scan is affordable for the single-operator release and gives one testable publication rule. It also leaves a direct upgrade path: webhooks can reduce latency by waking the same scanner, and later incremental reads can remain an optimization as long as periodic complete scans continue to repair missed observations.
+
+GitHub mutations do not expose a general compare-and-set revision. Saki can detect most stale local actions with a targeted read before mutation and can confirm the resulting state afterward, but another actor may still change the same item between those calls. The design therefore promises visible conflict detection and convergence to confirmed GitHub state, not serializable transactions across Saki and GitHub.
+
+## Synchronization protocol
+
+### Checkpoint and publication
+
+Each binding stores a GitHub Sync Checkpoint containing the Installation, GitHub Project, Repository, mapping revision, local scan generation, last successful complete-scan time, confirmed remote fingerprints, and current rate-limit or failure observation. Page cursors exist only inside one in-progress scan and are discarded on completion or failure.
+
+A Board scan validates the persisted node-id mapping, reads every configured Project item page in API order with its Status value, reads open Issues from the associated Repository for Inbox membership, and constructs a candidate snapshot. The control plane atomically publishes the candidate and advances the checkpoint only after all pages and invariants succeed. A partial response, mapping failure, permission failure, cancellation, or rate limit leaves the prior checkpoint and confirmed snapshot unchanged while exposing the new failure separately.
+
+The active Board polls by default every 30 seconds and background Projects every five minutes. Startup, manual refresh, a local mutation, reconnect, and a future webhook request an immediate scan. Both intervals and the background rate-limit reserve are validated Cordis plugin configuration, not fixed protocol constants.
+
+### Optimistic mutations
+
+Every Board mutation carries the last confirmed remote fingerprint for the affected Issue and Project item. The fingerprint covers Project membership, Status option, Issue open state, and the ordering neighbors relevant to the requested move.
+
+Before mutation, the GitHub adapter performs a targeted read. If the confirmed remote state already equals the desired state, the Intent succeeds idempotently. If it equals the expected fingerprint, Saki submits the mutation and reads the target again before committing the new observation. Any other state is a conflict: Saki does not overwrite it, replaces the optimistic display with the latest confirmed GitHub state, and offers retry as a new Intent. A missing or timed-out mutation response triggers inspection before retry; silence never proves failure.
+
+The confirmation read can observe a later concurrent change and therefore remains authoritative even when it differs from the requested target. Saki records the requested mutation and confirmed result so the discrepancy is explainable.
+
+### Mapping repair and rate limits
+
+Persisted Project, field, option, item, Repository, and Issue node ids are authoritative mapping references. Name matching may suggest a replacement but never repairs a missing or recreated field automatically. An invalid mapping makes affected Board mutations unavailable until an attributed repair Intent selects or creates the replacement mapping and a complete scan succeeds.
+
+One serialized API queue serves each GitHub App installation token. Targeted mutation reads, mutations, confirmation reads, login, and manual refresh outrank background scans. Background work pauses before a configurable reserve is exhausted. The adapter observes GraphQL cost and reset facts, REST rate-limit headers, `Retry-After`, and secondary-limit responses; REST reads use conditional requests where supported. Backoff is bounded and persisted when it affects recovery rather than implemented as an unobservable process sleep.
+
+## Considered options
+
+**Require webhooks for version 0.1.0.** Webhooks improve latency but add public ingress, secret rotation, delivery recovery, and incomplete-delivery handling to a local release. They cannot replace reconciliation scans, so they become an optional wake-up source later.
+
+**Persist GraphQL page cursors as synchronization offsets.** A page cursor resumes pagination within a result connection but does not identify all changes since an earlier scan. Treating it as a change cursor could publish a mixture of old and new pages and miss removals.
+
+**Apply each fetched page directly to the Board.** A later page, permission error, or mapping change would expose a partial remote world as confirmed state. Staging costs temporary memory but preserves one atomic projection revision.
+
+**Let last writer win without a targeted read.** This would silently overwrite changes made in GitHub while the local client was stale and violate GitHub's authority. The read-confirm-read protocol makes conflicts visible even though it cannot create a cross-system transaction.
+
+**Repair mappings by option name.** A renamed or recreated field can reuse a human-readable name while having different identity or meaning. Suggestions are useful, but an attributed repair decision must select the new node ids.
+
+## Consequences
+
+Board freshness is bounded by configured polling intervals rather than real-time delivery. The UI always distinguishes the last confirmed snapshot, an optimistic overlay, scan age, and the current synchronization failure. Automatic mode cannot claim or complete work from a Project whose required mapping is invalid or whose confirmed state is too stale for its policy.
+
+The GitHub Service Definition exposes complete scans, targeted reads, mutations, confirmation, and rate-limit facts; the Saki control plane owns Board mapping, staged publication, conflict rules, and checkpoint persistence. Tests cover multi-page scans, removal, incomplete pages, mapping recreation, remote edits during an optimistic move, lost mutation replies, secondary limits, process restart, and webhook wake-up without direct state application.
+
+The external protocol references are GitHub's [GraphQL pagination](https://docs.github.com/en/graphql/guides/using-pagination-in-the-graphql-api), [GraphQL rate limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api), [REST API best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api), and [failed webhook delivery behavior](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries).

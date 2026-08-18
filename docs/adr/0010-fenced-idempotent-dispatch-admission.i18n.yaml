@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/adr/0010-fenced-idempotent-dispatch-admission.md
+0010-fenced-idempotent-dispatch-admission.md: 34329bc6e5a4081ea0ebbda69a36516883eb1dcc
+0010-fenced-idempotent-dispatch-admission.zh.md: 9d397ac70602928555ff45c4e91fb0de448200fe

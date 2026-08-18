@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/adr/0014-stable-resource-bindings-over-canonical-worktrees.md
+0014-stable-resource-bindings-over-canonical-worktrees.md: 5e21530d6e5a958d5e5e023ea047e2ed3ad932da
+0014-stable-resource-bindings-over-canonical-worktrees.zh.md: f10c205501e67d65e82988537892df780fb60ea8

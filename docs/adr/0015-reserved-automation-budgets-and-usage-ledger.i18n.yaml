@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/adr/0015-reserved-automation-budgets-and-usage-ledger.md
+0015-reserved-automation-budgets-and-usage-ledger.md: 833bddd706b867f1f5dae355f7c7ed51dd839688
+0015-reserved-automation-budgets-and-usage-ledger.zh.md: 35c53deefc3430420f7273e21050dab19bb948b7

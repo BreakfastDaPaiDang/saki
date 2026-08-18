@@ -8,6 +8,9 @@
 
 - [产品需求](product-requirements.md)定义长期定位、领域抽象、原则和阶段边界。
 - [0.1.0 实现规格](versions/0.1.0.md)定义第一阶段首个可用切片及其发布条件。
+- [0.1.0 后端架构](architecture/0.1.0-backend.md)定义其 Module、capability seam、持久化所有权和故障语义。
+- [0.1.0 前端约定](architecture/0.1.0-frontend-contract.md)定义客户端状态、导航、Projection 消费、Intent 交互与验证，但不确定视觉方向。
+- [0.1.0 Web UI 接入基线](architecture/0.1.0-web-ui-baseline.md)记录要保留的 DSH 页面、分开的 Saki 页面、小白页面和少量壳层增量。
 - [领域上下文](../agents/domain.md)定义规范语言，[ADR](../adr/0004-control-and-execution-planes.md)保存已接受的架构决定。
 
 ## 运维

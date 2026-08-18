@@ -32,6 +32,9 @@
 
 | English | 中文 | 首次出现 | 不要译作 | 备注 |
 |---|---|---|---|---|
+| Actor | Actor | | 操作者、行动者 | Saki 领域概念：Control Intent 接受时派生的不可变操作归因；中文正文保留英文 |
+| Attention Inbox | Attention Inbox | | 收件箱、注意力收件箱 | Saki 领域概念：面向一个 Principal 或 Agent Identity 的待处理事项投影；与 Work Item Status `Inbox` 区分；中文正文保留英文 |
+| Automation Budget Reservation | Automation Budget Reservation | | 自动化预算预留 | Saki 领域概念：外部 effect 前为一项已准入自动 operation 持久、幂等分配类型化资源限制；中文正文保留英文 |
 | agent | agent | agent（智能体） | | |
 | Agent Note | Agent Note | | 智能体注记、智能体笔记 | 仓库定义的文档类型，涵盖提案、已实现决策和被否决提案；中文对侧 H1 保持固定前缀 `# Agent Note: `，标题中不加术语括注 |
 | agent harness | agent harness | agent harness（智能体框架） | | agent 组合词（agent harness/workflow/loop/skill 等）整体保留英文；未括注过 agent 时首现按对应组合词或 agent 行处理 |
@@ -39,21 +42,37 @@
 | blob hash | blob hash | | | `git hash-object` 的结果 |
 | coding agent | coding agent | coding agent（编程智能体） | | agent 组合词，正文保留英文 |
 | Cordis | Cordis | | | |
+| Credential Broker | Credential Broker | | 凭据代理、凭据中介 | Saki 领域概念：位于 Agent execution identity 之外的凭据权限主体；中文正文保留英文 |
+| Credential Protection Level | Credential Protection Level | | 凭据保护级别、凭据安全等级 | Saki 领域概念：声明哪些身份与进程可以恢复原始凭据；中文正文保留英文 |
+| Dispatch Claim | Dispatch Claim | | 派发声明、分派声明 | Saki 领域概念：允许一个执行器消费一条 Execution Dispatch 的有界、防重准入声明；中文正文保留英文 |
 | dispose | dispose | dispose（资源释放） | | |
 | doc-sync | doc-sync | doc-sync（文档同步门禁） | | |
+| Execution Dispatch | Execution Dispatch | | 执行派发、执行分派 | Saki 领域概念：根据已接受 Control Intent 产生、要求 Host 创建或恢复一次 Execution 的持久命令；中文正文保留英文 |
 | fiber | fiber | | | |
 | fixture | fixture | fixture（测试前置数据） | | |
 | fork | fork | | | |
 | Function Calling | Function Calling | Function Calling（函数调用） | | |
+| GitHub Sync Checkpoint | GitHub Sync Checkpoint | | GitHub 同步检查点 | Saki 领域概念：对特定映射 revision 的一次完整 GitHub 扫描已原子发布的持久确认；中文正文保留英文 |
+| Grant | Grant | | 授权、权限 | Saki 领域概念：授予 Principal 的版本化、带范围权限记录；中文正文保留英文 |
+| Host Operation | Host Operation | | Host 操作、主机操作 | Saki 领域概念：Host 在产生外部副作用前为一条 Execution Dispatch 持久准备的幂等 operation 记录；中文正文保留英文 |
 | harness | harness | | | |
 | harness engineering | harness engineering | | | |
+| Installation Export | Installation Export | | 安装导出、迁移包 | Saki 领域概念：声明包含内容、经过加密且带版本的可迁移 Installation archive；中文正文保留英文 |
+| Installation State Generation | Installation State Generation | | 安装状态代、状态版本 | Saki 领域概念：Saki 自有 Installation 状态的一份完整、带版本副本；中文正文保留英文 |
+| Intervention Request | Intervention Request | | 人工介入请求、干预请求 | Saki 领域概念：要求具名对象提供输入、审批、凭据授权、验收或恢复决定的持久请求；中文正文保留英文 |
 | KV Cache | KV Cache | | | 专有技术名称，保持大小写与空格 |
 | lint | lint | | | |
 | mock | mock | | | 保留英文；指测试替身 |
 | loader | loader | | | |
 | manifest | manifest | manifest（元数据清单） | | |
 | monorepo | monorepo | | | |
+| Principal | Principal | | 主体、身份主体 | Saki 领域概念：可以认证并接收 Grant 的持久安全主体；中文正文保留英文 |
+| Project Automation Principal | Project Automation Principal | | 项目自动化主体 | Saki 领域概念：代表一个 Project 自动模式行使已授予权限的 Principal；中文正文保留英文 |
+| Recovery Backup | Recovery Backup | | 恢复备份、回滚备份 | Saki 领域概念：与兼容 build 配对的一份精确本地 Installation State Generation 回滚 artifact；中文正文保留英文 |
+| Resource Binding | Resource Binding | | 资源绑定 | Saki 领域概念：从 Project 到具名 Saki Host 上一项资源的稳定关联；其定位观察可变，但身份拥有执行引用与租约；中文正文保留英文 |
 | Round | Round | | 回合、目标回合、Ralph 回合 | 外层策略使用 Round 时，领域层级为 Session > Round > Turn（轮次） > Step（步骤）；Round 是可选的外层策略迭代，并非每个会话轮次都具有的通用层级。Goal Round 与 Ralph Round 均保留英文。一个 Round 承载一个轮次，步骤隶属于该轮次；明确的零步骤轮次仍保持原义。 |
+| Saki Host | Saki Host | | 主机、Saki 主机 | Saki 领域概念：由 Saki Installation 登记的执行节点；中文正文保留英文 |
+| Saki Installation | Saki Installation | | Saki 安装、安装实例 | Saki 领域概念：一个活动控制面的稳定、可迁移身份与产品命名空间；中文正文保留英文 |
 | schema | schema | | | |
 | schema DSL | schema DSL | | | |
 | seam | seam | | 接缝 | 一个可替换能力的整体，包含 Service Definition / Service Provider / Consumer 三种角色；角色需要独立演化时才拆包，也可由同一包承担多个角色。以 `packages/shell` 为范例；Service Definition 是 Cordis `Service`（抽象类或具体 registry 服务），不是 TypeScript interface。任何单一角色、普通边界或扩展点都不能称为 seam。本仓库正文保留英文；与 `extension point` 是不同概念 |
@@ -67,8 +86,10 @@
 | subagent | subagent | | | |
 | transcript | transcript | transcript（文本记录） | | 指会话渲染给用户或编辑器的完整文本，区别于事件日志 |
 | Typert | Typert | | TypeRT、typeRT、Type RT | DeepSeek Harness 类型图、生成器、loader 与运行时 registry 的产品拼写 |
+| Usage Ledger Entry | Usage Ledger Entry | | 用量账本条目 | Saki 领域概念：与证据来源关联，对已测、估算、修正、释放或未解决资源用量进行归因的记录；中文正文保留英文 |
 | waterfall | waterfall | waterfall（瀑布式事件） | | |
 | wheel | wheel 包 | | | Python 打包格式 |
+| Work Assignment | Work Assignment | | 工作分配、任务指派 | Saki 领域概念：把 Work Item 的持续责任关联到 human Principal、Agent Identity 或 Project Automation Principal；中文正文保留英文 |
 | worktree | worktree | | | git 工作区概念 |
 | Zstandard | Zstandard | | | RFC 8878 compression format; `zstd` remains a code value. |
 
