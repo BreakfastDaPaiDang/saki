@@ -1,0 +1,257 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-4);
+}
+
+.loading,
+.error {
+  color: var(--sp-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-2);
+}
+
+.error {
+  color: var(--sp-danger);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-3);
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--sp-text-faint);
+}
+
+.mono {
+  font-family: var(--sp-mono);
+}
+
+.refreshing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sp-info);
+}
+
+.banner {
+  margin: 0;
+  display: flex;
+  gap: var(--sp-space-2);
+  align-items: flex-start;
+  border: 1px solid var(--sp-border-strong);
+  background: var(--sp-warn-soft);
+  color: var(--sp-warn);
+  border-radius: var(--sp-radius-m);
+  padding: var(--sp-space-3) var(--sp-space-4);
+  font-size: 13px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-2);
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-2);
+}
+
+.groupTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sp-text-secondary);
+}
+
+.groupCount {
+  color: var(--sp-text-faint);
+  font-weight: 500;
+}
+
+.groupHeaderAction {
+  margin-left: auto;
+}
+
+.emptyGroup {
+  margin: 0;
+  font-size: 12px;
+  color: var(--sp-text-faint);
+}
+
+.fileList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-2);
+}
+
+.fileRow {
+  background: var(--sp-bg-raised);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-m);
+  padding: var(--sp-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-2);
+}
+
+.fileRowTop {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-3);
+  flex-wrap: wrap;
+}
+
+.filePath {
+  font-family: var(--sp-mono);
+  font-size: 12px;
+  color: var(--sp-text);
+  word-break: break-all;
+}
+
+.fileKind {
+  font-size: 12px;
+  color: var(--sp-text-secondary);
+  flex-shrink: 0;
+}
+
+.fileStats {
+  margin-left: auto;
+  display: inline-flex;
+  gap: var(--sp-space-2);
+  font-family: var(--sp-mono);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.statAdd {
+  color: var(--sp-ok);
+}
+
+.statDel {
+  color: var(--sp-danger);
+}
+
+.diff {
+  font-size: 12px;
+}
+
+.diffSummary {
+  cursor: pointer;
+  color: var(--sp-text-secondary);
+}
+
+.diffSummary:hover {
+  color: var(--sp-text);
+}
+
+.diffPre {
+  margin: var(--sp-space-2) 0 0;
+  padding: var(--sp-space-3);
+  background: var(--sp-bg);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-s);
+  font-family: var(--sp-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--sp-text-secondary);
+  overflow-x: auto;
+}
+
+.commitArea {
+  background: var(--sp-bg-raised);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-m);
+  padding: var(--sp-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-3);
+}
+
+.commitTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sp-text-secondary);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--sp-text-secondary);
+}
+
+.input,
+.textarea {
+  background: var(--sp-bg-overlay);
+  border: 1px solid var(--sp-border-strong);
+  border-radius: var(--sp-radius-s);
+  padding: 8px 10px;
+  color: var(--sp-text);
+  resize: vertical;
+}
+
+.commitRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-3);
+  flex-wrap: wrap;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--sp-text-faint);
+}
+
+.reason {
+  font-size: 12px;
+  color: var(--sp-warn);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-3);
+  flex-wrap: wrap;
+}
+
+.dialogText {
+  margin: 0 0 var(--sp-space-3);
+  font-size: 13px;
+  color: var(--sp-text);
+}
+
+.dialogNote {
+  margin: 0;
+  font-size: 12px;
+  color: var(--sp-text-faint);
+}
+
+.prForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-3);
+}
+
+.prForm .dialogText {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .fileRowTop {
+    align-items: flex-start;
+  }
+
+  .fileStats {
+    margin-left: 0;
+  }
+}

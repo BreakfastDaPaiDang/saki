@@ -1,0 +1,213 @@
+.bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-space-3);
+  padding: 6px var(--sp-space-4);
+  background: #14100a;
+  border-top: 1px solid rgba(217, 161, 59, 0.35);
+  color: var(--sp-warn);
+  font-size: 12px;
+}
+
+.tag {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 10px;
+  border: 1px dashed rgba(217, 161, 59, 0.5);
+  border-radius: 4px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.select {
+  background: var(--sp-bg-raised);
+  color: var(--sp-text);
+  border: 1px solid var(--sp-border-strong);
+  border-radius: var(--sp-radius-s);
+  padding: 3px 8px;
+  font-size: 12px;
+  max-width: 260px;
+}
+
+.indexButton {
+  color: var(--sp-warn);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  flex-shrink: 0;
+}
+
+.summary {
+  color: var(--sp-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .summary {
+    display: none;
+  }
+}
+
+/* ----------------------------------------------------------- scenario index */
+
+.indexBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 6, 10, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-space-4);
+  z-index: 120;
+}
+
+.indexPanel {
+  background: var(--sp-bg-raised);
+  border: 1px solid var(--sp-border-strong);
+  border-radius: var(--sp-radius-l);
+  box-shadow: var(--sp-shadow-overlay);
+  width: min(720px, 100%);
+  max-height: min(80vh, 100%);
+  display: flex;
+  flex-direction: column;
+}
+
+.indexHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-space-4) var(--sp-space-5);
+  border-bottom: 1px solid var(--sp-border);
+}
+
+.indexTitle {
+  margin: 0;
+  font-size: 15px;
+}
+
+.indexClose {
+  color: var(--sp-text-secondary);
+  padding: 4px 8px;
+  border-radius: var(--sp-radius-s);
+}
+
+.indexClose:hover {
+  background: var(--sp-bg-hover);
+}
+
+.indexList {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-space-3);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-2);
+}
+
+.indexItem {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sp-space-3) var(--sp-space-4);
+  border-radius: var(--sp-radius-m);
+  border: 1px solid var(--sp-border);
+  background: var(--sp-bg-overlay);
+}
+
+.indexItem:hover {
+  border-color: var(--sp-border-strong);
+  background: var(--sp-bg-active);
+}
+
+.indexActive .indexItem {
+  border-color: var(--sp-accent);
+}
+
+.indexItemTitle {
+  font-weight: 600;
+  color: var(--sp-text);
+}
+
+.indexItemSummary {
+  color: var(--sp-text-secondary);
+  font-size: 13px;
+}
+
+.indexItemTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.demonstrateTag {
+  font-size: 11px;
+  color: var(--sp-text-faint);
+  border: 1px solid var(--sp-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+/* ------------------------------------------------------------------ toasts */
+
+.toasts {
+  position: fixed;
+  right: var(--sp-space-4);
+  bottom: 48px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-2);
+  z-index: 130;
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-space-3);
+  padding: 10px 14px;
+  border-radius: var(--sp-radius-m);
+  background: var(--sp-bg-overlay);
+  border: 1px solid var(--sp-border-strong);
+  box-shadow: var(--sp-shadow-overlay);
+  font-size: 13px;
+}
+
+.toast-confirmed {
+  border-color: rgba(63, 178, 127, 0.5);
+}
+
+.toast-conflict,
+.toast-failed,
+.toast-reconciliation-required {
+  border-color: rgba(224, 108, 117, 0.55);
+}
+
+.toastClose {
+  color: var(--sp-text-faint);
+  padding: 2px 6px;
+  border-radius: var(--sp-radius-s);
+  flex-shrink: 0;
+}
+
+.toastClose:hover {
+  background: var(--sp-bg-hover);
+  color: var(--sp-text);
+}

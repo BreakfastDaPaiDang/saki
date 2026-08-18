@@ -1,0 +1,26 @@
+.badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid var(--sp-border);
+  color: var(--sp-text-secondary);
+  background: var(--sp-bg-raised);
+  max-width: 100%;
+}
+
+.detail {
+  color: var(--sp-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ok { color: var(--sp-ok); border-color: rgba(63, 178, 127, 0.35); }
+.info { color: var(--sp-info); border-color: rgba(74, 168, 224, 0.35); }
+.warn { color: var(--sp-warn); border-color: rgba(217, 161, 59, 0.35); }
+.danger { color: var(--sp-danger); border-color: rgba(224, 108, 117, 0.4); }
+.neutral { color: var(--sp-text-secondary); }
