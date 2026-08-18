@@ -1,5 +1,7 @@
+import { once } from 'node:events'
+import { watch } from 'node:fs'
 import { access, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
@@ -16,15 +18,34 @@ const treeState = join(root, 'tree.json')
 const ready = join(root, 'ready')
 const proceed = join(root, 'proceed')
 const managedTree = fileURLToPath(new URL('./managed-tree.ts', import.meta.url))
+const managedTreeArgv = [process.execPath, ...process.execArgv, managedTree, treeState]
 
-async function waitForFile(path: string): Promise<void> {
-  for (;;) {
-    try {
-      await access(path)
-      return
-    } catch (_notReady) {
-      await new Promise(resolve => setTimeout(resolve, 10))
+function isENOENT(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+}
+
+async function waitForFile(path: string, managedTreeExited: Promise<never>): Promise<void> {
+  const watcher = watch(dirname(path))
+  try {
+    for (;;) {
+      const controller = new AbortController()
+      const changed = once(watcher, 'change', { signal: controller.signal }).then(() => undefined).catch((error: unknown) => {
+        if (!controller.signal.aborted) throw error
+      })
+      try {
+        try {
+          await access(path)
+          return
+        } catch (error) {
+          if (!isENOENT(error)) throw error
+        }
+        await Promise.race([changed, managedTreeExited])
+      } finally {
+        controller.abort()
+      }
     }
+  } finally {
+    watcher.close()
   }
 }
 
@@ -32,9 +53,10 @@ const listenersBefore = process.listenerCount('exit')
 const ctx = new Context()
 const fiber = await ctx.plugin(LocalSubprocessRuntime)
 const listenersAfterLoad = process.listenerCount('exit')
+let managedTreeExited: Promise<never>
 if (kind === 'ordinary') {
-  ctx.subprocess.spawn({
-    argv: [process.execPath, managedTree, treeState],
+  const handle = ctx.subprocess.spawn({
+    argv: managedTreeArgv,
     cwd: process.cwd(),
     stdio: {
       stdin: 'ignore',
@@ -43,23 +65,33 @@ if (kind === 'ordinary') {
     },
     graceMs: trigger === 'dispose' ? 100 : 30_000,
   })
+  managedTreeExited = handle.done.then((outcome) => {
+    const stderr = handle.collected.stderr?.readFrom(0).text.trim()
+    throw new Error(`managed tree exited before publication (code ${outcome.exitCode}, signal ${outcome.signal}): ${stderr ?? ''}`)
+  })
 } else {
-  await ctx.subprocess.spawnTerminal({
-    argv: [process.execPath, managedTree, treeState],
+  const handle = await ctx.subprocess.spawnTerminal({
+    argv: managedTreeArgv,
     cwd: process.cwd(),
     rows: 24,
     cols: 80,
     graceMs: 30_000,
   })
+  handle.output.setEncoding('utf8')
+  let output = ''
+  handle.output.on('data', (chunk: string) => { output += chunk })
+  managedTreeExited = handle.done.then((outcome) => {
+    throw new Error(`managed terminal tree exited before publication (code ${outcome.exitCode}, signal ${outcome.signal}): ${output.trim()}`)
+  })
 }
 
-await waitForFile(treeState)
+await waitForFile(treeState, managedTreeExited)
 const published = JSON.parse(await readFile(treeState, 'utf8')) as { root?: unknown; descendant?: unknown }
 if (!Number.isSafeInteger(published.root) || !Number.isSafeInteger(published.descendant)) {
   throw new Error('managed tree published invalid process ids')
 }
 await writeFile(ready, 'ready')
-await waitForFile(proceed)
+await waitForFile(proceed, managedTreeExited)
 
 if (trigger === 'dispose') {
   await fiber.dispose()
