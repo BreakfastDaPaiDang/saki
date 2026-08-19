@@ -56,9 +56,12 @@ export async function bridge(
   })
   const declaredLength = req.headers['content-length']
   if (declaredLength !== undefined && Number(declaredLength) > maxRequestBodyBytes) {
-    res.writeHead(413, rejectionHeaders(rejection))
-    res.end(rejection.body)
-    req.destroy()
+    rejectBeforeDispatch(req, res, 413, rejection)
+    return
+  }
+  const bodyForbidden = req.method === undefined || /^(?:GET|HEAD)$/i.test(req.method)
+  if (bodyForbidden && declaredLength !== undefined && Number(declaredLength) > 0) {
+    rejectBeforeDispatch(req, res, 400, rejection)
     return
   }
   const chunks: Buffer[] = []
@@ -67,9 +70,11 @@ export async function bridge(
     const buffer = chunk as Buffer
     received += buffer.byteLength
     if (received > maxRequestBodyBytes) {
-      res.writeHead(413, rejectionHeaders(rejection))
-      res.end(rejection.body)
-      req.destroy()
+      rejectBeforeDispatch(req, res, 413, rejection)
+      return
+    }
+    if (bodyForbidden && buffer.byteLength > 0) {
+      rejectBeforeDispatch(req, res, 400, rejection)
       return
     }
     chunks.push(buffer)
@@ -106,6 +111,17 @@ export async function bridge(
     }
   }
   res.end()
+}
+
+function rejectBeforeDispatch(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: 400 | 413,
+  policy: BridgeRejectionPolicy,
+): void {
+  res.writeHead(status, rejectionHeaders(policy))
+  res.end(policy.body)
+  req.destroy()
 }
 
 function rejectionHeaders(policy: BridgeRejectionPolicy): Record<string, string> {

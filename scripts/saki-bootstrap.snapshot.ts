@@ -4,6 +4,7 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import { createServer } from 'node:net'
 import { existsSync } from 'node:fs'
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -21,6 +22,12 @@ interface StartedSaki {
   readonly bootstrapPurpose?: 'initial-bootstrap' | 'local-reauthentication'
   readonly bootstrapSecret?: string
   readonly stop: () => Promise<void>
+}
+
+interface RawHttpResponse {
+  readonly status: number
+  readonly headers: IncomingHttpHeaders
+  readonly body: string
 }
 
 async function freePort(): Promise<number> {
@@ -134,6 +141,33 @@ async function rpc(
   return { response, value: envelope.result.value }
 }
 
+async function requestWithBody(port: number, method: 'GET' | 'HEAD', body: string): Promise<RawHttpResponse> {
+  return await new Promise<RawHttpResponse>((resolveRequest, reject) => {
+    const request = httpRequest({
+      hostname: '127.0.0.1',
+      port,
+      path: '/saki/access/read',
+      method,
+      headers: {
+        'content-length': String(Buffer.byteLength(body)),
+        host: `127.0.0.1:${String(port)}`,
+      },
+    }, (response) => {
+      const chunks: Buffer[] = []
+      response.on('data', (chunk: Buffer) => { chunks.push(chunk) })
+      response.once('end', () => {
+        resolveRequest({
+          status: response.statusCode ?? 0,
+          headers: response.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        })
+      })
+    })
+    request.once('error', reject)
+    request.end(body)
+  })
+}
+
 async function transcript(entry: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'saki-bootstrap-snapshot-'))
   const databasePath = join(directory, 'control.sqlite')
@@ -208,5 +242,25 @@ describe('authenticated Saki bundle snapshot', () => {
 
   it.skipIf(!existsSync(builtBin))('runs the built bundle through the same Host transport', async () => {
     await verify(builtBin)
+  })
+
+  it.skipIf(!existsSync(builtBin))('keeps GET and HEAD bodies inside the built Saki rejection policy', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'saki-bootstrap-snapshot-'))
+    const port = await freePort()
+    let started: StartedSaki | undefined
+    try {
+      started = await startSaki(builtBin, join(directory, 'control.sqlite'), port, true)
+      const sentinel = 'credential-sentinel'
+      for (const method of ['GET', 'HEAD'] as const) {
+        const response = await requestWithBody(port, method, sentinel)
+        expect(response.status).toBe(400)
+        expect(response.headers['cache-control']).toBe('no-store')
+        expect(response.body).toBe(method === 'HEAD' ? '' : 'Saki request is unavailable')
+        expect(response.body).not.toContain(sentinel)
+      }
+    } finally {
+      await started?.stop()
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 })
