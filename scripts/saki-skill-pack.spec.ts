@@ -31,6 +31,29 @@ async function copyPack(): Promise<string> {
   return root
 }
 
+async function expectPublicationFailure(
+  failureForAttempt: (attempt: number) => Error | undefined,
+  expectedMessage: string,
+): Promise<void> {
+  const current = await copyPack()
+  const candidate = await copyPack()
+  const currentManifest = resolve(current, '.dsh/skill-pack/manifest.json')
+  const before = await readFile(currentManifest, 'utf8')
+  let renameCount = 0
+
+  await expect(publishSakiSkillPackCandidate(current, candidate, {
+    async rename(from, to) {
+      renameCount += 1
+      const failure = failureForAttempt(renameCount)
+      if (failure) throw failure
+      await renamePath(from, to)
+    },
+  })).rejects.toThrow(expectedMessage)
+
+  expect(await readFile(currentManifest, 'utf8')).toBe(before)
+  expect(await verifySakiSkillPack(current)).toEqual([])
+}
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(path => rm(path, { force: true, recursive: true })))
 })
@@ -154,41 +177,17 @@ describe('Saki Development Skill Pack update arguments', () => {
   })
 
   it('restores the current pack when candidate publication fails', async () => {
-    const current = await copyPack()
-    const candidate = await copyPack()
-    const currentManifest = resolve(current, '.dsh/skill-pack/manifest.json')
-    const before = await readFile(currentManifest, 'utf8')
-    let renameCount = 0
-
-    await expect(publishSakiSkillPackCandidate(current, candidate, {
-      async rename(from, to) {
-        renameCount += 1
-        if (renameCount === 2) throw new Error('simulated candidate publication failure')
-        await renamePath(from, to)
-      },
-    })).rejects.toThrow('simulated candidate publication failure')
-
-    expect(await readFile(currentManifest, 'utf8')).toBe(before)
-    expect(await verifySakiSkillPack(current)).toEqual([])
+    await expectPublicationFailure(
+      attempt => attempt === 2 ? new Error('simulated candidate publication failure') : undefined,
+      'simulated candidate publication failure',
+    )
   })
 
   it('restores by copy when publication and rename rollback both fail', async () => {
-    const current = await copyPack()
-    const candidate = await copyPack()
-    const currentManifest = resolve(current, '.dsh/skill-pack/manifest.json')
-    const before = await readFile(currentManifest, 'utf8')
-    let renameCount = 0
-
-    await expect(publishSakiSkillPackCandidate(current, candidate, {
-      async rename(from, to) {
-        renameCount += 1
-        if (renameCount === 2 || renameCount === 3) throw new Error(`simulated rename failure ${String(renameCount)}`)
-        await renamePath(from, to)
-      },
-    })).rejects.toThrow('restored the previous .dsh tree by copy')
-
-    expect(await readFile(currentManifest, 'utf8')).toBe(before)
-    expect(await verifySakiSkillPack(current)).toEqual([])
+    await expectPublicationFailure(
+      attempt => attempt === 2 || attempt === 3 ? new Error(`simulated rename failure ${String(attempt)}`) : undefined,
+      'restored the previous .dsh tree by copy',
+    )
   })
 
   it('materializes the requested full commit in one adapted skill', async () => {
