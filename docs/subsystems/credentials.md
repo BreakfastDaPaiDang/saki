@@ -67,7 +67,7 @@ interface CredentialInfo {
 }
 ```
 
-`plaintext`, `ephemeral`, and `local-user-trust` are the built-in identifiers. `local-user-trust` means Windows current-user DPAPI storage: it protects persisted values without claiming isolation from deliberate processes running as the same Windows user. A separately isolated broker or external secret manager is required for that stronger boundary.
+`plaintext`, `ephemeral`, and `local-user-trust` are the built-in identifiers. `local-user-trust` means Windows current-user DPAPI storage: it protects persisted values without claiming isolation from deliberate processes running as the same Windows user. A separately isolated Credential Broker or external secret manager is required for that stronger boundary.
 
 ## Change commits
 

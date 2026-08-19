@@ -17,3 +17,4 @@ This directory owns product and operational documentation specific to Saki. Gene
 
 - [Host launcher](host-launcher.md) defines the checked-in Windows launch entry point and proxy behavior.
 - [Upstream synchronization](upstream-sync.md) defines how Saki tracks DeepSeek Harness without inheriting unsuitable workflows.
+- [Development skill pack](development-skill-pack.md) defines repository discovery, compatibility preflight, pinned provenance, and the reviewed update procedure.

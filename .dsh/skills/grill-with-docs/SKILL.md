@@ -1,0 +1,25 @@
+---
+name: grill-with-docs
+description: Sharpen a Saki plan through structured questions while recording resolved terminology and decisions in the repository.
+disable-model-invocation: true
+metadata:
+  saki:
+    upstream: https://github.com/mattpocock/skills
+    commit: 9c9f36ccd3995266cd675468af71639c8dde1ec5
+    dsh-capabilities:
+      - skill
+    one-of-capabilities: []
+    optional-capabilities: []
+    host-commands: []
+    mutation: workspace
+---
+
+# Grill with docs
+
+Load `grilling` and `domain-modeling` with the DSH `skill` capability, then follow both instruction bodies together. The interview owns the decision frontier; domain modeling records only terminology and decisions that the user actually settles.
+
+## DSH compatibility preflight
+
+Confirm that the `skill` capability is available before asking the first question. If it is absent, stop and say: "This flow requires the DSH skill capability to load grilling and domain-modeling. Select a Saki development preset and retry."
+
+Do not create or edit a domain document until `domain-modeling` has loaded successfully and its repository-specific instructions have been read.

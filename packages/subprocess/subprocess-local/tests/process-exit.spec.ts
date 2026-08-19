@@ -8,15 +8,19 @@ import { resolveExampleLaunch } from '@deepseek-ai/dsh-loader-smoke'
 import { createProcessInspector } from '../src/process-inspector.ts'
 import type { ProcessIdentity, ProcessInspector } from '../src/process-inspector.ts'
 import { taskkillProcessTree } from '../src/spawn.ts'
+import { observeProcessExit, waitForFile } from './fixtures/process-exit-coordination.ts'
+import type { ProcessExitObservation } from './fixtures/process-exit-coordination.ts'
 import { readTreeState } from './fixtures/tree-state.ts'
 import type { ManagedTreeState } from './fixtures/tree-state.ts'
 
 type ExitTrigger = 'direct' | 'uncaught-exception' | 'unhandled-rejection' | 'dispose'
 type ManagedKind = 'ordinary' | 'terminal'
+type CoordinationMode = 'normal' | 'preexisting-handshakes' | 'exit-before-publication' | 'exit-before-proceed'
 type TreeState = ManagedTreeState
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const hostScript = fileURLToPath(new URL('./fixtures/process-exit-host.ts', import.meta.url))
+const atomicWriteSource = fileURLToPath(new URL('../../../util/atomic-write/src/index.ts', import.meta.url))
 const scenarioTimeoutMs = 30_000
 
 function processExists(pid: number): boolean {
@@ -29,8 +33,11 @@ function processExists(pid: number): boolean {
   }
 }
 
-async function readTree(path: string): Promise<TreeState> {
-  return vi.waitUntil(() => readTreeState(path), { interval: 10, timeout: scenarioTimeoutMs })
+async function readTree(path: string, hostExited: Promise<ProcessExitObservation>): Promise<TreeState> {
+  await waitForFile(path, hostExited, 'tree-state publication')
+  const state = await readTreeState(path)
+  if (state === undefined) throw new Error('published managed-tree state disappeared before it could be read')
+  return state
 }
 
 async function captureIdentities(inspector: ProcessInspector, state: TreeState): Promise<ProcessIdentity[]> {
@@ -80,13 +87,13 @@ function cleanupTree(state: TreeState | undefined, identities: ProcessIdentity[]
   }
 }
 
-async function runScenario(kind: ManagedKind, trigger: ExitTrigger) {
+async function runScenario(kind: ManagedKind, trigger: ExitTrigger, coordination: CoordinationMode = 'normal') {
   const root = await mkdtemp(join(tmpdir(), `dsh-subprocess-host-exit-${kind}-${trigger}-`))
   const launch = resolveExampleLaunch({
     srcBin: hostScript,
     mode: 'src',
     tsconfigPath: join(repoRoot, 'tsconfig.json'),
-    configArgs: [kind, trigger, root],
+    configArgs: [kind, trigger, root, coordination],
   })
   const child = execa(launch.command, launch.args, {
     cwd: repoRoot,
@@ -95,23 +102,27 @@ async function runScenario(kind: ManagedKind, trigger: ExitTrigger) {
     reject: false,
     timeout: scenarioTimeoutMs,
   })
+  let hostStderr = ''
+  const observedChild = child.then(
+    (outcome) => {
+      hostStderr = outcome.stderr
+      return outcome
+    },
+    (error: unknown) => {
+      hostStderr = error instanceof Error ? error.message : String(error)
+      throw error
+    },
+  )
+  const hostExited = observeProcessExit(observedChild, 'process-exit host', () => hostStderr)
   let state: TreeState | undefined
   let identities: ProcessIdentity[] = []
   let settled = false
   let treeGone = false
   try {
-    state = await Promise.race([
-      readTree(join(root, 'tree.json')),
-      child.then((outcome) => {
-        throw new Error(`process-exit host exited before publishing its tree state: ${outcome.stderr}`)
-      }),
-    ])
-    await vi.waitFor(() => readFile(join(root, 'ready'), 'utf8'), {
-      interval: 10,
-      timeout: scenarioTimeoutMs,
-    })
+    state = await readTree(join(root, 'tree.json'), hostExited)
+    await waitForFile(join(root, 'ready'), hostExited, 'host readiness publication')
     if (process.platform !== 'win32') identities = await captureIdentities(createProcessInspector(), state)
-    await writeFile(join(root, 'proceed'), 'proceed')
+    if (coordination !== 'exit-before-proceed') await writeFile(join(root, 'proceed'), 'proceed')
     const outcome = await child
     settled = true
     await waitForGone(state)
@@ -123,7 +134,10 @@ async function runScenario(kind: ManagedKind, trigger: ExitTrigger) {
         listenersAfterDispose: number
       }
       : undefined
-    return { outcome, disposeCounts }
+    const preparedHandshakes = coordination === 'preexisting-handshakes'
+      ? await readFile(join(root, 'preexisting-handshakes'), 'utf8')
+      : undefined
+    return { outcome, disposeCounts, preparedHandshakes, atomicWriteModuleUrl: state.atomicWriteModuleUrl }
   } finally {
     if (!settled) {
       child.kill('SIGKILL')
@@ -163,10 +177,41 @@ describe('synchronous cleanup on host exit', () => {
     },
   )
 
-  it('preserves normal terminate-and-join disposal and removes the exit listener', { timeout: 45_000 }, async () => {
-    const { outcome, disposeCounts } = await runScenario('ordinary', 'dispose')
+  it('preserves source launch, normal disposal, and exit-listener cleanup', { timeout: 45_000 }, async () => {
+    const { outcome, disposeCounts, atomicWriteModuleUrl } = await runScenario('ordinary', 'dispose')
     expect(outcome.exitCode).toBe(0)
+    expect(fileURLToPath(atomicWriteModuleUrl)).toBe(atomicWriteSource)
     expect(disposeCounts?.listenersAfterLoad).toBe((disposeCounts?.listenersBefore ?? 0) + 1)
     expect(disposeCounts?.listenersAfterDispose).toBe(disposeCounts?.listenersBefore)
+  })
+
+  it('preserves ordinary disposal when both handshake files precede their first checks', { timeout: 45_000 }, async () => {
+    const { outcome, preparedHandshakes } = await runScenario('ordinary', 'dispose', 'preexisting-handshakes')
+    expect(outcome.exitCode).toBe(0)
+    expect(outcome.signal).toBeUndefined()
+    expect(preparedHandshakes).toBe('prepared')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'preserves terminal disposal when both handshake files precede their first checks',
+    { timeout: 45_000 },
+    async () => {
+      const { outcome, preparedHandshakes } = await runScenario('terminal', 'dispose', 'preexisting-handshakes')
+      expect(outcome.exitCode).toBe(0)
+      expect(outcome.signal).toBeUndefined()
+      expect(preparedHandshakes).toBe('prepared')
+    },
+  )
+
+  it('surfaces an early managed-tree exit during tree-state publication', { timeout: 45_000 }, async () => {
+    await expect(runScenario('ordinary', 'direct', 'exit-before-publication')).rejects.toThrow(
+      /managed tree exited during tree-state publication.*fixture-exit-before-publication/s,
+    )
+  })
+
+  it('surfaces an early managed-tree exit while awaiting the proceed signal', { timeout: 45_000 }, async () => {
+    const { outcome } = await runScenario('ordinary', 'direct', 'exit-before-proceed')
+    expect(outcome.exitCode).toBe(1)
+    expect(outcome.stderr).toMatch(/managed tree exited during proceed signal/)
   })
 })

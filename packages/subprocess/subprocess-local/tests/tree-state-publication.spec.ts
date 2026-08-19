@@ -29,8 +29,13 @@ describe('managed-tree state publication', () => {
   it('never exposes an intermediate target document', async () => {
     const root = await scratch()
     const target = join(root, 'tree.json')
-    const previous = JSON.stringify({ root: 1, descendant: 2 })
-    const nextState = { root: 3, descendant: 4, padding: 'x'.repeat(16 * 1024 * 1024) }
+    const previous = JSON.stringify({ root: 1, descendant: 2, atomicWriteModuleUrl: 'file:///previous.ts' })
+    const nextState = {
+      root: 3,
+      descendant: 4,
+      atomicWriteModuleUrl: 'file:///next.ts',
+      padding: 'x'.repeat(16 * 1024 * 1024),
+    }
     const next = JSON.stringify(nextState)
     await writeFile(target, previous)
     let partialLength: number | undefined
@@ -64,7 +69,11 @@ describe('managed-tree state publication', () => {
     const target = join(root, 'occupied')
     await mkdir(target)
     try {
-      await expect(publishTreeState(target, { root: 1, descendant: 2 })).rejects.toThrow()
+      await expect(publishTreeState(target, {
+        root: 1,
+        descendant: 2,
+        atomicWriteModuleUrl: 'file:///fixture.ts',
+      })).rejects.toThrow()
       expect(await readdir(root)).toEqual(['occupied'])
     } finally {
       await rm(root, { recursive: true, force: true })

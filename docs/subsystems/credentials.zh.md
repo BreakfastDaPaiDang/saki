@@ -67,7 +67,7 @@ interface CredentialInfo {
 }
 ```
 
-`plaintext`、`ephemeral` 与 `local-user-trust` 是内置 Credential Protection Level 标识符。`local-user-trust` 表示 Windows 当前用户 DPAPI 存储：它保护持久化值，但不声称能隔离刻意以同一 Windows 用户身份运行的进程。要建立更强边界，需要独立隔离的凭据代理或外部机密管理器。
+`plaintext`、`ephemeral` 与 `local-user-trust` 是内置 Credential Protection Level 标识符。`local-user-trust` 表示 Windows 当前用户 DPAPI 存储：它保护持久化值，但不声称能隔离刻意以同一 Windows 用户身份运行的进程。要建立更强边界，需要独立隔离的 Credential Broker 或外部机密管理器。
 
 ## 已提交的变更
 

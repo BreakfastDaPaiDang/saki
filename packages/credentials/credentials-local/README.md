@@ -53,7 +53,7 @@ External edits publish `credentials/updated` per changed reference after the sna
 
 The document is `0600` under a `0700` directory, which stops other OS users — **not** the model. Tool processes (bash, the filesystem tools) run as the same user, and the shipped `workspace-write` file policy confines mutations rather than reads, so they can read this file exactly like any other file the user owns; no sandbox mode singles it out. What the harness does hold to is narrower: it never hands the model a resolved path to the document, and never loads it into the process environment — unlike `$DSH_HOME/.env`, which is the user's ordinary environment layer (see [app-boot's Harness-home layers](../../boot/app-boot/README.md#profiles)) — so reaching the value takes a deliberate read of a path the agent was not given.
 
-That is discretion, not a boundary. [`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.md) is the sibling for encrypted Windows storage at rest, but its current-user scope still trusts deliberate processes running as the same Windows user. Keeping provider keys away from those processes requires a separately isolated credential broker or external secret manager.
+That is discretion, not a boundary. [`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.md) is the sibling for encrypted Windows storage at rest, but its current-user scope still trusts deliberate processes running as the same Windows user. Keeping provider keys away from those processes requires a separately isolated Credential Broker or external secret manager.
 
 ## Model Experience
 

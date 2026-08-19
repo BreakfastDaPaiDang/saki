@@ -55,7 +55,7 @@ OPENAI_API_KEY: sk-…
 
 文档在 `0700` 目录下以 `0600` 权限存放，这挡得住其他 OS 用户，**挡不住**模型。工具进程（bash、文件系统工具）以同一用户身份运行，而已交付的 `workspace-write` 文件策略限制的是修改而非读取，因此它们读这个文件与读该用户拥有的任何其他文件毫无二致；也没有任何沙箱模式会把它单独挑出来。harness 真正守住的更窄：它绝不把该文档的解析后路径交给模型，也绝不把它载入进程环境——这与用户的普通环境层 `$DSH_HOME/.env` 不同（见 [app-boot 的 Harness home 各层](../../boot/app-boot/README.md#profiles)）——因此要拿到这个值，需要刻意去读一条并未交给 agent（智能体）的路径。
 
-这是审慎，不是边界。[`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.md) 是在 Windows 上提供静态加密的平级包，但当前用户作用域仍然信任以同一 Windows 用户身份刻意运行的进程。要让这些进程也无法取得提供方密钥，需要独立隔离的凭据代理或外部机密管理器。
+这是审慎，不是边界。[`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.md) 是在 Windows 上提供静态加密的平级包，但当前用户作用域仍然信任以同一 Windows 用户身份刻意运行的进程。要让这些进程也无法取得提供方密钥，需要独立隔离的 Credential Broker 或外部机密管理器。
 
 ## 模型体验
 
