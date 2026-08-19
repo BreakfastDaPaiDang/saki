@@ -15,6 +15,9 @@ describe('empty Saki application snapshot', () => {
     delete environment.DEEPSEEK_API_KEY
     delete environment.OPENAI_API_KEY
     delete environment.CODEX_API_KEY
+    environment.SAKI_ONESHOT = '1'
+    environment.SAKI_DATABASE_PATH = ':memory:'
+    environment.SAKI_PORT = '43129'
     const result = spawnSync(process.execPath, [
       '--import',
       'tsx/esm',

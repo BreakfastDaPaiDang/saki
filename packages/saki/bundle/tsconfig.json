@@ -22,6 +22,12 @@
     },
     {
       "path": "../../runtime-diagnostics/invariants"
+    },
+    {
+      "path": "../control-plane"
+    },
+    {
+      "path": "../host-api/tsconfig.host.json"
     }
   ]
 }

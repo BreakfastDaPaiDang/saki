@@ -41,18 +41,20 @@ export function apply(ctx: Context): void {
  * A reporting failure disposes the booted tree before it is returned to the launcher.
  * @param startup - complete application boot, including the activation audit.
  * @param io - launcher-owned stdout and clean-exit request.
+ * @param options - readiness-process behavior after the record is written.
  * @returns the audited application context after readiness is requested.
  */
 export async function announceSakiReadiness(
   startup: Promise<Context>,
   io: SakiReadinessIo,
+  options: { readonly exitAfterAnnounce?: boolean } = {},
 ): Promise<Context> {
   const ctx = await startup
   try {
     const record = ctx.get('sakiReadiness')
     if (record === undefined) throw new Error('saki: activated bundle did not provide sakiReadiness')
     io.stdout.write(`${JSON.stringify(record)}\n`)
-    io.exit(0)
+    if (options.exitAfterAnnounce !== false) io.exit(0)
     return ctx
   } catch (error) {
     await ctx.fiber.dispose()

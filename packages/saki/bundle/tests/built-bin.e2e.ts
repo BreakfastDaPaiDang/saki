@@ -15,6 +15,8 @@ describe.skipIf(!existsSync(bin))('built Saki executable', () => {
     delete environment.DEEPSEEK_API_KEY
     delete environment.OPENAI_API_KEY
     delete environment.CODEX_API_KEY
+    environment.SAKI_DATABASE_PATH = ':memory:'
+    environment.SAKI_ONESHOT = '1'
 
     const { stdout, stderr } = await execFileAsync(process.execPath, [bin], {
       env: environment,
@@ -23,5 +25,32 @@ describe.skipIf(!existsSync(bin))('built Saki executable', () => {
 
     expect(stdout).toBe('{"product":"saki","status":"ready"}\n')
     expect(stderr).toBe('')
+  })
+
+  it('rejects a port that cannot identify the configured browser Origin', async () => {
+    let rejected = false
+    try {
+      await execFileAsync(process.execPath, [bin], {
+        env: {
+          ...process.env,
+          SAKI_DATABASE_PATH: ':memory:',
+          SAKI_ONESHOT: '1',
+          SAKI_PORT: '0',
+        },
+        timeout: 30_000,
+      })
+    } catch (error) {
+      if (!(error instanceof Error)
+        || !('code' in error)
+        || !('stdout' in error)
+        || !('stderr' in error)
+        || typeof error.stdout !== 'string'
+        || typeof error.stderr !== 'string') throw error
+      rejected = true
+      expect(error.code).toBe(1)
+      expect(error.stdout).toBe('')
+      expect(error.stderr).toContain('SAKI_PORT must be an integer from 1 through 65535')
+    }
+    expect(rejected).toBe(true)
   })
 })

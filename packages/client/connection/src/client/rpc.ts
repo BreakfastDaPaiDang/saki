@@ -18,9 +18,11 @@ const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
  */
 export function createWebConnectionRpc(): ClientConnectionRpc {
   return {
-    async call(channel, endpoint, payload, signal) {
+    async call(channel, endpoint, payload, options) {
       assertTarget(channel, endpoint)
       const rpcId = RpcId(randomUuid())
+      const headers = new Headers(options?.headers)
+      headers.set('content-type', 'application/json')
       const message: ClientRequest = {
         type: 'client-request',
         rpcId,
@@ -31,9 +33,10 @@ export function createWebConnectionRpc(): ClientConnectionRpc {
         new URL(`${channel}/${endpoint}`, resolveBase()),
         {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers,
+          credentials: options?.credentials ?? 'same-origin',
           body: JSON.stringify(message),
-          ...signal === undefined ? {} : { signal },
+          ...options?.signal === undefined ? {} : { signal: options.signal },
         },
       )
       if (!response.ok) {

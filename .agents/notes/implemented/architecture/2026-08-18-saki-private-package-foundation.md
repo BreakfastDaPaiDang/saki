@@ -1,4 +1,4 @@
-# Agent Note: Saki package-family enforcement and empty bundle
+# Agent Note: Saki package-family enforcement and repository bundle
 
 Status: implemented
 
@@ -16,13 +16,13 @@ English | [中文](2026-08-18-saki-private-package-foundation.zh.md)
 
 **Keep engineering checks family-neutral.** The shared package rules, source-plane mappings, project references, license and invariant checks, generated catalogs, module graph, and bundle resolution accept both classified product families. The [package governance reference](../../../../docs/saki/package-governance.md) owns the complete current package and publication rules.
 
-**Prove only the first composition root.** `@breakfastdapaidang/saki-bundle` owns an empty Cordis root, one patch layer, and the repository-local launcher. Its sole row provides a stable readiness record. The launcher emits that record and requests clean exit only after `boot()` completes its entry-activation audit; a reporting failure disposes the application and enters the launcher's failure path. Later packages arrive with independently testable product slices; planned names do not justify placeholder directories.
+**Keep composition evidence slice-owned.** `@breakfastdapaidang/saki-bundle` owns an empty Cordis base config, one patch layer, and the repository-local launcher. The patch mounts only implemented product slices and a stable readiness row; B01 composes SQLite storage, a loopback Host transport, `saki-control-plane`, and `saki-host-api`. The launcher emits readiness only after `boot()` completes its entry-activation audit and remains alive for the Host lifecycle; a reporting failure disposes the application and enters the launcher failure path. Later packages arrive with independently testable product slices; planned names do not justify placeholder directories.
 
 ## Consequences
 
 `pnpm run saki` proves that a clean checkout can resolve and run Saki source without credentials, while the built executable proves plain-Node artifact resolution. The command remains a repository entry separate from machine-local Windows wrappers and proxy bootstrap. Generated package documentation uses collision-free `saki/<pkg>` graph keys, and broad filesystem scans cannot make a private Saki manifest a DSH release member.
 
-The initial bundle has no persistence, identity, GitHub, Agent, model, server, or Web behavior. Each later slice decides whether it owns reusable Harness capability in a DSH group or Saki product semantics under `packages/saki/`; neither the accepted architecture nor a planned package name creates a package by itself.
+The bundle now contains the B01 persistence, local identity, access, server, and browser-transport slice. It still has no GitHub, Agent, model, or rendered Web behavior. Each later slice decides whether it owns reusable Harness capability in a DSH group or Saki product semantics under `packages/saki/`; neither the accepted architecture nor a planned package name creates a package by itself.
 
 ## Alternatives considered
 

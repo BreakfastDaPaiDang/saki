@@ -3004,7 +3004,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
   }
 
   const rpc: ClientConnectionRpc = {
-    call(channel, endpoint, payload) {
+    call(channel, endpoint, payload, _options) {
       if (channel !== '/api') {
         return Promise.reject(new Error(`fixture connection RPC channel ${JSON.stringify(channel)} is unavailable`))
       }

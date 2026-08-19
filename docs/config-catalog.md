@@ -410,7 +410,7 @@ export interface ConnectionConfig {
 }
 ```
 
-Source: [`packages/client/connection/src/index.ts:50`](../packages/client/connection/src/index.ts)
+Source: [`packages/client/connection/src/index.ts:55`](../packages/client/connection/src/index.ts)
 
 <a id="deepseek-aidsh-client-hmr"></a>
 
@@ -3042,6 +3042,7 @@ Source: [`packages/workflow/workflow-worker-thread/src/index.ts:32`](../packages
 These load from a `cordis.yml` entry with no `config:` block; they declare no configuration API.
 
 - `@breakfastdapaidang/saki-bundle` ([`packages/saki/bundle/src/index.ts`](../packages/saki/bundle/src/index.ts))
+- `@breakfastdapaidang/saki-host-api` — requires `connection` · `sakiControlPlane` ([`packages/saki/host-api/src/index.ts`](../packages/saki/host-api/src/index.ts))
 - `@deepseek-ai/dsh-agent` ([`packages/core/agent/src/index.ts`](../packages/core/agent/src/index.ts))
 - `@deepseek-ai/dsh-api-gateway` — requires `typert` ([`packages/api/gateway/src/index.ts`](../packages/api/gateway/src/index.ts))
 - `@deepseek-ai/dsh-api-remotes` ([`packages/api/remotes/src/index.ts`](../packages/api/remotes/src/index.ts))
@@ -3132,6 +3133,7 @@ Abstract service classes — a deployment loads a concrete implementation packag
 
 Imported as libraries by other packages; a `cordis.yml` cannot load them.
 
+- `@breakfastdapaidang/saki-control-plane` ([`packages/saki/control-plane/src/index.ts`](../packages/saki/control-plane/src/index.ts))
 - `@deepseek-ai/dsh-acp-snapshot` ([`packages/test-support/acp-snapshot/src/index.ts`](../packages/test-support/acp-snapshot/src/index.ts))
 - `@deepseek-ai/dsh-agent-loop-testkit` ([`packages/test-support/agent-loop-testkit/src/index.ts`](../packages/test-support/agent-loop-testkit/src/index.ts))
 - `@deepseek-ai/dsh-anonymous-user-id` ([`packages/identity/anonymous-user-id/src/index.ts`](../packages/identity/anonymous-user-id/src/index.ts))

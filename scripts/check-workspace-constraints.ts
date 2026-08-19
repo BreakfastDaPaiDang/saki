@@ -146,6 +146,9 @@ const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   '@deepseek-ai/dsh-sandbox-windows-acl': ['lib/runner.js', 'lib/types-*.js'],
   '@deepseek-ai/dsh-skill-badge': ['assets'],
   '@deepseek-ai/dsh-subprocess-local': ['scripts/ensure-spawn-helper.mjs'],
+  // The control plane's root and Host-only entries share authentication class
+  // identity and the opaque cookie-header registry through one generated chunk.
+  '@breakfastdapaidang/saki-control-plane': ['lib/host.js', 'lib/fixtures.js', 'lib/service-*.js'],
   // The private Saki bundle carries its empty root beside the patch layer.
   '@breakfastdapaidang/saki-bundle': ['cordis.yml', 'cordis.patch.yml'],
 }

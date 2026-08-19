@@ -187,19 +187,19 @@ describe('Client Typert API', () => {
 
     await expect(ctx.remote.probe.create('agent-1', { objective: 'ship' }))
       .resolves.toEqual({ ok: true, value: { ref: 'goal-1' } })
-    expect(call).toHaveBeenCalledWith(
+    expect(call.mock.calls[0]?.slice(0, 3)).toEqual([
       '/api',
       'probe/create',
       { args: { agentId: 'agent-1', request: { objective: 'ship' } } },
-      expect.any(AbortSignal),
-    )
+    ])
+    expect(call.mock.calls[0]?.[3]?.signal).toBeInstanceOf(AbortSignal)
     const callerAbort = new AbortController()
     await expect(ctx.remote.probe.create(
       'agent-1',
       { objective: 'cancel me' },
       callerAbort.signal,
     )).resolves.toEqual({ ok: true, value: { ref: 'goal-1' } })
-    const combinedSignal = call.mock.calls.at(-1)?.[3]
+    const combinedSignal = call.mock.calls.at(-1)?.[3]?.signal
     expect(combinedSignal).toBeInstanceOf(AbortSignal)
     expect(combinedSignal).not.toBe(callerAbort.signal)
     const cancellation = new Error('caller cancelled')
@@ -245,21 +245,19 @@ describe('Client Typert API', () => {
     })
 
     await expect(ctx.remote.probe.maybe(undefined)).resolves.toStrictEqual({ ok: true, value: undefined })
-    expect(call).toHaveBeenNthCalledWith(
-      1,
+    expect(call.mock.calls[0]?.slice(0, 3)).toEqual([
       '/api',
       'probe/maybe',
       { args: {} },
-      expect.any(AbortSignal),
-    )
+    ])
+    expect(call.mock.calls[0]?.[3]?.signal).toBeInstanceOf(AbortSignal)
     await expect(ctx.remote.probe.maybe(null)).resolves.toStrictEqual({ ok: true, value: null })
-    expect(call).toHaveBeenNthCalledWith(
-      2,
+    expect(call.mock.calls[1]?.slice(0, 3)).toEqual([
       '/api',
       'probe/maybe',
       { args: { value: null } },
-      expect.any(AbortSignal),
-    )
+    ])
+    expect(call.mock.calls[1]?.[3]?.signal).toBeInstanceOf(AbortSignal)
 
     await dispose()
   })
@@ -280,12 +278,12 @@ describe('Client Typert API', () => {
 
     await expect(agentCtx.remote.probe.create({ objective: 'ship scoped' }))
       .resolves.toEqual({ ok: true, value: { ref: 'goal-2' } })
-    expect(call).toHaveBeenCalledWith(
+    expect(call.mock.calls[0]?.slice(0, 3)).toEqual([
       '/api',
       'probe/create',
       { args: { agentId: 'agent-2', request: { objective: 'ship scoped' } } },
-      expect.any(AbortSignal),
-    )
+    ])
+    expect(call.mock.calls[0]?.[3]?.signal).toBeInstanceOf(AbortSignal)
     await expect((ctx as FixtureContext).remote.probe.create({ objective: 'wrong scope' }))
       .rejects.toThrow('expected 2 business argument(s)')
 
@@ -310,12 +308,12 @@ describe('Client Typert API', () => {
 
     await expect(agentCtx.remote.probe.rename({ objective: 'land' }))
       .resolves.toEqual({ ok: true, value: { renamed: true } })
-    expect(call).toHaveBeenCalledWith(
+    expect(call.mock.calls[0]?.slice(0, 3)).toEqual([
       '/api',
       'probe/rename',
       { args: { agentId: 'agent-2', request: { objective: 'land' } } },
-      expect.any(AbortSignal),
-    )
+    ])
+    expect(call.mock.calls[0]?.[3]?.signal).toBeInstanceOf(AbortSignal)
     await expect((ctx as FixtureContext).remote.probe.rename({ objective: 'land' }))
       .rejects.toThrow('requires a "fixture" Context')
 
@@ -395,12 +393,13 @@ describe('Client Typert API', () => {
     })
     await expect(agentCtx.remote.probe.rename({ objective: 'remounted' }))
       .resolves.toEqual({ ok: true, value: { renamed: true } })
-    expect(call).toHaveBeenLastCalledWith(
+    const lastCall = call.mock.calls.at(-1)
+    expect(lastCall?.slice(0, 3)).toEqual([
       '/api',
       'probe/rename',
       { args: { agentId: 'agent-remounted', request: { objective: 'remounted' } } },
-      expect.any(AbortSignal),
-    )
+    ])
+    expect(lastCall?.[3]?.signal).toBeInstanceOf(AbortSignal)
     await disposeMultipleScoped()
   })
 

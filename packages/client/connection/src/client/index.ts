@@ -39,7 +39,7 @@ export {
 // Connection loop types are public through ConnectionHandle.start; the
 // controller remains package-internal.
 export type { ConnectionConfig, ConnectionSinks, ConnectionState }
-export type { ClientConnectionRpc } from '../rpc.ts'
+export type { ClientConnectionRpc, ConnectionRpcCallOptions } from '../rpc.ts'
 
 /** Observable Host description published by each completed connection handshake. */
 export interface HostDescriptionSource {
