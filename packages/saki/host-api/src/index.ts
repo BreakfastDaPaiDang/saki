@@ -62,9 +62,9 @@ async function dispatch(
     switch (endpoint) {
       case 'access/read': return await readAccess(controlPlane, payload, signal, request)
       case 'access/exchange': return await exchangeBootstrap(controlPlane, payload, signal, request)
-      case 'access/logout': return await logout(controlPlane, payload, signal, request)
+      case 'access/logout': return await authenticatedMutation(controlPlane, 'logout', payload, signal, request)
       case 'control/query': return await query(controlPlane, payload, signal, request)
-      case 'control/submit': return await submitUnavailable(controlPlane, payload, signal, request)
+      case 'control/submit': return await authenticatedMutation(controlPlane, 'submit', payload, signal, request)
       default: return reply(badRequest())
     }
   } catch {
@@ -105,8 +105,27 @@ async function exchangeBootstrap(
   return reply({ ok: true, value: result }, cookieHeader === undefined ? undefined : { 'set-cookie': cookieHeader })
 }
 
-async function logout(
+async function query(
   controlPlane: SakiControlPlaneModule,
+  payload: unknown,
+  signal: AbortSignal,
+  request: ConnectionRpcRequestMetadata,
+): Promise<ConnectionRpcReply> {
+  const parsed = sakiQueryRequestSchema.safeParse(payload)
+  if (!parsed.success) return reply(badRequest())
+  const resolution = await resolveSakiAuthentication(
+    controlPlane,
+    sessionCookie(request, sakiSessionCookieName(controlPlane)),
+    { origin: request.headers.get('origin') ?? undefined, mutation: false },
+    signal,
+  )
+  if (!resolution.ok) return reply({ ok: true, value: { ok: false, reason: 'unavailable' } })
+  return reply({ ok: true, value: await controlPlane.query(resolution.authentication, parsed.data, signal) })
+}
+
+async function authenticatedMutation(
+  controlPlane: SakiControlPlaneModule,
+  kind: 'logout' | 'submit',
   payload: unknown,
   signal: AbortSignal,
   request: ConnectionRpcRequestMetadata,
@@ -126,56 +145,16 @@ async function logout(
   if (!resolution.ok || requestToken === undefined) {
     return reply({ ok: true, value: { ok: false, reason: 'unavailable' } })
   }
-  const result = await controlPlane.access.logoutCurrentSession(
-    resolution.authentication,
-    requestToken,
-    signal,
-  )
+  const authentication = resolution.authentication
+  if (kind === 'submit') {
+    return reply({
+      ok: true,
+      value: await controlPlane.submit(authentication, undefined, signal),
+    })
+  }
+  const result = await controlPlane.access.logoutCurrentSession(authentication, requestToken, signal)
   const cookieHeader = takeSakiCookieHeader(result)
   return reply({ ok: true, value: result }, cookieHeader === undefined ? undefined : { 'set-cookie': cookieHeader })
-}
-
-async function query(
-  controlPlane: SakiControlPlaneModule,
-  payload: unknown,
-  signal: AbortSignal,
-  request: ConnectionRpcRequestMetadata,
-): Promise<ConnectionRpcReply> {
-  const parsed = sakiQueryRequestSchema.safeParse(payload)
-  if (!parsed.success) return reply(badRequest())
-  const resolution = await resolveSakiAuthentication(
-    controlPlane,
-    sessionCookie(request, sakiSessionCookieName(controlPlane)),
-    { origin: request.headers.get('origin') ?? undefined, mutation: false },
-    signal,
-  )
-  if (!resolution.ok) return reply({ ok: true, value: { ok: false, reason: 'unavailable' } })
-  return reply({ ok: true, value: await controlPlane.query(resolution.authentication, parsed.data, signal) })
-}
-
-async function submitUnavailable(
-  controlPlane: SakiControlPlaneModule,
-  payload: unknown,
-  signal: AbortSignal,
-  request: ConnectionRpcRequestMetadata,
-): Promise<ConnectionRpcReply> {
-  if (!sakiEmptyRequestSchema.safeParse(payload).success) return reply(badRequest())
-  const requestToken = request.headers.get(SAKI_REQUEST_TOKEN_HEADER) ?? undefined
-  const resolution = await resolveSakiAuthentication(
-    controlPlane,
-    sessionCookie(request, sakiSessionCookieName(controlPlane)),
-    {
-      origin: request.headers.get('origin') ?? undefined,
-      mutation: true,
-      ...(requestToken === undefined ? {} : { requestToken }),
-    },
-    signal,
-  )
-  if (!resolution.ok) return reply({ ok: true, value: { ok: false, reason: 'unavailable' } })
-  return reply({
-    ok: true,
-    value: await controlPlane.submit(resolution.authentication, undefined, signal),
-  })
 }
 
 function sessionCookie(request: ConnectionRpcRequestMetadata, name: string): string | undefined {

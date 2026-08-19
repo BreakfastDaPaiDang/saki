@@ -79,14 +79,22 @@ export async function bridge(
     }
     chunks.push(buffer)
   }
-  /* v8 ignore next 3 -- `??` arms: node:http always sets url/method on server
-  requests; the fields are only optional on the client-side IncomingMessage type */
-  const request = new Request(new URL(req.url ?? '/', requestOrigin(req)), {
-    method: req.method ?? 'GET',
-    headers: Object.fromEntries(Object.entries(req.headers).filter(([, v]) => typeof v === 'string') as [string, string][]),
-    ...chunks.length > 0 ? { body: Buffer.concat(chunks) } : {},
-    signal: abort.signal,
-  })
+  let request: Request
+  try {
+    /* v8 ignore next 3 -- `??` arms: node:http always sets url/method on server
+    requests; the fields are only optional on the client-side IncomingMessage type */
+    request = new Request(new URL(req.url ?? '/', requestOrigin(req)), {
+      method: req.method ?? 'GET',
+      headers: Object.fromEntries(Object.entries(req.headers).filter(([, v]) => typeof v === 'string') as [string, string][]),
+      ...chunks.length > 0 ? { body: Buffer.concat(chunks) } : {},
+      signal: abort.signal,
+    })
+  } catch {
+    // WHATWG rejects some methods accepted by node:http; the channel policy
+    // owns that pre-dispatch response and must not expose the parser error.
+    rejectBeforeDispatch(req, res, 400, rejection)
+    return
+  }
   const response = await apiHandler.fetch(request)
   res.writeHead(response.status, Object.fromEntries(response.headers.entries()))
   if (response.body === null) {

@@ -141,7 +141,7 @@ async function rpc(
   return { response, value: envelope.result.value }
 }
 
-async function requestWithBody(port: number, method: 'GET' | 'HEAD', body: string): Promise<RawHttpResponse> {
+async function rawRequest(port: number, method: 'GET' | 'HEAD' | 'TRACE', body?: string): Promise<RawHttpResponse> {
   return await new Promise<RawHttpResponse>((resolveRequest, reject) => {
     const request = httpRequest({
       hostname: '127.0.0.1',
@@ -149,7 +149,7 @@ async function requestWithBody(port: number, method: 'GET' | 'HEAD', body: strin
       path: '/saki/access/read',
       method,
       headers: {
-        'content-length': String(Buffer.byteLength(body)),
+        ...(body === undefined ? {} : { 'content-length': String(Buffer.byteLength(body)) }),
         host: `127.0.0.1:${String(port)}`,
       },
     }, (response) => {
@@ -244,7 +244,7 @@ describe('authenticated Saki bundle snapshot', () => {
     await verify(builtBin)
   })
 
-  it.skipIf(!existsSync(builtBin))('keeps GET and HEAD bodies inside the built Saki rejection policy', async () => {
+  it.skipIf(!existsSync(builtBin))('keeps built pre-dispatch failures inside the Saki rejection policy', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'saki-bootstrap-snapshot-'))
     const port = await freePort()
     let started: StartedSaki | undefined
@@ -252,12 +252,16 @@ describe('authenticated Saki bundle snapshot', () => {
       started = await startSaki(builtBin, join(directory, 'control.sqlite'), port, true)
       const sentinel = 'credential-sentinel'
       for (const method of ['GET', 'HEAD'] as const) {
-        const response = await requestWithBody(port, method, sentinel)
+        const response = await rawRequest(port, method, sentinel)
         expect(response.status).toBe(400)
         expect(response.headers['cache-control']).toBe('no-store')
         expect(response.body).toBe(method === 'HEAD' ? '' : 'Saki request is unavailable')
         expect(response.body).not.toContain(sentinel)
       }
+      const trace = await rawRequest(port, 'TRACE')
+      expect(trace.status).toBe(400)
+      expect(trace.headers['cache-control']).toBe('no-store')
+      expect(trace.body).toBe('Saki request is unavailable')
     } finally {
       await started?.stop()
       await rm(directory, { recursive: true, force: true })

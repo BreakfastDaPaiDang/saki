@@ -130,6 +130,39 @@ describe('HTTP bridge abort', () => {
     expect(body).toBeUndefined()
   })
 
+  it('applies the channel policy to a pre-dispatch request conversion failure', async () => {
+    const request = Readable.from([]) as unknown as IncomingMessage
+    Object.assign(request, {
+      url: '/saki/access/read',
+      method: 'TRACE',
+      headers: { host: '127.0.0.1' },
+    })
+    let status: number | undefined
+    let headers: unknown
+    let body: unknown
+    const response = Object.assign(new EventEmitter(), {
+      writableEnded: false,
+      writeHead(code: number, values?: unknown) { status = code; headers = values; return this },
+      write() { return true },
+      end(this: { writableEnded: boolean }, value?: unknown) {
+        this.writableEnded = true
+        body = value
+        return this
+      },
+    }) as unknown as ServerResponse
+
+    await bridge(request, response, {
+      fetch: () => { throw new Error('a rejected request must never reach the handler') },
+    }, Number.MAX_SAFE_INTEGER, {
+      headers: { 'cache-control': 'no-store' },
+      body: 'Saki request is unavailable',
+    })
+
+    expect(status).toBe(400)
+    expect(headers).toEqual({ 'cache-control': 'no-store', connection: 'close' })
+    expect(body).toBe('Saki request is unavailable')
+  })
+
   it('aborts a pending native picker request when the browser disconnects', async () => {
     const body = JSON.stringify({
       type: 'client-request', rpcId: 'picker-1', method: 'host.pickDirectory', payload: {},
