@@ -13,10 +13,10 @@
  * way down: switching models mid-reply takes effect on the next step, never
  * inside the one in flight.
  *
- * Credentials stay outside that collection. The harness resolves a route's key
- * through its own seam and passes it as the request's `apiKey` option, which
- * pi-ai treats as the highest-priority auth override — so `Models` never holds
- * a credential store and the harness keeps its fail-loud reference semantics.
+ * The generic plugin resolves route API keys through the Harness credential
+ * seam and passes them as per-request overrides. A specialized constructor may
+ * instead bind a pi-ai credential store to every immutable collection; the
+ * collection and store binding then freeze together for each operation.
  *
  * @module dsh-llm-pi-ai/adapter
  */
@@ -24,10 +24,13 @@
 import { createModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import type {
   Api,
+  CredentialStore,
   Model,
   Models,
   ModelThinkingLevel,
   MutableModels,
+  ProviderHeaders,
+  ProviderResponse,
   SimpleStreamOptions,
   ThinkingLevel,
 } from '@earendil-works/pi-ai'
@@ -61,7 +64,27 @@ interface PiAiSnapshot {
   models: Models
 }
 
-/** Constructor options for {@link PiAiAdapter}: the two resolution hooks the plugin owns. */
+/** Model-hidden facts available while preparing one pi-ai transport request. */
+export interface PiAiTransportRequest {
+  /** Captured Harness provider route. */
+  readonly provider: string
+  /** Captured provider model id. */
+  readonly model: string
+  /** Session identity when the caller supplied one. */
+  readonly sessionId?: GenerateOptions['sessionId']
+  /** Session-local turn identity when the caller supplied one. */
+  readonly turn?: number
+}
+
+/** Per-request pi-ai transport additions returned by the preparation hook. */
+export interface PiAiTransportObservation {
+  /** Dynamic headers merged after deployment headers and before Harness attribution. */
+  readonly headers?: ProviderHeaders
+  /** Observe the response before body consumption; pi-ai awaits the result and propagates rejection. */
+  readonly onResponse?: (response: ProviderResponse) => void | Promise<void>
+}
+
+/** Constructor options for {@link PiAiAdapter}. */
 export interface PiAiAdapterOptions {
   /** Current validated profiles by provider route; called once per operation. */
   profiles: () => ReadonlyMap<string, ResolvedPiAiProviderProfile>
@@ -74,8 +97,18 @@ export interface PiAiAdapterOptions {
    * `MISSING_CREDENTIAL` rather than falling back.
    */
   resolveApiKey: (provider: string, profile: ResolvedPiAiProviderProfile) => Promise<string | undefined>
+  /** Pi-ai credential source bound to every immutable Models collection. */
+  credentials?: CredentialStore
   /** Resolve the optional durable attachment service at request time. */
   resolveAttachments?: () => AttachmentStore | undefined
+  /**
+   * Prepare model-hidden request headers and response observation once after
+   * route capture. The adapter awaits the result before dispatch; rejection
+   * prevents the provider request.
+   */
+  prepareTransportRequest?: (
+    request: PiAiTransportRequest,
+  ) => PiAiTransportObservation | Promise<PiAiTransportObservation>
   /**
    * Observe one assistant history message degrading to provider-neutral
    * conversion because its stored replay state is unusable by this build.
@@ -173,14 +206,29 @@ function reasoningInfo(
   }
 }
 
-/** Merge deployment headers while removing case-insensitive attribution collisions. */
-function requestHeaders(headers: Readonly<Record<string, string>> | undefined): Record<string, string> {
-  const attribution = attributionHeaders()
-  const reserved = new Set(Object.keys(attribution).map(name => name.toLowerCase()))
-  return {
-    ...Object.fromEntries(Object.entries(headers ?? {}).filter(([name]) => !reserved.has(name.toLowerCase()))),
-    ...attribution,
+/** Merge header sources case-insensitively, with each later source taking ownership. */
+function mergeHeaders(...sources: readonly (ProviderHeaders | undefined)[]): ProviderHeaders {
+  const merged = new Map<string, readonly [name: string, value: string | null]>()
+  for (const source of sources) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      const normalized = name.toLowerCase()
+      merged.delete(normalized)
+      merged.set(normalized, [name, value])
+    }
   }
+  return Object.fromEntries(merged.values())
+}
+
+/** Merge dynamic headers after resolved auth/deployment headers, then enforce Harness attribution. */
+function requestHeaders(headers: ProviderHeaders, dynamic: ProviderHeaders | undefined): ProviderHeaders {
+  return mergeHeaders(headers, dynamic, attributionHeaders())
+}
+
+/** Forward the captured observer result so pi-ai awaits it before body consumption. */
+function responseObserver(
+  added: PiAiTransportObservation['onResponse'] | undefined,
+): SimpleStreamOptions['onResponse'] {
+  return added === undefined ? undefined : response => added(response)
 }
 
 /**
@@ -204,7 +252,9 @@ export class PiAiAdapter extends LlmAdapter {
   private current(): PiAiSnapshot {
     const profiles = this.config.profiles()
     if (this.snapshot?.profiles === profiles) return this.snapshot
-    const models: MutableModels = createModels()
+    const models: MutableModels = createModels(
+      this.config.credentials === undefined ? {} : { credentials: this.config.credentials },
+    )
     for (const profile of profiles.values()) models.setProvider(profile.piProvider)
     this.snapshot = { profiles, models }
     return this.snapshot
@@ -287,14 +337,23 @@ export class PiAiAdapter extends LlmAdapter {
     // snapshot, and the credential freezes with them. A configuration change
     // mid-request builds a separate snapshot, so this request finishes under
     // the one it started with and the next call picks up the new one.
+    const request: PiAiTransportRequest = {
+      provider: options.provider,
+      model: options.model,
+      ...options.sessionId === undefined ? {} : { sessionId: options.sessionId },
+      ...options.turn === undefined ? {} : { turn: options.turn },
+    }
     const snapshot = this.current()
-    const profile = this.profileOf(snapshot, options.provider)
-    const model = this.modelOf(snapshot, options.provider, options.model)
+    const profile = this.profileOf(snapshot, request.provider)
+    const model = this.modelOf(snapshot, request.provider, request.model)
     const reasoning = resolveReasoningLevel(
       model,
       options.reasoningEffort ?? profile.reasoning,
     )
-    const apiKey = await this.config.resolveApiKey(options.provider, profile)
+    const apiKey = await this.config.resolveApiKey(request.provider, profile)
+    const transport = await this.config.prepareTransportRequest?.(request)
+    const transportHeaders = transport?.headers === undefined ? undefined : { ...transport.headers }
+    const transportOnResponse = transport?.onResponse
 
     const consumer = new AbortController()
     const upstream = options.signal === undefined
@@ -313,20 +372,22 @@ export class PiAiAdapter extends LlmAdapter {
         throw new LlmError('pi-ai image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
       }
       const onReplayDegrade = (reason: string): void => {
-        this.config.onReplayDegrade?.({ provider: options.provider, model: options.model, reason })
+        this.config.onReplayDegrade?.({ provider: request.provider, model: request.model, reason })
       }
       const context = attachments === undefined
         ? toPiContext(options, undefined, onReplayDegrade)
         : await toPiContext(options, attachments, onReplayDegrade)
+      const baseOptions = profileOptions(profile, reasoning, apiKey)
+      const onResponse = responseObserver(transportOnResponse)
       const events = snapshot.models.streamSimple(model, context, {
-        ...profileOptions(profile, reasoning, apiKey),
+        ...baseOptions,
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
-        ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
+        ...request.sessionId === undefined ? {} : { sessionId: String(request.sessionId) },
         signal: watchdog.signal,
-        // Profile headers are deployment-owned; attribution names are
-        // Harness-owned and therefore win collisions.
-        headers: requestHeaders(profile.headers),
+        ...profile.headers === undefined ? {} : { headers: profile.headers },
+        transformHeaders: headers => requestHeaders(headers, transportHeaders),
+        ...onResponse === undefined ? {} : { onResponse },
       })
       const iterator = toStreamChunks(events, model.contextWindow)[Symbol.asyncIterator]()
       let exhausted = false

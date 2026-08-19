@@ -64,3 +64,23 @@ describe('modality schema boundary', () => {
     expect(absent.providers['acme-gateway']?.defaultInput).toEqual(['text'])
   })
 })
+
+describe('transport header ownership', () => {
+  it.each([
+    'SeSsIoN-Id',
+    'THREAD-ID',
+    'X-CLIENT-REQUEST-ID',
+    'x-CoDeX-TuRn-StAtE',
+    'User-Agent',
+  ])('rejects case-insensitive static request header %s during serviceability validation', (header) => {
+    const config = routeWith({ headers: { [header]: 'secret-sentinel' } })() as Config
+
+    expect(() => { assertServiceable(config) })
+      .toThrow(new RegExp(`provider "acme-gateway" header "${header}" is request-owned`))
+    try {
+      assertServiceable(config)
+    } catch (error) {
+      expect(String(error)).not.toContain('secret-sentinel')
+    }
+  })
+})

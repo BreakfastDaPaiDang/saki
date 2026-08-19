@@ -489,6 +489,7 @@ export class ReactLoopAgent implements Agent {
       ...header.system !== undefined ? { system: header.system } : {},
       ...header.tools !== undefined ? { tools: header.tools } : {},
       sessionId: this.session.id,
+      turn,
       signal,
     }))
     return { request, ...preparedCall === undefined ? {} : { preparedCall } }

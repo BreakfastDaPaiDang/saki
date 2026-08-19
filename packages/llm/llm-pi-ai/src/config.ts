@@ -120,7 +120,7 @@ export interface PiAiProviderProfile {
    * to answer instead.
    */
   defaultInput?: PiAiModality[]
-  /** Provider request headers; Harness attribution wins reserved names. */
+  /** Provider request headers; request-owned identity, state, and attribution names are rejected. */
   headers?: Record<string, string>
   /** Provider-neutral pi-ai reasoning level. */
   reasoning?: ModelThinkingLevel
@@ -290,6 +290,28 @@ function rejectRemovedFields(provider: string, source: PiAiProviderProfile): voi
   }
 }
 
+const REQUEST_OWNED_HEADERS = new Set([
+  'session-id',
+  'thread-id',
+  'x-client-request-id',
+  'x-codex-turn-state',
+  'user-agent',
+])
+
+/** Reject static values whose owner is the captured request or Harness attribution. */
+function assertStaticHeaderOwnership(
+  provider: string,
+  headers: Readonly<Record<string, string>> | undefined,
+): void {
+  for (const header of Object.keys(headers ?? {})) {
+    if (REQUEST_OWNED_HEADERS.has(header.toLowerCase())) {
+      throw new Error(
+        `llm-pi-ai: provider "${provider}" header "${header}" is request-owned and cannot be configured statically`,
+      )
+    }
+  }
+}
+
 /**
  * Validate profiles and return a detached route-keyed map suitable for
  * per-request reads. This is the one explicit resolve step, so an omitted dict
@@ -308,6 +330,7 @@ export function resolveProfiles(
   const resolved = new Map<string, ResolvedPiAiProviderProfile>()
   for (const [provider, source] of entries) {
     rejectRemovedFields(provider, source)
+    assertStaticHeaderOwnership(provider, source.headers)
     if (provider.length === 0) throw new Error('llm-pi-ai: provider names must be non-empty')
     if (source.baseURL !== undefined && source.baseURL.length === 0) {
       throw new Error(`llm-pi-ai: provider "${provider}" has an empty baseURL`)

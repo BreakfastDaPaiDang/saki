@@ -8,10 +8,12 @@ import type {
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, { createUserMessage, CONTEXT_WINDOW_EXCEEDED_CODE, LlmError, ReasoningEffortId, userAgent } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
+import type { CredentialStore, ProviderHeaders } from '@earendil-works/pi-ai'
 import { resolveProfiles } from '../src/config.ts'
 import { assemble } from './assemble.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
@@ -50,6 +52,23 @@ function adapterOf(
   })
 }
 
+/** Direct local transport route for request-preparation behavior tests. */
+function transportAdapter(
+  baseURL: string,
+  options: Omit<LlmPiAi.PiAiAdapterOptions, 'profiles'>,
+): PiAiAdapter {
+  return new PiAiAdapter({
+    profiles: () => resolveProfiles({
+      'local-gateway': {
+        api: 'openai-completions',
+        baseURL: `${baseURL}/v1`,
+        models: [{ id: 'local-model', contextWindow: 8192, maxTokens: 1024 }],
+      },
+    }),
+    ...options,
+  })
+}
+
 beforeEach(() => {
   // Configuration carries only the reference; these mounts resolve it from
   // the environment, which is the whole credential plane without a seam.
@@ -73,14 +92,115 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.paths).toEqual(['/chat/completions'])
   })
 
-  it('merges profile headers with Harness attribution winning', async () => {
+  it('merges allowed profile headers with Harness attribution', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {
-      headers: { 'x-company': 'private', 'User-Agent': 'wrong' },
+      headers: { 'x-company': 'private' },
     })
     await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
     expect(server.headers[0]?.['x-company']).toBe('private')
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
+  })
+
+  it('prepares one model-hidden transport observation with final header ownership', async () => {
+    const server = await mockServer([
+      { events: textEvents, headers: { 'x-response-marker': 'observed' } },
+      { events: textEvents, headers: { 'x-response-marker': 'observed' } },
+    ])
+    const onResponse = vi.fn(() => undefined)
+    const prepareTransportRequest = vi.fn(() => ({
+      headers: {
+        'x-order': 'dynamic',
+        'x-hook': 'present',
+        'x-codex-turn-state': 'sticky-state',
+        'User-Agent': 'dynamic-wrong',
+      },
+      onResponse,
+    }))
+    const adapter = new PiAiAdapter({
+      profiles: () => resolveProfiles({
+        'local-gateway': {
+          api: 'openai-completions',
+          baseURL: `${server.url}/v1`,
+          headers: {
+            'x-order': 'deployment',
+          },
+          models: [{ id: 'local-model', contextWindow: 8192, maxTokens: 1024 }],
+        },
+      }),
+      resolveApiKey: () => Promise.resolve('test-key'),
+      prepareTransportRequest,
+    })
+
+    const chunks = []
+    for await (const chunk of adapter.stream({
+      provider: 'local-gateway',
+      model: 'local-model',
+      messages: [],
+      sessionId: 'transport-session' as never,
+      turn: 7,
+    })) chunks.push(chunk)
+    for await (const _chunk of adapter.stream({
+      provider: 'local-gateway',
+      model: 'local-model',
+      messages: [],
+    })) { /* drain */ }
+
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    expect(prepareTransportRequest).toHaveBeenCalledTimes(2)
+    expect(prepareTransportRequest).toHaveBeenNthCalledWith(1, {
+      provider: 'local-gateway',
+      model: 'local-model',
+      sessionId: 'transport-session',
+      turn: 7,
+    })
+    expect(prepareTransportRequest).toHaveBeenNthCalledWith(2, {
+      provider: 'local-gateway',
+      model: 'local-model',
+    })
+    expect(server.headers[0]).toMatchObject({
+      'x-order': 'dynamic',
+      'x-hook': 'present',
+      'x-codex-turn-state': 'sticky-state',
+      'user-agent': userAgent(),
+    })
+    expect(server.headers[0]?.['session-id']).toBeUndefined()
+    expect(onResponse).toHaveBeenCalledTimes(2)
+    expect(onResponse).toHaveBeenLastCalledWith({
+      status: 200,
+      headers: expect.objectContaining({ 'x-response-marker': 'observed' }) as unknown,
+    })
+  })
+
+  it('enforces case-insensitive attribution ownership through the Anthropic provider path', async () => {
+    const server = await mockServer([{ status: 400, body: '{"error":{"message":"fixture stop"}}' }])
+    const adapter = new PiAiAdapter({
+      profiles: () => resolveProfiles({
+        'anthropic-gateway': {
+          api: 'anthropic-messages',
+          baseURL: server.url,
+          headers: { 'x-order': 'deployment' },
+          models: [{ id: 'claude-fixture', contextWindow: 8192, maxTokens: 1024 }],
+        },
+      }),
+      resolveApiKey: () => Promise.resolve('sk-ant-oat-fixture'),
+      prepareTransportRequest: () => ({
+        headers: {
+          'User-Agent': 'dynamic-wrong',
+          'X-ORDER': 'dynamic',
+        },
+      }),
+    })
+
+    for await (const _chunk of adapter.stream({
+      provider: 'anthropic-gateway',
+      model: 'claude-fixture',
+      messages: [],
+    })) { /* drain */ }
+
+    expect(server.paths).toEqual(['/v1/messages'])
+    expect(server.headers[0]?.['user-agent']).toBe(userAgent())
+    expect(server.headers[0]?.['x-order']).toBe('dynamic')
   })
 
   it('forwards common stream options and profile reasoning', async () => {
@@ -152,6 +272,201 @@ describe('PiAiAdapter provider routing', () => {
     const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
 
     expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+  })
+
+  it('uses the injected credential store for every immutable profile snapshot', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const credentials: CredentialStore = {
+      read: provider => Promise.resolve(provider === 'stored-route'
+        ? { type: 'api_key', key: 'stored-key' }
+        : undefined),
+      list: () => Promise.resolve([{ providerId: 'stored-route', type: 'api_key' }]),
+      modify: (_provider, update) => update({ type: 'api_key', key: 'stored-key' }),
+      delete: () => Promise.resolve(),
+    }
+    const configured = () => resolveProfiles({
+      'stored-route': {
+        api: 'openai-completions',
+        baseURL: `${server.url}/v1`,
+        models: [{ id: 'stored-model', contextWindow: 8192, maxTokens: 1024 }],
+      },
+    })
+    let profiles = configured()
+    const adapter = new PiAiAdapter({
+      profiles: () => profiles,
+      credentials,
+      resolveApiKey: () => Promise.resolve(undefined),
+    })
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['stored-route'], adapter)
+
+    await assemble(ctx, { provider: 'stored-route', model: 'stored-model', messages: [] })
+    profiles = configured()
+    await assemble(ctx, { provider: 'stored-route', model: 'stored-model', messages: [] })
+
+    expect(server.headers.map(headers => headers.authorization)).toEqual([
+      'Bearer stored-key',
+      'Bearer stored-key',
+    ])
+  })
+
+  it('captures transport additions before asynchronous credential resolution', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const readStarted = Promise.withResolvers<undefined>()
+    const releaseRead = Promise.withResolvers<undefined>()
+    const credentials: CredentialStore = {
+      async read() {
+        readStarted.resolve(undefined)
+        await releaseRead.promise
+        return { type: 'api_key', key: 'stored-key' }
+      },
+      list: () => Promise.resolve([{ providerId: 'stored-route', type: 'api_key' }]),
+      modify: (_provider, update) => update({ type: 'api_key', key: 'stored-key' }),
+      delete: () => Promise.resolve(),
+    }
+    const sharedHeaders: ProviderHeaders = { 'x-captured': 'first' }
+    const adapter = new PiAiAdapter({
+      profiles: () => resolveProfiles({
+        'stored-route': {
+          api: 'openai-completions',
+          baseURL: `${server.url}/v1`,
+          models: [{ id: 'stored-model', contextWindow: 8192, maxTokens: 1024 }],
+        },
+      }),
+      credentials,
+      resolveApiKey: () => Promise.resolve(undefined),
+      prepareTransportRequest: () => ({ headers: sharedHeaders }),
+    })
+
+    const consume = (async () => {
+      for await (const _chunk of adapter.stream({
+        provider: 'stored-route',
+        model: 'stored-model',
+        messages: [],
+      })) { /* drain */ }
+    })()
+    await readStarted.promise
+    sharedHeaders['x-captured'] = 'mutated-after-return'
+    releaseRead.resolve(undefined)
+    await consume
+
+    expect(server.headers[0]?.['x-captured']).toBe('first')
+  })
+
+  it('awaits asynchronous transport preparation exactly once before dispatch', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const prepareTransportRequest = vi.fn(async () => {
+      await Promise.resolve()
+      return { headers: { 'x-async-prepare': 'observed' } }
+    })
+    const adapter = transportAdapter(server.url, {
+      resolveApiKey: () => Promise.resolve('test-key'),
+      prepareTransportRequest,
+    })
+
+    for await (const _chunk of adapter.stream({
+      provider: 'local-gateway',
+      model: 'local-model',
+      messages: [],
+    })) { /* drain */ }
+
+    expect(prepareTransportRequest).toHaveBeenCalledOnce()
+    expect(server.headers[0]?.['x-async-prepare']).toBe('observed')
+  })
+
+  it('propagates an asynchronous transport-preparation rejection before network I/O', async () => {
+    const server = await mockServer([])
+    const failure = new Error('transport-prepare-rejected')
+    const prepareTransportRequest = vi.fn(async () => {
+      await Promise.resolve()
+      throw failure
+    })
+    const adapter = transportAdapter(server.url, {
+      resolveApiKey: () => Promise.resolve('test-key'),
+      prepareTransportRequest,
+    })
+
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.stream({
+        provider: 'local-gateway',
+        model: 'local-model',
+        messages: [],
+      })) { /* drain */ }
+    }
+
+    await expect(consume()).rejects.toBe(failure)
+    expect(prepareTransportRequest).toHaveBeenCalledOnce()
+    expect(server.requests).toEqual([])
+  })
+
+  it('awaits one asynchronous response observation and propagates its rejection', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const onResponse = vi.fn(async () => {
+      await Promise.resolve()
+      throw new Error('response-observer-rejected')
+    })
+    const adapter = transportAdapter(server.url, {
+      resolveApiKey: () => Promise.resolve('test-key'),
+      prepareTransportRequest: () => ({ onResponse }),
+    })
+    const chunks = []
+
+    for await (const chunk of adapter.stream({
+      provider: 'local-gateway',
+      model: 'local-model',
+      messages: [],
+    })) chunks.push(chunk)
+
+    expect(onResponse).toHaveBeenCalledOnce()
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: {
+        kind: 'error',
+        failure: { message: 'response-observer-rejected' },
+      },
+    })
+  })
+
+  it('freezes transport identity before asynchronous credential resolution', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const resolutionStarted = Promise.withResolvers<undefined>()
+    const releaseResolution = Promise.withResolvers<undefined>()
+    const prepareTransportRequest = vi.fn(() => ({ headers: { 'x-identity': 'captured' } }))
+    const adapter = transportAdapter(server.url, {
+      async resolveApiKey() {
+        resolutionStarted.resolve(undefined)
+        await releaseResolution.promise
+        return 'test-key'
+      },
+      prepareTransportRequest,
+    })
+    const options: GenerateOptions = {
+      provider: 'local-gateway',
+      model: 'local-model',
+      messages: [],
+      sessionId: 'original-session' as never,
+      turn: 4,
+    }
+
+    const consume = (async () => {
+      for await (const _chunk of adapter.stream(options)) { /* drain */ }
+    })()
+    await resolutionStarted.promise
+    options.provider = 'mutated-route'
+    options.model = 'mutated-model'
+    options.sessionId = 'mutated-session' as never
+    options.turn = 99
+    releaseResolution.resolve(undefined)
+    await consume
+
+    expect(prepareTransportRequest).toHaveBeenCalledExactlyOnceWith({
+      provider: 'local-gateway',
+      model: 'local-model',
+      sessionId: 'original-session',
+      turn: 4,
+    })
+    expect(server.requests[0]).toMatchObject({ model: 'local-model' })
   })
 
   it('names a route by its displayName, and by its own key once the profiles drop it', () => {
@@ -722,6 +1037,21 @@ describe('provider profile lifecycle', () => {
         .rejects.toThrow(/removed.*agent recovery/i)
     },
   )
+
+  it('rejects request-owned static headers while the plugin loads', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+
+    const error: unknown = await ctx.plugin(LlmPiAi, {
+      providers: {
+        openai: { headers: { 'uSeR-aGeNt': 'secret-sentinel' } },
+      },
+    }).then(() => undefined, (reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(Error)
+    expect(String(error)).toMatch(/provider "openai" header "uSeR-aGeNt" is request-owned/)
+    expect(String(error)).not.toContain('secret-sentinel')
+  })
 
   it('rejects invalid stream tunables at plugin load', async () => {
     const invalid = [

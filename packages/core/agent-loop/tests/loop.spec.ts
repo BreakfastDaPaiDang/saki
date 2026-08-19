@@ -199,6 +199,7 @@ describe('agent loop', () => {
     const adapter = new MockAdapter([
       toolCallResponse('c1', 'echo', { text: 'ping' }, 'calling echo'),
       textResponse('done'),
+      textResponse('next turn'),
     ])
     const ctx = await harness(adapter)
     ctx.tools.register(defineContentToolFixture({
@@ -213,9 +214,12 @@ describe('agent loop', () => {
 
     send(agent, 'use the tool')
     await waitForIdle(ctx, agent)
+    send(agent, 'continue')
+    await waitForIdle(ctx, agent)
 
-    // two model calls happened (tool-call step, then final step)
-    expect(adapter.requests).toHaveLength(2)
+    // Tool-call steps share one turn; the next durable turn advances.
+    expect(adapter.requests).toHaveLength(3)
+    expect(adapter.requests.map(request => request.turn)).toEqual([1, 1, 2])
 
     // the second request's derived history contains the tool result
     const secondMessages = adapter.requests[1]!.messages

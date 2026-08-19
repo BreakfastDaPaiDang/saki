@@ -369,6 +369,12 @@ export interface GenerateOptions {
    */
   sessionId?: Branded<'SessionId'>
   /**
+   * Model-hidden Session-local turn identity stamped by the agent loop. The
+   * value is reconstructable from durable turn boundaries; auxiliary requests
+   * that do not run inside a conversation turn may omit it.
+   */
+  turn?: number
+  /**
    * Provider-neutral classification for an auxiliary model call. Adapters may
    * map the purpose to model-hidden transport metadata or purpose-specific
    * generation policy. Ordinary conversation requests leave it unset.

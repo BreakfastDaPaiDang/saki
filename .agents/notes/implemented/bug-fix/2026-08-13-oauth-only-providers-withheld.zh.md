@@ -8,7 +8,7 @@ Status: implemented
 
 模型设置页把 `openai-codex` 当作普通 pi-ai 路由提供出来，配的还是每个 pi-ai 提供方共用的那句占位文案：填入 API 密钥，或留空使用环境认证。照此配置后发送消息，本轮以 `Provider is not configured: openai-codex` 失败，并被适配器归入兜底的 `PI_AI_ERROR`。
 
-占位文案所邀请的那种配置姿态在这条路由上不可能工作。pi-ai 的 `resolveProviderAuth` 抵达 OAuth 提供方只有一条路径——集合的 `CredentialStore` 里已经存着的凭据——对它没有任何 ambient 回退；而 `openai-codex` 正是已安装 catalog 中唯一只声明 `auth.oauth`、没有 `auth.apiKey` 的提供方。`PiAiAdapter.current()` 以不带参数的 `createModels()` 构造集合，于是用的是 pi-ai 默认的 `InMemoryCredentialStore`：每次启动都是空的，每次配置变更产生新快照时又重建一份。本仓库没有任何位置调用 `Models.login()`；pi-ai 库这一半也不会去读 Codex 自己的 `~/.codex/auth.json`——它的 OAuth 模块是一套 PKCE 登录流程，凭据由*宿主*应用持久化，这正是 pi CLI 提供、而本适配器没有提供的东西。
+占位文案所邀请的那种配置姿态在这条路由上不可能工作。pi-ai 的 `resolveProviderAuth` 抵达 OAuth 提供方只有一条路径——集合的 `CredentialStore` 里已经存着的凭据——对它没有任何 ambient 回退；而 `openai-codex` 正是已安装 catalog 中唯一只声明 `auth.oauth`、没有 `auth.apiKey` 的提供方。`PiAiAdapter` 接受由构造方持有的可选存储，并将其绑定到每个不可变集合，但已交付的可配置提供方插件不提供该存储，因此 pi-ai 会使用一份新的空 `InMemoryCredentialStore`。该插件没有任何位置调用 `Models.login()`；pi-ai 库这一半也不会去读 Codex 自己的 `~/.codex/auth.json`——它的 OAuth 模块是一套 PKCE 登录流程，凭据由*宿主*应用持久化，这正是 pi CLI 提供、而通用插件没有提供的东西。
 
 于是页面用自己占位文案所描述的「留空」姿态，提供了一个根本没有「留空」姿态的提供方——而失败信息指向的是配置键，不是缺失的能力。唯一能让这条路由完成认证的，是把一个 ChatGPT OAuth token 粘进密钥框，那既不是这个提供所描述的用法，也会过期且这里没有任何环节会去刷新它。
 
@@ -16,7 +16,7 @@ Status: implemented
 
 目录只提供本适配器认得的东西。`catalogProviderTakesApiKey(provider)` 回答 pi-ai 为某路由安装的提供方是否声明了 api-key 方法——这是 harness 唯一能供给的方法，因为它通过自己的凭据 seam 解析密钥，再作为请求的 `apiKey` 覆盖交给 pi-ai——`directoryEntries()` 跳过不满足它的 catalog 路由。
 
-不尝试实现 OAuth。它需要持久化凭据存储、登录流程，以及运行登录的界面；这三样都不是发布阻塞项的修复，而在它们缺席时仍把提供方摆出来，正是这次报告的成因。
+可配置提供方插件不尝试 OAuth 授权。它需要持久化凭据存储、登录流程，以及运行登录的界面；三者都不属于这项通用 settings 提供，而在它们缺席时仍把提供方摆出来，正是这次报告的成因。专用 `PiAiAdapter` 所有者可以同时提供存储与自己的授权生命周期，而无需改变这项目录决策。
 
 两条边界把「不提供」的范围收窄：
 

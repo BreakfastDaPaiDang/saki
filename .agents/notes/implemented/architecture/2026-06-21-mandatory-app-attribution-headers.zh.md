@@ -20,7 +20,7 @@ LLM（大语言模型）提供方请求应当标识发出请求的产品。这�
 - **`From` 是标准的，但不适合作为强制默认值。** RFC 9110 第 10.1.2 节将 `From` 定义为负责用户代理的人的电子邮件地址。机器人代理应当发送它以便服务器联系运营者，但非机器人代理出于隐私和安全策略考虑不应在未经用户显式配置的情况下发送。harness 可以后续支持运营者联系方式，但不得凭空捏造或全局强制要求。
 - **请求体中的 `user` 或 `metadata` 字段不是应用归属。** 部分模型 API 暴露稳定的终端用户标识符、请求元数据、标签或项目/账户头部。这些对滥用监控、内部计费、仪表盘或链路追踪有用，但它们要么标识的是终端用户而非产品，要么是提供方特有的 body schema，要么不保证能通过 OpenAI 兼容网关透传。它们不能替代静态的应用身份头部。
 - **SDK 遥测头部标识的是 SDK，而非应用。** 官方和第三方 SDK 常发送库/版本头部。这些帮助 SDK 维护者调试其客户端，但除非应用显式提供产品归属层，否则它们不能标识 harness 作为应用。
-- **pi-ai 有原生支持的头部钩子。** `@earendil-works/pi-ai` 的 `StreamOptions.headers` 将调用方头部最后合并（覆盖提供方默认值），因此基于库的适配器无需包装或上游改动即可满足与手写适配器相同的线路约定。mock 服务器测试套件对两个适配器都断言头部到达了线路。
+- **pi-ai 原生支持头部转换，但最终线路仍由 carrier 决定。** `@earendil-works/pi-ai` 的 `Models.streamSimple` 会在解析认证与部署头部之后应用 `transformHeaders`，因此基于库的适配器可以在通用 carrier 上强制归属。carrier 仍可能在之后改写转换结果；当前 Codex carrier 就会如此，因此生产采用必须等待上游修正，不能把适配器层转换当作最终线路证据。
 
 ## 决策
 
@@ -54,7 +54,7 @@ OpenRouter 应用归属刻意未实现。`HTTP-Referer`、`X-OpenRouter-Title`�
 - `dsh-llm` 为 `LlmAdapter` 作者文档化了强制的 `User-Agent` 归属约定（`LlmAdapter` JSDoc、包 README，以及 `docs/subsystems/llm-streaming.md` 的适配器约定（adapter contract）章节）。
 - 共享辅助函数（`attributionHeaders` / `userAgent`）从包元数据构建应用身份和标准 `User-Agent` 值，适配器无需手动复制版本常量。
 - `dsh-llm-deepseek` 在每个请求上发送共享的 `User-Agent`，其 mock 服务器套件断言精确值。
-- `dsh-llm-pi-ai` 通过 pi-ai 的 `StreamOptions.headers` 钩子发送相同的 `User-Agent`，其 mock 服务器套件断言精确值。
+- `dsh-llm-pi-ai` 通过 pi-ai 的 `transformHeaders` 强制相同的 `User-Agent`，通用提供方 mock 服务器套件会断言精确线路值。当前 Codex carrier 不会被声称为符合约定，并且在上游正式版本保留该值、通过精确线路验证之前不得用于生产。
 - 本决策下没有适配器发送 OpenRouter 特有的归属头部（`HTTP-Referer`、`X-OpenRouter-Title`、`X-Title`、`X-OpenRouter-Categories`）。
 - 没有应用归属字段携带机密、本地路径、会话 id、提示词文本、模型输出、用户邮箱或逐用户的稳定标识符。
 - 适配器 README 声明了 `User-Agent` 归属策略，并明确避免将 OpenRouter 应用归属记录为已实现的行为。
@@ -77,6 +77,6 @@ OpenRouter 应用归属刻意未实现。`HTTP-Referer`、`X-OpenRouter-Title`�
 
 **提供方看到流量来自 harness。** 这正是目的，但意味着此前混在通用 SDK 流量中的部署变得可识别。缓解措施：仅发送静态公开产品数据，并允许 fork/白标部署传入自己的 `AppIdentity`。
 
-**不同客户端库的头部支持有差异。** 手写适配器直接设置头部；基于 pi-ai 的适配器依赖 pi-ai 继续尊重 `StreamOptions.headers`（最后合并覆盖提供方默认值）。线路级 mock 服务器测试是守卫：如果 pi-ai 升级后不再投递该头部，套件会变红。这对抽象施加了有益的压力：一个无法设置强制头部的提供方适配器不能完整实现 harness 的 LLM 约定。
+**不同客户端库与 carrier 的头部支持有差异。** 手写适配器直接设置头部；基于 pi-ai 的适配器依赖 `Models.streamSimple` 在解析认证与部署头部之后继续应用 `transformHeaders`，也依赖所选 carrier 保留结果。通用线路测试守卫适配器路径。会改写该值的 carrier 必须继续阻塞，直到上游正式版本与精确线路 fixture 证明其符合约定；当前 Codex carrier 是已知实例。这对抽象施加了有益的压力：无法保留强制头部的提供方路径不能完整实现 Harness LLM 约定。
 
 **OpenRouter 排名尚未受益。** `User-Agent` 是提供方无关的 HTTP 身份的正确基线，但它不会创建 OpenRouter 应用页面或排名，因为 OpenRouter 要求 `HTTP-Referer` 来实现该产品功能。这是有意为之：公开应用市场参与是一个独立的产品决策，不是强制请求归属的前提。
