@@ -67,6 +67,17 @@
   margin-bottom: var(--sp-space-6);
 }
 
+.attentionGroup {
+  margin-bottom: var(--sp-space-3);
+}
+
+.attentionKind {
+  margin: 0 0 var(--sp-space-2);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sp-text-faint);
+}
+
 .attention-urgent {
   border-color: rgba(224, 108, 117, 0.45);
 }
@@ -270,6 +281,26 @@
   margin: 0;
   font-size: 12px;
   color: var(--sp-text-faint);
+}
+
+.statusConflict,
+.statusReconcile {
+  margin: 0;
+  padding: var(--sp-space-3) var(--sp-space-4);
+  border-radius: var(--sp-radius-m);
+  font-size: 13px;
+}
+
+.statusConflict {
+  color: var(--sp-danger);
+  background: var(--sp-danger-soft);
+  border: 1px solid rgba(224, 108, 117, 0.4);
+}
+
+.statusReconcile {
+  color: var(--sp-warn);
+  background: var(--sp-warn-soft);
+  border: 1px solid rgba(217, 161, 59, 0.4);
 }
 
 @media (max-width: 720px) {

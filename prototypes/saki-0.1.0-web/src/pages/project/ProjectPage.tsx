@@ -30,7 +30,7 @@ export function ProjectPage(props: { address: SakiViewAddress & { projectId: str
         <div className={styles.headerLeft}>
           <h1 className={styles.title}>
             项目 <span className={styles.titleSep}>/</span>
-            <ProjectSwitcher current={address.projectId} projects={projects?.data ?? []} />
+            <ProjectSwitcher current={address.projectId} section={section} projects={projects?.data ?? []} />
           </h1>
           <div className={styles.headerStates}>
             {project ? (
@@ -53,7 +53,7 @@ export function ProjectPage(props: { address: SakiViewAddress & { projectId: str
             ) : null}
           </div>
         </div>
-        <NewWorkItemButton projectId={address.projectId} />
+        {/* 新建入口唯一归属「工作」页的「提交需求」；项目页不保留第二入口。 */}
       </header>
 
       <nav className={styles.tabs} role="tablist" aria-label="项目内部区段">
@@ -83,14 +83,14 @@ export function ProjectPage(props: { address: SakiViewAddress & { projectId: str
   )
 }
 
-function ProjectSwitcher(props: { current: string; projects: ProjectIndexEntry[] }) {
+function ProjectSwitcher(props: { current: string; section: ProjectSection; projects: ProjectIndexEntry[] }) {
   const current = props.projects.find((p) => p.projectId === props.current)
   return (
     <select
       className={styles.switcher}
       aria-label="切换 Development Project"
       value={props.current}
-      onChange={(e) => navigate({ kind: 'work', projectId: e.target.value })}
+      onChange={(e) => navigate(projectAddress(e.target.value, props.section))}
     >
       {!current ? <option value={props.current}>{props.current}</option> : null}
       {props.projects.map((p) => (
@@ -99,53 +99,6 @@ function ProjectSwitcher(props: { current: string; projects: ProjectIndexEntry[]
         </option>
       ))}
     </select>
-  )
-}
-
-function NewWorkItemButton(props: { projectId: string }) {
-  const [open, setOpen] = useState(false)
-  const [title, setTitle] = useState('')
-  const [body, setBody] = useState('')
-  const [pending, setPending] = useState(false)
-  const { submit } = useSubmitIntent()
-
-  const doSubmit = async () => {
-    setPending(true)
-    await submit({ kind: 'create-work-item', projectId: props.projectId, title, body }, 0)
-    setPending(false)
-    setOpen(false)
-  }
-
-  return (
-    <>
-      <Button variant="primary" onClick={() => setOpen(true)}>新建工作项</Button>
-      {open ? (
-        <Dialog
-          title="新建工作项"
-          onClose={() => setOpen(false)}
-          footer={
-            <>
-              <Button onClick={() => setOpen(false)} disabled={pending}>取消</Button>
-              <Button variant="primary" onClick={doSubmit} disabled={pending || !title.trim()}>
-                {pending ? '创建中…' : '创建'}
-              </Button>
-            </>
-          }
-        >
-          <div className={styles.newItemForm}>
-            <p className={styles.newItemNote}>会同时创建 GitHub Issue、加入所选 Project 并设置为 Inbox；部分失败会显示已完成事实和恢复操作。</p>
-            <label className={styles.field}>
-              标题
-              <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} />
-            </label>
-            <label className={styles.field}>
-              正文（可选）
-              <textarea className={styles.textarea} rows={3} value={body} onChange={(e) => setBody(e.target.value)} />
-            </label>
-          </div>
-        </Dialog>
-      ) : null}
-    </>
   )
 }
 
@@ -166,10 +119,13 @@ const columnTitles: Record<WorkItemStatus, string> = {
 function BoardSection(props: { address: SakiViewAddress & { kind: 'work'; projectId: string } }) {
   const { address } = props
   const { envelope, refreshing } = useProjection<BoardProjection>(`board:${address.projectId}`)
+  const { envelope: milestones } = useProjection<{ milestoneId: string; title: string }[]>(`milestones:${address.projectId}`)
   const { submit } = useSubmitIntent()
   const [optimistic, setOptimistic] = useState<{ workItemId: string; target: WorkItemStatus; receiptId: string } | null>(null)
   const [conflict, setConflict] = useState<{ workItemId: string; message: string } | null>(null)
   const [moveMenuCard, setMoveMenuCard] = useState<BoardCard | null>(null)
+  // Narrow viewports show one status column at a time (状态 selector below).
+  const [narrowColumn, setNarrowColumn] = useState<WorkItemStatus | null>(null)
   const liveRef = useRef<HTMLDivElement>(null)
 
   const announce = (text: string) => {
@@ -192,7 +148,7 @@ function BoardSection(props: { address: SakiViewAddress & { kind: 'work'; projec
       announce(`正在把「${card.title}」移动到 ${columnTitles[target]}，等待 GitHub 确认`)
       const receipt = await submit(
         { kind: 'move-work-item', workItemId: card.workItemId, targetStatus: target, expectedRemoteFingerprint: card.remoteFingerprint },
-        envelope.revision,
+        { expectedRevision: envelope.revision, subject: `board:${address.projectId}` },
       )
       setOptimistic(null)
       if (receipt.outcome?.type === 'conflict') {
@@ -202,7 +158,7 @@ function BoardSection(props: { address: SakiViewAddress & { kind: 'work'; projec
         announce(`已确认：「${card.title}」现在在 ${columnTitles[target]}`)
       }
     },
-    [envelope, submit],
+    [envelope, submit, address.projectId],
   )
 
   if (!envelope) {
@@ -211,6 +167,39 @@ function BoardSection(props: { address: SakiViewAddress & { kind: 'work'; projec
 
   const board = envelope.data
   const repair = board.mappingHealth === 'repair-required'
+  const milestoneFilter = address.board?.milestoneId ?? null
+  // Filter options come from the Milestone projection (scope authority), not
+  // only from milestones currently visible on cards — filtering to a milestone
+  // with no open cards is the filtered-empty case.
+  const milestoneOptions = [
+    ...new Set([
+      ...(milestones?.data.map((m) => m.title) ?? []),
+      ...board.columns.flatMap((c) => c.cards.map((card) => card.milestone).filter((m): m is string => m !== null)),
+    ]),
+  ]
+
+  // The displayed board derives from the confirmed snapshot plus the
+  // optimistic overlay: a pending move removes the card from its source
+  // column AND inserts it into the target column, marked 等待确认. A conflict
+  // discards the overlay and restores the confirmed snapshot.
+  const displayColumns = optimistic
+    ? (() => {
+        const movedCard = board.columns.flatMap((c) => c.cards).find((c) => c.workItemId === optimistic.workItemId)
+        if (!movedCard) return board.columns
+        const overlaid = { ...movedCard, status: optimistic.target }
+        return board.columns.map((c) => ({
+          ...c,
+          cards: c.status === optimistic.target ? [...c.cards, overlaid] : c.cards.filter((x) => x.workItemId !== optimistic.workItemId),
+        }))
+      })()
+    : board.columns
+
+  // The milestone filter lives in the typed address and narrows, never
+  // rewrites, the confirmed columns.
+  const filteredColumns = milestoneFilter
+    ? displayColumns.map((c) => ({ ...c, cards: c.cards.filter((card) => card.milestone === milestoneFilter) }))
+    : displayColumns
+  const filteredEmpty = milestoneFilter !== null && filteredColumns.every((c) => c.cards.length === 0) && !board.columns.every((c) => c.cards.length === 0)
 
   return (
     <div className={styles.board}>
@@ -219,26 +208,67 @@ function BoardSection(props: { address: SakiViewAddress & { kind: 'work'; projec
           已确认扫描 · generation {board.checkpoint.generation} · {board.checkpoint.confirmedAt}
         </span>
         {refreshing ? <span className={styles.boardRefreshing}><Spinner label="正在刷新" /> 正在刷新</span> : null}
-        {board.freshness === 'offline' ? <StateBadge condition={{ kind: 'offline', source: 'GitHub 不可达：显示 08:12 的已确认缓存，不会伪造远端写入' }} compact /> : null}
+        {board.freshness === 'offline' ? <StateBadge condition={{ kind: 'offline', source: 'GitHub 不可达：显示 08:12 的已确认缓存，不会伪造远端写入' }} /> : null}
+        {board.freshness === 'offline' ? <StateBadge condition={{ kind: 'unavailable', capability: '看板写入', reason: 'GitHub 不可达' }} /> : null}
         {board.freshness === 'stale' ? <StateBadge condition={{ kind: 'stale', confirmedAt: board.checkpoint.confirmedAt, source: '后台项目每 5 分钟轮询' }} compact /> : null}
         {board.checkpoint.complete === false ? <StateBadge condition={{ kind: 'empty', reason: 'not-scanned' }} compact /> : null}
         {repair ? <StateBadge condition={{ kind: 'repair-required', detail: board.mappingRepairDetail ?? '' }} compact /> : null}
-        {repair ? <RepairMappingButton projectId={address.projectId} /> : null}
+        {repair ? <RepairMappingButton projectId={address.projectId} revision={envelope.revision} /> : null}
+        {milestoneOptions.length > 0 ? (
+          <label className={styles.filterLabel}>
+            里程碑筛选
+            <select
+              className={styles.filterSelect}
+              value={milestoneFilter ?? ''}
+              onChange={(e) => navigate({ ...address, board: e.target.value ? { milestoneId: e.target.value } : undefined })}
+              aria-label="按里程碑筛选看板"
+            >
+              <option value="">全部</option>
+              {milestoneOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
 
       <div ref={liveRef} className="sp-sr-only" aria-live="polite" />
 
-      {board.columns.every((c) => c.cards.length === 0) ? (
+      {filteredEmpty ? (
+        <div className={styles.emptyBoard}>
+          <p>当前筛选「{milestoneFilter}」下没有任何工作项。</p>
+          <p className={styles.emptyBoardSub}>这是筛选结果为空，不是看板为空。清除筛选即可看到全部。</p>
+          <Button onClick={() => navigate({ ...address, board: undefined })}>清除筛选</Button>
+        </div>
+      ) : board.columns.every((c) => c.cards.length === 0) ? (
         <div className={styles.emptyBoard}>
           <p>{board.checkpoint.complete === false ? '首次扫描尚未完成，看板会在扫描确认后填充。' : '这个看板现在没有任何工作项。'}</p>
-          <p className={styles.emptyBoardSub}>可以从右上角「新建工作项」开始。</p>
+          <p className={styles.emptyBoardSub}>可以从「工作」页的「提交需求」创建第一项。</p>
         </div>
       ) : (
         <div className={styles.columns} aria-label="看板列">
-          {board.columns.map((column) => (
+          <div className={styles.columnSelector} role="tablist" aria-label="选择看板列（窄屏）">
+            {filteredColumns.map((column) => (
+              <button
+                key={column.status}
+                type="button"
+                role="tab"
+                aria-selected={(narrowColumn ?? filteredColumns.find((c) => c.cards.length)?.status) === column.status}
+                className={styles.columnSelectorButton}
+                onClick={() => setNarrowColumn(column.status)}
+              >
+                {columnTitles[column.status]} {column.cards.length}
+              </button>
+            ))}
+          </div>
+          {filteredColumns.map((column) => {
+            const activeNarrow = narrowColumn ?? filteredColumns.find((c) => c.cards.length)?.status ?? null
+            return (
             <section
               key={column.status}
-              className={styles.column}
+              className={[styles.column, column.status !== activeNarrow ? styles.columnNarrowHidden : ''].join(' ')}
               aria-label={`${columnTitles[column.status]}，${column.cards.length} 项`}
               onDragOver={(e) => {
                 if (e.dataTransfer.types.includes('text/saki-work-item')) e.preventDefault()
@@ -258,15 +288,13 @@ function BoardSection(props: { address: SakiViewAddress & { kind: 'work'; projec
               <ul className={styles.columnCards}>
                 {column.cards.map((card) => {
                   const isOptimistic = optimistic?.workItemId === card.workItemId
-                  const shownStatus = isOptimistic ? optimistic.target : card.status
-                  if (isOptimistic && shownStatus !== column.status) return null
                   return (
                     <BoardCardView
                       key={card.workItemId}
                       card={card}
                       optimistic={isOptimistic}
                       conflict={conflict?.workItemId === card.workItemId ? conflict.message : null}
-                      readOnly={repair || board.freshness === 'offline'}
+                      readOnly={repair || board.freshness === 'offline' || isOptimistic}
                       onOpen={() => navigate({ ...address, workItemId: card.workItemId })}
                       onMoveMenu={() => setMoveMenuCard(card)}
                       onKeyboardMove={(target) => doMove(card, target)}
@@ -275,7 +303,8 @@ function BoardSection(props: { address: SakiViewAddress & { kind: 'work'; projec
                 })}
               </ul>
             </section>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -295,7 +324,7 @@ function BoardSection(props: { address: SakiViewAddress & { kind: 'work'; projec
   )
 }
 
-function RepairMappingButton(props: { projectId: string }) {
+function RepairMappingButton(props: { projectId: string; revision: number }) {
   const { submit } = useSubmitIntent()
   const [pending, setPending] = useState(false)
   return (
@@ -304,7 +333,7 @@ function RepairMappingButton(props: { projectId: string }) {
       disabled={pending}
       onClick={async () => {
         setPending(true)
-        await submit({ kind: 'repair-mapping', projectId: props.projectId }, 0)
+        await submit({ kind: 'repair-mapping', projectId: props.projectId }, { expectedRevision: props.revision, subject: `board:${props.projectId}` })
         setPending(false)
       }}
     >
@@ -441,6 +470,23 @@ function WorkItemDrawer(props: { workItemId: string; address: SakiViewAddress & 
       if (event.key === 'Escape') {
         event.stopPropagation()
         closeRef.current()
+        return
+      }
+      // Tab containment: keep focus cycling inside the drawer.
+      const panel = asideRef.current
+      if (event.key !== 'Tab' || !panel) return
+      const items = [...panel.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select, textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      )].filter((el) => el.offsetParent !== null)
+      if (!items.length) return
+      const firstItem = items[0]
+      const lastItem = items[items.length - 1]
+      if (event.shiftKey && document.activeElement === firstItem) {
+        event.preventDefault()
+        lastItem.focus()
+      } else if (!event.shiftKey && document.activeElement === lastItem) {
+        event.preventDefault()
+        firstItem.focus()
       }
     }
     document.addEventListener('keydown', onKeyDown, true)
@@ -510,29 +556,62 @@ function WorkItemDrawer(props: { workItemId: string; address: SakiViewAddress & 
             </section>
 
             {detail.interventions.some((iv) => iv.status === 'open') ? (
-              <section aria-label="等待回答" className={styles.drawerIntervention}>
-                <h3 className={styles.drawerSectionTitle}>等待你回答</h3>
+              <section aria-label="等待处理" className={styles.drawerIntervention}>
+                <h3 className={styles.drawerSectionTitle}>等待你处理</h3>
                 {detail.interventions
                   .filter((iv) => iv.status === 'open')
                   .map((iv) => (
                     <div key={iv.interventionId}>
                       <p className={styles.drawerText}>{iv.question}</p>
-                      <label className={styles.field}>
-                        你的回答
-                        <textarea className={styles.textarea} rows={3} value={answer} onChange={(e) => setAnswer(e.target.value)} />
-                      </label>
-                      <Button
-                        variant="primary"
-                        disabled={!answer.trim() || pending}
-                        onClick={async () => {
-                          setPending(true)
-                          const receipt = await submit({ kind: 'answer-intervention', interventionId: iv.interventionId, response: answer }, envelope?.revision ?? 0)
-                          setPending(false)
-                          if (receipt.outcome?.type === 'confirmed') setAnswer('')
-                        }}
-                      >
-                        {pending ? '提交中…' : '提交回答'}
-                      </Button>
+                      {iv.kind === 'clarification' ? (
+                        <>
+                          <label className={styles.field}>
+                            你的回答
+                            <textarea className={styles.textarea} rows={3} value={answer} onChange={(e) => setAnswer(e.target.value)} />
+                          </label>
+                          <Button
+                            variant="primary"
+                            disabled={!answer.trim() || pending}
+                            onClick={async () => {
+                              setPending(true)
+                              const receipt = await submit(
+                                { kind: 'answer-intervention', interventionId: iv.interventionId, response: { kind: 'text', text: answer } },
+                                { expectedRevision: envelope?.revision ?? 0, subject: `work-item:${props.workItemId}` },
+                              )
+                              setPending(false)
+                              if (receipt.outcome?.type === 'confirmed') setAnswer('')
+                            }}
+                          >
+                            {pending ? '提交中…' : '提交回答'}
+                          </Button>
+                        </>
+                      ) : null}
+                      {iv.kind === 'approval' ? (
+                        <div className={styles.drawerApprovalRow}>
+                          {(['approve', 'reject'] as const).map((decision) => (
+                            <Button
+                              key={decision}
+                              variant={decision === 'approve' ? 'primary' : 'danger'}
+                              disabled={pending}
+                              onClick={async () => {
+                                setPending(true)
+                                await submit(
+                                  { kind: 'answer-intervention', interventionId: iv.interventionId, response: { kind: 'decision', decision } },
+                                  { expectedRevision: envelope?.revision ?? 0, subject: `work-item:${props.workItemId}` },
+                                )
+                                setPending(false)
+                              }}
+                            >
+                              {decision === 'approve' ? '批准' : '拒绝'}
+                            </Button>
+                          ))}
+                        </div>
+                      ) : null}
+                      {iv.kind === 'repair-link' ? (
+                        <Button variant="danger" onClick={() => navigate({ kind: 'project-settings', projectId: detail.projectId })}>
+                          去修复（项目设置）
+                        </Button>
+                      ) : null}
                       <p className={styles.drawerNote}>回答是一条针对 expected revision 的 Control Intent；第一个有效回答胜出，关闭通知不代表回答。</p>
                     </div>
                   ))}
@@ -559,7 +638,7 @@ function WorkItemDrawer(props: { workItemId: string; address: SakiViewAddress & 
                   disabled={pending}
                   onClick={async () => {
                     setPending(true)
-                    await submit(detail.offer!.intent, envelope?.revision ?? 0)
+                    await submit(detail.offer!.intent, { expectedRevision: envelope?.revision ?? 0, subject: `work-item:${props.workItemId}` })
                     setPending(false)
                   }}
                 >

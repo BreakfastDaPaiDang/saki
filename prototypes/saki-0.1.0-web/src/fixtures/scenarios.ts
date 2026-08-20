@@ -11,11 +11,13 @@ import {
   baseMilestones,
   baseModelSupply,
   baseMyWork,
+  baseProjectConfig,
   baseProjects,
   baseSessions,
   baseWorkItemDetail,
   baseWorkspace,
   installDefaultHandlers,
+  websiteBoard,
 } from './shared'
 
 /**
@@ -50,12 +52,7 @@ function installBase(engine: FixtureControlPlane): void {
     activeOperations: [],
   })
   engine.define(`board:${PROJECT_SAKI}`, baseBoard())
-  engine.define(`board:${PROJECT_WEB}`, {
-    ...baseBoard(),
-    projectId: PROJECT_WEB,
-    checkpoint: { generation: 6, confirmedAt: '08:47', complete: true },
-    freshness: 'stale',
-  })
+  engine.define(`board:${PROJECT_WEB}`, websiteBoard())
   engine.define('work-item:wi-123', baseWorkItemDetail())
   engine.define(`changes:${PROJECT_SAKI}`, baseChanges())
   engine.define(`changes:${PROJECT_WEB}`, { ...baseChanges(), projectId: PROJECT_WEB, branch: 'main', staged: [], unstaged: [], untracked: [], inheritedNotice: null })
@@ -64,6 +61,8 @@ function installBase(engine: FixtureControlPlane): void {
   engine.define('attention', baseAttention())
   engine.define(`automation:${PROJECT_SAKI}`, baseAutomation())
   engine.define(`automation:${PROJECT_WEB}`, { ...baseAutomation(), projectId: PROJECT_WEB })
+  engine.define(`project-config:${PROJECT_SAKI}`, baseProjectConfig(PROJECT_SAKI))
+  engine.define(`project-config:${PROJECT_WEB}`, baseProjectConfig(PROJECT_WEB))
   engine.define(`milestones:${PROJECT_SAKI}`, baseMilestones())
   engine.define(`milestones:${PROJECT_WEB}`, [])
   engine.define('model-supply', baseModelSupply())
@@ -111,6 +110,7 @@ export const scenarios: ScenarioDef[] = [
       engine.define('changes:proj-registered', { ...baseChanges(), projectId: 'proj-registered', branch: 'master', staged: [], unstaged: [], untracked: [], inheritedNotice: null })
       engine.define('sessions:proj-registered', { projectId: 'proj-registered', sessions: [], selected: null })
       engine.define('automation:proj-registered', { ...baseAutomation(), projectId: 'proj-registered' })
+      engine.define('project-config:proj-registered', baseProjectConfig('proj-registered'))
       engine.define('milestones:proj-registered', [])
     },
   },
@@ -125,6 +125,7 @@ export const scenarios: ScenarioDef[] = [
       engine.define(`automation:${PROJECT_SAKI}`, {
         ...baseAutomation(),
         enabled: true,
+        triggerMode: 'auto',
       })
       engine.define('my-work', {
         ...baseMyWork(),
@@ -200,6 +201,7 @@ export const scenarios: ScenarioDef[] = [
       engine.define(`automation:${PROJECT_SAKI}`, {
         ...baseAutomation(),
         enabled: true,
+        triggerMode: 'auto' as const,
         paused: true,
         pauseReason: '模型请求 / 天 已达到 200 上限；提供方额度观察未知，policy 选择 pause-on-unknown',
         limits: baseAutomation().limits.map((l) => (l.dimension === '模型请求 / 天' ? { ...l, used: '200' } : l)),
@@ -217,6 +219,7 @@ export const scenarios: ScenarioDef[] = [
           detail: '授权一次性预算例外，或等待额度周期重置',
           age: '12 分钟前',
           interventionId: 'iv-budget',
+          interventionKind: 'approval' as const,
           question: '模型请求 / 天 已达上限。要授权一次性预算例外（24 小时）还是保持暂停？',
           returnAddress: { kind: 'project-settings', projectId: PROJECT_SAKI },
         },
@@ -255,6 +258,7 @@ export const scenarios: ScenarioDef[] = [
           detail: '推送 operation 的 acknowledgement 丢失；inspection 无法证明成功或失败',
           age: '3 分钟前',
           interventionId: null,
+          interventionKind: null,
           question: null,
           returnAddress: { kind: 'sessions', projectId: PROJECT_SAKI, workSessionId: 'ws-2298' },
         },
@@ -279,6 +283,72 @@ export const scenarios: ScenarioDef[] = [
       })
       engine.define('my-work', { principalName: '你', items: [] })
       engine.define('attention', [])
+    },
+  },
+  {
+    id: 'create-item-outcomes',
+    title: '新建工作项 · 部分失败与结果不明',
+    summary: 'CreateWorkItem 的非快乐路径：第一次提交只完成一半（Issue 已创建但未加入 Project，给出修复动作）；第二次提交 acknowledgement 丢失，对账检查后安全重试，绝不盲目重复创建。',
+    demonstrates: ['CreateWorkItem partial GitHub result', 'acknowledgement lost → reconciliation', '修复 / 对账后安全重试', '未收敛不关窗'],
+    startAddress: { kind: 'my-work' },
+    install: (engine) => {
+      installBase(engine)
+      // Outcome scripting is driven by the submitted title so the checklist
+      // stays readable: “见证” → partial first; “合规” → ack lost first; any
+      // repeat of an already-created title confirms idempotently.
+      const partialDone = new Set<string>()
+      const ackLostDone = new Set<string>()
+      const createdTitles = new Set<string>()
+      engine.onIntent('create-work-item', (intent, api) => {
+        if (intent.kind !== 'create-work-item') return { type: 'failed' as const, message: 'intent 类型不匹配' }
+        const config = api.read<{ revision: number }>(`project-config:${intent.projectId}`)
+        if (!config) return { type: 'failed' as const, message: '找不到目标 Project 的配置 Projection' }
+        if (config.revision !== intent.expectedProjectRevision) {
+          return { type: 'conflict' as const, message: 'Project 配置已变化；已刷新表单，请复核后重新提交' }
+        }
+        // Idempotency: re-submitting an already-created title confirms instead
+        // of duplicating the Issue.
+        if (createdTitles.has(intent.title)) {
+          return { type: 'confirmed' as const, message: '对账完成：该 Issue 已创建，未重复创建' }
+        }
+        if (intent.title.includes('见证') && !partialDone.has(intent.title)) {
+          // Partial: the Issue exists on GitHub but joining the Project failed.
+          partialDone.add(intent.title)
+          createdTitles.add(intent.title)
+          const issueNumber = 141
+          api.update(`board:${intent.projectId}`, (b: { columns: { status: string; cards: unknown[] }[] }) => ({
+            ...b,
+            columns: b.columns.map((c) =>
+              c.status === 'inbox'
+                ? { ...c, cards: [...c.cards, { workItemId: `wi-${issueNumber}`, issueNumber, title: intent.title, status: 'inbox', labels: [], assignee: '你', updatedAt: api.now(), blocked: false, notInProject: true, milestone: null, runSummary: null, prRef: null, ciState: null, remoteFingerprint: `fp-wi-${issueNumber}-1` }] }
+                : c,
+            ),
+          }))
+          return {
+            type: 'reconciliation-required' as const,
+            message: '部分完成：Issue #141 已创建，但加入 Project 失败。已完成事实已展示；使用修复动作完成加入，不会重复创建 Issue',
+          }
+        }
+        if (intent.title.includes('合规') && !ackLostDone.has(intent.title)) {
+          // Acknowledgement lost: outcome unknown until the operator reconciles.
+          ackLostDone.add(intent.title)
+          return {
+            type: 'reconciliation-required' as const,
+            message: 'acknowledgement 丢失：无法证明 Issue 是否已创建。请先对账检查，再安全重试',
+          }
+        }
+        createdTitles.add(intent.title)
+        const issueNumber = 142 + createdTitles.size
+        api.update(`board:${intent.projectId}`, (b: { columns: { status: string; cards: unknown[] }[] }) => ({
+          ...b,
+          columns: b.columns.map((c) =>
+            c.status === 'inbox'
+              ? { ...c, cards: [...c.cards, { workItemId: `wi-${issueNumber}`, issueNumber, title: intent.title, status: 'inbox', labels: [], assignee: '你', updatedAt: api.now(), blocked: false, notInProject: false, milestone: null, runSummary: null, prRef: null, ciState: null, remoteFingerprint: `fp-wi-${issueNumber}-1` }] }
+              : c,
+          ),
+        }))
+        return { type: 'confirmed' as const, message: `已创建 Issue #${issueNumber} 并加入 Project 的 Inbox` }
+      })
     },
   },
   {

@@ -1,37 +1,45 @@
-# Saki 0.1.0 Web 低保真交互 prototype（K0 / issue #42）
+# Saki 0.1.0 Web low-fi interactive prototype (K0 / issue #42)
 
-这是 Saki 0.1.0 两个新增顶层页面（「工作」与「项目」）的可点击、可键盘操作的低保真 prototype。它验证：保留现有 DSH 壳层（Conversation、New Session、Settings）且只增加两个顶层页面时，Host Operator 与小白用户都能完成 0.1.0 的关键任务。
+English | [中文](README.zh.md)
 
-它不是生产代码：fixture 字段只用于表达 [前端约定](../../../docs/saki/architecture/0.1.0-frontend-contract.zh.md)，不是最终 wire type；视觉（布局、密度、配色）也不是验收条件。
+A clickable, keyboard-operable low-fidelity prototype for the two new Saki 0.1.0 top-level pages (「工作」 and 「项目」). It proves that with the shipped DSH shell preserved (Conversation, New Session, Settings), a Host Operator and a beginner can both complete the 0.1.0 task flows on desktop and constrained viewports.
 
-## 运行
+This is not production code: fixture fields express the [frontend contract](../../../docs/saki/architecture/0.1.0-frontend-contract.zh.md) and are not final wire types; layout, density, and color are not acceptance criteria. The scenario tool bar at the bottom is K0-only tooling and does not carry into production.
+
+## Run
 
 ```sh
-npm install
+npm ci
 npm run dev        # http://localhost:5242
 npm run build      # tsc --noEmit + vite build
+node validation/validate.mjs   # Playwright + axe checklist against the production build
 ```
 
-可用 `?scenario=<id>` 直达某个场景，例如 `http://localhost:5242/?scenario=board-conflict`。
+Deep link a scenario with `?scenario=<id>`, e.g. `http://localhost:5242/?scenario=board-conflict`.
 
-## 怎么读这个 prototype
+## How to read this prototype
 
-- 底部琥珀色条是 **prototype 工具条**（不是产品 UI）：切换 11 个命名场景、打开场景索引。场景索引同时以文档形式维护在 [SCENARIOS.md](SCENARIOS.md)。
-- 应用内有一个模拟控制面（`src/fixtures/engine.ts`），只暴露契约中的三个操作：`query`（完整 Projection + revision）、`submit`（typed Intent + expected revision → receipt）、`onChanged`（失效通知 → 重新查询完整 Projection）。UI 不 join 后端记录、不按 Work Item Status 猜按钮；每个 Action Offer 与原因都来自 Projection。
-- 键盘：Tab 走全部交互控件；看板卡片聚焦后 `Enter` 开详情、`Alt+←/→` 移动列（等效拖拽）、每张卡还有「移动…」菜单；对话框 Esc 关闭并把焦点还给发起控件。`Alt+←/→` 等键盘移动与拖拽都会携带已确认远端指纹。
-- 桌面与受限 viewport（<720px）都能完成全部流程：窄屏下侧边栏变为抽屉、看板列纵向堆叠、详情抽屉全屏、会话与运行列表/详情互斥显示，不要求多个 pane 同时可见。
+- The amber bar at the bottom is **prototype tooling** (not product UI): switch between the twelve named scenarios or open the scenario index, also kept as a document in [SCENARIOS.md](SCENARIOS.md).
+- The app talks to a simulated control plane (`src/fixtures/engine.ts`) exposing exactly the contract's three operations: `query` (complete Projection + revision), `submit` (typed Intent + expected revision → one stable receipt id from pending to terminal), and `onChanged` (invalidation → full re-query). A stale expected revision is rejected as a conflict. Components never join backend records or infer buttons from Work Item Status; every Action Offer and its plain-language reason come from the Projection.
+- Keyboard: Tab reaches every control; board cards open details with `Enter`, move columns with `Alt+←/→` or the 移动… menu (drag-equivalent); dialogs and the drawer close with Escape and return focus to the invoking control.
+- Desktop and constrained viewport (<720px) both complete every flow without requiring multiple panes at once: the sidebar becomes a drawer, the board shows one status column at a time behind a column selector, the item drawer goes full screen, and Sessions shows either list or detail with a back path.
 
-## 目录
+## Layout
 
-- `src/contract/` — 从约定镜像的 Projection / Intent / Action Offer / View Address / 状态语义类型
-- `src/fixtures/` — 模拟控制面 + 命名场景（每个场景声明它模拟的 Projection、接受的 Intent 与演示结果）
-- `src/client/` — snapshot store、导航（typed `SakiViewAddress`，hash + localStorage 持久化）、React 绑定
-- `src/shell/` — AppFrame / 侧边栏占位（保留 DSH 元素）+ prototype 工具条
-- `src/pages/` — bootstrap、「工作」、「项目」六个内部区段、继承的 Conversation / New Session 占位、Settings 对话框（Model Supply 分节）
+- `src/contract/` — Projection / Intent / Action Offer / view-address / state-semantics types mirrored from the contract
+- `src/fixtures/` — simulated control plane + named scenarios; each scenario declares the Projections it simulates, the Intents it accepts, and the outcomes it demonstrates
+- `src/client/` — snapshot store, navigation (typed `SakiViewAddress`, hash + localStorage persistence), React bindings
+- `src/shell/` — AppFrame / sidebar stand-ins (DSH-owned elements preserved) + the prototype tool bar
+- `src/pages/` — bootstrap, 「工作」, the six internal 「项目」 sections, inherited Conversation / New Session stand-ins, and the Settings dialog (Model Supply section)
+- `validation/` — the Playwright + axe checklist and its results
 
-## 交付物
+## Repo gates
 
-- 场景索引：[SCENARIOS.md](SCENARIOS.md)
-- 每条 affordance 对应的 Projection / Intent：[AFFORDANCES.md](AFFORDANCES.md)
-- 需要产品决定的未决问题：[OPEN-QUESTIONS.md](OPEN-QUESTIONS.md)
-- 验证记录（desktop / 受限 viewport / 键盘 / axe）：[VALIDATION.md](VALIDATION.md)
+The prototype sits outside the pnpm workspace globs, so package-scoped gates (knip, publint, workspace constraints, per-file coverage) do not apply to it. Repo-wide staged gates still do: this README keeps a bilingual pair, staged sources pass lint and whitespace checks, and the K0 Agent Note passes note format and translation-pairing gates.
+
+## Deliverables
+
+- Scenario index: [SCENARIOS.md](SCENARIOS.md)
+- Affordance → Projection/Intent mapping: [AFFORDANCES.md](AFFORDANCES.md)
+- Open product questions: [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md)
+- Validation record: [VALIDATION.md](VALIDATION.md)

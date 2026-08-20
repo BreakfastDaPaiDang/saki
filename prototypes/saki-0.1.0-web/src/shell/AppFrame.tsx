@@ -69,7 +69,9 @@ export function Sidebar(props: { open: boolean; onClose: () => void }) {
   const { address } = useStore(navStore)
   const { envelope: attention } = useProjection<AttentionEntry[]>('attention')
   const { envelope: projects } = useProjection<{ projectId: string; name: string }[]>('projects')
-  const openCount = attention?.data.length ?? 0
+  // The badge counts only unresolved entries that need a person or block
+  // automation; informational notices stay visible in the page list only.
+  const openCount = attention?.data.filter((e) => e.severity !== 'info').length ?? 0
   const currentProjectId = 'projectId' in address ? address.projectId : null
 
   return (

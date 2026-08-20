@@ -62,10 +62,15 @@ export interface ActionOffer {
 // eligibility before accepting.
 // ---------------------------------------------------------------------------
 
+export type InterventionResponse =
+  | { kind: 'text'; text: string }
+  | { kind: 'decision'; decision: 'approve' | 'reject' }
+  | { kind: 'action'; action: string }
+
 export type SakiIntent =
   | { kind: 'claim-work-item'; workItemId: string }
   | { kind: 'move-work-item'; workItemId: string; targetStatus: WorkItemStatus; expectedRemoteFingerprint: string }
-  | { kind: 'answer-intervention'; interventionId: string; response: string }
+  | { kind: 'answer-intervention'; interventionId: string; response: InterventionResponse }
   | { kind: 'accept-deliverable'; workItemId: string }
   | { kind: 'stage-files'; projectId: string; paths: string[] }
   | { kind: 'unstage-files'; projectId: string; paths: string[] }
@@ -75,12 +80,23 @@ export type SakiIntent =
   | { kind: 'register-project'; displayName: string; directory: string }
   | { kind: 'repair-binding'; projectId: string; directory: string }
   | { kind: 'repair-mapping'; projectId: string }
-  | { kind: 'create-work-item'; projectId: string; title: string; body: string }
+  | {
+      kind: 'create-work-item'
+      projectId: string
+      title: string
+      intendedOutcome: string
+      acceptanceCriteria: string[]
+      expectedProjectRevision: number
+      expectedMappingRevision: number
+    }
   | { kind: 'complete-bootstrap'; displayName: string }
   | { kind: 'resume-automation'; projectId: string }
   | { kind: 'budget-exception'; projectId: string; note: string }
   | { kind: 'cancel-generation-job'; jobId: string }
   | { kind: 'retry-generation-job'; jobId: string }
+  | { kind: 'set-default-agent-profile'; projectId: string; profileId: string }
+  | { kind: 'update-automation-policy'; projectId: string; field: string; value: string | boolean | number }
+  | { kind: 'update-sync-config'; projectId: string; pollingSeconds: number }
 
 export type IntentOutcome =
   | { type: 'confirmed'; message: string }
@@ -143,6 +159,8 @@ export interface ProjectIndexEntry {
   githubConfirmedAt: string
   automationPaused: boolean
   automationPauseReason: string | null
+  /** Monotonic revision of the Project's configuration record. */
+  configRevision: number
 }
 
 export interface WorkspaceProjection {
@@ -211,7 +229,7 @@ export interface WorkItemDetail {
   prRef: string | null
   ciState: BoardCard['ciState']
   evidence: { kind: string; label: string; ref: string }[]
-  interventions: { interventionId: string; question: string; status: 'open' | 'answered' }[]
+  interventions: { interventionId: string; kind: 'clarification' | 'approval' | 'repair-link'; question: string; status: 'open' | 'answered' }[]
   activity: { at: string; actor: string; text: string }[]
   offer: ActionOffer | null
   offerUnavailableReason: string | null
@@ -278,6 +296,8 @@ export interface AttentionEntry {
   detail: string
   age: string
   interventionId: string | null
+  /** Structured response shape the Intervention requires. */
+  interventionKind: 'clarification' | 'approval' | 'repair-link' | null
   question: string | null
   returnAddress: SakiViewAddress
 }
@@ -286,12 +306,33 @@ export interface AutomationProjection {
   projectId: string
   policyRevision: number
   enabled: boolean
+  triggerMode: 'manual' | 'auto'
   enabledActions: string[]
+  availableActions: { id: string; label: string }[]
+  /** Evidence required before automatic delivery / automatic Done. */
+  evidenceRules: string[]
   limits: { dimension: string; limit: string; used: string }[]
   reservations: { id: string; scope: string; dimensions: string }[]
   paused: boolean
   pauseReason: string | null
   unknownObservations: string[]
+}
+
+/**
+ * Editable Project configuration. Every edit Intent is field-scoped and
+ * carries the expected configRevision.
+ */
+export interface ProjectConfigProjection {
+  projectId: string
+  configRevision: number
+  defaultAgentProfileId: string
+  availableProfiles: { profileId: string; label: string; route: string }[]
+  sync: {
+    pollingSeconds: number
+    /** saved → revalidating → scanning → checkpointed → activated; saved ≠ activated. */
+    state: 'idle' | 'saved' | 'revalidating' | 'scanning' | 'checkpointed' | 'activated'
+    lastActivatedAt: string | null
+  }
 }
 
 export interface MilestoneEntry {

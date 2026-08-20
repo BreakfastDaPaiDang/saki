@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import { useSubmitIntent } from '../../client/controlPlane'
+import { useEffect, useState } from 'react'
+import { useProjection, useSubmitIntent } from '../../client/controlPlane'
 import { navigate } from '../../client/navigation'
+import type { ProjectIndexEntry } from '../../contract/types'
 import { Button } from '../../components/primitives'
 import styles from './BootstrapPage.module.css'
 
@@ -41,6 +42,7 @@ const candidates: DirectoryCandidate[] = [
 
 export function BootstrapPage() {
   const { submit } = useSubmitIntent()
+  const { envelope: projects } = useProjection<ProjectIndexEntry[]>('projects')
   const [step, setStep] = useState<Step>('secret')
   const [secret, setSecret] = useState('')
   const [name, setName] = useState('')
@@ -48,11 +50,21 @@ export function BootstrapPage() {
   const [confirmed, setConfirmed] = useState(false)
   const [pending, setPending] = useState(false)
 
+  // The bootstrap secret is cleared the moment the step advances and on
+  // unmount: going back, browser history, or re-renders must not restore it.
+  useEffect(() => () => setSecret(''), [])
+
+  const advanceFromSecret = () => {
+    setSecret('')
+    setStep('principal')
+  }
+
   const finish = async () => {
     if (!selected) return
     setPending(true)
-    await submit({ kind: 'complete-bootstrap', displayName: name }, 0)
-    await submit({ kind: 'register-project', displayName: 'Saki', directory: selected.path }, 0)
+    const revision = projects?.revision ?? 0
+    await submit({ kind: 'complete-bootstrap', displayName: name }, { expectedRevision: revision, subject: 'projects' })
+    await submit({ kind: 'register-project', displayName: 'Saki', directory: selected.path }, { expectedRevision: revision, subject: 'projects' })
     setPending(false)
     setStep('done')
   }
@@ -79,7 +91,7 @@ export function BootstrapPage() {
               <input className={styles.input} value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="例如 7f3a-…" />
             </label>
             <p className={styles.note}>secret 通过本地启动流程传递，不会出现在 URL 或持久日志中，且只能使用一次。</p>
-            <Button variant="primary" disabled={!secret.trim()} onClick={() => setStep('principal')}>继续</Button>
+            <Button variant="primary" disabled={!secret.trim()} onClick={advanceFromSecret}>继续</Button>
           </section>
         ) : null}
 

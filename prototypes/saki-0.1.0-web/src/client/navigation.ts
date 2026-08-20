@@ -6,15 +6,16 @@ export type { ProjectSection, SakiViewAddress }
 /**
  * Navigation owns typed SakiViewAddress values. Addresses serialize to the
  * URL hash (shareable, reload-proof) and persist to localStorage so a reload
- * without a hash restores the last location.
+ * without a hash restores the last location. The Settings dialog remembers
+ * the address it was opened from and returns there.
  */
 
 const STORAGE_KEY = 'saki-proto-address'
 
 export interface NavState {
   address: SakiViewAddress
-  /** Return stack for drawers/panels opened from a parent address. */
-  drawerFrom: SakiViewAddress | null
+  /** The address Settings was opened from; close returns here. */
+  settingsFrom: SakiViewAddress | null
 }
 
 function serialize(address: SakiViewAddress): string {
@@ -38,8 +39,16 @@ function serialize(address: SakiViewAddress): string {
     case 'trace':
     case 'project-settings': {
       const params = new URLSearchParams()
-      if (address.kind === 'work' && address.workItemId) params.set('item', address.workItemId)
-      if (address.kind === 'sessions' && address.workSessionId) params.set('session', address.workSessionId)
+      if (address.kind === 'work') {
+        if (address.workItemId) params.set('item', address.workItemId)
+        if (address.board?.milestoneId) params.set('milestone', address.board.milestoneId)
+      }
+      if (address.kind === 'milestones' && address.milestoneId) params.set('milestone', address.milestoneId)
+      if (address.kind === 'changes' && address.file) params.set('file', address.file)
+      if (address.kind === 'sessions') {
+        if (address.workSessionId) params.set('session', address.workSessionId)
+        if (address.agentRunId) params.set('run', address.agentRunId)
+      }
       if (address.kind === 'trace' && address.workItemId) params.set('item', address.workItemId)
       const q = params.toString()
       return `#/project/${address.projectId}/${address.kind}${q ? `?${q}` : ''}`
@@ -59,19 +68,18 @@ function parse(hash: string): SakiViewAddress | null {
   if (segments[0] === 'projects') return { kind: 'projects' }
   if (segments[0] === 'settings') return { kind: 'settings', section: segments[1] ?? 'general' }
   if (segments[0] === 'bootstrap') return { kind: 'bootstrap' }
-  if (segments[0] === 'scenarios') return { kind: 'my-work' } // scenarios live in the prototype console
   if (segments[0] === 'project' && segments[1]) {
     const section = (segments[2] ?? 'work') as ProjectSection
     const projectId = segments[1]
     switch (section) {
       case 'work':
-        return { kind: 'work', projectId, workItemId: params.get('item') ?? undefined }
+        return { kind: 'work', projectId, workItemId: params.get('item') ?? undefined, board: params.get('milestone') ? { milestoneId: params.get('milestone')! } : undefined }
       case 'milestones':
-        return { kind: 'milestones', projectId }
+        return { kind: 'milestones', projectId, milestoneId: params.get('milestone') ?? undefined }
       case 'changes':
-        return { kind: 'changes', projectId }
+        return { kind: 'changes', projectId, file: params.get('file') ?? undefined }
       case 'sessions':
-        return { kind: 'sessions', projectId, workSessionId: params.get('session') ?? undefined }
+        return { kind: 'sessions', projectId, workSessionId: params.get('session') ?? undefined, agentRunId: params.get('run') ?? undefined }
       case 'trace':
         return { kind: 'trace', projectId, workItemId: params.get('item') ?? undefined }
       case 'project-settings':
@@ -98,10 +106,13 @@ function loadInitial(): SakiViewAddress {
   return { kind: 'my-work' }
 }
 
-export const navStore = createStore<NavState>({ address: loadInitial(), drawerFrom: null })
+export const navStore = createStore<NavState>({ address: loadInitial(), settingsFrom: null })
 
-export function navigate(address: SakiViewAddress, options?: { drawerFrom?: SakiViewAddress | null; replace?: boolean }): void {
+export function navigate(address: SakiViewAddress, options?: { replace?: boolean }): void {
   const hash = serialize(address)
+  const current = navStore.getSnapshot()
+  // Opening Settings records the owning address so close returns there.
+  const settingsFrom = address.kind === 'settings' ? (current.address.kind === 'settings' ? current.settingsFrom : current.address) : current.settingsFrom
   if (options?.replace) {
     history.replaceState(null, '', hash)
   } else {
@@ -112,12 +123,18 @@ export function navigate(address: SakiViewAddress, options?: { drawerFrom?: Saki
   } catch {
     // Storage may be unavailable in private contexts; navigation still works.
   }
-  navStore.set({ address, drawerFrom: options?.drawerFrom ?? null })
+  navStore.set({ address, settingsFrom })
+}
+
+/** Close the Settings dialog, returning to the address it was opened from. */
+export function closeSettings(): void {
+  const { settingsFrom } = navStore.getSnapshot()
+  navigate(settingsFrom ?? { kind: 'my-work' })
 }
 
 window.addEventListener('popstate', () => {
   const address = parse(window.location.hash)
-  if (address) navStore.set({ address, drawerFrom: null })
+  if (address) navStore.update((current) => ({ ...current, address }))
 })
 
 /** Project 页内部区段与 address kind 的映射。 */

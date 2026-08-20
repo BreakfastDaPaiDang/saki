@@ -64,55 +64,10 @@
 
 /* ----------------------------------------------------------- scenario index */
 
-.indexBackdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(4, 6, 10, 0.62);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--sp-space-4);
-  z-index: 120;
-}
-
-.indexPanel {
-  background: var(--sp-bg-raised);
-  border: 1px solid var(--sp-border-strong);
-  border-radius: var(--sp-radius-l);
-  box-shadow: var(--sp-shadow-overlay);
-  width: min(720px, 100%);
-  max-height: min(80vh, 100%);
-  display: flex;
-  flex-direction: column;
-}
-
-.indexHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--sp-space-4) var(--sp-space-5);
-  border-bottom: 1px solid var(--sp-border);
-}
-
-.indexTitle {
-  margin: 0;
-  font-size: 15px;
-}
-
-.indexClose {
-  color: var(--sp-text-secondary);
-  padding: 4px 8px;
-  border-radius: var(--sp-radius-s);
-}
-
-.indexClose:hover {
-  background: var(--sp-bg-hover);
-}
-
 .indexList {
   list-style: none;
   margin: 0;
-  padding: var(--sp-space-3);
+  padding: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -210,4 +165,10 @@
 .toastClose:hover {
   background: var(--sp-bg-hover);
   color: var(--sp-text);
+}
+
+.receiptId {
+  color: var(--sp-text-faint);
+  font-family: var(--sp-mono);
+  font-size: 11px;
 }

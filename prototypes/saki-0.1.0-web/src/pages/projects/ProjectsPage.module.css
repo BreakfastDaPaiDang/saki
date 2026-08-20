@@ -49,6 +49,33 @@
   gap: var(--sp-space-2);
 }
 
+.itemRow {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-space-2);
+}
+
+.itemRow .item {
+  flex: 1;
+}
+
+.repairBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-space-3);
+  font-size: 13px;
+  color: var(--sp-text-secondary);
+}
+
+.repairBody p {
+  margin: 0;
+}
+
+.mono {
+  font-family: var(--sp-mono);
+  font-size: 12px;
+}
+
 .item {
   width: 100%;
   display: flex;

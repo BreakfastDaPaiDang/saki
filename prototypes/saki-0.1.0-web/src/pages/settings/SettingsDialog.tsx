@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useProjection, useSubmitIntent } from '../../client/controlPlane'
-import { navigate } from '../../client/navigation'
+import { closeSettings, navigate } from '../../client/navigation'
 import type { ContextPolicy, GenerationJob, ModelRoute, ModelSupplyProjection, ProviderAccountProfile } from '../../contract/types'
 import { Button, Chip, Spinner } from '../../components/primitives'
 import { Dialog } from '../../components/Dialog'
@@ -24,7 +24,7 @@ export function SettingsDialog(props: { section: string }) {
   const active = sections.find((s) => s.id === props.section)
 
   return (
-    <Dialog title="设置" onClose={() => navigate({ kind: 'my-work' })} wide>
+    <Dialog title="设置" onClose={closeSettings} wide>
       <div className={styles.shell}>
         <nav className={styles.nav} aria-label="设置分节">
           {sections.map((s) => (
@@ -353,7 +353,7 @@ function JobsBlock(props: {
 
   const act = async (jobId: string, kind: 'cancel-generation-job' | 'retry-generation-job') => {
     setPendingJobId(jobId)
-    await submit({ kind, jobId }, props.expectedRevision)
+    await submit({ kind, jobId }, { expectedRevision: props.expectedRevision, subject: 'model-supply' })
     setPendingJobId(null)
   }
 

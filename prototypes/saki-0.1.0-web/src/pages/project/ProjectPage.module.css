@@ -136,6 +136,24 @@
   color: var(--sp-text-faint);
 }
 
+.filterLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--sp-text-secondary);
+  margin-left: auto;
+}
+
+.filterSelect {
+  background: var(--sp-bg-raised);
+  border: 1px solid var(--sp-border-strong);
+  border-radius: var(--sp-radius-s);
+  color: var(--sp-text);
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
 .boardRefreshing {
   display: inline-flex;
   align-items: center;
@@ -459,6 +477,11 @@
   color: var(--sp-text-faint);
 }
 
+.drawerApprovalRow {
+  display: flex;
+  gap: var(--sp-space-3);
+}
+
 @media (max-width: 720px) {
   .page {
     padding: var(--sp-space-4) var(--sp-space-3) 0;
@@ -471,7 +494,40 @@
     overflow-x: visible;
   }
 
+  /* Narrow: one status column at a time behind the column selector. */
+  .columnNarrowHidden {
+    display: none;
+  }
+
   .drawer {
     width: 100%;
   }
+}
+
+.columnSelector {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .columnSelector {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding-bottom: var(--sp-space-2);
+  }
+}
+
+.columnSelectorButton {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--sp-border);
+  color: var(--sp-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.columnSelectorButton[aria-selected='true'] {
+  border-color: var(--sp-accent);
+  color: var(--sp-accent-text);
+  background: var(--sp-accent-soft);
 }

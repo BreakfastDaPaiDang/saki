@@ -6,9 +6,11 @@ import type {
   BoardCard,
   BoardProjection,
   ChangesProjection,
+  InterventionResponse,
   MilestoneEntry,
   ModelSupplyProjection,
   MyWorkProjection,
+  ProjectConfigProjection,
   ProjectIndexEntry,
   SakiIntent,
   SessionViewProjection,
@@ -61,6 +63,7 @@ export function baseProjects(): ProjectIndexEntry[] {
       githubConfirmedAt: '10:15',
       automationPaused: false,
       automationPauseReason: null,
+      configRevision: 7,
     },
     {
       projectId: PROJECT_WEB,
@@ -74,6 +77,7 @@ export function baseProjects(): ProjectIndexEntry[] {
       githubConfirmedAt: '08:47',
       automationPaused: false,
       automationPauseReason: null,
+      configRevision: 3,
     },
   ]
 }
@@ -113,8 +117,9 @@ export function baseMyWork(): MyWorkProjection {
         currentActor: 'Agent 正在处理',
         updatedAt: '今天 10:15',
         blocked: false,
-        offer: offer({ kind: 'claim-work-item', workItemId: 'wi-125' }, '打开', 'open-active', 'Agent 正在处理，打开查看进展'),
-        offerUnavailableReason: null,
+        // “打开”是导航 affordance，不是 Action Offer；处理中的条目没有推荐操作。
+        offer: null,
+        offerUnavailableReason: 'Agent 正在处理；新的操作会在它需要你时出现',
       },
       {
         workItemId: 'wi-123',
@@ -128,7 +133,7 @@ export function baseMyWork(): MyWorkProjection {
         currentActor: '产品同学',
         updatedAt: '今天 09:30',
         blocked: false,
-        offer: offer({ kind: 'answer-intervention', interventionId: 'iv-123', response: '' }, '回答', 'intervention-open', 'Agent 等待你的回答才能继续'),
+        offer: offer({ kind: 'answer-intervention', interventionId: 'iv-123', response: { kind: 'text', text: '' } }, '回答', 'intervention-open', 'Agent 等待你的回答才能继续'),
         offerUnavailableReason: null,
       },
       {
@@ -202,15 +207,12 @@ function card(partial: Partial<BoardCard> & Pick<BoardCard, 'workItemId' | 'issu
 
 export function baseBoard(): BoardProjection {
   const cards: BoardCard[] = [
-    card({ workItemId: 'wi-128', issueNumber: 128, title: '支持批量上传知识库文件', status: 'inbox', labels: [{ name: 'enhancement', tone: 'purple' }], assignee: '产品同学', notInProject: true }),
+    card({ workItemId: 'wi-130', issueNumber: 130, title: '服务重启后会话恢复兜底', status: 'inbox', labels: [{ name: 'backend', tone: 'ok' }], assignee: '产品同学', notInProject: true }),
     card({ workItemId: 'wi-127', issueNumber: 127, title: '优化移动端对话输入体验', status: 'inbox', labels: [{ name: 'ux', tone: 'info' }], assignee: '产品同学', updatedAt: '昨天 17:08' }),
     card({ workItemId: 'wi-126', issueNumber: 126, title: '会话列表支持关键词搜索', status: 'ready', labels: [{ name: 'enhancement', tone: 'purple' }], updatedAt: '昨天 16:42' }),
-    card({ workItemId: 'wi-125', issueNumber: 125, title: 'API 文档完善与示例补充', status: 'ready', labels: [{ name: 'documentation', tone: 'info' }], assignee: 'Agent', updatedAt: '昨天 15:20', milestone: 'v0.2.0' }),
+    card({ workItemId: 'wi-125', issueNumber: 125, title: 'API 文档完善与示例补充', status: 'in-progress', labels: [{ name: 'documentation', tone: 'info' }], assignee: 'Agent', runSummary: 'Agent 正在处理', updatedAt: '今天 10:02', milestone: 'v0.2.0' }),
     card({ workItemId: 'wi-124', issueNumber: 124, title: '错误码体系梳理与返回', status: 'ready', labels: [{ name: 'backend', tone: 'ok' }], updatedAt: '5月10日', milestone: 'v0.2.0' }),
     card({ workItemId: 'wi-123', issueNumber: 123, title: '用户反馈收集与分析看板', status: 'in-progress', labels: [{ name: 'enhancement', tone: 'purple' }], assignee: 'Agent', runSummary: 'Agent 正在处理', updatedAt: '今天 10:15', milestone: 'v0.2.0' }),
-    card({ workItemId: 'wi-122', issueNumber: 122, title: '登录体验优化', status: 'in-progress', labels: [{ name: 'backend', tone: 'ok' }], updatedAt: '昨天 11:20' }),
-    card({ workItemId: 'wi-121', issueNumber: 121, title: '官网改版：定价模块优化', status: 'in-review', labels: [{ name: 'enhancement', tone: 'purple' }], runSummary: 'Agent 已提交', prRef: '#432', ciState: 'passing', updatedAt: '昨天 16:42', milestone: 'v0.2.0' }),
-    card({ workItemId: 'wi-120', issueNumber: 120, title: '补充产品截图与落地页文案', status: 'in-review', labels: [{ name: 'documentation', tone: 'info' }], runSummary: 'Agent 已提交', prRef: '#428', ciState: 'pending', updatedAt: '昨天 14:05' }),
     card({ workItemId: 'wi-119', issueNumber: 119, title: '新手引导流程优化', status: 'done', labels: [{ name: 'ux', tone: 'info' }], runSummary: 'Agent 已合并', updatedAt: '5月9日' }),
     card({ workItemId: 'wi-118', issueNumber: 118, title: '支持深色模式切换', status: 'done', labels: [{ name: 'frontend', tone: 'accent' }], runSummary: '你已合并', updatedAt: '5月8日' }),
     card({ workItemId: 'wi-117', issueNumber: 117, title: '修复会话导出格式问题', status: 'done', labels: [{ name: 'bugfix', tone: 'danger' }], runSummary: 'Agent 已合并', updatedAt: '5月7日', prRef: '#415', ciState: 'passing' }),
@@ -222,6 +224,25 @@ export function baseBoard(): BoardProjection {
     mappingHealth: 'ok',
     mappingRepairDetail: null,
     freshness: 'fresh',
+  }
+}
+
+/** Website 项目的独立看板：不同的 Work Item、card id 与数据，绝不浅拷贝 Saki。 */
+export function websiteBoard(): BoardProjection {
+  const cards: BoardCard[] = [
+    card({ workItemId: 'wi-220', issueNumber: 220, title: '官网首页首屏性能优化', status: 'inbox', labels: [{ name: 'performance', tone: 'info' }], assignee: '产品同学', updatedAt: '今天 08:30', notInProject: true }),
+    card({ workItemId: 'wi-122', issueNumber: 122, title: '备案与合规页脚更新', status: 'backlog', labels: [{ name: 'compliance', tone: 'info' }], assignee: '你', updatedAt: '昨天 18:02' }),
+    card({ workItemId: 'wi-128', issueNumber: 128, title: '官网改版：落地页文案与截图', status: 'ready', labels: [{ name: 'enhancement', tone: 'purple' }], assignee: '你', updatedAt: '昨天 16:42' }),
+    card({ workItemId: 'wi-121', issueNumber: 121, title: '登录体验优化', status: 'in-review', labels: [{ name: 'backend', tone: 'ok' }], runSummary: 'Agent 已提交', prRef: '#432', ciState: 'passing', updatedAt: '昨天 16:42', milestone: '网站改版一期' }),
+    card({ workItemId: 'wi-120', issueNumber: 120, title: '官网改版：定价模块优化', status: 'in-review', labels: [{ name: 'enhancement', tone: 'purple' }], runSummary: 'Agent 已提交', prRef: '#428', ciState: 'pending', updatedAt: '昨天 14:05', milestone: '网站改版一期' }),
+  ]
+  return {
+    projectId: PROJECT_WEB,
+    checkpoint: { generation: 6, confirmedAt: '08:47', complete: true },
+    columns: columnOrder.map(({ status }) => ({ status, cards: cards.filter((c) => c.status === status) })),
+    mappingHealth: 'ok',
+    mappingRepairDetail: null,
+    freshness: 'stale',
   }
 }
 
@@ -254,7 +275,7 @@ export function baseWorkItemDetail(): WorkItemDetail {
       { kind: 'pr', label: 'PR', ref: '#432' },
       { kind: 'ci', label: 'CI', ref: '通过' },
     ],
-    interventions: [{ interventionId: 'iv-123', question: '导出报表需要包含哪些字段？当前实现包含来源、关键字、时间、满意度评分。', status: 'open' }],
+    interventions: [{ interventionId: 'iv-123', kind: 'clarification', question: '导出报表需要包含哪些字段？当前实现包含来源、关键字、时间、满意度评分。', status: 'open' }],
     activity: [
       { at: '10:19:45', actor: '系统', text: 'CI 检查全部通过' },
       { at: '10:19:02', actor: 'Agent', text: '已创建 PR #432' },
@@ -262,7 +283,7 @@ export function baseWorkItemDetail(): WorkItemDetail {
       { at: '10:15:06', actor: 'Agent', text: 'Agent 开始执行任务' },
       { at: '10:15:03', actor: '你', text: '已领取：Agent 在 Ready 列自动领取' },
     ],
-    offer: offer({ kind: 'answer-intervention', interventionId: 'iv-123', response: '' }, '回答', 'intervention-open', 'Agent 等待你的回答才能继续'),
+    offer: offer({ kind: 'answer-intervention', interventionId: 'iv-123', response: { kind: 'text', text: '' } }, '回答', 'intervention-open', 'Agent 等待你的回答才能继续'),
     offerUnavailableReason: null,
   }
 }
@@ -368,6 +389,7 @@ export function baseAttention(): AttentionEntry[] {
       detail: '导出报表需要包含哪些字段？',
       age: '45 分钟前',
       interventionId: 'iv-123',
+      interventionKind: 'clarification',
       question: '导出报表需要包含哪些字段？当前实现包含来源、关键字、时间、满意度评分。',
       returnAddress: { kind: 'work', projectId: PROJECT_SAKI, workItemId: 'wi-123' },
     },
@@ -381,6 +403,7 @@ export function baseAttention(): AttentionEntry[] {
       detail: '已就绪：验收条件完整，可以交给 Agent',
       age: '昨天',
       interventionId: null,
+      interventionKind: null,
       question: null,
       returnAddress: { kind: 'work', projectId: PROJECT_WEB },
     },
@@ -394,6 +417,7 @@ export function baseAttention(): AttentionEntry[] {
       detail: 'PR #432 已通过 CI，等待你验收',
       age: '昨天',
       interventionId: null,
+      interventionKind: 'approval',
       question: null,
       returnAddress: { kind: 'work', projectId: PROJECT_WEB, workItemId: 'wi-121' },
     },
@@ -409,7 +433,17 @@ export function baseAutomation(): AutomationProjection {
     projectId: PROJECT_SAKI,
     policyRevision: 7,
     enabled: false,
+    triggerMode: 'manual',
     enabledActions: ['领取 Ready 工作项', '创建或继续会话', '提交与推送', '创建 PR'],
+    availableActions: [
+      { id: 'claim', label: '领取 Ready 工作项' },
+      { id: 'session', label: '创建或继续会话' },
+      { id: 'commit-push', label: '提交与推送' },
+      { id: 'pr', label: '创建 PR' },
+      { id: 'auto-merge', label: '自动合并（需 Outcome Evidence）' },
+      { id: 'auto-done', label: '自动 Done（需 Outcome Evidence）' },
+    ],
+    evidenceRules: ['PR 已创建', 'CI 全部通过', '验收条件逐条映射证据'],
     limits: [
       { dimension: '并发 Agent Run', limit: '1', used: '1' },
       { dimension: 'Run 时长', limit: '45 分钟', used: '8 分钟' },
@@ -421,6 +455,20 @@ export function baseAutomation(): AutomationProjection {
     paused: false,
     pauseReason: null,
     unknownObservations: [],
+  }
+}
+
+/** Editable Project configuration used by the Project Settings owner flow. */
+export function baseProjectConfig(projectId: string): ProjectConfigProjection {
+  return {
+    projectId,
+    configRevision: projectId === PROJECT_SAKI ? 7 : 3,
+    defaultAgentProfileId: 'profile-dev-v4',
+    availableProfiles: [
+      { profileId: 'profile-dev-v4', label: 'Development Agent v4', route: 'Codex · GPT-5（个人 Pro）' },
+      { profileId: 'profile-review-v2', label: 'Review Agent v2', route: 'Kimi · K2（个人订阅）' },
+    ],
+    sync: { pollingSeconds: 30, state: 'activated', lastActivatedAt: '10:15' },
   }
 }
 
@@ -544,12 +592,16 @@ export function baseWorkspace(): WorkspaceProjection {
 
 // ---------------------------------------------------------------------------
 // Default Intent handlers. Scenarios override individual handlers.
+// Handlers always resolve the owning Project from the intent — never a
+// hardcoded project — so operating one Project can never rewrite another.
 // ---------------------------------------------------------------------------
 
 export function installDefaultHandlers(engine: FixtureControlPlane): void {
   engine.onIntent('claim-work-item', (intent, api) => {
     if (intent.kind !== 'claim-work-item') return { type: 'failed', message: 'intent 类型不匹配' }
-    moveCardBetweenColumns(api, intent.workItemId, 'in-progress')
+    const boardKey = findBoardKeyOf(api, intent.workItemId)
+    if (!boardKey) return { type: 'failed', message: '找不到该工作项所属的 Board' }
+    moveCardBetweenColumns(api, boardKey, intent.workItemId, 'in-progress')
     updateMyWorkItem(api, intent.workItemId, (item) => ({
       ...item,
       group: 'in-progress',
@@ -567,8 +619,9 @@ export function installDefaultHandlers(engine: FixtureControlPlane): void {
     return applyMoveWorkItem(api, intent.workItemId, intent.targetStatus, intent.expectedRemoteFingerprint)
   })
 
-  engine.onIntent('answer-intervention', (_intent, api) => {
-    resolveIntervention(api)
+  engine.onIntent('answer-intervention', (intent, api) => {
+    if (intent.kind !== 'answer-intervention') return { type: 'failed', message: 'intent 类型不匹配' }
+    resolveIntervention(api, intent.interventionId, intent.response)
     return { type: 'confirmed', message: '回答已提交，Agent 将继续执行' }
   })
 
@@ -597,14 +650,26 @@ export function installDefaultHandlers(engine: FixtureControlPlane): void {
     return { type: 'confirmed', message: `已取消暂存 ${intent.paths.length} 个文件` }
   })
 
-  engine.onIntent('commit', (_intent, api) => {
-    api.update<ChangesProjection>(`changes:${PROJECT_SAKI}`, (c) => ({ ...c, staged: [], head: 'b2c3d4e' }))
+  engine.onIntent('commit', (intent, api) => {
+    if (intent.kind !== 'commit') return { type: 'failed', message: 'intent 类型不匹配' }
+    const changes = api.read<ChangesProjection>(`changes:${intent.projectId}`)
+    if (!changes) return { type: 'failed', message: '找不到该项目的 Changes Projection' }
+    if (changes.data.head !== intent.expectedIndexTree) {
+      return { type: 'conflict', message: '暂存区已变化（expectedIndexTree 不匹配）；已恢复为最新确认状态' }
+    }
+    api.update<ChangesProjection>(`changes:${intent.projectId}`, (c) => ({ ...c, staged: [], head: 'b2c3d4e' }))
     return { type: 'confirmed', message: '已提交：commit b2c3d4e' }
   })
 
-  engine.onIntent('push', (_intent, api) => {
-    api.update<WorkspaceProjection>(`workspace:${PROJECT_SAKI}`, (w) => ({ ...w, aheadBehind: { ahead: 0, behind: 0 } }))
-    return { type: 'confirmed', message: '已推送到 origin/feature/saki-123-feedback' }
+  engine.onIntent('push', (intent, api) => {
+    if (intent.kind !== 'push') return { type: 'failed', message: 'intent 类型不匹配' }
+    const changes = api.read<ChangesProjection>(`changes:${intent.projectId}`)
+    if (!changes) return { type: 'failed', message: '找不到该项目的 Changes Projection' }
+    if (changes.data.head !== intent.expectedCommit) {
+      return { type: 'conflict', message: 'HEAD 已变化（expectedCommit 不匹配）；推送未执行' }
+    }
+    api.update<WorkspaceProjection>(`workspace:${intent.projectId}`, (w) => ({ ...w, aheadBehind: { ahead: 0, behind: 0 } }))
+    return { type: 'confirmed', message: `已推送到 ${intent.targetRef}` }
   })
 
   engine.onIntent('create-pr', (_intent, api) => {
@@ -628,6 +693,7 @@ export function installDefaultHandlers(engine: FixtureControlPlane): void {
         githubConfirmedAt: api.now(),
         automationPaused: false,
         automationPauseReason: null,
+        configRevision: 1,
       },
     ])
     return { type: 'confirmed', message: `已登记 Development Project「${intent.displayName}」` }
@@ -638,27 +704,39 @@ export function installDefaultHandlers(engine: FixtureControlPlane): void {
     api.update<ProjectIndexEntry[]>('projects', (projects) =>
       projects.map((p) => (p.projectId === intent.projectId ? { ...p, bindingHealth: 'active' as const } : p)),
     )
+    api.update<WorkspaceProjection>(`workspace:${intent.projectId}`, (w) => ({ ...w, bindingHealth: 'active', blockedRecovery: [] }))
     return { type: 'confirmed', message: 'Resource Binding 已重新验证，项目恢复可写' }
   })
 
   engine.onIntent('repair-mapping', (intent, api) => {
     if (intent.kind !== 'repair-mapping') return { type: 'failed', message: 'intent 类型不匹配' }
     api.update<BoardProjection>(`board:${intent.projectId}`, (b) => ({ ...b, mappingHealth: 'ok', mappingRepairDetail: null }))
+    api.update<ProjectIndexEntry[]>('projects', (projects) =>
+      projects.map((p) => (p.projectId === intent.projectId ? { ...p, mappingHealth: 'ok' as const } : p)),
+    )
     return { type: 'confirmed', message: 'GitHub Status 字段映射已修复，看板恢复读写' }
   })
 
   engine.onIntent('create-work-item', (intent, api) => {
     if (intent.kind !== 'create-work-item') return { type: 'failed', message: 'intent 类型不匹配' }
-    const workItemId = `wi-${130 + Math.floor(Math.random() * 60)}`
+    const config = api.read<ProjectConfigProjection>(`project-config:${intent.projectId}`)
+    if (!config) return { type: 'failed', message: '找不到目标 Project 的配置 Projection' }
+    // The Project configuration revision is a second precondition beyond the
+    // engine-checked mapping revision.
+    if (config.revision !== intent.expectedProjectRevision) {
+      return { type: 'conflict', message: 'Project 配置已变化；已刷新表单，请复核后重新提交' }
+    }
+    const issueNumber = 131 + Math.floor(Math.random() * 20)
+    const workItemId = `wi-${issueNumber}`
     api.update<BoardProjection>(`board:${intent.projectId}`, (b) => ({
       ...b,
       columns: b.columns.map((c) =>
         c.status === 'inbox'
-          ? { ...c, cards: [...c.cards, { workItemId, issueNumber: 130, title: intent.title, status: 'inbox' as const, labels: [], assignee: '你', updatedAt: api.now(), blocked: false, notInProject: false, milestone: null, runSummary: null, prRef: null, ciState: null, remoteFingerprint: `fp-${workItemId}-1` }] }
+          ? { ...c, cards: [...c.cards, { workItemId, issueNumber, title: intent.title, status: 'inbox' as const, labels: [], assignee: '你', updatedAt: api.now(), blocked: false, notInProject: false, milestone: null, runSummary: null, prRef: null, ciState: null, remoteFingerprint: `fp-${workItemId}-1` }] }
           : c,
       ),
     }))
-    return { type: 'confirmed', message: '已创建 Issue 并加入 Project 的 Inbox' }
+    return { type: 'confirmed', message: `已创建 Issue #${issueNumber} 并加入 Project 的 Inbox` }
   })
 
   engine.onIntent('complete-bootstrap', (_intent, api) => {
@@ -695,6 +773,78 @@ export function installDefaultHandlers(engine: FixtureControlPlane): void {
     }))
     return { type: 'confirmed', message: '已重新排队该 Generation Job' }
   })
+
+  // --- K7: field-scoped Project configuration edits --------------------------
+
+  engine.onIntent('set-default-agent-profile', (intent, api) => {
+    if (intent.kind !== 'set-default-agent-profile') return { type: 'failed', message: 'intent 类型不匹配' }
+    api.update<ProjectConfigProjection>(`project-config:${intent.projectId}`, (c) => {
+      if (!c.availableProfiles.some((p) => p.profileId === intent.profileId)) return c
+      return { ...c, defaultAgentProfileId: intent.profileId }
+    })
+    return { type: 'confirmed', message: '默认 Agent Profile 已更新' }
+  })
+
+  engine.onIntent('update-automation-policy', (intent, api) => {
+    if (intent.kind !== 'update-automation-policy') return { type: 'failed', message: 'intent 类型不匹配' }
+    api.update<AutomationProjection>(`automation:${intent.projectId}`, (a) => {
+      if (intent.field === 'triggerMode') return { ...a, triggerMode: intent.value === 'auto' ? 'auto' : 'manual' }
+      if (intent.field.startsWith('action:')) {
+        const actionId = intent.field.slice('action:'.length)
+        const label = a.availableActions.find((x) => x.id === actionId)?.label
+        if (!label) return a
+        const enabled = intent.value === true
+        return {
+          ...a,
+          enabledActions: enabled ? [...a.enabledActions, label] : a.enabledActions.filter((x) => x !== label),
+        }
+      }
+      if (intent.field.startsWith('limit:')) {
+        const dimension = intent.field.slice('limit:'.length)
+        return { ...a, limits: a.limits.map((l) => (l.dimension === dimension ? { ...l, limit: String(intent.value) } : l)) }
+      }
+      return a
+    })
+    return { type: 'confirmed', message: 'Automation Policy 已更新（field-scoped）' }
+  })
+
+  engine.onIntent('update-sync-config', (intent, api) => {
+    if (intent.kind !== 'update-sync-config') return { type: 'failed', message: 'intent 类型不匹配' }
+    const key = `project-config:${intent.projectId}`
+    api.update<ProjectConfigProjection>(key, (c) => ({
+      ...c,
+      sync: { ...c.sync, pollingSeconds: intent.pollingSeconds, state: 'saved' },
+    }))
+    return { type: 'confirmed', message: '同步配置已保存；正在重新验证映射…（保存成功 ≠ 已启用）' }
+  })
+}
+
+/**
+ * Advance the sync-activation chain after a sync config save. The Settings UI
+ * calls this once after a confirmed save; each stage is a Host-side poke, and
+ * only the final one activates the configuration.
+ */
+export function advanceSyncActivation(engine: FixtureControlPlane, projectId: string): void {
+  const key = `project-config:${projectId}`
+  const stages: ProjectConfigProjection['sync']['state'][] = ['revalidating', 'scanning', 'checkpointed', 'activated']
+  stages.forEach((state, i) => {
+    setTimeout(() => {
+      engine.poke<ProjectConfigProjection>(key, (c) => ({
+        ...c,
+        sync: { ...c.sync, state, lastActivatedAt: state === 'activated' ? '刚刚' : c.sync.lastActivatedAt },
+      }))
+    }, 900 * (i + 1))
+  })
+}
+
+/** Find the Board Projection key that owns a Work Item, across all Projects. */
+export function findBoardKeyOf(api: EngineMutator, workItemId: string): string | null {
+  for (const key of api.keys()) {
+    if (!key.startsWith('board:')) continue
+    const slot = api.read<BoardProjection>(key)
+    if (slot?.data.columns.some((c) => c.cards.some((card) => card.workItemId === workItemId))) return key
+  }
+  return null
 }
 
 /**
@@ -707,18 +857,19 @@ export function applyMoveWorkItem(
   targetStatus: WorkItemStatus,
   expectedRemoteFingerprint: string,
 ): { type: 'confirmed' | 'conflict' | 'failed'; message: string } {
-  const board = api.read<BoardProjection>(`board:${PROJECT_SAKI}`)
-  const current = board?.data.columns.flatMap((c) => c.cards).find((c) => c.workItemId === workItemId)
-  if (!current) return { type: 'failed', message: '找不到该工作项' }
+  const boardKey = findBoardKeyOf(api, workItemId)
+  if (!boardKey) return { type: 'failed', message: '找不到该工作项所属的 Board' }
+  const board = api.read<BoardProjection>(boardKey)!
+  const current = board.data.columns.flatMap((c) => c.cards).find((c) => c.workItemId === workItemId)!
   if (current.remoteFingerprint !== expectedRemoteFingerprint) {
     return { type: 'conflict', message: '远端状态已变化：卡片被其他操作移动过，已恢复为最新确认状态' }
   }
-  moveCardBetweenColumns(api, workItemId, targetStatus)
+  moveCardBetweenColumns(api, boardKey, workItemId, targetStatus)
   return { type: 'confirmed', message: `已移动到 ${targetStatus}，GitHub 已确认` }
 }
 
-function moveCardBetweenColumns(api: EngineMutator, workItemId: string, target: WorkItemStatus): void {
-  api.update<BoardProjection>(`board:${PROJECT_SAKI}`, (b) => {
+function moveCardBetweenColumns(api: EngineMutator, boardKey: string, workItemId: string, target: WorkItemStatus): void {
+  api.update<BoardProjection>(boardKey, (b) => {
     const found = b.columns.flatMap((c) => c.cards).find((c) => c.workItemId === workItemId)
     if (!found) return b
     const moved = { ...found, status: target, remoteFingerprint: `${found.remoteFingerprint}+` }
@@ -739,24 +890,41 @@ function updateMyWorkItem(api: EngineMutator, workItemId: string, mutate: (item:
   }))
 }
 
-function resolveIntervention(api: EngineMutator): void {
+/** Resolve an Intervention on whichever Work Item owns it. */
+function resolveIntervention(api: EngineMutator, interventionId: string, response: InterventionResponse): void {
+  const ownerKey = api.keys().find((key) => {
+    if (!key.startsWith('work-item:')) return false
+    const slot = api.read<WorkItemDetail>(key)
+    return slot?.data.interventions.some((iv) => iv.interventionId === interventionId)
+  })
+  const ownerId = ownerKey?.slice('work-item:'.length)
+
   api.update<MyWorkProjection>('my-work', (mw) => ({
     ...mw,
     items: mw.items.map((item) =>
-      item.workItemId === 'wi-123'
+      ownerId && item.workItemId === ownerId
         ? { ...item, group: 'in-progress', currentActor: 'Agent 正在处理', updatedAt: api.now(), offer: null, offerUnavailableReason: 'Agent 正在处理；新的操作会在它需要你时出现' }
         : item,
     ),
   }))
-  api.update<AttentionEntry[]>('attention', (entries) => entries.filter((e) => e.interventionId !== 'iv-123'))
-  api.update<WorkItemDetail>('work-item:wi-123', (d) => ({
-    ...d,
-    interventions: d.interventions.map((iv) => ({ ...iv, status: 'answered' as const })),
-    agentRun: d.agentRun ? { ...d.agentRun, state: 'running' as AgentRunState, summary: 'Agent 运行中 · 已继续执行' } : null,
-    offer: null,
-    offerUnavailableReason: 'Agent 正在处理；新的操作会在它需要你时出现',
-    activity: [{ at: api.now(), actor: '你', text: '已回答 Intervention，Agent 继续执行' }, ...d.activity],
-  }))
+  api.update<AttentionEntry[]>('attention', (entries) => entries.filter((e) => e.interventionId !== interventionId))
+  if (ownerKey) {
+    api.update<WorkItemDetail>(ownerKey, (d) => ({
+      ...d,
+      interventions: d.interventions.map((iv) => ({ ...iv, status: 'answered' as const })),
+      agentRun: d.agentRun ? { ...d.agentRun, state: 'running' as AgentRunState, summary: 'Agent 运行中 · 已继续执行' } : null,
+      offer: null,
+      offerUnavailableReason: 'Agent 正在处理；新的操作会在它需要你时出现',
+      activity: [
+        {
+          at: api.now(),
+          actor: '你',
+          text: response.kind === 'text' ? '已回答 Intervention，Agent 继续执行' : response.kind === 'decision' ? `已${response.decision === 'approve' ? '批准' : '拒绝'}，Agent 继续执行` : '已执行修复动作，Agent 继续执行',
+        },
+        ...d.activity,
+      ],
+    }))
+  }
 }
 
 function moveFiles(api: EngineMutator, projectId: string, paths: string[], target: 'staged' | 'unstaged'): void {

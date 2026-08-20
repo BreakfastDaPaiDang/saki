@@ -29,8 +29,11 @@ export function App() {
 }
 
 function MainSurface() {
-  const { address } = useStore(navStore)
-  switch (address.kind) {
+  const { address, settingsFrom } = useStore(navStore)
+  // The Settings dialog overlays the address it was opened from; the owner
+  // page keeps rendering underneath so closing returns exactly there.
+  const effective = address.kind === 'settings' ? (settingsFrom ?? { kind: 'my-work' as const }) : address
+  switch (effective.kind) {
     case 'bootstrap':
       return <BootstrapPage />
     case 'my-work':
@@ -43,14 +46,12 @@ function MainSurface() {
     case 'sessions':
     case 'trace':
     case 'project-settings':
-      return <ProjectPage address={address} />
+      return <ProjectPage address={effective} />
     case 'conversation':
-      return <ConversationPage sessionId={address.sessionId} />
+      return <ConversationPage sessionId={effective.sessionId} />
     case 'new-session':
       return <NewSessionPage />
     case 'settings':
-      // The dialog renders over whatever was underneath; My Work is the
-      // neutral backdrop when the dialog is opened directly via URL.
       return <MyWorkPage />
   }
 }

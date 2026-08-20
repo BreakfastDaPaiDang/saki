@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useControlPlane, useSubmitIntent } from '../client/controlPlane'
 import { navigate } from '../client/navigation'
+import { Dialog } from '../components/Dialog'
 import styles from './DevBar.module.css'
 
 /**
@@ -47,41 +48,33 @@ export function DevBar() {
 function ScenarioIndex(props: { onClose: () => void }) {
   const { scenario, switchScenario, allScenarios } = useControlPlane()
   return (
-    <div className={styles.indexBackdrop} onClick={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div className={styles.indexPanel} role="dialog" aria-modal="true" aria-label="场景索引">
-        <header className={styles.indexHeader}>
-          <h2 className={styles.indexTitle}>场景索引</h2>
-          <button type="button" className={styles.indexClose} onClick={props.onClose} aria-label="关闭场景索引">
-            ✕
-          </button>
-        </header>
-        <ul className={styles.indexList}>
-          {allScenarios.map((s) => (
-            <li key={s.id} className={s.id === scenario.id ? styles.indexActive : ''}>
-              <button
-                type="button"
-                className={styles.indexItem}
-                onClick={() => {
-                  switchScenario(s.id)
-                  navigate(s.startAddress, { replace: true })
-                  props.onClose()
-                }}
-              >
-                <span className={styles.indexItemTitle}>{s.title}</span>
-                <span className={styles.indexItemSummary}>{s.summary}</span>
-                <span className={styles.indexItemTags}>
-                  {s.demonstrates.map((d) => (
-                    <span key={d} className={styles.demonstrateTag}>
-                      {d}
-                    </span>
-                  ))}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
+    <Dialog title="场景索引" onClose={props.onClose} wide>
+      <ul className={styles.indexList}>
+        {allScenarios.map((s) => (
+          <li key={s.id} className={s.id === scenario.id ? styles.indexActive : ''}>
+            <button
+              type="button"
+              className={styles.indexItem}
+              onClick={() => {
+                switchScenario(s.id)
+                navigate(s.startAddress, { replace: true })
+                props.onClose()
+              }}
+            >
+              <span className={styles.indexItemTitle}>{s.title}</span>
+              <span className={styles.indexItemSummary}>{s.summary}</span>
+              <span className={styles.indexItemTags}>
+                {s.demonstrates.map((d) => (
+                  <span key={d} className={styles.demonstrateTag}>
+                    {d}
+                  </span>
+                ))}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Dialog>
   )
 }
 
@@ -97,7 +90,9 @@ export function ReceiptToasts() {
             <span>已提交，等待控制面确认…（凭据 {s.receipt.receiptId}）</span>
           ) : (
             <>
-              <span>{s.receipt.outcome?.message}</span>
+              <span>
+                {s.receipt.outcome?.message} <span className={styles.receiptId} title="稳定 receipt id">（凭据 {s.receipt.receiptId}）</span>
+              </span>
               <button type="button" className={styles.toastClose} onClick={() => dismiss(s.receipt.receiptId)} aria-label="关闭通知">
                 ✕
               </button>

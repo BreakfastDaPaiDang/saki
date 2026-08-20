@@ -1,6 +1,8 @@
 .frame {
   display: flex;
   height: 100%;
+  /* Leave room for the fixed prototype tool bar so it never covers content. */
+  padding-bottom: 34px;
   overflow: hidden;
 }
 

@@ -46,20 +46,20 @@ export function ChangesSection(props: { projectId: string }) {
 
   const run = async (key: string, intent: SakiIntent): Promise<void> => {
     setPending(key)
-    await submit(intent, revision)
+    await submit(intent, { expectedRevision: revision, subject: `changes:${projectId}` })
     setPending(null)
   }
 
   const doCommit = async () => {
     setPending('commit')
-    const receipt = await submit({ kind: 'commit', projectId, message, expectedIndexTree: data.head }, revision)
+    const receipt = await submit({ kind: 'commit', projectId, message, expectedIndexTree: data.head }, { expectedRevision: revision, subject: `changes:${projectId}` })
     setPending(null)
     if (receipt.outcome?.type === 'confirmed') setMessage('')
   }
 
   const doPush = async () => {
     setPending('push')
-    await submit({ kind: 'push', projectId, expectedCommit: data.head, targetRef: `origin/${data.branch}` }, revision)
+    await submit({ kind: 'push', projectId, expectedCommit: data.head, targetRef: `origin/${data.branch}` }, { expectedRevision: revision, subject: `changes:${projectId}` })
     setPending(null)
     setPushOpen(false)
   }
@@ -73,7 +73,7 @@ export function ChangesSection(props: { projectId: string }) {
 
   const doCreatePr = async () => {
     setPending('pr')
-    await submit({ kind: 'create-pr', projectId, workItemId: 'wi-123', title: prTitle, body: prBody }, revision)
+    await submit({ kind: 'create-pr', projectId, workItemId: 'wi-123', title: prTitle, body: prBody }, { expectedRevision: revision, subject: `changes:${projectId}` })
     setPending(null)
     setPrOpen(false)
   }

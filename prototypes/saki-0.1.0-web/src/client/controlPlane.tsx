@@ -23,7 +23,12 @@ export interface IntentSubmission {
 }
 
 interface IntentContextValue {
-  submit: (intent: SakiIntent, expectedRevision: number) => Promise<IntentReceipt>
+  /**
+   * Submit a typed Intent with the expected revision of the Projection it
+   * read. The receipt id is stable from pending to terminal; an identical
+   * in-flight submission reuses the same receipt.
+   */
+  submit: (intent: SakiIntent, options: SubmitOptions) => Promise<IntentReceipt>
   submissions: IntentSubmission[]
   dismiss: (receiptId: string) => void
 }
@@ -45,16 +50,16 @@ export function ControlPlaneProvider(props: { scenarioId: string | null; onScena
   useEffect(() => setSubmissions([]), [engine])
 
   const submit = useCallback(
-    async (intent: SakiIntent, expectedRevision: number): Promise<IntentReceipt> => {
-      const pendingReceipt: IntentReceipt = {
-        receiptId: `pending-${Date.now()}`,
-        intent,
-        submittedAt: '',
-        outcome: null,
-      }
-      setSubmissions((list) => [...list, { receipt: pendingReceipt, pending: true }])
-      const receipt = await engine.submit(intent, expectedRevision)
-      setSubmissions((list) => list.map((s) => (s.receipt.receiptId === pendingReceipt.receiptId ? { receipt, pending: false } : s)))
+    async (intent: SakiIntent, options: SubmitOptions): Promise<IntentReceipt> => {
+      const handle = engine.submit(intent, options)
+      // The receipt id is minted synchronously and stays stable from pending
+      // to terminal — no placeholder id is ever replaced.
+      setSubmissions((list) => [
+        ...list,
+        { receipt: { receiptId: handle.receiptId, intent, submittedAt: '', outcome: null }, pending: true },
+      ])
+      const receipt = await handle.done
+      setSubmissions((list) => list.map((s) => (s.receipt.receiptId === handle.receiptId ? { receipt, pending: false } : s)))
       return receipt
     },
     [engine],
@@ -145,4 +150,10 @@ export function useSubmitIntent(): IntentContextValue {
   const ctx = useContext(IntentContext)
   if (!ctx) throw new Error('useSubmitIntent outside provider')
   return ctx
+}
+
+/** What every submit call needs: the revision of the Projection it read. */
+export interface SubmitOptions {
+  expectedRevision: number
+  subject: string
 }
