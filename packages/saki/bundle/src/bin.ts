@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Repository-local launcher for the empty Saki composition.
+ * Repository-local launcher for the Saki composition.
  * @module @breakfastdapaidang/saki-bundle/bin
  */
 

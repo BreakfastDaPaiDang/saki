@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { projectSelectionProjectionSchema } from '@breakfastdapaidang/saki-execution'
 import type { SakiControlPlaneModule } from '../src/index.ts'
 import { SakiAuthenticationContext } from '../src/authentication.ts'
 import {
@@ -7,6 +8,9 @@ import {
   SAKI_ACCESS_RESULT_FIXTURES,
   SAKI_CONTROL_RESULT_FIXTURES,
   SAKI_EMPTY_PROJECT_INDEX_FIXTURE,
+  SAKI_PROJECT_PROJECTION_FIXTURES,
+  SAKI_PROJECT_RECEIPT_FIXTURES,
+  SAKI_PROJECT_REQUEST_FIXTURES,
   SAKI_SECURITY_RECORD_FIXTURES,
 } from '../src/fixtures.ts'
 import {
@@ -18,7 +22,10 @@ import {
   cookieDigest,
   SakiBootstrapHandoff,
 } from '../src/secrets.ts'
-import { principalRecordSchema } from '../src/spec.ts'
+import {
+  principalRecordSchema,
+  registerDevelopmentProjectIntentSchema,
+} from '../src/spec.ts'
 import type {
   SakiBootstrapChallengeId,
   SakiBrowserSessionId,
@@ -72,19 +79,42 @@ describe('Saki control-plane public contracts', () => {
     expect(() => orphan.projectRequestToken()).toThrow('has no request token')
   })
 
-  it('publishes secret-free frontend fixtures for every B01 state family', () => {
+  it('publishes typed secret-free frontend fixtures for access and Project workflows', () => {
     expect(SAKI_ACCESS_FIXTURES.authenticated.kind).toBe('authenticated')
     expect(SAKI_EMPTY_PROJECT_INDEX_FIXTURE.projects).toEqual([])
     expect(SAKI_ACCESS_RESULT_FIXTURES.logoutConfirmed).toEqual({ ok: true })
-    expect(SAKI_CONTROL_RESULT_FIXTURES.intentUnavailable).toEqual({ ok: false, reason: 'intent-unavailable' })
+    expect(SAKI_CONTROL_RESULT_FIXTURES.intentDenied).toEqual({ ok: false, reason: 'denied' })
+    expect(registerDevelopmentProjectIntentSchema.parse(
+      SAKI_PROJECT_REQUEST_FIXTURES.registration,
+    ).projectTitle).toBe('Fixture project')
+    expect(projectSelectionProjectionSchema.parse(
+      SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection,
+    ).automaticMutationEligible).toBe(true)
+    expect(projectSelectionProjectionSchema.parse(
+      SAKI_PROJECT_PROJECTION_FIXTURES.dirtySelection,
+    ).blockingReasons).toEqual(['dirty'])
+    expect(SAKI_PROJECT_PROJECTION_FIXTURES.invalidDirectoryInspection)
+      .toEqual({ type: 'inspect-project-selection', result: { ok: false, reason: 'missing' } })
+    expect(SAKI_PROJECT_RECEIPT_FIXTURES.confirmed)
+      .toMatchObject({ ok: true, receipt: { state: 'confirmed', registryRevision: 1 } })
+    expect(SAKI_PROJECT_RECEIPT_FIXTURES.duplicate)
+      .toMatchObject({ ok: false, reason: 'conflict', receipt: { reason: 'duplicate-binding' } })
+    expect(SAKI_PROJECT_PROJECTION_FIXTURES.developmentWorkspace.recovery)
+      .toEqual({ state: 'ready', reasons: [] })
     expect(SAKI_ACCESS_LIFECYCLE_FIXTURES.challenges).toContain('revoked')
     expect(SAKI_SECURITY_RECORD_FIXTURES.sessions.active.verifier.redacted).toBe(true)
-    expect(JSON.stringify([
+    const serialized = JSON.stringify([
       SAKI_ACCESS_FIXTURES,
       SAKI_ACCESS_RESULT_FIXTURES,
       SAKI_CONTROL_RESULT_FIXTURES,
+      SAKI_PROJECT_REQUEST_FIXTURES,
+      SAKI_PROJECT_PROJECTION_FIXTURES,
+      SAKI_PROJECT_RECEIPT_FIXTURES,
       SAKI_ACCESS_LIFECYCLE_FIXTURES,
       SAKI_SECURITY_RECORD_FIXTURES,
-    ])).not.toMatch(/bootstrapSecret|cookieDigest|requestTokenDerivation/)
+    ])
+    expect(serialized).not.toMatch(/bootstrapSecret|cookieDigest|requestTokenDerivation/)
+    expect(serialized).not.toMatch(/canonicalWorktreePath|canonicalGitDirectory|canonicalCommonGitDirectory/)
+    expect(serialized).not.toContain('/fixture/repository')
   })
 })

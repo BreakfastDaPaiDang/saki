@@ -11,13 +11,11 @@ export const name = 'saki-control-plane-invariant'
 export const inject = ['invariants']
 
 /**
- * No continuous companion relation: every query reads the authoritative domain
- * records directly, while the owning module validates persisted relationships
- * at open and permits later writes only through its serialized operations.
+ * No runtime invariant: every query reads the authoritative domain records
+ * directly. The owning module validates Installation Access, Project Registry,
+ * Binding, and Intent relationships at open, then serializes writes.
  */
 const install: InvariantInstaller = () => {
-  // No runtime invariant: the module validates persisted relationships at open
-  // and owns every later serialized Installation Access mutation.
 }
 
 /**

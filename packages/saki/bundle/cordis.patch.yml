@@ -2,6 +2,11 @@
     - id: storage
       name: '@deepseek-ai/dsh-storage'
 
+    - id: storage-json
+      name: '@deepseek-ai/dsh-storage-json'
+      config:
+        root: !!js dshHomePath('storages')
+
     - id: saki-storage-sqlite
       name: '@deepseek-ai/dsh-storage-sqlite'
       config:
@@ -11,7 +16,31 @@
     - id: storage-domain
       name: '@deepseek-ai/dsh-storage-domain'
       config:
-        backend: sqlite
+        backend: json
+        routes:
+          saki_control_plane: sqlite
+
+    - id: session
+      name: '@deepseek-ai/dsh-session'
+
+    - id: session-persistence-jsonl
+      name: '@deepseek-ai/dsh-session-persistence-jsonl'
+      config:
+        root: !!js dshHomePath('sessions')
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
+    - id: fs-local
+      name: '@deepseek-ai/dsh-fs-local'
+      config:
+        cwd: !!js process.cwd()
+
+    - id: subprocess
+      name: '@deepseek-ai/dsh-subprocess-local'
+
+    - id: saki-execution-local
+      name: '@breakfastdapaidang/saki-execution-local'
 
     - id: saki-webserver
       name: '@deepseek-ai/dsh-host-webserver'

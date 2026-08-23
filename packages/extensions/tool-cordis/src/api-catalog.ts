@@ -977,8 +977,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'sakiControlPlane',
-    summary: 'Public deep-module operations used by Host and future automation Consumers.',
-    description: 'Public deep-module operations used by Host and future automation Consumers.',
+    summary: 'Control-plane operations used by trusted Consumers.',
+    description: 'Control-plane operations used by trusted Consumers.',
     methods: [
       {
         signature: 'readonly access: SakiAccess',
@@ -997,22 +997,35 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'stable independent identities.',
       },
       {
-        signature: 'query( authentication: SakiAuthenticationContext, query: SakiQuery, signal: AbortSignal, ): Promise<SakiQueryResult>',
+        signature: 'query<K extends keyof SakiQueryMap>( authentication: SakiAuthenticationContext, query: SakiQueryMap[K][\'request\'], signal: AbortSignal, ): Promise<SakiQueryResult<K>>',
         description: 'Query one protected Projection after revalidating current authority.',
-        parameters: [{ name: 'authentication', description: 'trusted server-derived AuthenticationContext.' }, { name: 'query', description: 'closed B01 Projection query.' }, { name: 'signal', description: 'caller cancellation.' }],
-        returns: 'authorized Projection or safe denial.',
+        parameters: [{ name: 'authentication', description: 'trusted server-derived AuthenticationContext.' }, { name: 'query', description: 'closed Projection query.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the authorized Projection or that query kind\'s typed failure: `denied` or `unavailable`, plus `stale` or `not-found` for Development Workspace reads.',
       },
       {
         signature: 'submit( authentication: SakiAuthenticationContext, intent: SakiIntentInput, signal: AbortSignal, ): Promise<SakiIntentReceipt>',
-        description: 'Reject the empty B01 Intent map after revalidating current authority.',
-        parameters: [{ name: 'authentication', description: 'trusted server-derived AuthenticationContext.' }, { name: 'intent', description: 'absent only while the merge-extensible Intent map is empty.' }, { name: 'signal', description: 'caller cancellation.' }],
-        returns: 'stable unavailable receipt.',
+        description: 'Submit one durable Project-registration Intent after current authorization.',
+        parameters: [{ name: 'authentication', description: 'trusted server-derived AuthenticationContext.' }, { name: 'intent', description: 'bounded immutable registration content.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'a confirmed receipt or typed `denied`, `unavailable`, `conflict`, `failure`, or `reconciliation-required` result with only phase-valid receipt fields.',
       },
       {
         signature: 'onChanged(listener: (keys: readonly SakiProjectionKey[]) => void): SakiChangedDisposer',
         description: 'Subscribe to contained post-commit Projection invalidations.',
         parameters: [{ name: 'listener', description: 'listener that re-queries affected Projection keys.' }],
         returns: 'disposer removing the listener.',
+      },
+    ],
+  },
+  {
+    key: 'sakiHostExecution',
+    summary: 'Host Execution capability.',
+    description: 'Host Execution capability. Providers resolve untrusted locators in their own execution world; control-plane Consumers own product policy and state.',
+    methods: [
+      {
+        signature: 'abstract inspectProjectSelection( request: InspectProjectSelectionRequest, signal: AbortSignal, ): Promise<InspectProjectSelectionResult>',
+        description: 'Resolve and inspect one selected directory without creating a Workspace or changing repository state.',
+        parameters: [{ name: 'request', description: 'selected Host and untrusted directory locator.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
+        returns: 'detached safe evidence plus the trusted Host observation, or a bounded rejection.',
       },
     ],
   },
@@ -2879,6 +2892,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CompactionTrigger = \'pressure\' | \'context-overflow\';',
   },
   {
+    name: 'CompleteInheritedChangeBaseline',
+    declaration: 'export interface CompleteInheritedChangeBaseline {\n    readonly kind: \'complete\';\n    readonly formatVersion: 1;\n    readonly capturedAt: number;\n    readonly bounds: InheritedChangeBaselineBounds;\n    readonly observed: InheritedChangeBaselineObservedLimits;\n    readonly entries: readonly InheritedChangeBaselineEntry[];\n    readonly digest: string;\n}',
+  },
+  {
     name: 'ConfinedArgv',
     declaration: 'export interface ConfinedArgv {\n    argv: string[];\n    enforcement: SandboxEnforcement;\n    denialSignatures: readonly string[];\n    runnerFailureRules: readonly RunnerFailureRule[];\n}',
   },
@@ -3221,6 +3238,46 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'InboxTarget',
     declaration: 'export type InboxTarget = \'next-turn\' | \'next-step\';',
+  },
+  {
+    name: 'InheritedChangeBaseline',
+    declaration: 'export type InheritedChangeBaseline = CompleteInheritedChangeBaseline | UnavailableInheritedChangeBaseline;',
+  },
+  {
+    name: 'InheritedChangeBaselineBounds',
+    declaration: 'export interface InheritedChangeBaselineBounds {\n    readonly maxEntries: number;\n    readonly maxPathBytes: number;\n    readonly maxGitOutputBytes: number;\n    readonly maxFileBytes: number;\n    readonly maxTotalFileBytes: number;\n    readonly maxCaptureMs: number;\n}',
+  },
+  {
+    name: 'InheritedChangeBaselineEntry',
+    declaration: 'export type InheritedChangeBaselineEntry = InheritedChangeBaselineEntryBase & {\n    readonly statusKind: \'tracked\';\n    readonly head: InheritedGitObjectSlot;\n    readonly index: InheritedGitObjectSlot;\n    readonly worktree: InheritedCurrentWorktreeEvidence;\n} | InheritedChangeBaselineEntryBase & {\n    readonly statusKind: \'untracked\';\n    readonly worktree: InheritedCurrentWorktreeEvidence;\n} | InheritedChangeBaselineEntryBase & {\n    readonly statusKind: \'unmerged\';\n    readonly head: InheritedGitObjectSlot;\n    readonly stages: readonly [\n        InheritedGitObjectSlot,\n        InheritedGitObjectSlot,\n        InheritedGitObjectSlot\n    ];\n    readonly worktree: InheritedCurrentWorktreeEvidence;\n};',
+  },
+  {
+    name: 'InheritedChangeBaselineObservedLimits',
+    declaration: 'export interface InheritedChangeBaselineObservedLimits {\n    readonly entries: number;\n    readonly pathBytes: number;\n    readonly gitOutputBytes: number;\n    readonly hashedBytes: number;\n    readonly elapsedMs: number;\n}',
+  },
+  {
+    name: 'InheritedChangeBaselineUnavailableReason',
+    declaration: 'export type InheritedChangeBaselineUnavailableReason = \'entry-limit\' | \'path-limit\' | \'git-output-limit\' | \'file-limit\' | \'hash-limit\' | \'time-limit\' | \'invalid-utf8\' | \'duplicate-path\' | \'unsupported-state\' | \'unstable-content\' | \'io-failure\';',
+  },
+  {
+    name: 'InheritedCurrentWorktreeEvidence',
+    declaration: 'export type InheritedCurrentWorktreeEvidence = {\n    readonly kind: \'regular\';\n    readonly mode: \'100644\' | \'100755\';\n    readonly byteLength: number;\n    readonly contentDigest: string;\n} | {\n    readonly kind: \'symlink\';\n    readonly targetDigest: string;\n} | {\n    readonly kind: \'submodule\';\n    readonly objectId: string;\n} | {\n    readonly kind: \'missing\';\n};',
+  },
+  {
+    name: 'InheritedGitObjectEvidence',
+    declaration: 'export interface InheritedGitObjectEvidence {\n    readonly kind: \'object\';\n    readonly mode: \'100644\' | \'100755\' | \'120000\' | \'160000\';\n    readonly objectId: string;\n}',
+  },
+  {
+    name: 'InheritedGitObjectSlot',
+    declaration: 'export type InheritedGitObjectSlot = InheritedGitObjectEvidence | {\n    readonly kind: \'missing\';\n};',
+  },
+  {
+    name: 'InspectProjectSelectionRequest',
+    declaration: 'export interface InspectProjectSelectionRequest {\n    readonly hostId: SakiHostId;\n    readonly directoryLocator: string;\n}',
+  },
+  {
+    name: 'InspectProjectSelectionResult',
+    declaration: 'export type InspectProjectSelectionResult = {\n    readonly ok: true;\n    readonly inspection: ProjectSelectionInspection;\n} | {\n    readonly ok: false;\n    readonly reason: ProjectSelectionRejectionReason;\n};',
   },
   {
     name: 'InvariantFailure',
@@ -3579,6 +3636,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type PreToolDecision = {\n    kind: \'allow\';\n} | {\n    kind: \'deny\';\n    reason: string;\n} | {\n    kind: \'ask\';\n    reason?: string;\n};',
   },
   {
+    name: 'ProjectInspectionFingerprint',
+    declaration: 'export interface ProjectInspectionFingerprint {\n    readonly version: 1;\n    readonly digest: string;\n}',
+  },
+  {
     name: 'ProjectionChangeListener',
     declaration: 'export type ProjectionChangeListener = (session: Session, key: Extract<keyof SessionProjectionMap, string>, value: unknown, seq: number) => void;',
   },
@@ -3597,6 +3658,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ProjectionSnapshot',
     declaration: 'export interface ProjectionSnapshot {\n    asOfSeq: number;\n    values: Partial<SessionProjectionMap>;\n}',
+  },
+  {
+    name: 'ProjectSelectionInspection',
+    declaration: 'export interface ProjectSelectionInspection {\n    readonly projection: ProjectSelectionProjection;\n    readonly trusted: TrustedProjectSelectionObservation;\n}',
+  },
+  {
+    name: 'ProjectSelectionProjection',
+    declaration: 'export interface ProjectSelectionProjection {\n    readonly observationVersion: 1;\n    readonly hostId: SakiHostId;\n    readonly displayLocation: string;\n    readonly objectFormat: \'sha1\' | \'sha256\';\n    readonly head: string;\n    readonly branch?: string;\n    readonly detached: boolean;\n    readonly upstream?: string;\n    readonly locked: boolean;\n    readonly inheritedChangeEntryCount: number;\n    readonly conversionAmbiguous: boolean;\n    readonly remotes: readonly SafeGitRemoteObservation[];\n    readonly githubRepositoryCandidates?: readonly string[];\n    readonly workspaceId?: WorkspaceId;\n    readonly automaticMutationEligible: boolean;\n    readonly blockingReasons: readonly (\'dirty\' | \'baseline-unavailable\' | \'conversion-ambiguous\' | \'locked\')[];\n    readonly fingerprint: ProjectInspectionFingerprint;\n    readonly baseline: InheritedChangeBaseline;\n}',
+  },
+  {
+    name: 'ProjectSelectionRejectionReason',
+    declaration: 'export type ProjectSelectionRejectionReason = \'missing\' | \'not-directory\' | \'not-git\' | \'bare\' | \'prunable\' | \'ambiguous\' | \'malformed\' | \'unavailable\';',
   },
   {
     name: 'PromptAssembly',
@@ -3643,8 +3716,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface RedactedSecret {\n    path: string[];\n    set: boolean;\n}',
   },
   {
+    name: 'RegisterDevelopmentProjectIntent',
+    declaration: 'export interface RegisterDevelopmentProjectIntent {\n    readonly type: \'register-development-project\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectTitle: string;\n    readonly hostId: SakiHostId;\n    readonly directoryLocator: string;\n    readonly expectedRegistryRevision: number;\n    readonly confirmedFingerprint: ProjectInspectionFingerprint;\n    readonly confirmedBaseline: InheritedChangeBaseline;\n}',
+  },
+  {
     name: 'ReplayEnvelope',
     declaration: 'export interface ReplayEnvelope {\n    response: unknown;\n    blocks?: readonly unknown[];\n}',
+  },
+  {
+    name: 'RepositoryAdministrativeIdentity',
+    declaration: 'export interface RepositoryAdministrativeIdentity {\n    readonly version: 1;\n    readonly digest: string;\n}',
+  },
+  {
+    name: 'RepositoryComparisonObservation',
+    declaration: 'export interface RepositoryComparisonObservation {\n    readonly fileMode: boolean;\n    readonly symlinks: boolean;\n    readonly autocrlf: boolean;\n}',
   },
   {
     name: 'RequestContext',
@@ -3723,6 +3808,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface RunnerFailureRule {\n    allowedExitCodes?: readonly number[];\n    fatalSignatures: readonly string[];\n    informationalLines?: readonly string[];\n}',
   },
   {
+    name: 'SafeGitRemoteObservation',
+    declaration: 'export interface SafeGitRemoteObservation {\n    readonly transport: \'https\' | \'ssh\' | \'file\' | \'other\';\n    readonly coordinate?: string;\n}',
+  },
+  {
     name: 'SakiAccess',
     declaration: 'export interface SakiAccess {\n    readAccess(presentedSession: string | undefined, signal: AbortSignal): Promise<AccessProjection>;\n    exchangeBootstrap(transportContext: SakiBootstrapTransportContext, request: SakiBootstrapExchangeRequest, signal: AbortSignal): Promise<SakiAccessExchangeResult>;\n    logoutCurrentSession(authentication: SakiAuthenticationContext, requestToken: string, signal: AbortSignal): Promise<SakiAccessLogoutResult>;\n}',
   },
@@ -3771,8 +3860,36 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SakiChangedDisposer = () => void;',
   },
   {
+    name: 'SakiControlIntentId',
+    declaration: 'export type SakiControlIntentId = Branded<\'SakiControlIntentId\'>;',
+  },
+  {
+    name: 'SakiDevelopmentProjectId',
+    declaration: 'export type SakiDevelopmentProjectId = Branded<\'SakiDevelopmentProjectId\'>;',
+  },
+  {
+    name: 'SakiDevelopmentProjectSummary',
+    declaration: 'export interface SakiDevelopmentProjectSummary {\n    readonly id: SakiDevelopmentProjectId;\n    readonly revision: number;\n    readonly projectTitle: string;\n    readonly binding: {\n        readonly id: SakiResourceBindingId;\n        readonly revision: number;\n        readonly health: \'active\' | \'missing\' | \'repair-required\';\n        readonly hostId: SakiHostId;\n        readonly displayLocation: string;\n        readonly head: string;\n        readonly branch?: string;\n        readonly detached: boolean;\n        readonly inheritedChangeEntryCount: number;\n        readonly baseline: \'complete\' | \'unavailable\';\n        readonly automaticMutationEligible: boolean;\n        readonly configurationGaps: readonly (\'baseline-unavailable\' | \'conversion-ambiguous\' | \'binding-missing\' | \'binding-repair-required\')[];\n    };\n}',
+  },
+  {
+    name: 'SakiDevelopmentWorkspaceProjection',
+    declaration: 'export interface SakiDevelopmentWorkspaceProjection {\n    readonly type: \'development-workspace\';\n    readonly registryRevision: number;\n    readonly project: SakiDevelopmentProjectSummary;\n    readonly currentSelection?: ProjectSelectionProjection;\n    readonly recovery: {\n        readonly state: \'ready\' | \'blocked\';\n        readonly reasons: readonly (\'binding-missing\' | \'binding-repair-required\' | \'baseline-unavailable\' | \'conversion-ambiguous\' | \'dirty\' | \'locked\')[];\n    };\n}',
+  },
+  {
+    name: 'SakiDevelopmentWorkspaceQuery',
+    declaration: 'export interface SakiDevelopmentWorkspaceQuery {\n    readonly type: \'development-workspace\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n}',
+  },
+  {
+    name: 'SakiHostChoiceProjection',
+    declaration: 'export interface SakiHostChoiceProjection {\n    readonly id: SakiHostId;\n    readonly revision: number;\n    readonly state: \'enrolled\';\n}',
+  },
+  {
     name: 'SakiHostId',
     declaration: 'export type SakiHostId = Branded<\'SakiHostId\'>;',
+  },
+  {
+    name: 'SakiInspectProjectSelectionQuery',
+    declaration: 'export interface SakiInspectProjectSelectionQuery {\n    readonly type: \'inspect-project-selection\';\n    readonly hostId: SakiHostId;\n    readonly directoryLocator: string;\n}',
   },
   {
     name: 'SakiInstallationGenerationId',
@@ -3792,15 +3909,15 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiIntentInput',
-    declaration: 'export type SakiIntentInput = [\n    keyof SakiIntentMap\n] extends [\n    never\n] ? undefined : SakiIntent;',
+    declaration: 'export type SakiIntentInput = SakiIntent;',
   },
   {
     name: 'SakiIntentMap',
-    declaration: 'export interface SakiIntentMap {\n}',
+    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n}',
   },
   {
     name: 'SakiIntentReceipt',
-    declaration: 'export type SakiIntentReceipt = {\n    readonly ok: false;\n    readonly reason: \'intent-unavailable\' | \'denied\' | \'unavailable\';\n};',
+    declaration: 'export type SakiIntentReceipt = {\n    readonly ok: true;\n    readonly receipt: Extract<SakiRegistrationReceipt, {\n        readonly state: \'confirmed\';\n    }>;\n} | {\n    readonly ok: false;\n    readonly reason: \'denied\';\n    readonly receipt?: never;\n} | {\n    readonly ok: false;\n    readonly reason: \'unavailable\';\n    readonly receipt?: Extract<SakiRegistrationReceipt, {\n        readonly state: \'prepared\';\n    }>;\n} | {\n    readonly ok: false;\n    readonly reason: \'conflict\';\n    readonly receipt?: Extract<SakiRegistrationReceipt, {\n        readonly state: \'conflict\';\n    }>;\n} | {\n    readonly ok: false;\n    readonly reason: \'failure\';\n    readonly receipt: Extract<SakiRegistrationReceipt, {\n        readonly state: \'failure\';\n    }>;\n} | {\n    readonly ok: false;\n    readonly reason: \'reconciliation-required\';\n    readonly receipt: Extract<SakiRegistrationReceipt, {\n        readonly state: \'reconciliation-required\';\n    }>;\n};',
   },
   {
     name: 'SakiPrincipalId',
@@ -3808,7 +3925,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiProjectIndexProjection',
-    declaration: 'export interface SakiProjectIndexProjection {\n    readonly type: \'project-index\';\n    readonly revision: 0;\n    readonly projects: readonly [\n    ];\n}',
+    declaration: 'export interface SakiProjectIndexProjection {\n    readonly type: \'project-index\';\n    readonly revision: number;\n    readonly hosts: readonly SakiHostChoiceProjection[];\n    readonly projects: readonly SakiDevelopmentProjectSummary[];\n}',
   },
   {
     name: 'SakiProjectIndexQuery',
@@ -3816,23 +3933,31 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiProjectionKey',
-    declaration: 'export type SakiProjectionKey = \'access\' | \'project-index\';',
+    declaration: 'export type SakiProjectionKey = \'access\' | \'project-index\' | \'development-workspace\';',
   },
   {
-    name: 'SakiQuery',
-    declaration: 'export type SakiQuery = SakiQueryMap[keyof SakiQueryMap][\'request\'];',
+    name: 'SakiProjectSelectionInspectionProjection',
+    declaration: 'export interface SakiProjectSelectionInspectionProjection {\n    readonly type: \'inspect-project-selection\';\n    readonly result: {\n        readonly ok: true;\n        readonly selection: ProjectSelectionProjection;\n    } | Extract<InspectProjectSelectionResult, {\n        readonly ok: false;\n    }>;\n}',
   },
   {
     name: 'SakiQueryMap',
-    declaration: 'export interface SakiQueryMap {\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly projection: SakiProjectIndexProjection;\n    };\n}',
+    declaration: 'export interface SakiQueryMap {\n    readonly \'inspect-project-selection\': {\n        readonly request: SakiInspectProjectSelectionQuery;\n        readonly projection: SakiProjectSelectionInspectionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly projection: SakiProjectIndexProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'development-workspace\': {\n        readonly request: SakiDevelopmentWorkspaceQuery;\n        readonly projection: SakiDevelopmentWorkspaceProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'stale\' | \'not-found\';\n    };\n}',
   },
   {
     name: 'SakiQueryResult',
-    declaration: 'export type SakiQueryResult = {\n    readonly ok: true;\n    readonly projection: SakiProjectIndexProjection;\n} | {\n    readonly ok: false;\n    readonly reason: \'denied\' | \'unavailable\';\n};',
+    declaration: 'export type SakiQueryResult<K extends keyof SakiQueryMap = keyof SakiQueryMap> = K extends keyof SakiQueryMap ? {\n    readonly ok: true;\n    readonly projection: SakiQueryMap[K][\'projection\'];\n} | {\n    readonly ok: false;\n    readonly reason: SakiQueryMap[K][\'failure\'];\n} : never;',
+  },
+  {
+    name: 'SakiRegistrationReceipt',
+    declaration: 'export type SakiRegistrationReceipt = (SakiRegistrationReceiptBase & {\n    readonly state: \'prepared\';\n}) | (SakiRegistrationReceiptBase & {\n    readonly state: \'confirmed\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly resourceBindingId: SakiResourceBindingId;\n    readonly registryRevision: number;\n}) | (SakiRegistrationReceiptBase & {\n    readonly state: \'conflict\';\n    readonly reason: \'expected-revision\' | \'duplicate-binding\';\n}) | (SakiRegistrationReceiptBase & {\n    readonly state: \'failure\';\n    readonly reason: \'authority\';\n}) | (SakiRegistrationReceiptBase & {\n    readonly state: \'reconciliation-required\';\n    readonly reason: \'workspace\' | \'observation\';\n});',
+  },
+  {
+    name: 'SakiResourceBindingId',
+    declaration: 'export type SakiResourceBindingId = Branded<\'SakiResourceBindingId\'>;',
   },
   {
     name: 'SakiUnauthenticatedAccessProjection',
-    declaration: 'export interface SakiUnauthenticatedAccessProjection {\n    readonly kind: \'bootstrap-required\' | \'session-required\' | \'unavailable\';\n    readonly message: string;\n}',
+    declaration: 'export type SakiUnauthenticatedAccessProjection = {\n    readonly kind: \'bootstrap-required\';\n    readonly message: \'Local bootstrap is required.\';\n} | {\n    readonly kind: \'session-required\';\n    readonly message: \'A local browser session is required.\';\n} | {\n    readonly kind: \'unavailable\';\n    readonly message: \'Local access is temporarily unavailable.\';\n};',
   },
   {
     name: 'SandboxEnforcement',
@@ -4631,6 +4756,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ToolSchema {\n    name: string;\n    description: string;\n    parameters: Record<string, unknown>;\n}',
   },
   {
+    name: 'TrustedProjectSelectionObservation',
+    declaration: 'export interface TrustedProjectSelectionObservation {\n    readonly canonicalWorktreePath: string;\n    readonly canonicalGitDirectory: string;\n    readonly canonicalCommonGitDirectory: string;\n    readonly gitDirectoryIdentity: RepositoryAdministrativeIdentity;\n    readonly commonGitDirectoryIdentity: RepositoryAdministrativeIdentity;\n    readonly comparison: RepositoryComparisonObservation;\n}',
+  },
+  {
     name: 'TurnEndCancelCause',
     declaration: 'export type TurnEndCancelCause = AgentCancelCause | {\n    readonly kind: \'legacy\';\n};',
   },
@@ -4701,6 +4830,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TypertTypeModel',
     declaration: 'export interface TypertTypeModel {\n    readonly name: string;\n    readonly declaration: string;\n}',
+  },
+  {
+    name: 'UnavailableInheritedChangeBaseline',
+    declaration: 'export interface UnavailableInheritedChangeBaseline {\n    readonly kind: \'unavailable\';\n    readonly reason: InheritedChangeBaselineUnavailableReason;\n    readonly observed: InheritedChangeBaselineObservedLimits;\n}',
   },
   {
     name: 'UserMessage',

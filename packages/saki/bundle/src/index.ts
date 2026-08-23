@@ -1,5 +1,5 @@
 /**
- * Empty Saki application readiness provider and post-boot announcer.
+ * Saki application readiness provider and post-boot announcer.
  * @module @breakfastdapaidang/saki-bundle
  */
 

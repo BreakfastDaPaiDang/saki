@@ -9,6 +9,54 @@ This file is GENERATED from source (`scripts/gen-config-catalog.ts`) and verifie
 
 A `Requires:` line lists the service keys the plugin `inject`s: its `cordis.yml` tree must also load providers for those services. Scope is the harness tier (`packages/`); the vendored cordis plugins a config tree may also load (`hmr`, the console logger, …) are pinned upstream source ([vendoring policy](../vendor/README.md)) and not catalogued here.
 
+<a id="breakfastdapaidangsaki-execution-local"></a>
+
+## `@breakfastdapaidang/saki-execution-local`
+
+Requires: `fs` · `subprocess` · `workspaceRegistry`
+
+```ts config-catalog
+type ResolvedConfig = Required<Config>
+
+/** Local Git observation and baseline resource limits. */
+export interface Config {
+  /** Wall-clock bound for each Git process. */
+  gitCommandTimeoutMs?: number
+  /** TERM-to-KILL grace for each Git process tree. */
+  gitTerminationGraceMs?: number
+  /** Inclusive complete stdout bound for each Git process. */
+  maxGitStdoutBytes?: number
+  /** Inclusive complete stderr bound for each Git process. */
+  maxGitStderrBytes?: number
+  /** Maximum distinct paths in one complete repository inventory. */
+  inventoryMaxEntries?: number
+  /** Maximum exact path bytes across one complete repository inventory. */
+  inventoryMaxPathBytes?: number
+  /** Maximum raw Git stdout plus stderr bytes across one repository observation round. */
+  inventoryMaxGitOutputBytes?: number
+  /** Maximum retained raw evidence bytes from one inventory path. */
+  inventoryMaxFileBytes?: number
+  /** Maximum raw bytes read, including stability checks, across one repository inventory. */
+  inventoryMaxTotalFileBytes?: number
+  /** Wall-clock bound for one complete Git, filesystem, and Workspace observation round. */
+  inventoryMaxCaptureMs?: number
+  /** Maximum dirty entries in a complete inherited baseline. */
+  baselineMaxEntries?: number
+  /** Maximum sum of exact Git path bytes in a complete baseline. */
+  baselineMaxPathBytes?: number
+  /** Maximum allowlisted Git evidence bytes retained by one baseline. */
+  baselineMaxGitOutputBytes?: number
+  /** Maximum retained raw evidence bytes from one changed path. */
+  baselineMaxFileBytes?: number
+  /** Maximum bytes hashed across one complete baseline. */
+  baselineMaxTotalFileBytes?: number
+  /** Wall-clock bound for content baseline capture. */
+  baselineMaxCaptureMs?: number
+}
+```
+
+Source: [`packages/saki/execution-local/src/index.ts:54`](../packages/saki/execution-local/src/index.ts)
+
 <a id="deepseek-aidsh-acp"></a>
 
 ## `@deepseek-ai/dsh-acp`
@@ -3113,6 +3161,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 
 Abstract service classes — a deployment loads a concrete implementation package instead ([capability seams](../.agents/notes/implemented/architecture/2026-06-13-capability-seams.md)).
 
+- `@breakfastdapaidang/saki-execution` — abstract `SakiHostExecution` ([`packages/saki/execution/src/index.ts`](../packages/saki/execution/src/index.ts))
 - `@deepseek-ai/dsh-attachment` — abstract `AttachmentStore` ([`packages/attachment/attachment/src/index.ts`](../packages/attachment/attachment/src/index.ts))
 - `@deepseek-ai/dsh-code-runtime` — abstract `CodeRuntime` ([`packages/code-runtime/code-runtime/src/index.ts`](../packages/code-runtime/code-runtime/src/index.ts))
 - `@deepseek-ai/dsh-compaction` — abstract `CompactionEngine` ([`packages/compaction/compaction/src/index.ts`](../packages/compaction/compaction/src/index.ts))

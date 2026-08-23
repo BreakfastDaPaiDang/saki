@@ -16,6 +16,8 @@ Saki 需要一个位置协调 Work Item、Work Session、Agent Run、模型账�
 
 0.1.0 只增加四个 Saki capability seam：Host Execution、GitHub、Model Account 和 Image Generation。它们共享 Control Intent identity、稳定外部 reference、provider-neutral error category、cancellation signal 和 reconciliation 义务，但不实现万能 adapter 基类。它们的授权、取消、排队、自然身份和结果观测语义差异足够大，需要精确的 capability-specific Interface。
 
+已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.md)提供只读 Host Execution definition、Local Host Provider 与首个控制面 Consumer 操作。本 Agent Note 保持 proposed，因为 Host 修改操作以及 GitHub、Model Account 与 Image Generation seam 尚未实现。
+
 Workspace、Session、Agent、LLM、compaction、credential reference、attachment、live job、skill、file、shell、terminal、sandbox 与 tool 直接使用现有 DSH Service。除非产品需要 DSH Interface 无法表达的行为，否则不增加透传包装层。普遍可复用的缺失行为，应先进入上游或通用 DSH Provider，再考虑成为 Saki 专用能力。
 
 把 Saki 权威控制状态通过 `storageDomain` 路由到专用 SQLite 数据库。通用可选 schema migration 继续由 `storage-domain` 拥有；Saki 专属 generation 切换、Recovery Backup、加密 Installation Export、restore、retention 与替换 Host 恢复属于 `installation-maintenance` 产品 plugin。[Migration 与维护 proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.md)定义这项所有权分离，但不增加第五个外部 capability seam。

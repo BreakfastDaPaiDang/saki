@@ -16,6 +16,7 @@
     { "path": "../../client/connection/tsconfig.host.json" },
     { "path": "../../host/apiproxy" },
     { "path": "../../runtime-diagnostics/invariants" },
-    { "path": "../control-plane" }
+    { "path": "../control-plane" },
+    { "path": "../execution" }
   ]
 }

@@ -11,6 +11,7 @@ import SakiControlPlane from '../src/index.ts'
 import type { SakiControlPlaneModule } from '../src/index.ts'
 import {
   CONTROL_STATE_KEY,
+  DEVELOPMENT_PROJECT_REGISTRY_KEY,
   sakiControlPlaneDomainSpec,
 } from '../src/spec.ts'
 import type {
@@ -63,6 +64,13 @@ async function storageContext(path: string): Promise<Context> {
   await ctx.plugin(Storage)
   await ctx.plugin(StorageSqlite, { path, journalMode: 'delete' })
   await ctx.plugin(StorageDomain, { backend: 'sqlite' })
+  ctx.provide('sakiHostExecution', {
+    inspectProjectSelection: () => Promise.resolve({ ok: false, reason: 'unavailable' }),
+  } as never)
+  ctx.provide('workspaceRegistry', {
+    list: () => [],
+    create: () => Promise.reject(new Error('workspace creation is outside access invariant tests')),
+  } as never)
   return ctx
 }
 
@@ -106,6 +114,19 @@ function control(domain: SakiDomain) {
 function access(domain: SakiDomain): InstallationAccessRecord {
   const owner = control(domain)
   return domain.table('installation_access').get(owner.installationAccessId)!
+}
+
+function durableState(domain: SakiDomain): unknown {
+  return structuredClone({
+    control: [...domain.table('control_state').entries()],
+    installations: [...domain.table('installations').entries()],
+    hosts: [...domain.table('hosts').entries()],
+    principals: [...domain.table('principals').entries()],
+    grants: [...domain.table('grants').entries()],
+    access: [...domain.table('installation_access').entries()],
+    projects: [...domain.table('development_project_registry').entries()],
+    intents: [...domain.table('registration_intents').entries()],
+  })
 }
 
 async function mutateAccess(path: string, mutation: AccessMutation): Promise<void> {
@@ -650,6 +671,7 @@ describe('Saki durable control-plane invariants', () => {
   ] as const)('rejects an inconsistent provisioning %s child', async (_name, tableName) => {
     const path = await initialAccessDatabase()
     await edit(path, async (domain) => {
+      await domain.table('development_project_registry').delete(DEVELOPMENT_PROJECT_REGISTRY_KEY)
       await domain.table('control_state').update(CONTROL_STATE_KEY, current => ({
         ...current,
         revision: current.revision + 1,
@@ -671,9 +693,47 @@ describe('Saki durable control-plane invariants', () => {
     await expectStartFailure(path, `provisioning ${_name} is inconsistent`)
   })
 
+  it('validates every retained provisioning child before filling an earlier missing child', async () => {
+    const path = await initialAccessDatabase()
+    await edit(path, async (domain) => {
+      await domain.table('development_project_registry').delete(DEVELOPMENT_PROJECT_REGISTRY_KEY)
+      await domain.table('control_state').update(CONTROL_STATE_KEY, current => ({
+        ...current,
+        revision: current.revision + 1,
+        phase: 'provisioning',
+      }))
+      const owner = control(domain)
+      await domain.table('installations').delete(owner.installationId)
+      await domain.table('hosts').update(owner.initialHostId, current => ({
+        ...current,
+        revision: current.revision + 1,
+      }))
+    })
+    let before: unknown
+    await edit(path, async (domain) => { before = durableState(domain) })
+
+    await expectStartFailure(path, 'provisioning Host is inconsistent')
+
+    await edit(path, async (domain) => { expect(durableState(domain)).toEqual(before) })
+  })
+
+  it('rejects Development Project product records before provisioning is ready', async () => {
+    const path = await initialAccessDatabase()
+    await edit(path, async (domain) => {
+      await domain.table('control_state').update(CONTROL_STATE_KEY, current => ({
+        ...current,
+        revision: current.revision + 1,
+        phase: 'provisioning',
+      }))
+    })
+
+    await expectStartFailure(path, 'provisioning contains Development Project product records')
+  })
+
   it('rejects child rows outside the provisioning owner stable references', async () => {
     const path = await initialAccessDatabase()
     await edit(path, async (domain) => {
+      await domain.table('development_project_registry').delete(DEVELOPMENT_PROJECT_REGISTRY_KEY)
       await domain.table('control_state').update(CONTROL_STATE_KEY, current => ({
         ...current,
         revision: current.revision + 1,
