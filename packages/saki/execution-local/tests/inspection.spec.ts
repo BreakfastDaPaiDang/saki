@@ -842,14 +842,18 @@ describe('LocalSakiHostExecution', () => {
 
   it.skipIf(process.platform === 'win32')('captures a real changed worktree symlink without following it', async () => {
     const root = await repository()
-    await writeFile(join(root, 'first-target'), 'first secret bytes')
-    await writeFile(join(root, 'second-target'), 'second secret bytes')
+    const targetRoot = await mkdtemp(join(tmpdir(), 'saki-inspection-symlink-target-'))
+    roots.push(targetRoot)
+    const firstTarget = join(targetRoot, 'first-target')
+    const secondTarget = join(targetRoot, 'second-target')
+    await writeFile(firstTarget, 'first secret bytes')
+    await writeFile(secondTarget, 'second secret bytes')
     const link = join(root, 'tracked-link')
-    await symlink('first-target', link, 'file')
+    await symlink(firstTarget, link, 'file')
     await git(root, 'add', 'tracked-link')
     await git(root, 'commit', '-m', 'symlink')
     await rm(link)
-    await symlink('second-target', link, 'file')
+    await symlink(secondTarget, link, 'file')
     const execution = await provider()
 
     const result = await execution.inspectProjectSelection(
