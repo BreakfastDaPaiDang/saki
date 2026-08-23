@@ -61,19 +61,29 @@ export interface GitRunnerConfig {
   readonly terminationGraceMs: number
 }
 
-const GIT_GLOBAL_ARGS = [
-  '--no-pager',
-  '--no-lazy-fetch',
-  '--no-replace-objects',
-  '-c', 'core.fsmonitor=false',
-  '-c', 'core.pager=cat',
-  '-c', 'credential.helper=',
-  '-c', 'diff.external=',
-  '-c', 'core.hooksPath=',
-  '-c', `core.excludesFile=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
-  '-c', `core.attributesFile=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
-  '--no-optional-locks',
-] as const
+/**
+ * Construct the fixed repository-isolation prefix for one Host platform.
+ * @param platform - platform whose null device Git must use.
+ * @returns exact arguments prepended to every inspected Git command.
+ */
+export function gitGlobalArguments(platform: NodeJS.Platform): readonly string[] {
+  const nullDevice = gitNullDevice(platform)
+  return [
+    '--no-pager',
+    '--no-lazy-fetch',
+    '--no-replace-objects',
+    '-c', 'core.fsmonitor=false',
+    '-c', 'core.pager=cat',
+    '-c', 'credential.helper=',
+    '-c', 'diff.external=',
+    '-c', 'core.hooksPath=',
+    '-c', `core.excludesFile=${nullDevice}`,
+    '-c', `core.attributesFile=${nullDevice}`,
+    '--no-optional-locks',
+  ]
+}
+
+const GIT_GLOBAL_ARGS = gitGlobalArguments(process.platform)
 
 /**
  * Execute a process with raw pipe collection and join its complete process
@@ -226,10 +236,11 @@ export class GitRunner {
 /**
  * Remove all ambient Git control variables and apply the fixed non-interactive
  * locale/config layer used by every inspection command.
+ * @param platform - platform whose null device Git must use.
  * @returns explicit environment overrides and tombstones.
  */
-export function gitInspectionEnvironment(): NodeJS.ProcessEnv {
-  const nullConfig = process.platform === 'win32' ? 'NUL' : '/dev/null'
+export function gitInspectionEnvironment(platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  const nullConfig = gitNullDevice(platform)
   let entries: [string, string | undefined][] = []
   for (const key of Object.keys(process.env)) {
     if (key.toUpperCase().startsWith('GIT_')) entries.push([key, undefined])
@@ -253,6 +264,10 @@ export function gitInspectionEnvironment(): NodeJS.ProcessEnv {
     entries.push([key, value])
   }
   return Object.fromEntries(entries)
+}
+
+function gitNullDevice(platform: NodeJS.Platform): 'NUL' | '/dev/null' {
+  return platform === 'win32' ? 'NUL' : '/dev/null'
 }
 
 function signalAborted(signal: AbortSignal): boolean {

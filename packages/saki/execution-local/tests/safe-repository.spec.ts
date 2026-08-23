@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import type { SakiHostId } from '@breakfastdapaidang/saki-execution'
+import { canonicalDigest, type SakiHostId } from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Config } from '../src/index.ts'
 import { GitCommandError, GitRunner } from '../src/git-runner.ts'
@@ -41,6 +41,17 @@ const CONFIG: Required<Config> = {
   baselineMaxFileBytes: 1024 * 1024,
   baselineMaxTotalFileBytes: 4 * 1024 * 1024,
   baselineMaxCaptureMs: 10_000,
+}
+
+async function deterministicAdministrativeDirectoryIdentity(
+  path: string,
+  signal: AbortSignal,
+): Promise<{ readonly version: 1; readonly digest: string }> {
+  signal.throwIfAborted()
+  return {
+    version: 1,
+    digest: canonicalDigest('saki/test-administrative-directory-identity/v1', { path: normalize(path) }),
+  }
 }
 
 afterEach(async () => {
@@ -422,6 +433,7 @@ describe('safe repository admission', () => {
       CONFIG,
       { hostId: HOST_ID, directoryLocator: root },
       new AbortController().signal,
+      deterministicAdministrativeDirectoryIdentity,
     )
 
     expect(result).toEqual({ ok: false, reason: 'unavailable' })
@@ -1037,6 +1049,45 @@ describe('safe repository admission', () => {
     if (crlfOpened.kind !== 'repository') return
     await using crlfView = crlfOpened.view
     await crlfView.git.run(root, ['rev-parse', '--verify', 'HEAD'], new AbortController().signal)
+  })
+
+  it('rejects diagnostics from successful private config parsing commands', async () => {
+    const root = await repository()
+    const harness = await localHarness()
+    const selectors = [
+      (args: readonly string[]) => args[0] === 'config' && args.includes('--file') && args.includes('--name-only'),
+      (args: readonly string[]) => args[0] === 'config' && args.includes('--file') && args.includes('--get-all'),
+    ]
+
+    for (const selects of selectors) {
+      let injected = false
+      const diagnostic = {
+        run: async (
+          cwd: string,
+          args: readonly string[],
+          signal: AbortSignal,
+          stdin?: Parameters<GitRunner['run']>[3],
+          outputBudget?: Parameters<GitRunner['run']>[4],
+        ) => {
+          const output = await harness.git.run(cwd, args, signal, stdin, outputBudget)
+          if (injected || !selects(args)) return output
+          injected = true
+          return { ...output, stderr: Buffer.from('private config diagnostic') }
+        },
+      } as GitRunner
+
+      const opened = await openSafeRepositoryView(
+        harness.fs,
+        diagnostic,
+        await realpath(root),
+        MAX_CONTROL_FILE_BYTES,
+        new AbortController().signal,
+      )
+
+      expect(injected).toBe(true)
+      expect(opened.kind).toBe('unavailable')
+      if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    }
   })
 
   it('rejects missing or link-shaped object storage before repository queries', async () => {

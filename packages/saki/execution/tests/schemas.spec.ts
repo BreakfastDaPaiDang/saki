@@ -445,6 +445,12 @@ describe('InheritedChangeBaseline schemas', () => {
       upstream: 'refs/remotes/origin/main',
       workspace: { kind: 'present', workspaceId: 'workspace-current' },
     })
+    expect(fingerprintMaterial).not.toHaveProperty('githubRepositoryCandidates')
+    expect(projectInspectionFingerprintMaterial({
+      ...workspaceProjection,
+      remotes: githubRemotes,
+      githubRepositoryCandidates: ['github.com/org/repo'],
+    }, trusted)).toHaveProperty('githubRepositoryCandidates', ['github.com/org/repo'])
     expect(projectInspectionWorkspaceIndependentMaterial(workspaceProjection, trusted))
       .not.toHaveProperty('workspace')
     const { branch: _branch, ...withoutBranch } = projection
@@ -452,6 +458,22 @@ describe('InheritedChangeBaseline schemas', () => {
       { ...withoutBranch, detached: true },
       trusted,
     )).not.toHaveProperty('branch')
+  })
+
+  it('derives GitHub candidates only from transport-compatible normalized coordinates', () => {
+    const sshGithubCoordinate = 'ssh.github.com:443/org/repo'
+    expect(deriveGitHubRepositoryCandidates([
+      { transport: 'https', coordinate: sshGithubCoordinate },
+    ])).toEqual([])
+    expect(deriveGitHubRepositoryCandidates([
+      { transport: 'ssh', coordinate: sshGithubCoordinate },
+    ])).toEqual(['github.com/org/repo'])
+
+    const escapedCoordinate = 'github.com/org/repo%2Fpart'
+    expect(isNormalizedRemoteCoordinate(escapedCoordinate)).toBe(true)
+    expect(deriveGitHubRepositoryCandidates([
+      { transport: 'https', coordinate: escapedCoordinate },
+    ])).toEqual([])
   })
 
   it('rejects impossible retained byte totals and duplicate path identities', () => {

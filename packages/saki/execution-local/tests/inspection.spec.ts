@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
 import { constants as bufferConstants } from 'node:buffer'
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, cp, mkdtemp, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, delimiter, join, normalize, parse, relative } from 'node:path'
+import { basename, delimiter, dirname, join, normalize, parse, relative } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { promisify } from 'node:util'
 import { Context } from '@deepseek-ai/cordis'
@@ -20,6 +20,7 @@ import {
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import {
+  canonicalDigest,
   MAX_INHERITED_BASELINE_ENTRIES,
   MAX_GIT_REF_CHARS,
   MAX_INVENTORY_ENTRIES,
@@ -30,7 +31,11 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { assertSupportedGitVersion, LocalSakiHostExecution, sanitizeRemote, type Config } from '../src/index.ts'
 import { GitCommandError, GitRunner, gitInspectionEnvironment } from '../src/git-runner.ts'
-import { inspectLocalProjectSelection } from '../src/inspection.ts'
+import {
+  inspectLocalProjectSelection as inspectSelection,
+  projectDisplayLocation,
+  type AdministrativeDirectoryIdentityReader,
+} from '../src/inspection.ts'
 import { openSafeRepositoryView } from '../src/safe-repository.ts'
 
 const run = promisify(execFile)
@@ -54,6 +59,26 @@ const CONFIG: Required<Config> = {
   baselineMaxFileBytes: 1024 * 1024,
   baselineMaxTotalFileBytes: 4 * 1024 * 1024,
   baselineMaxCaptureMs: 10_000,
+}
+
+const deterministicAdministrativeDirectoryIdentity: AdministrativeDirectoryIdentityReader = async (path, signal) => {
+  signal.throwIfAborted()
+  return {
+    version: 1,
+    digest: canonicalDigest('saki/test-administrative-directory-identity/v1', { path: normalize(path) }),
+  }
+}
+
+function inspectLocalProjectSelection(
+  fs: FileSystem,
+  workspaces: Parameters<typeof inspectSelection>[1],
+  git: GitRunner,
+  config: Parameters<typeof inspectSelection>[3],
+  request: Parameters<typeof inspectSelection>[4],
+  signal: AbortSignal,
+  identityReader: AdministrativeDirectoryIdentityReader = deterministicAdministrativeDirectoryIdentity,
+): ReturnType<typeof inspectSelection> {
+  return inspectSelection(fs, workspaces, git, config, request, signal, identityReader)
 }
 
 afterEach(async () => {
@@ -335,6 +360,10 @@ describe('LocalSakiHostExecution', () => {
     if (!result.ok) return
     expect(result.inspection.projection.displayLocation).toBe('repository')
     expect(JSON.stringify(result.inspection.projection)).not.toContain('\u202e')
+  })
+
+  it('labels the Local Host filesystem root without projecting its path spelling', () => {
+    expect(projectDisplayLocation(parse(process.cwd()).root)).toBe('filesystem root')
   })
 
   it('treats linked and detached worktrees as distinct selections in one repository family', async () => {
@@ -634,6 +663,190 @@ describe('LocalSakiHostExecution', () => {
     expect(JSON.stringify(result.inspection.projection.baseline)).not.toContain(
       await gitText(root, 'rev-parse', 'HEAD'),
     )
+  }, 15_000)
+
+  it.skipIf(process.platform !== 'win32')('uses the stable canonical spelling for nested gitlink admission and private --work-tree arguments', async () => {
+    const source = await repository()
+    const root = await repository()
+    const indexedModule = join(root, 'ModuleCase')
+    const intermediate = join(root, 'module-case-intermediate')
+    const canonicalModule = join(root, 'modulecase')
+    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'ModuleCase')
+    await git(root, 'commit', '-am', 'submodule')
+    await rename(indexedModule, intermediate)
+    await rename(intermediate, canonicalModule)
+    const canonicalPath = await realpath(canonicalModule)
+    const harness = await localInspectionHarness()
+    const invocations: Array<{ readonly cwd: string; readonly args: readonly string[] }> = []
+    const recording = {
+      run: async (...args: Parameters<GitRunner['run']>) => {
+        invocations.push({ cwd: args[0], args: [...args[1]] })
+        return await harness.git.run(...args)
+      },
+    } as GitRunner
+
+    const result = await inspectLocalProjectSelection(
+      harness.fs,
+      { list: () => [] },
+      recording,
+      CONFIG,
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+    )
+
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    if (!result.ok) return
+    expect(result.inspection.projection.baseline).toMatchObject({ kind: 'complete', entries: [] })
+    const nestedReads = invocations.filter(({ args }) => gitSubcommand(args).at(-1) === 'HEAD^{commit}')
+    expect(nestedReads.length).toBeGreaterThan(0)
+    expect(nestedReads.every(({ args }) => args.includes(`--work-tree=${canonicalPath}`))).toBe(true)
+    expect(nestedReads.every(({ args }) => !args.includes(`--work-tree=${indexedModule}`))).toBe(true)
+  }, 15_000)
+
+  it('contains unstable nested gitlink directory resolution as unavailable evidence', async () => {
+    const source = await repository()
+    const root = await repository()
+    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+    await git(root, 'commit', '-am', 'submodule')
+    const module = normalize(join(root, 'module'))
+    const nestedMarker = normalize(join(module, '.git'))
+    const harness = await localInspectionHarness()
+    for (const fault of [
+      'first-missing',
+      'first-reparse',
+      'first-target-missing',
+      'first-target-file',
+      'second-missing',
+      'second-reparse',
+      'version-changed',
+      'second-target-missing',
+      'second-target-file',
+      'canonical-target-changed',
+    ] as const) {
+      let lstatReads = 0
+      let resolveReads = 0
+      let statReads = 0
+      let nestedMarkerProbes = 0
+      let nestedGitProbes = 0
+      const filesystem = new Proxy(harness.fs, {
+        get(target, property) {
+          if (property === 'lstat') {
+            return async (...args: Parameters<FileSystem['lstat']>) => {
+              const candidate = normalize(args[0])
+              if (candidate === nestedMarker) nestedMarkerProbes += 1
+              const actual = await target.lstat(...args)
+              if (candidate !== module) return actual
+              lstatReads += 1
+              const second = lstatReads % 2 === 0
+              if (fault === 'first-missing') return undefined
+              if (fault === 'first-reparse' && actual !== undefined) return { ...actual, type: 'symlink' as const }
+              if (fault === 'second-missing' && second) return undefined
+              if (fault === 'second-reparse' && second && actual !== undefined) {
+                return { ...actual, type: 'symlink' as const }
+              }
+              if (fault === 'version-changed' && second && actual !== undefined) {
+                return { ...actual, version: FsVersion('changed') }
+              }
+              return actual
+            }
+          }
+          if (property === 'resolve') {
+            return async (...args: Parameters<FileSystem['resolve']>) => {
+              if (normalize(args[0]) !== module) return await target.resolve(...args)
+              resolveReads += 1
+              if (fault === 'canonical-target-changed' && resolveReads % 2 === 0) {
+                return await target.resolve(dirname(module), args[1])
+              }
+              return await target.resolve(...args)
+            }
+          }
+          if (property === 'stat') {
+            return async (...args: Parameters<FileSystem['stat']>) => {
+              const actual = await target.stat(...args)
+              if (normalize(target.processPath(args[0])) !== module) return actual
+              statReads += 1
+              const second = statReads % 2 === 0
+              if (fault === 'first-target-missing') return undefined
+              if (fault === 'first-target-file' && actual !== undefined) return { ...actual, type: 'file' as const }
+              if (fault === 'second-target-missing' && second) return undefined
+              if (fault === 'second-target-file' && second && actual !== undefined) {
+                return { ...actual, type: 'file' as const }
+              }
+              return actual
+            }
+          }
+          const value: unknown = Reflect.get(target, property, target)
+          if (typeof value !== 'function') return value
+          const method = value as (...args: unknown[]) => unknown
+          return (...args: unknown[]): unknown => method.apply(target, args)
+        },
+      })
+      const recording = {
+        run: async (...args: Parameters<GitRunner['run']>) => {
+          const nestedWorkTree = args[1].some(argument => argument.startsWith('--work-tree=')
+            && normalize(argument.slice('--work-tree='.length)) === module)
+          if (normalize(args[0]) === module || nestedWorkTree) nestedGitProbes += 1
+          return await harness.git.run(...args)
+        },
+      } as GitRunner
+
+      const result = await inspectLocalProjectSelection(
+        filesystem,
+        { list: () => [] },
+        recording,
+        CONFIG,
+        { hostId: HOST_ID, directoryLocator: root },
+        new AbortController().signal,
+      )
+
+      expect(result.ok, fault).toBe(true)
+      if (result.ok) expect(result.inspection.projection.baseline, fault).toMatchObject({
+        kind: 'unavailable',
+        reason: 'unsupported-state',
+      })
+      expect(nestedMarkerProbes, fault).toBe(0)
+      expect(nestedGitProbes, fault).toBe(0)
+    }
+  }, 60_000)
+
+  it('contains a nonzero nested HEAD observation as unavailable submodule evidence', async () => {
+    const source = await repository()
+    const root = await repository()
+    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+    await git(root, 'commit', '-am', 'submodule')
+    const harness = await localInspectionHarness()
+    let rejected = 0
+    const missingNestedHead = {
+      run: async (
+        cwd: string,
+        args: readonly string[],
+        signal: AbortSignal,
+        stdin?: Parameters<GitRunner['run']>[3],
+        outputBudget?: Parameters<GitRunner['run']>[4],
+      ) => {
+        if (args.includes(`--work-tree=${join(root, 'module')}`)
+          && gitSubcommand(args).at(-1) === 'HEAD^{commit}') {
+          rejected += 1
+          throw new GitCommandError('nonzero', 128)
+        }
+        return await harness.git.run(cwd, args, signal, stdin, outputBudget)
+      },
+    } as GitRunner
+
+    const result = await inspectLocalProjectSelection(
+      harness.fs,
+      { list: () => [] },
+      missingNestedHead,
+      CONFIG,
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+    )
+
+    expect(rejected).toBeGreaterThan(0)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.inspection.projection.baseline).toMatchObject({
+      kind: 'unavailable', reason: 'unsupported-state',
+    })
   }, 15_000)
 
   it('blocks automatic mutation for staged, unstaged, and untracked changes inside an initialized submodule', async () => {
@@ -976,6 +1189,22 @@ describe('LocalSakiHostExecution', () => {
       { transport: 'other' },
     ])
     expect(JSON.stringify(result.inspection.projection)).not.toContain('LEAKED_REMOTE_SECRET')
+  })
+
+  it('projects canonical public-GitHub candidates from admitted remotes', async () => {
+    const root = await repository()
+    await git(root, 'remote', 'add', 'origin', 'https://github.com/BreakfastDaPaiDang/Saki.git')
+    const execution = await provider()
+
+    const result = await execution.inspectProjectSelection(
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.inspection.projection.githubRepositoryCandidates)
+      .toEqual(['github.com/breakfastdapaidang/saki'])
   })
 
   it('rejects a remote inventory at the fixed unique-observation cap', async () => {
@@ -1412,6 +1641,26 @@ describe('LocalSakiHostExecution', () => {
 
       expect(result, locator).toEqual({ ok: false, reason: 'unavailable' })
     }
+  })
+
+  it('rejects a NUL-bearing locator before any filesystem probe on every platform', async () => {
+    let probes = 0
+    const result = await inspectLocalProjectSelection(
+      {
+        async lstat() {
+          probes += 1
+          return undefined
+        },
+      } as unknown as FileSystem,
+      { list: () => [] },
+      {} as GitRunner,
+      CONFIG,
+      { hostId: HOST_ID, directoryLocator: `${parse(process.cwd()).root}repository\0private` },
+      new AbortController().signal,
+    )
+
+    expect(result).toEqual({ ok: false, reason: 'unavailable' })
+    expect(probes).toBe(0)
   })
 
   it('rejects a reparse Git marker before any Git command', async () => {
@@ -2033,6 +2282,102 @@ describe('LocalSakiHostExecution', () => {
     expect(identityReads).toBe(2)
   })
 
+  it('keeps native administrative identity stable for child writes and changes it for directory replacement', async () => {
+    const root = await repository()
+    const gitDirectory = join(root, '.git')
+    const replacement = `${root}-replacement-git`
+    const displaced = `${root}-displaced-git`
+    roots.push(replacement, displaced)
+    const execution = await provider()
+
+    const first = await execution.inspectProjectSelection(
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+    )
+    expect(first.ok, JSON.stringify(first)).toBe(true)
+    if (!first.ok) return
+
+    await writeFile(join(gitDirectory, 'ordinary-child'), 'ordinary administrative child\n')
+    const afterChildWrite = await execution.inspectProjectSelection(
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+    )
+    expect(afterChildWrite.ok, JSON.stringify(afterChildWrite)).toBe(true)
+    if (!afterChildWrite.ok) return
+    expect(afterChildWrite.inspection.trusted.gitDirectoryIdentity)
+      .toEqual(first.inspection.trusted.gitDirectoryIdentity)
+    expect(afterChildWrite.inspection.trusted.commonGitDirectoryIdentity)
+      .toEqual(first.inspection.trusted.commonGitDirectoryIdentity)
+
+    await cp(gitDirectory, replacement, { recursive: true })
+    await rename(gitDirectory, displaced)
+    await rename(replacement, gitDirectory)
+    const afterReplacement = await execution.inspectProjectSelection(
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+    )
+    expect(afterReplacement.ok, JSON.stringify(afterReplacement)).toBe(true)
+    if (!afterReplacement.ok) return
+    expect(afterReplacement.inspection.trusted.canonicalGitDirectory)
+      .toBe(first.inspection.trusted.canonicalGitDirectory)
+    expect(afterReplacement.inspection.trusted.canonicalCommonGitDirectory)
+      .toBe(first.inspection.trusted.canonicalCommonGitDirectory)
+    expect(afterReplacement.inspection.trusted.gitDirectoryIdentity)
+      .not.toEqual(first.inspection.trusted.gitDirectoryIdentity)
+    expect(afterReplacement.inspection.trusted.commonGitDirectoryIdentity)
+      .not.toEqual(first.inspection.trusted.commonGitDirectoryIdentity)
+  }, 30_000)
+
+  it('classifies failed independent final repository admissions by owned failure kind', async () => {
+    const finalAdmissionDiscoveryRead = 7
+    const finalAdmissionGitDirectoryRead = 8
+    for (const [finalKind, reason] of [
+      ['malformed', 'malformed'],
+      ['unavailable', 'unavailable'],
+      ['not-git', 'ambiguous'],
+    ] as const) {
+      const root = await repository()
+      const harness = await localInspectionHarness()
+      const markerPath = normalize(join(root, '.git'))
+      let markerReads = 0
+      const filesystem = new Proxy(harness.fs, {
+        get(target, property) {
+          if (property === 'lstat') {
+            return async (...args: Parameters<FileSystem['lstat']>) => {
+              const actual = await target.lstat(...args)
+              if (normalize(args[0]) !== markerPath) return actual
+              markerReads += 1
+              if (markerReads === finalAdmissionDiscoveryRead && finalKind === 'not-git') return undefined
+              if (markerReads === finalAdmissionDiscoveryRead && finalKind === 'unavailable' && actual !== undefined) {
+                return { ...actual, type: 'symlink' as const }
+              }
+              if (markerReads === finalAdmissionGitDirectoryRead && finalKind === 'malformed') return undefined
+              return actual
+            }
+          }
+          const value: unknown = Reflect.get(target, property, target)
+          if (typeof value !== 'function') return value
+          const method = value as (...args: unknown[]) => unknown
+          return (...args: unknown[]): unknown => method.apply(target, args)
+        },
+      })
+
+      const result = await inspectLocalProjectSelection(
+        filesystem,
+        { list: () => [] },
+        harness.git,
+        CONFIG,
+        { hostId: HOST_ID, directoryLocator: root },
+        new AbortController().signal,
+      )
+
+      expect(markerReads).toBe(finalKind === 'malformed'
+        ? finalAdmissionGitDirectoryRead
+        : finalAdmissionDiscoveryRead)
+      expect(result, finalKind).toEqual({ ok: false, reason })
+    }
+  }, 30_000)
+
   it('classifies malformed facts in the final observation before comparing snapshots', async () => {
     const root = await repository()
     const ctx = new Context()
@@ -2181,6 +2526,43 @@ describe('LocalSakiHostExecution', () => {
         { hostId: HOST_ID, directoryLocator: root },
         new AbortController().signal,
       )).resolves.toEqual({ ok: false, reason: expected })
+    }
+  })
+
+  it('rejects a valid Git branch that disagrees with either admitted source-control snapshot', async () => {
+    for (const mismatchAt of [1, 2]) {
+      const root = await repository()
+      const harness = await localInspectionHarness()
+      let branchReads = 0
+      const mismatched = {
+        run: async (
+          cwd: string,
+          args: readonly string[],
+          signal: AbortSignal,
+          stdin?: Parameters<GitRunner['run']>[3],
+          outputBudget?: Parameters<GitRunner['run']>[4],
+        ) => {
+          const output = await harness.git.run(cwd, args, signal, stdin, outputBudget)
+          const command = gitSubcommand(args)
+          if (command[0] === 'for-each-ref' && command.at(-1) === 'refs/heads/other') {
+            return { ...output, stdout: Buffer.from('refs/heads/other\0\0\n') }
+          }
+          if (command[0] !== 'symbolic-ref' || ++branchReads !== mismatchAt) return output
+          return { ...output, stdout: Buffer.from('refs/heads/other\n') }
+        },
+      } as GitRunner
+
+      const result = await inspectLocalProjectSelection(
+        harness.fs,
+        { list: () => [] },
+        mismatched,
+        CONFIG,
+        { hostId: HOST_ID, directoryLocator: root },
+        new AbortController().signal,
+      )
+
+      expect(result, `observation ${mismatchAt}`).toEqual({ ok: false, reason: 'ambiguous' })
+      expect(branchReads).toBe(mismatchAt)
     }
   })
 

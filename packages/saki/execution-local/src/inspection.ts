@@ -1,11 +1,10 @@
 /** Local Git worktree inspection orchestration. @module @breakfastdapaidang/saki-execution-local/inspection */
 
-import { basename, isAbsolute, join, normalize } from 'node:path'
+import { basename, join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { FsError, type FileSystem, type FsTarget } from '@deepseek-ai/dsh-fs'
 import {
   compareSafeGitRemoteObservations,
-  canonicalDigest,
   computeProjectInspectionFingerprint,
   deriveGitHubRepositoryCandidates,
   inheritedChangeBaselineIdentityMaterial,
@@ -16,7 +15,6 @@ import {
   isSafeGitRef,
   MAX_GIT_REF_CHARS,
   MAX_SAFE_REMOTES,
-  MAX_TRUSTED_PATH_CHARS,
   projectSelectionInspectionSchema,
   safeGitRemoteObservationKey,
 } from '@breakfastdapaidang/saki-execution'
@@ -36,7 +34,6 @@ import { parseWorktreeList, type ParsedWorktreeRecord } from './git-observation.
 import {
   captureRepositoryInventory,
   createRepositoryObservationRound,
-  isGitConfigIncludeName,
   RepositoryInventoryError,
   type RepositoryInventoryGit,
   type SubmoduleObjectObservation,
@@ -84,6 +81,18 @@ export type AdministrativeDirectoryIdentityReader = (
 ) => Promise<RepositoryAdministrativeIdentity>
 
 /**
+ * Derive the fixed browser label for one canonical Local Host worktree path.
+ * @param path - canonical worktree path from an admitted repository view.
+ * @returns safe basename, filesystem-root label, or generic repository label.
+ */
+export function projectDisplayLocation(path: string): string {
+  const location = basename(path)
+  return location === ''
+    ? 'filesystem root'
+    : isSafeDisplayLocation(location) ? location : 'repository'
+}
+
+/**
  * Resolve and inspect one caller selection without changing Git, Workspace, or
  * product state.
  * @param fs - filesystem provider sharing the Git execution world.
@@ -92,7 +101,7 @@ export type AdministrativeDirectoryIdentityReader = (
  * @param config - applied Git and baseline limits.
  * @param request - selected Host and untrusted directory locator.
  * @param signal - required caller lifetime.
- * @param identityReader - optional Local Host filesystem-object identity reader.
+ * @param identityReader - Local Host filesystem-object identity reader.
  * @returns detached safe/trusted evidence or a bounded rejection.
  */
 export async function inspectLocalProjectSelection(
@@ -102,7 +111,7 @@ export async function inspectLocalProjectSelection(
   config: InspectionConfig,
   request: InspectProjectSelectionRequest,
   signal: AbortSignal,
-  identityReader?: AdministrativeDirectoryIdentityReader,
+  identityReader: AdministrativeDirectoryIdentityReader,
 ): Promise<InspectProjectSelectionResult> {
   signal.throwIfAborted()
   if (!isSafeLocalRepositoryPath(request.directoryLocator)) return { ok: false, reason: 'unavailable' }
@@ -139,29 +148,6 @@ export async function inspectLocalProjectSelection(
     await using firstRepository = firstOpen.view
     const firstGit = firstRepository.git
 
-    let bare: string
-    try {
-      bare = await gitText(firstGit, selectionPath.path, ['rev-parse', '--is-bare-repository'], firstSignal)
-    } catch (error) {
-      if (error instanceof GitCommandError && error.code === 'nonzero') return { ok: false, reason: 'not-git' }
-      if (signal.aborted) throw signal.reason
-      return { ok: false, reason: 'unavailable' }
-    }
-    if (bare === 'true') return { ok: false, reason: 'bare' }
-    if (bare !== 'false') return { ok: false, reason: 'malformed' }
-
-    if (await repositoryConfigIsUnsafe(firstGit, selectionPath.path, firstSignal)) {
-      return { ok: false, reason: 'unavailable' }
-    }
-    const topLevelReported = await gitText(firstGit, selectionPath.path, [
-      'rev-parse', '--path-format=absolute', '--show-toplevel',
-    ], firstSignal)
-    const gitDirectoryReported = await gitText(firstGit, selectionPath.path, [
-      'rev-parse', '--path-format=absolute', '--absolute-git-dir',
-    ], firstSignal)
-    const commonDirectoryReported = await gitText(firstGit, selectionPath.path, [
-      'rev-parse', '--path-format=absolute', '--git-common-dir',
-    ], firstSignal)
     const objectFormat = await gitText(firstGit, selectionPath.path, ['rev-parse', '--show-object-format'], firstSignal)
     const head = await gitText(firstGit, selectionPath.path, ['rev-parse', '--verify', 'HEAD'], firstSignal)
     if ((objectFormat !== 'sha1' && objectFormat !== 'sha256')
@@ -169,45 +155,20 @@ export async function inspectLocalProjectSelection(
       return { ok: false, reason: 'malformed' }
     }
 
-    const topLevel = await resolveStableDirectory(fs, topLevelReported, false, firstSignal)
-    const gitDirectory = await resolveStableDirectory(fs, gitDirectoryReported, true, firstSignal)
-    const commonDirectory = await resolveStableDirectory(fs, commonDirectoryReported, true, firstSignal)
-    if (topLevel === undefined || gitDirectory === undefined || commonDirectory === undefined) {
-      return { ok: false, reason: 'malformed' }
-    }
-    if ([topLevel.path, gitDirectory.path, commonDirectory.path]
-      .some(path => path.length > MAX_TRUSTED_PATH_CHARS)) return { ok: false, reason: 'unavailable' }
-    if (!fs.contains(topLevel.target, selectionPath.target)
-      || !fs.contains(commonDirectory.target, gitDirectory.target)) {
-      return { ok: false, reason: 'ambiguous' }
-    }
-    const gitDirectoryIdentity = await administrativeDirectoryIdentity(
-      gitDirectory,
-      identityReader,
-      firstSignal,
-    )
+    const topLevel = { path: firstRepository.topLevelPath }
+    const gitDirectory = { path: firstRepository.gitDirectoryPath }
+    const commonDirectory = { path: firstRepository.commonDirectoryPath }
+    const gitDirectoryIdentity = await identityReader(gitDirectory.path, firstSignal)
     const commonGitDirectoryIdentity = commonDirectory.path === gitDirectory.path
       ? gitDirectoryIdentity
-      : await administrativeDirectoryIdentity(commonDirectory, identityReader, firstSignal)
+      : await identityReader(commonDirectory.path, firstSignal)
 
     const worktreeOutput = await firstGit.run(commonDirectory.path, [
       '--bare', `--git-dir=${commonDirectory.path}`, 'worktree', 'list', '--porcelain', '-z',
     ], firstSignal)
-    let records: ParsedWorktreeRecord[]
-    try {
-      records = parseWorktreeList(worktreeOutput.stdout)
-    } catch {
-      return { ok: false, reason: 'malformed' }
-    }
-    if (records.some(record => record.head !== undefined && !objectMatchesFormat(record.head, objectFormat))) {
-      return { ok: false, reason: 'malformed' }
-    }
-    const selected = await selectWorktreeRecord(fs, records, topLevel.path, firstSignal)
-    if (selected.kind !== 'selected') return { ok: false, reason: selected.kind }
-    if (selected.record.bare) return { ok: false, reason: 'bare' }
-    if (selected.record.prunable) return { ok: false, reason: 'prunable' }
+    const selectedRecord = admittedWorktreeRecord(worktreeOutput.stdout)
     const branch = await inspectBranch(firstGit, topLevel.path, firstSignal)
-    if (!headAndBranchMatch(selected.record, branch, head)) return { ok: false, reason: 'ambiguous' }
+    if (!worktreeBranchMatches(selectedRecord, branch)) return { ok: false, reason: 'ambiguous' }
     const inventory = await captureRepositoryInventory(
       topLevel.path,
       firstGit,
@@ -242,23 +203,20 @@ export async function inspectLocalProjectSelection(
       ...(baselineFacts.inheritedChangeEntryCount > 0 ? ['dirty' as const] : []),
       ...(baseline.kind === 'unavailable' ? ['baseline-unavailable' as const] : []),
       ...(baselineFacts.conversionAmbiguous ? ['conversion-ambiguous' as const] : []),
-      ...(selected.record.locked ? ['locked' as const] : []),
+      ...(selectedRecord.locked ? ['locked' as const] : []),
     ]
-    const location = basename(topLevel.path)
     const projection: Omit<ProjectSelectionProjection, 'fingerprint'> = {
       observationVersion: 1,
       hostId: request.hostId,
-      displayLocation: location === ''
-        ? 'filesystem root'
-        : isSafeDisplayLocation(location) ? location : 'repository',
+      displayLocation: projectDisplayLocation(topLevel.path),
       objectFormat,
       head,
-      ...(selected.record.branch !== undefined
-        ? { branch: selected.record.branch.replace(/^refs\/heads\//u, '') }
+      ...(selectedRecord.branch !== undefined
+        ? { branch: selectedRecord.branch.replace(/^refs\/heads\//u, '') }
         : {}),
-      detached: selected.record.detached,
+      detached: selectedRecord.detached,
       ...(branch.upstream !== undefined ? { upstream: branch.upstream } : {}),
-      locked: selected.record.locked,
+      locked: selectedRecord.locked,
       inheritedChangeEntryCount: baselineFacts.inheritedChangeEntryCount,
       conversionAmbiguous: baselineFacts.conversionAmbiguous,
       remotes,
@@ -301,58 +259,23 @@ export async function inspectLocalProjectSelection(
     await using finalRepository = finalOpen.view
     const finalGit = finalRepository.git
     const finalSignal = finalObservation.signal
-    if (await repositoryConfigIsUnsafe(finalGit, selectionPath.path, finalSignal)) {
-      return { ok: false, reason: 'unavailable' }
-    }
-    const finalBare = await gitText(finalGit, selectionPath.path, ['rev-parse', '--is-bare-repository'], finalSignal)
-    const finalTopLevelReported = await gitText(finalGit, selectionPath.path, [
-      'rev-parse', '--path-format=absolute', '--show-toplevel',
-    ], finalSignal)
-    const finalGitDirectoryReported = await gitText(finalGit, selectionPath.path, [
-      'rev-parse', '--path-format=absolute', '--absolute-git-dir',
-    ], finalSignal)
-    const finalCommonDirectoryReported = await gitText(finalGit, selectionPath.path, [
-      'rev-parse', '--path-format=absolute', '--git-common-dir',
-    ], finalSignal)
     const finalObjectFormat = await gitText(finalGit, selectionPath.path, ['rev-parse', '--show-object-format'], finalSignal)
     const finalHead = await gitText(finalGit, selectionPath.path, ['rev-parse', '--verify', 'HEAD'], finalSignal)
-    if ((finalBare !== 'true' && finalBare !== 'false')
-      || !isAbsolute(finalTopLevelReported)
-      || !isAbsolute(finalGitDirectoryReported)
-      || !isAbsolute(finalCommonDirectoryReported)
-      || (finalObjectFormat !== 'sha1' && finalObjectFormat !== 'sha256')
+    if ((finalObjectFormat !== 'sha1' && finalObjectFormat !== 'sha256')
       || !isGitObjectId(finalHead, finalObjectFormat)) {
       return { ok: false, reason: 'malformed' }
     }
-    const finalTopLevel = await resolveStableDirectory(fs, finalTopLevelReported, false, finalSignal)
-    const finalGitDirectory = await resolveStableDirectory(fs, finalGitDirectoryReported, true, finalSignal)
-    const finalCommonDirectory = await resolveStableDirectory(fs, finalCommonDirectoryReported, true, finalSignal)
-    if (finalTopLevel === undefined || finalGitDirectory === undefined || finalCommonDirectory === undefined) {
-      return { ok: false, reason: 'malformed' }
-    }
-    if ([finalTopLevel.path, finalGitDirectory.path, finalCommonDirectory.path]
-      .some(path => path.length > MAX_TRUSTED_PATH_CHARS)) return { ok: false, reason: 'unavailable' }
-    if (!fs.contains(finalCommonDirectory.target, finalGitDirectory.target)) {
-      return { ok: false, reason: 'ambiguous' }
-    }
+    const finalTopLevel = { path: finalRepository.topLevelPath }
+    const finalGitDirectory = { path: finalRepository.gitDirectoryPath }
+    const finalCommonDirectory = { path: finalRepository.commonDirectoryPath }
     const finalWorktreeOutput = await finalGit.run(
       finalCommonDirectory.path,
       ['--bare', `--git-dir=${finalCommonDirectory.path}`, 'worktree', 'list', '--porcelain', '-z'],
       finalSignal,
     )
-    let finalRecords: ParsedWorktreeRecord[]
-    try {
-      finalRecords = parseWorktreeList(finalWorktreeOutput.stdout)
-    } catch {
-      return { ok: false, reason: 'malformed' }
-    }
-    if (finalRecords.some(record => record.head !== undefined && !objectMatchesFormat(record.head, finalObjectFormat))) {
-      return { ok: false, reason: 'malformed' }
-    }
-    const finalSelected = await selectWorktreeRecord(fs, finalRecords, finalTopLevel.path, finalSignal)
+    const finalSelectedRecord = admittedWorktreeRecord(finalWorktreeOutput.stdout)
     const finalBranch = await inspectBranch(finalGit, finalTopLevel.path, finalSignal)
-    if (finalSelected.kind === 'malformed') return { ok: false, reason: 'malformed' }
-    if (finalSelected.kind !== 'selected' || !headAndBranchMatch(finalSelected.record, finalBranch, finalHead)) {
+    if (!worktreeBranchMatches(finalSelectedRecord, finalBranch)) {
       return { ok: false, reason: 'ambiguous' }
     }
     const finalInventory = await captureRepositoryInventory(
@@ -382,17 +305,12 @@ export async function inspectLocalProjectSelection(
     }, Date.now(), finalSignal)
     const finalRemotes = await inspectRemotes(finalGit, finalTopLevel.path, finalSignal)
     const finalWorkspaceId = workspaceForPath(workspaces, finalTopLevel.path)
-    const finalGitDirectoryIdentity = await administrativeDirectoryIdentity(
-      finalGitDirectory,
-      identityReader,
-      finalSignal,
-    )
+    const finalGitDirectoryIdentity = await identityReader(finalGitDirectory.path, finalSignal)
     const finalCommonGitDirectoryIdentity = finalCommonDirectory.path === finalGitDirectory.path
       ? finalGitDirectoryIdentity
-      : await administrativeDirectoryIdentity(finalCommonDirectory, identityReader, finalSignal)
+      : await identityReader(finalCommonDirectory.path, finalSignal)
     await finalRepository.assertSourceControlUnchanged(finalSignal)
-    if (finalBare !== 'false'
-      || finalTopLevel.path !== topLevel.path
+    if (finalTopLevel.path !== topLevel.path
       || finalGitDirectory.path !== gitDirectory.path
       || finalCommonDirectory.path !== commonDirectory.path
       || finalRepository.sourceControlIdentity !== firstRepository.sourceControlIdentity
@@ -400,7 +318,7 @@ export async function inspectLocalProjectSelection(
       || !isDeepStrictEqual(finalCommonGitDirectoryIdentity, commonGitDirectoryIdentity)
       || finalObjectFormat !== objectFormat
       || finalHead !== head
-      || !isDeepStrictEqual(finalSelected.record, selected.record)
+      || !isDeepStrictEqual(finalSelectedRecord, selectedRecord)
       || !isDeepStrictEqual(finalBranch, branch)
       || !sameInventoryEvidence(finalInventory, inventory)
       || finalBaselineFacts.inheritedChangeEntryCount !== baselineFacts.inheritedChangeEntryCount
@@ -423,66 +341,6 @@ export async function inspectLocalProjectSelection(
   }
 }
 
-async function repositoryConfigIsUnsafe(
-  git: RepositoryInventoryGit,
-  cwd: string,
-  signal: AbortSignal,
-): Promise<boolean> {
-  if (await scopedRepositoryConfigIsUnsafe(git, cwd, '--local', signal)) return true
-  const worktreeConfig = await readScopedBooleanConfig(
-    git,
-    cwd,
-    '--local',
-    'extensions.worktreeConfig',
-    signal,
-  )
-  if (!worktreeConfig.ok) return true
-  return worktreeConfig.value === true
-    && await scopedRepositoryConfigIsUnsafe(git, cwd, '--worktree', signal)
-}
-
-async function scopedRepositoryConfigIsUnsafe(
-  git: RepositoryInventoryGit,
-  cwd: string,
-  scope: '--local' | '--worktree',
-  signal: AbortSignal,
-): Promise<boolean> {
-  const names = await git.run(cwd, [
-    'config', '--no-includes', scope, '--null', '--name-only', '--list',
-  ], signal)
-  if (names.stderr.byteLength !== 0
-    || splitNul(names.stdout).some(raw => isGitConfigIncludeName(decode(raw)))) return true
-  const fsmonitor = await readScopedBooleanConfig(git, cwd, scope, 'core.fsmonitor', signal)
-  return !fsmonitor.ok || fsmonitor.value === true
-}
-
-async function readScopedBooleanConfig(
-  git: RepositoryInventoryGit,
-  cwd: string,
-  scope: '--local' | '--worktree',
-  key: string,
-  signal: AbortSignal,
-): Promise<{ readonly ok: true; readonly value: boolean | undefined } | { readonly ok: false }> {
-  let output: Awaited<ReturnType<RepositoryInventoryGit['run']>>
-  try {
-    output = await git.run(cwd, [
-      'config', '--no-includes', scope, '--null', '--type=bool', '--get-all', key,
-    ], signal)
-  } catch (error) {
-    if (error instanceof GitCommandError && error.code === 'nonzero') {
-      return error.exitCode === 1 ? { ok: true, value: undefined } : { ok: false }
-    }
-    throw error
-  }
-  if (output.stderr.byteLength !== 0) return { ok: false }
-  const last = splitNul(output.stdout).at(-1)
-  if (last === undefined) return { ok: false }
-  const value = decode(last)
-  if (value === 'true') return { ok: true, value: true }
-  if (value === 'false') return { ok: true, value: false }
-  return { ok: false }
-}
-
 async function readSubmoduleObject(
   fs: FileSystem,
   rawGit: RepositoryInventoryGit,
@@ -494,16 +352,16 @@ async function readSubmoduleObject(
   signal: AbortSignal,
 ): Promise<SubmoduleObjectObservation | undefined> {
   try {
-    const expected = await resolveStableDirectory(fs, path, true, signal)
-    if (expected === undefined) return undefined
+    const canonicalPath = await resolveStableDirectory(fs, path, signal)
+    if (canonicalPath === undefined) return undefined
     const opened = await openSafeRepositoryView(
       fs,
       rawGit,
-      expected.path,
+      canonicalPath,
       maxControlFileBytes,
       signal,
       {
-        expectedTopLevelPath: expected.path,
+        expectedTopLevelPath: canonicalPath,
         allowedAdministrativeRoots: [
           join(selectedGitDirectory, 'modules'),
           join(selectedCommonDirectory, 'modules'),
@@ -514,11 +372,11 @@ async function readSubmoduleObject(
     await using repository = opened.view
     const git = repository.git
     const read = async (args: readonly string[]): Promise<string> => {
-      const value = await gitTextWithBytes(git, path, args, signal)
+      const value = await gitTextWithBytes(git, canonicalPath, args, signal)
       return value.text
     }
     const nestedFormat = await read(['rev-parse', '--show-object-format'])
-    const object = await gitTextWithBytes(git, path, ['rev-parse', '--verify', 'HEAD^{commit}'], signal)
+    const object = await gitTextWithBytes(git, canonicalPath, ['rev-parse', '--verify', 'HEAD^{commit}'], signal)
     const objectId = object.text
     if (nestedFormat !== 'sha1' && nestedFormat !== 'sha256') {
       throw new RepositoryInventoryError('malformed')
@@ -536,13 +394,13 @@ async function readSubmoduleObject(
   }
 }
 
-function objectMatchesFormat(objectId: string, objectFormat: 'sha1' | 'sha256'): boolean {
-  return isGitObjectId(objectId, objectFormat)
-}
-
 interface ObservedBranch {
   readonly ref?: string
   readonly upstream?: string
+}
+
+function admittedWorktreeRecord(output: Uint8Array): ParsedWorktreeRecord {
+  return parseWorktreeList(output)[0] as ParsedWorktreeRecord
 }
 
 async function inspectBranch(
@@ -592,12 +450,10 @@ async function inspectUpstream(
   return match[2] === '' ? undefined : match[2]
 }
 
-function headAndBranchMatch(
+function worktreeBranchMatches(
   record: ParsedWorktreeRecord,
   branch: ObservedBranch,
-  head: string,
 ): boolean {
-  if (record.head !== head) return false
   if (record.detached) return record.branch === undefined && branch.ref === undefined
   return record.branch !== undefined && record.branch === branch.ref
 }
@@ -652,71 +508,24 @@ async function resolveSelectedDirectory(
   return { kind: 'directory', path: fs.processPath(second), target: second }
 }
 
-interface StableDirectory {
-  readonly path: string
-  readonly target: FsTarget
-  readonly version: string
-}
-
 async function resolveStableDirectory(
   fs: FileSystem,
   path: string,
-  rejectSymlink: boolean,
   signal: AbortSignal,
-): Promise<StableDirectory | undefined> {
-  if (!isAbsolute(path)) return undefined
+): Promise<string | undefined> {
   const entry = await fs.lstat(path, undefined, signal)
-  if (entry === undefined || (rejectSymlink && entry.type === 'symlink')) return undefined
+  if (entry?.type !== 'directory') return undefined
   const first = await fs.resolve(path, { signal })
   if ((await fs.stat(first, signal))?.type !== 'directory') return undefined
   const secondEntry = await fs.lstat(path, undefined, signal)
-  if (secondEntry === undefined || secondEntry.version !== entry.version || (rejectSymlink && secondEntry.type === 'symlink')) {
+  if (secondEntry?.type !== 'directory' || secondEntry.version !== entry.version) {
     return undefined
   }
   const second = await fs.resolve(path, { signal })
-  if ((await fs.stat(second, signal))?.type !== 'directory' || fs.processPath(second) !== fs.processPath(first)) return undefined
-  return { path: fs.processPath(first), target: first, version: secondEntry.version }
-}
-
-async function administrativeDirectoryIdentity(
-  directory: StableDirectory,
-  reader: AdministrativeDirectoryIdentityReader | undefined,
-  signal: AbortSignal,
-): Promise<RepositoryAdministrativeIdentity> {
-  signal.throwIfAborted()
-  if (reader !== undefined) return await reader(directory.path, signal)
-  return {
-    version: 1,
-    digest: canonicalDigest('saki/provider-administrative-directory-identity/v1', { version: directory.version }),
+  if ((await fs.stat(second, signal))?.type !== 'directory' || fs.processPath(second) !== fs.processPath(first)) {
+    return undefined
   }
-}
-
-type WorktreeSelection =
-  | { readonly kind: 'selected'; readonly record: ParsedWorktreeRecord }
-  | { readonly kind: 'ambiguous' | 'malformed' }
-
-async function selectWorktreeRecord(
-  fs: FileSystem,
-  records: readonly ParsedWorktreeRecord[],
-  selectedPath: string,
-  signal: AbortSignal,
-): Promise<WorktreeSelection> {
-  const matches: ParsedWorktreeRecord[] = []
-  const selectedSpelling = normalize(selectedPath)
-  for (const record of records) {
-    if (!isAbsolute(record.path)) return { kind: 'malformed' }
-    if (normalize(record.path) !== selectedSpelling) continue
-    if (record.bare || record.prunable) {
-      matches.push(record)
-      continue
-    }
-    const resolved = await resolveStableDirectory(fs, record.path, false, signal)
-    if (resolved?.path !== selectedPath) return { kind: 'malformed' }
-    matches.push(record)
-  }
-  const [record, ...duplicates] = matches
-  if (record === undefined || duplicates.length > 0) return { kind: 'ambiguous' }
-  return { kind: 'selected', record }
+  return fs.processPath(first)
 }
 
 async function gitText(

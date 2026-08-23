@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, normalize, relative, resolve as resolvePath, sep, win32 } from 'node:path'
-import type { FileSystem } from '@deepseek-ai/dsh-fs'
+import type { FileSystem, FsVersion } from '@deepseek-ai/dsh-fs'
 import {
   canonicalDigest,
   isSafeGitBranchName,
@@ -64,12 +64,12 @@ export class RepositoryControlChangedError extends Error {
 
 interface StableFile {
   readonly bytes: Uint8Array
-  readonly version: string
+  readonly version: FsVersion
 }
 
 interface StableDirectory {
   readonly path: string
-  readonly version: string
+  readonly version: FsVersion
 }
 
 interface RepositoryTopology {
@@ -81,7 +81,7 @@ interface RepositoryTopology {
   readonly markerFile?: StableFile
   readonly commonFile?: StableFile
   readonly backlink?: StableFile
-  readonly lockedEntry?: { readonly type: string; readonly version: string; readonly size?: number }
+  readonly lockedEntry?: { readonly type: string; readonly version: FsVersion; readonly size?: number }
 }
 
 /**
@@ -641,6 +641,7 @@ async function configSnapshotIsUnsafe(
   const output = await git.run(cwd, [
     'config', '--no-includes', '--file', snapshot, '--null', '--name-only', '--list',
   ], signal)
+  if (output.stderr.byteLength !== 0) throw new SafeRepositoryError('unavailable')
   if (splitNul(output.stdout).some(raw => isGitConfigIncludeName(decode(raw)))) return true
   return (await explicitConfigBooleans(git, cwd, snapshot, 'core.fsmonitor', signal))?.some(Boolean) ?? false
 }
@@ -679,6 +680,7 @@ async function explicitConfigValues(
     if (error instanceof GitCommandError && error.code === 'nonzero' && error.exitCode === 1) return undefined
     throw new SafeRepositoryError('unavailable')
   }
+  if (output.stderr.byteLength !== 0) throw new SafeRepositoryError('unavailable')
   return splitNul(output.stdout).map(raw => decode(raw))
 }
 
@@ -715,7 +717,7 @@ async function copyOptionalControlFile(
 }
 
 function sourceFileStamp(file: StableFile | undefined):
-  | { readonly version: string; readonly digest: string }
+  | { readonly version: FsVersion; readonly digest: string }
   | undefined {
   return file === undefined
     ? undefined

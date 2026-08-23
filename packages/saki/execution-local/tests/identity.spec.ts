@@ -11,6 +11,18 @@ afterEach(async () => {
 })
 
 describe('local Git administrative-directory identity', () => {
+  it('rejects an administrative identity target that is not a directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'saki-admin-identity-file-'))
+    roots.push(root)
+    const admin = join(root, '.git')
+    await writeFile(admin, 'gitdir: elsewhere\n')
+
+    await expect(readLocalAdministrativeDirectoryIdentity(
+      admin,
+      new AbortController().signal,
+    )).rejects.toThrow('Git administrative identity target is not a directory')
+  })
+
   it('survives child updates but changes when the directory object is replaced', async () => {
     const root = await mkdtemp(join(tmpdir(), 'saki-admin-identity-'))
     roots.push(root)

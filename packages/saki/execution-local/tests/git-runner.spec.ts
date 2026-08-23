@@ -6,7 +6,13 @@ import { Context } from '@deepseek-ai/cordis'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { GitCommandError, gitInspectionEnvironment, runBoundedCommand } from '../src/git-runner.ts'
+import {
+  GitCommandError,
+  GitRunner,
+  gitGlobalArguments,
+  gitInspectionEnvironment,
+  runBoundedCommand,
+} from '../src/git-runner.ts'
 
 const fibers: Array<{ dispose(): Promise<void> }> = []
 const roots: string[] = []
@@ -566,11 +572,32 @@ describe('bounded raw command runner', () => {
     }, new AbortController().signal)).rejects.toMatchObject({ code: 'stdout-limit' })
   })
 
-  it('uses POSIX null devices in a dynamically loaded non-Windows runner', async () => {
-    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
-    vi.resetModules()
-    const { GitRunner: PosixGitRunner, gitInspectionEnvironment: posixEnvironment } =
-      await import('../src/git-runner.ts')
+  it.each([
+    ['win32', 'NUL', '/dev/null'],
+    ['linux', '/dev/null', 'NUL'],
+  ] as const)('constructs fixed %s Git isolation with %s', (platform, nullDevice, otherNullDevice) => {
+    const globalArguments = gitGlobalArguments(platform)
+    expect(globalArguments).toEqual([
+      '--no-pager',
+      '--no-lazy-fetch',
+      '--no-replace-objects',
+      '-c', 'core.fsmonitor=false',
+      '-c', 'core.pager=cat',
+      '-c', 'credential.helper=',
+      '-c', 'diff.external=',
+      '-c', 'core.hooksPath=',
+      '-c', `core.excludesFile=${nullDevice}`,
+      '-c', `core.attributesFile=${nullDevice}`,
+      '--no-optional-locks',
+    ])
+    expect(globalArguments).not.toEqual(expect.arrayContaining([
+      `core.excludesFile=${otherNullDevice}`,
+      `core.attributesFile=${otherNullDevice}`,
+    ]))
+    expect(gitInspectionEnvironment(platform)).toMatchObject({ GIT_CONFIG_GLOBAL: nullDevice })
+  })
+
+  it('runs Git with the isolation constructed for the current platform', async () => {
     const spawn = vi.fn((_spec: Parameters<SubprocessRuntime['spawn']>[0]) => ({
       stdin: new Writable({ write(_chunk, _encoding, callback) { callback() } }),
       stdout: Readable.from([]),
@@ -579,7 +606,7 @@ describe('bounded raw command runner', () => {
       terminate: vi.fn(),
       waitForExit: () => Promise.resolve(true),
     }))
-    const runner = new PosixGitRunner({ spawn } as unknown as SubprocessRuntime, 'git', {
+    const runner = new GitRunner({ spawn } as unknown as SubprocessRuntime, 'git', {
       maxStdoutBytes: 2,
       maxStderrBytes: 2,
       timeoutMs: 5_000,
@@ -594,10 +621,21 @@ describe('bounded raw command runner', () => {
       { bytes: Buffer.alloc(0), maxBytes: 1 },
       { observe: () => true },
     )
-    expect(spawn.mock.calls[0]![0].argv).toEqual(expect.arrayContaining([
-      'core.excludesFile=/dev/null',
-      'core.attributesFile=/dev/null',
-    ]))
-    expect(posixEnvironment()).toMatchObject({ GIT_CONFIG_GLOBAL: '/dev/null' })
+    const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null'
+    expect(spawn.mock.calls[1]![0].argv).toEqual([
+      'git',
+      '--no-pager',
+      '--no-lazy-fetch',
+      '--no-replace-objects',
+      '-c', 'core.fsmonitor=false',
+      '-c', 'core.pager=cat',
+      '-c', 'credential.helper=',
+      '-c', 'diff.external=',
+      '-c', 'core.hooksPath=',
+      '-c', `core.excludesFile=${nullDevice}`,
+      '-c', `core.attributesFile=${nullDevice}`,
+      '--no-optional-locks',
+      'check-attr',
+    ])
   })
 })
