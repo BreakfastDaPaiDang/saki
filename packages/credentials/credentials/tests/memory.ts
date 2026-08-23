@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { CredentialProvider } from '../src/index.ts'
+import { CREDENTIAL_PROTECTION_EPHEMERAL, CredentialProvider } from '../src/index.ts'
 import type {
   CredentialInfo,
   CredentialKey,
@@ -27,16 +27,20 @@ export class MemoryCredentials extends CredentialProvider {
     const value = this.store.get(ref)
     return Promise.resolve(value === undefined || value.length === 0
       ? undefined
-      : { value, source: 'memory' })
+      : { value, source: 'memory', protectionLevel: CREDENTIAL_PROTECTION_EPHEMERAL })
   }
 
   override describe(ref: CredentialRef): Promise<CredentialInfo> {
     const value = this.store.get(ref)
     const configured = value !== undefined && value.length > 0
     return Promise.resolve({
+      ref,
       configured,
       ...configured ? { source: 'memory' } : {},
+      protectionLevel: CREDENTIAL_PROTECTION_EPHEMERAL,
       writable: true,
+      health: configured ? 'available' : 'missing',
+      observedAt: Date.now(),
     })
   }
 

@@ -23,9 +23,25 @@ import {
   splitMarkdownUrlTarget,
 } from './markdown.ts'
 
-const REPOSITORY_URL = 'https://github.com/deepseek-ai/deepseek-harness'
+const DEFAULT_REPOSITORY_SLUG = 'deepseek-ai/deepseek-harness'
 const root = resolve(import.meta.dirname, '..')
 const generatedRoot = resolve(root, 'website/.generated')
+
+/**
+ * Resolve the GitHub repository that owns projected source and edit links.
+ *
+ * @param environment Build environment containing an optional `owner/repository` slug.
+ * @returns The configured repository slug, or the official DeepSeek Harness repository.
+ */
+export function resolveRepositorySlug(environment: NodeJS.ProcessEnv): string {
+  const slug = environment.DOCS_REPOSITORY ?? DEFAULT_REPOSITORY_SLUG
+  const segments = slug.split('/')
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(slug)
+    || segments.some(segment => segment === '.' || segment === '..')) {
+    throw new Error(`project-doc-site: DOCS_REPOSITORY must be an owner/repository slug; received ${JSON.stringify(slug)}.`)
+  }
+  return slug
+}
 
 /**
  * Resolve the public repository ref used by projected source links.
@@ -34,7 +50,27 @@ const generatedRoot = resolve(root, 'website/.generated')
  * @returns The configured public ref, or `master`.
  */
 export function resolveRepositoryRef(environment: NodeJS.ProcessEnv): string {
-  return environment.DOCS_REPOSITORY_REF ?? 'master'
+  const ref = environment.DOCS_REPOSITORY_REF ?? 'master'
+  const segments = ref.split('/')
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref)
+    || ref.includes('..')
+    || ref.endsWith('.')
+    || segments.some(segment => segment.length === 0 || segment.startsWith('.') || segment.endsWith('.lock'))) {
+    throw new Error(`project-doc-site: DOCS_REPOSITORY_REF must be a safe Git ref; received ${JSON.stringify(ref)}.`)
+  }
+  return ref
+}
+
+/**
+ * Build the GitHub edit target for one projected source file.
+ *
+ * @param repositorySlug GitHub `owner/repository` slug.
+ * @param repositoryRef Public branch or tag containing the source.
+ * @param source Repository-relative source path.
+ * @returns GitHub URL for editing the source at the configured ref.
+ */
+export function repositoryEditUrl(repositorySlug: string, repositoryRef: string, source: string): string {
+  return `https://github.com/${repositorySlug}/edit/${repositoryRef}/${source}`
 }
 
 interface Replacement {
@@ -52,6 +88,7 @@ export interface RewriteMarkdownOptions {
   route: string
   pages: DocsPage[]
   repoRoot: string
+  repositorySlug: string
   repositoryRef: string
   /**
    * Place one referenced image beside the projected page and return the URL to
@@ -135,15 +172,16 @@ function githubTarget(
   absPath: string,
   line: number | undefined,
   suffix: string,
+  repositorySlug: string,
   repositoryRef: string,
   repoRoot: string,
   image: boolean,
 ): string {
   const path = repoPath(absPath, repoRoot)
-  if (image) return `https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/${repositoryRef}/${path}${suffix}`
+  if (image) return `https://raw.githubusercontent.com/${repositorySlug}/${repositoryRef}/${path}${suffix}`
   const kind = lstatSync(absPath).isDirectory() ? 'tree' : 'blob'
   const lineSuffix = line === undefined ? suffix : `#L${line}`
-  return `${REPOSITORY_URL}/${kind}/${repositoryRef}/${path}${lineSuffix}`
+  return `https://github.com/${repositorySlug}/${kind}/${repositoryRef}/${path}${lineSuffix}`
 }
 
 /**
@@ -176,7 +214,15 @@ export function rewriteMarkdown(source: string, options: RewriteMarkdownOptions)
         // The suffix rides along exactly as the GitHub branch keeps it: an SVG
         // view fragment or a Vite query changes what the reference means.
         ? `${options.placeImage(absPath)}${suffix}`
-        : githubTarget(absPath, line, suffix, options.repositoryRef, options.repoRoot, node.type === 'image')
+        : githubTarget(
+          absPath,
+          line,
+          suffix,
+          options.repositorySlug,
+          options.repositoryRef,
+          options.repoRoot,
+          node.type === 'image',
+        )
 
     const destination = markdownDestination(source, node)
     replacements.push({
@@ -206,11 +252,17 @@ export function rewriteMarkdown(source: string, options: RewriteMarkdownOptions)
  *
  * @param markdown Projected Markdown content.
  * @param page Publication manifest entry for the content.
+ * @param repository Public repository coordinates used by the edit target.
  * @returns Markdown with projection-owned frontmatter fields.
  */
-export function addProjectionFrontmatter(markdown: string, page: Pick<DocsPage, 'source' | 'outline'>): string {
+export function addProjectionFrontmatter(
+  markdown: string,
+  page: Pick<DocsPage, 'source' | 'outline'>,
+  repository: Pick<ProjectionContext, 'repositorySlug' | 'repositoryRef'>,
+): string {
   const fields = [
     `editSource: ${JSON.stringify(page.source)}`,
+    `editUrl: ${JSON.stringify(repositoryEditUrl(repository.repositorySlug, repository.repositoryRef, page.source))}`,
     ...(page.outline === undefined ? [] : [`outline: ${JSON.stringify(page.outline)}`]),
   ].join('\n')
   if (markdown.startsWith('---\n')) return markdown.replace('---\n', `---\n${fields}\n`)
@@ -299,6 +351,7 @@ function referencedImages(): string[] {
       route: page.route,
       pages: docsPages,
       repoRoot: root,
+      repositorySlug: resolveRepositorySlug(process.env),
       repositoryRef: 'master',
       placeImage: (absPath) => {
         const real = publishableImage(absPath, root)
@@ -328,10 +381,17 @@ export interface ProjectionContext {
   repoRoot: string
   /** Public ref used by projected GitHub links. */
   repositoryRef: string
+  /** GitHub `owner/repository` slug used by projected source links. */
+  repositorySlug: string
 }
 
 function defaultProjectionContext(): ProjectionContext {
-  return { pages: docsPages, repoRoot: root, repositoryRef: resolveRepositoryRef(process.env) }
+  return {
+    pages: docsPages,
+    repoRoot: root,
+    repositorySlug: resolveRepositorySlug(process.env),
+    repositoryRef: resolveRepositoryRef(process.env),
+  }
 }
 
 /**
@@ -391,6 +451,7 @@ function projectPagesInto(
       route: page.route,
       pages: context.pages,
       repoRoot: context.repoRoot,
+      repositorySlug: context.repositorySlug,
       repositoryRef: context.repositoryRef,
       placeImage: (absPath) => {
         const real = publishableImage(absPath, context.repoRoot)
@@ -419,8 +480,9 @@ function projectPagesInto(
 /** Rebuild the disposable VitePress source tree from the publication manifest. */
 export function projectDocs(): void {
   rmSync(generatedRoot, { recursive: true, force: true })
-  projectPagesInto(generatedRoot, defaultProjectionContext(), (markdown, page) =>
-    addProjectionFrontmatter(projectedPageContent(markdown, page), page))
+  const context = defaultProjectionContext()
+  projectPagesInto(generatedRoot, context, (markdown, page) =>
+    addProjectionFrontmatter(projectedPageContent(markdown, page), page, context))
 }
 
 /**
@@ -524,6 +586,7 @@ export function rawMarkdownRoute(route: string, context: ProjectionContext = def
     route: page.route,
     pages: context.pages,
     repoRoot: context.repoRoot,
+    repositorySlug: context.repositorySlug,
     repositoryRef: context.repositoryRef,
     placeImage: absPath => `./${encodeURI(basename(absPath))}`,
   }), page.source)

@@ -9,6 +9,7 @@
 | [`credentials/`](credentials/README.zh.md) | 凭据引用与凭据记录 seam | `ctx.credentials` |
 | [`credentials-local/`](credentials-local/README.zh.md) | 环境与本地文件提供方 | 注册 `ctx.credentials` |
 | [`authorization/`](authorization/README.zh.md) | 由插件拥有、通过询问人来取得凭据的 flow | `ctx.authorization` |
+| [`credentials-windows-dpapi/`](credentials-windows-dpapi/README.zh.md) | Windows 当前用户 DPAPI 提供方 | 注册 `ctx.credentials` |
 
 配置携带引用而非机密值。消费方在其操作边界解析这些引用；变更、优先级与存储语义由子级 README 负责。授权 flow 写入一条凭据记录并以它为键，因此两个 seam 只在记录处相交，别无其他接触面。
 

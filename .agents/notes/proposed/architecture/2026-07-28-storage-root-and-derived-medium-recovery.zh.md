@@ -27,6 +27,7 @@ Status: proposed
 - `DomainSpec` 增加 `recovery?: 'reject' | 'reset'`（默认 `'reject'`）。spec 对象已经是一个域的身份与布局的真源；其介质是权威还是派生属于同类事实，落在同一处。`session_projcache` 声明 `'reset'`；`workspace` 保持默认。
 - `KvFacet` 增加一个原语：`destroy(descriptor): Promise<void>`——整体移除该 unit 的介质（json：删文件；sqlite：drop 该 unit 的表）。与 `open` 一样，它是后端存储原语，不是策略。
 - `DomainFacility.open` 在 spec 声明 `'reset'` 且 open 恰以损坏类错误失败时——`StorageError('version-mismatch' | 'malformed-medium')` 或 `DomainError('invalid-record')`——记一条命名该域和被丢弃介质的警告，调用 `destroy`，再空开一次。其余一切失败（`backend-not-found`、`facet-unsupported`、`already-open`、I/O 错误）无论声明与否都保持大声：配置错误和环境故障不是介质损坏。重试单发——第二次失败原样传播，持续失败的介质不会成环。
+- 一个 domain 不能把 `'reset'` 与为 [Saki 向前兼容状态](2026-08-18-saki-forward-migrations-and-installation-maintenance.zh.md)提议的 migration registry 组合使用。派生 medium 执行 reset；权威兼容状态执行 migrate 或 reject，而且 migration failure 绝不触发删除。
 - 有了这个，缓存域 spec 的 version 字段才获得其本意：bump `version`（或让 zod 拒绝漂移行）真正丢弃整个介质，缓存经正常写点和冷读重建——恢复阶梯的最外一档，与已落地的行级各档对齐。
 
 ## 备选方案

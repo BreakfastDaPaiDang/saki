@@ -1,0 +1,47 @@
+diff --git a/.dsh/skills/handoff/SKILL.md b/.dsh/skills/handoff/SKILL.md
+index 2eb98a5..a14b152 100644
+--- a/.dsh/skills/handoff/SKILL.md
++++ b/.dsh/skills/handoff/SKILL.md
+@@ -1,16 +1,34 @@
+ ---
+ name: handoff
+-description: Compact the current conversation into a handoff document for another agent to pick up.
+-argument-hint: "What will the next session be used for?"
++description: Write a portable, repository-local handoff for another Saki Session, harness, person, or working directory.
++argument-hint: What will the receiving Session do?
+ disable-model-invocation: true
++metadata:
++  saki:
++    upstream: https://github.com/mattpocock/skills
++    commit: 9c9f36ccd3995266cd675468af71639c8dde1ec5
++    dsh-capabilities:
++      - read
++      - write
++    one-of-capabilities: []
++    optional-capabilities: []
++    host-commands: []
++    mutation: workspace
+ ---
+
+-Write a handoff document summarising the current conversation so a fresh agent can continue the work. Save to the temporary directory of the user's OS - not the current workspace.
++# Handoff
+
+-Include a "suggested skills" section in the document, naming which skills the next agent should call the Skill tool for.
++Write a concise handoff for a fresh agent. Save it under `.scratch/handoffs/<descriptive-slug>.md` inside the current repository, never in an operating-system temporary directory.
+
+-Do not duplicate content already captured in other artifacts (specs, plans, ADRs, issues, commits, diffs). Reference them by path or URL instead.
++## DSH compatibility preflight
+
+-Redact any sensitive information, such as API keys, passwords, or personally identifiable information.
++Confirm that `read` and `write` are available and that the current working directory belongs to the intended repository. If either capability is absent or the repository cannot be identified, stop before writing and report the corrective action.
+
+-If the user passed arguments, treat them as a description of what the next session will focus on and tailor the doc accordingly.
++The handoff contains:
++
++- the receiving Session's concrete objective and current status;
++- links or repository-relative paths to specifications, plans, ADRs, Issues, commits, diffs, and evidence rather than copied content;
++- unresolved blockers and the next safe action;
++- a `## Suggested skills` section naming skills the recipient should load with the DSH `skill` capability.
++
++Tailor the document to any invocation argument. Redact credentials, tokens, personal data, and sensitive environment values. Do not claim an unrun check passed, and do not duplicate source material already stored in the repository or tracker.
+warning: in the working copy of '.dsh/skills/handoff/SKILL.md', LF will be replaced by CRLF the next time Git touches it

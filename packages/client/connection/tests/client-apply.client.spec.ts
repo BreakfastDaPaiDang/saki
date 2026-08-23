@@ -290,12 +290,16 @@ describe('connection client apply', () => {
     })
     const handle = await mount()
     const original = globalThis.fetch
-    const seen: { url: string; body: unknown }[] = []
+    const seen: { url: string; body: unknown; credentials?: RequestCredentials }[] = []
     globalThis.fetch = async (input: URL | RequestInfo, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
       if (typeof init?.body !== 'string') throw new TypeError('expected a JSON string request body')
       const body = JSON.parse(init.body) as { rpcId: string }
-      seen.push({ url, body })
+      seen.push({
+        url,
+        body,
+        ...init.credentials === undefined ? {} : { credentials: init.credentials },
+      })
       return Response.json({
         type: 'server-response',
         rpcId: body.rpcId,
@@ -311,12 +315,48 @@ describe('connection client apply', () => {
     }
     expect(seen).toHaveLength(1)
     expect(seen[0]?.url).toBe('http://dsh.internal/api/goals/create')
+    expect(seen[0]?.credentials).toBe('same-origin')
     expect(seen[0]?.body).toMatchObject({
       type: 'client-request',
       rpcId: '00000000-0000-4000-8000-000000000000',
       method: 'goals/create',
       payload: { args: { agentId: 'agent-1' } },
     })
+  })
+
+  it('carries operation headers and credential options while retaining JSON Content-Type ownership', async () => {
+    ;(globalThis as Win).location = {
+      hostname: 'harness.example', search: '', origin: 'https://harness.example',
+    }
+    const handle = await mount()
+    const original = globalThis.fetch
+    const abort = new AbortController()
+    let observed: RequestInit | undefined
+    globalThis.fetch = async (_input: URL | RequestInfo, init?: RequestInit) => {
+      observed = init
+      if (typeof init?.body !== 'string') throw new TypeError('expected a JSON string request body')
+      const body = JSON.parse(init.body) as { rpcId: string }
+      return Response.json({
+        type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: null },
+      })
+    }
+    try {
+      await handle.rpc.call('/saki', 'control/query', {}, {
+        signal: abort.signal,
+        credentials: 'same-origin',
+        headers: {
+          'content-type': 'text/plain',
+          'x-saki-request-token': 'request-token',
+        },
+      })
+    } finally {
+      globalThis.fetch = original
+    }
+
+    expect(observed).toMatchObject({ signal: abort.signal, credentials: 'same-origin' })
+    const headers = new Headers(observed?.headers)
+    expect(headers.get('content-type')).toBe('application/json')
+    expect(headers.get('x-saki-request-token')).toBe('request-token')
   })
 
   it('validates generic RPC transport failures, correlation, and targets', async () => {
@@ -328,7 +368,7 @@ describe('connection client apply', () => {
     const abort = new AbortController()
     globalThis.fetch = vi.fn().mockResolvedValue(new Response('unavailable', { status: 503 }))
     try {
-      await expect(handle.rpc.call('/api', 'goals/create', {}, abort.signal))
+      await expect(handle.rpc.call('/api', 'goals/create', {}, { signal: abort.signal }))
         .rejects.toThrow('HTTP 503')
       expect(globalThis.fetch).toHaveBeenCalledWith(
         new URL('https://harness.example/api/goals/create'),

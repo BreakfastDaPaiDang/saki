@@ -7,7 +7,13 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { credentialKey, credentialKeyScope, credentialRef, parseCredentialKey } from '@deepseek-ai/dsh-credentials'
+import {
+  CREDENTIAL_PROTECTION_PLAINTEXT,
+  credentialKey,
+  credentialKeyScope,
+  credentialRef,
+  parseCredentialKey,
+} from '@deepseek-ai/dsh-credentials'
 import type { CredentialKey, CredentialRecord } from '@deepseek-ai/dsh-credentials'
 import { LocalCredentialProvider } from '../src/index.ts'
 
@@ -116,6 +122,42 @@ describe('record storage', () => {
     expect(await ctx.credentials.readRecord(BEDROCK)).toEqual({ kind: 'api-key', env: { AWS_PROFILE: 'prod' } })
   })
 
+  it('round-trips __proto__ as an api-key environment name', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const record = {
+      kind: 'api-key',
+      env: Object.fromEntries([['__proto__', 'profile']]),
+    } as const satisfies CredentialRecord
+
+    await put(ctx, CODEX, record)
+
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX)).resolves.toEqual(record)
+  })
+
+  it('does not expose unsupported document metadata in diagnostics', async () => {
+    const dir = await tempDir()
+    const secret = 'LEAKED_SECRET_FROM_DOCUMENT_METADATA'
+    const cases = [
+      `version: ${secret}\nrefs: {}\nrecords: {}\n`,
+      `version: 1\nrecords:\n  ${CODEX}:\n    kind: ${secret}\n`,
+    ]
+
+    for (const [index, text] of cases.entries()) {
+      const path = join(dir, `.credentials-${String(index)}.yaml`)
+      await writeCredentials(path, text)
+      const failure = await boot({ path, watch: false })
+        .then(() => undefined, (error: unknown) => error as Error)
+
+      expect(failure).toBeInstanceOf(Error)
+      expect(failure?.message).not.toContain(secret)
+      expect(failure?.cause).toBeUndefined()
+      expect(JSON.stringify(failure)).not.toContain(secret)
+    }
+  })
+
   it('keeps references and records in one document without either disturbing the other', async () => {
     const dir = await tempDir()
     const path = join(dir, '.credentials.yaml')
@@ -128,7 +170,9 @@ describe('record storage', () => {
       'version: 1\nrefs:\n  DSH_RECORDS_KEY: sk-live\nrecords:\n'
       + '  llm-pi-ai/openai-codex:\n    kind: grant\n    payload:\n      token: t\n',
     )
-    expect(await ctx.credentials.resolve(credentialRef('DSH_RECORDS_KEY'))).toEqual({ value: 'sk-live', source: 'file' })
+    expect(await ctx.credentials.resolve(credentialRef('DSH_RECORDS_KEY'))).toEqual({
+      value: 'sk-live', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('reads every record shape back off disk', async () => {
@@ -175,6 +219,20 @@ describe('record storage', () => {
     expect(await ctx.credentials.readRecord(CODEX)).toEqual({ kind: 'grant', payload: { a: 1, b: 2 } })
   })
 
+  it('publishes an external edit that replaces an own __proto__ payload field', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    await writeCredentials(path, `version: 1\nrecords:\n  ${CODEX}:\n    kind: grant\n    payload:\n      __proto__: {}\n`)
+    const ctx = await boot({ path, watch: false })
+    const seen = recordUpdates(ctx)
+    await writeCredentials(path, `version: 1\nrecords:\n  ${CODEX}:\n    kind: grant\n    payload:\n      x: 1\n`)
+
+    await put(ctx, BEDROCK, { kind: 'api-key' })
+
+    expect(seen).toContain(CODEX)
+    await expect(ctx.credentials.readRecord(CODEX)).resolves.toEqual({ kind: 'grant', payload: { x: 1 } })
+  })
+
   it('keeps two owners of the same provider id apart', async () => {
     const dir = await tempDir()
     const ctx = await boot({ path: join(dir, '.credentials.yaml'), watch: false })
@@ -218,6 +276,111 @@ describe('record mutation', () => {
     expect(result).toEqual({ kind: 'grant', payload: { expires: 1 } })
     expect(await readFile(path, 'utf8')).toBe(before)
     expect(seen).toEqual([])
+  })
+
+  it('isolates the cached record from caller and mutation references', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const payload = { nested: { expires: 1 } }
+    const written = await put(ctx, CODEX, { kind: 'grant', payload })
+    payload.nested.expires = 2
+    if (written?.kind === 'grant') {
+      (written.payload as { nested: { expires: number } }).nested.expires = 3
+    }
+    const firstRead = await ctx.credentials.readRecord(CODEX)
+    if (firstRead?.kind === 'grant') {
+      (firstRead.payload as { nested: { expires: number } }).nested.expires = 4
+    }
+
+    const declined = await ctx.credentials.modifyRecord(CODEX, (current) => {
+      if (current?.kind === 'grant') {
+        (current.payload as { nested: { expires: number } }).nested.expires = 5
+      }
+      return Promise.resolve(undefined)
+    })
+
+    expect(declined).toEqual({ kind: 'grant', payload: { nested: { expires: 1 } } })
+    await expect(ctx.credentials.readRecord(CODEX))
+      .resolves.toEqual({ kind: 'grant', payload: { nested: { expires: 1 } } })
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX))
+      .resolves.toEqual({ kind: 'grant', payload: { nested: { expires: 1 } } })
+  })
+
+  it('rejects record and api-key env accessors without invoking them', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const secret = 'LEAKED_SECRET_FROM_RECORD_ACCESSOR'
+    let recordReads = 0
+    let envReads = 0
+    let recordProxyReads = 0
+    let envProxyReads = 0
+    const record = {}
+    Object.defineProperty(record, 'kind', {
+      enumerable: true,
+      get: () => {
+        recordReads++
+        throw new Error(secret)
+      },
+    })
+    const env = {}
+    Object.defineProperty(env, 'AWS_PROFILE', {
+      enumerable: true,
+      get: () => {
+        envReads++
+        throw new Error(secret)
+      },
+    })
+    const recordProxy = new Proxy({ kind: 'grant', payload: {} } as const, {
+      get: (_target, property) => {
+        if (property === 'then') return undefined
+        recordProxyReads++
+        throw new Error(secret)
+      },
+    })
+    const envProxy = new Proxy({ AWS_PROFILE: 'prod' }, {
+      ownKeys: () => {
+        envProxyReads++
+        throw new Error(secret)
+      },
+    })
+
+    const failures = await Promise.all([
+      put(ctx, CODEX, record as CredentialRecord).then(() => undefined, (error: unknown) => error as Error),
+      put(ctx, BEDROCK, { kind: 'api-key', env })
+        .then(() => undefined, (error: unknown) => error as Error),
+      put(ctx, CODEX, recordProxy).then(() => undefined, (error: unknown) => error as Error),
+      put(ctx, BEDROCK, { kind: 'api-key', env: envProxy })
+        .then(() => undefined, (error: unknown) => error as Error),
+    ])
+
+    expect([recordReads, envReads, recordProxyReads, envProxyReads]).toEqual([0, 0, 0, 0])
+    for (const failure of failures) {
+      expect(failure).toBeInstanceOf(TypeError)
+      expect(failure?.message).not.toContain(secret)
+      expect(failure?.cause).toBeUndefined()
+    }
+    await expect(ctx.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+    await expect(ctx.credentials.readRecord(BEDROCK)).resolves.toBeUndefined()
+  })
+
+  it('rejects malformed record roots before writing a document', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const records = [
+      { kind: 'grant', payload: {}, extra: 'dropped' },
+      { kind: 'api-key', key: 1 },
+      { kind: 'unknown', payload: {} },
+    ]
+
+    for (const record of records) {
+      await expect(put(ctx, CODEX, record as unknown as CredentialRecord)).rejects.toBeInstanceOf(TypeError)
+    }
+    await expect(ctx.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+    await expect(readFile(path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('announces a committed write and a committed delete, and stays silent on an absent delete', async () => {
@@ -316,6 +479,226 @@ describe('record mutation', () => {
     await expect(readFile(path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('refuses a sparse grant payload that serialization would fill with null', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const payload: unknown[] = []
+    payload.length = 1
+
+    await expect(put(ctx, CODEX, { kind: 'grant', payload })).rejects.toThrow(/payload/)
+    await expect(ctx.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
+  it('refuses an enumerable array property that serialization would omit', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const payload: unknown[] = ['kept']
+    Object.assign(payload, { omitted: 'value' })
+
+    await expect(put(ctx, CODEX, { kind: 'grant', payload })).rejects.toThrow(/payload/)
+    await expect(ctx.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
+  it('rejects enumerable payload getters without invoking them', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const secret = 'LEAKED_SECRET'
+    let throwingReads = 0
+    let changingReads = 0
+    const throwing = {}
+    const changing = {}
+    Object.defineProperty(throwing, 'value', {
+      enumerable: true,
+      get: () => {
+        throwingReads++
+        throw new Error(secret)
+      },
+    })
+    Object.defineProperty(changing, 'value', {
+      enumerable: true,
+      get: () => ++changingReads,
+    })
+
+    const throwingFailure = await put(ctx, CODEX, { kind: 'grant', payload: throwing })
+      .then(() => undefined, (error: unknown) => error as Error)
+    const changingFailure = await put(ctx, BEDROCK, { kind: 'grant', payload: changing })
+      .then(() => undefined, (error: unknown) => error as Error)
+
+    expect([throwingReads, changingReads]).toEqual([0, 0])
+    expect(throwingFailure).toBeInstanceOf(TypeError)
+    expect(changingFailure).toBeInstanceOf(TypeError)
+    expect(throwingFailure?.message).not.toContain(secret)
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+    await expect(restarted.credentials.readRecord(BEDROCK)).resolves.toBeUndefined()
+  })
+
+  it('rejects an own non-enumerable toJSON without invoking it', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const secret = 'LEAKED_SECRET_FROM_TOJSON'
+    let calls = 0
+    const payload = { value: 'kept' }
+    Object.defineProperty(payload, 'toJSON', {
+      value: () => {
+        calls++
+        throw new Error(secret)
+      },
+    })
+
+    const failure = await put(ctx, CODEX, { kind: 'grant', payload })
+      .then(() => undefined, (error: unknown) => error as Error)
+
+    expect(calls).toBe(0)
+    expect(failure).toBeInstanceOf(TypeError)
+    expect(failure?.message).not.toContain(secret)
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
+  it('rejects an inherited toJSON without invoking it', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const secret = 'LEAKED_SECRET_FROM_TOJSON'
+    let calls = 0
+    const payload: unknown[] = ['kept']
+    const prototype = Object.create(Array.prototype) as object
+    Object.defineProperty(prototype, 'toJSON', {
+      value: () => {
+        calls++
+        throw new Error(secret)
+      },
+    })
+    Object.setPrototypeOf(payload, prototype)
+
+    const failure = await put(ctx, CODEX, { kind: 'grant', payload })
+      .then(() => undefined, (error: unknown) => error as Error)
+
+    expect(calls).toBe(0)
+    expect(failure).toBeInstanceOf(TypeError)
+    expect(failure?.message).not.toContain(secret)
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
+  it('does not invoke a global toJSON hook while storing an api-key record', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const secret = 'LEAKED_SECRET_FROM_GLOBAL_TOJSON'
+    const original = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON')
+    let calls = 0
+    try {
+      Object.defineProperty(Object.prototype, 'toJSON', {
+        configurable: true,
+        value: () => {
+          calls++
+          throw new Error(secret)
+        },
+      })
+
+      const failure = await put(ctx, CODEX, { kind: 'api-key', env: { AWS_PROFILE: 'prod' } })
+        .then(() => undefined, (error: unknown) => error as Error)
+
+      expect(calls).toBe(0)
+      expect(failure).toBeInstanceOf(TypeError)
+      expect(failure?.message).not.toContain(secret)
+    } finally {
+      if (original === undefined) delete (Object.prototype as { toJSON?: unknown }).toJSON
+      else Object.defineProperty(Object.prototype, 'toJSON', original)
+    }
+    await expect(ctx.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
+  it('rejects an array subclass that a JSON round trip would flatten', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const payload = new (class extends Array<unknown> {})()
+    payload.push('kept')
+
+    await expect(put(ctx, CODEX, { kind: 'grant', payload })).rejects.toThrow(/payload/)
+    await expect(ctx.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
+  it('round-trips a non-callable toJSON data field', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const record = { kind: 'grant', payload: { toJSON: 'literal', value: 'kept' } } as const
+
+    await put(ctx, CODEX, record)
+
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX)).resolves.toEqual(record)
+  })
+
+  it('refuses a symbol-keyed payload property that serialization would omit', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const payload = { visible: 'kept', [Symbol('omitted')]: 'value' }
+
+    await expect(put(ctx, CODEX, { kind: 'grant', payload })).rejects.toThrow(/payload/)
+
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
+  it('refuses a non-enumerable payload data property that serialization would omit', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const payload = { visible: 'kept' }
+    Object.defineProperty(payload, 'omitted', { value: 'value' })
+
+    await expect(put(ctx, CODEX, { kind: 'grant', payload })).rejects.toThrow(/payload/)
+
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
+  it('sanitizes payload reflection trap failures without committing', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const secret = 'LEAKED_SECRET_FROM_REFLECTION'
+    const calls = [0, 0, 0]
+    const payloads = [
+      new Proxy({ value: 'kept' }, { ownKeys: () => { calls[0] = (calls[0] ?? 0) + 1; throw new Error(secret) } }),
+      new Proxy({ value: 'kept' }, { getOwnPropertyDescriptor: () => { calls[1] = (calls[1] ?? 0) + 1; throw new Error(secret) } }),
+      new Proxy({ value: 'kept' }, { getPrototypeOf: () => { calls[2] = (calls[2] ?? 0) + 1; throw new Error(secret) } }),
+    ]
+
+    for (const payload of payloads) {
+      const failure = await put(ctx, CODEX, { kind: 'grant', payload })
+        .then(() => undefined, (error: unknown) => error as Error)
+      expect(failure).toBeInstanceOf(TypeError)
+      expect(failure?.message).not.toContain(secret)
+      expect(failure?.cause).toBeUndefined()
+    }
+    expect(calls).toEqual([0, 0, 0])
+
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
+  it('refuses -0 rather than persisting it as 0', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+
+    await expect(put(ctx, CODEX, { kind: 'grant', payload: { offset: -0 } })).rejects.toThrow(/payload/)
+
+    const restarted = await boot({ path, watch: false })
+    await expect(restarted.credentials.readRecord(CODEX)).resolves.toBeUndefined()
+  })
+
   it('refuses an api-key record this document could not read back', async () => {
     const dir = await tempDir()
     const path = join(dir, '.credentials.yaml')
@@ -339,9 +722,13 @@ describe('record mutation', () => {
     const ctx = new Context()
     const fiber = ctx.plugin(LocalCredentialProvider, { path: join(dir, '.credentials.yaml'), watch: false })
     await fiber
+    await put(ctx, CODEX, { kind: 'grant', payload: { expires: 1 } })
     const credentials = ctx.credentials
     await fiber.dispose()
 
+    await expect(credentials.describeRecord(CODEX))
+      .resolves.toEqual({ configured: true, kind: 'grant', writable: false })
+    await expect(credentials.describeRecord(BEDROCK)).resolves.toEqual({ configured: false, writable: false })
     await expect(credentials.modifyRecord(CODEX, () => Promise.resolve({ kind: 'grant', payload: 1 })))
       .rejects.toThrow(/disposed/)
     await expect(credentials.deleteRecord(CODEX)).rejects.toThrow(/disposed/)

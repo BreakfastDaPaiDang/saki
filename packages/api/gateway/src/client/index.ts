@@ -405,7 +405,7 @@ class ClientRemoteService extends Service implements TypertClientRemote {
       ? token.abort.signal
       : AbortSignal.any([token.abort.signal, callerSignal])
     try {
-      const result = await connection.rpc.call('/api', endpoint, { args }, signal)
+      const result = await connection.rpc.call('/api', endpoint, { args }, { signal })
       if (!mountActive(token)) return withdrawn(endpoint)
       if (!result.ok) return { ok: false, error: result.error }
       return { ok: true, value: parse(descriptor.result, result.value, endpoint, 'result') }

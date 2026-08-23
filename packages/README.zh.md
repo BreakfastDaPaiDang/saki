@@ -2,11 +2,11 @@
 
 [English](README.md) | 中文
 
-npm scope 为 `@deepseek-ai/dsh-*`；Cordis `Service` 子类和函数插件通过 `ctx.effect()`、`ctx.on()` 或 `ctx.waterfall()` 注册。规则见[包](AGENTS.md)与[根规则](../AGENTS.md#conventions)。
+DSH 包使用 `@deepseek-ai/dsh-*`；私有 Saki 包使用 `@breakfastdapaidang/saki-*`。Cordis 贡献通过 `ctx.effect()`、`ctx.on()` 或 `ctx.waterfall()` 注册。规则见[包](AGENTS.md)、[根规则](../AGENTS.md#conventions)与[治理](../docs/saki/package-governance.zh.md)。
 
 ## 层级结构
 
-包按组置于 `packages/<group>/<pkg>/`；包名仍为 `@deepseek-ai/dsh-<pkg>`。**组 README 负责包／ctx 键映射。**
+包位于 `packages/<group>/<pkg>/`；DSH 使用 `@deepseek-ai/dsh-<pkg>`，Saki 使用 `@breakfastdapaidang/saki-<pkg>`。**组 README 负责包／ctx 键映射。**
 
 | 组 | 职责 | 发布预期 |
 |---|---|---|
@@ -41,6 +41,7 @@ npm scope 为 `@deepseek-ai/dsh-*`；Cordis `Service` 子类和函数插件通�
 | [`preset/`](preset/README.zh.md) | 由 preset `cordis.yml` 按会话组装 agent | 产品：稳定 API |
 | [`guard/`](guard/README.zh.md) | 循环卫生守卫：建议性重复调用提醒 + `tools/execute` 截止时间强制执行器 | 产品：稳定 API |
 | [`bundle/`](bundle/README.zh.md) | 可安装的 `dsh --profile` 补丁层 | 产品：稳定 API |
+| [`saki/`](saki/README.zh.md) | 私有 Saki 产品插件与组合 | 产品：私有、未发布 |
 | [`extensions/`](extensions/README.zh.md) | agent 运行时自修改：实时插件／服务检查和模型所写插件挂载／卸载（[设计](../.agents/notes/implemented/feature/2026-07-08-self-referential-cordis-toolset.zh.md)） | 产品：稳定 API |
 | [`hooks/`](hooks/README.zh.md) | 钩子桥接 + 共享的 Claude Code／Codex 线协议库 | 产品：稳定 API |
 | [`session/`](session/README.zh.md) | 持久会话数据平面：持久化 seam + JSONL/SQLite 后端、投影 seam、基于日志的标题、会话上报 | 产品：稳定 API |

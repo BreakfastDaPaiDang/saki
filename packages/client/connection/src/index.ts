@@ -13,13 +13,18 @@ import { rejectWebSocketUpgrade, WebSocketDownlinks } from './websocket-downlink
 
 export type {
   ConnectionRpcAuthority,
+  ConnectionRpcCallOptions,
   ConnectionRpcEndpointMatcher,
   ConnectionRpcHandler,
   ConnectionRpcHandlerOptions,
+  ConnectionRpcReply,
+  ConnectionRpcRequestHeaders,
+  ConnectionRpcRequestMetadata,
   HostConnectionHandle,
   HostConnectionRpc,
 } from './rpc.ts'
 export { HostConnectionService } from './rpc-host.ts'
+export { isLoopbackHostname } from './loopback-hostname.ts'
 
 export { API_PATH, HOST_EVENTS_PATH, MUX_EVENTS_PATH } from './api-path.ts'
 

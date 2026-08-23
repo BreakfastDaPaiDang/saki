@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Schema from '@deepseek-ai/schemastery'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
-import type { RpcResponse, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { CredentialView, RpcResponse, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import {
   ModelsSection, needsSetup, providerCopy, providerTargetLabel, removeProviderProfile,
 } from '../src/client/ModelsSection.tsx'
@@ -27,6 +27,19 @@ const OPENAI_TARGET = { provider: 'openai', displayName: 'openai' }
 const openaiCopy = (template: string): string => providerCopy(template, OPENAI_TARGET)
 const DEEPSEEK_TARGET = { provider: 'deepseek-official', displayName: 'DeepSeek' }
 const deepSeekCopy = (template: string): string => providerCopy(template, DEEPSEEK_TARGET)
+const PLAINTEXT_PROTECTION = 'plaintext' as CredentialView['protectionLevel']
+
+function availableCredential(ref: string, writable = true): CredentialView {
+  return {
+    ref: ref as CredentialView['ref'],
+    configured: true,
+    source: 'file',
+    protectionLevel: PLAINTEXT_PROTECTION,
+    writable,
+    health: 'available',
+    observedAt: 0,
+  }
+}
 
 /** Open one row's capacity disclosure (1-based, as the labels read). */
 function expandRow(position: number): void {
@@ -290,7 +303,7 @@ describe('ModelsSection', () => {
   it('turns the setup card into a row once the credential reports configured', async () => {
     const { face } = await mountFirstRun()
     face.credentials.describe.mockImplementation((payload: { refs: string[] }) => Promise.resolve(ok({
-      credentials: Object.fromEntries(payload.refs.map(ref => [ref, { configured: true, writable: true }])),
+      credentials: Object.fromEntries(payload.refs.map(ref => [ref, availableCredential(ref)])),
     })))
     const controller = new ModelsSettingsStore(face as unknown as WireFace, settingsSchema, new SettingsDescribeMirror(face as never))
     await controller.load()
@@ -317,7 +330,7 @@ describe('ModelsSection', () => {
       credential,
     })
     expect(needsSetup(row(undefined), false)).toBe(true)
-    expect(needsSetup(row({ configured: true, writable: true }), false)).toBe(false)
+    expect(needsSetup(row(availableCredential('X')), false)).toBe(false)
     const nested = { ...row(undefined), entry: { ...entry, settingsPath: ['providers', 'x'] } }
     expect(needsSetup(nested, false)).toBe(false)
     // A user who can already reach some provider is not in the first-run

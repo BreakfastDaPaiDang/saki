@@ -1,7 +1,7 @@
 /**
  * Browser-safe, zero-dependency loopback classification shared by the `/api`
- * Host fence and the package's `ctx.connection` state. The predicate stays
- * package-internal; client plugins consume the derived state through Cordis.
+ * Host fence, the package's `ctx.connection` state, and products that validate
+ * one configured local browser origin.
  */
 
 /**

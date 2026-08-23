@@ -10,7 +10,7 @@ Status: implemented
 
 ## 决策
 
-每个拉取请求都在 [CI](../../../../.github/workflows/ci.yml) 中运行必需的 `python-runtime` 作业。该作业不使用路径过滤，调用共享的[单文件可执行程序构建器](../../../../.github/workflows/build-exe-for-python-sdk.yml)构建 `node24-linux-x64`，并参与 `all checks passed`。被调用的工作流会构建真实可执行文件，运行全部无密钥 Python 完整轮次和直接二进制场景（包括两份检入的快照），构建 SDK 与运行时 wheel 包，将二者安装进干净的虚拟环境，检查可执行文件与原生 addon 的 GLIBC 依赖，并在 manylinux 2.28 容器中运行已安装的 wheel 包。
+每个已就绪且非草稿的 PR 都在 [CI](../../../../.github/workflows/ci.yml) 中依据 [Saki Actions 策略](../process/2026-08-18-saki-actions-cost-policy.zh.md)运行必需的 `python-runtime` 作业。该作业不使用路径过滤，调用共享的[单文件可执行程序构建器](../../../../.github/workflows/build-exe-for-python-sdk.yml)构建 `node24-linux-x64`，并参与 `all checks passed`。被调用的工作流会构建真实可执行文件，运行全部无密钥 Python 完整轮次和直接二进制场景（包括两份检入的快照），构建 SDK 与运行时 wheel 包，将二者安装进干净的虚拟环境，检查可执行文件与原生 addon 的 GLIBC 依赖，并在 manylinux 2.28 容器中运行已安装的 wheel 包。
 
 必需作业与 [Python 发布工作流](../process/2026-08-11-python-publication-workflow.zh.md)共用同一构建器。其并发键包含调用方工作流，因此同一 ref 上的必需 CI 与显式完整发布验证不会互相取消。完整的 linux-x64、linux-arm64 和 macos-arm64 矩阵仍属于发布验证：平台无关的运行时、SDK 与快照行为只需要一个阻断合并的原生载体，而架构相关的可执行文件、addon、wheel 包标签与部署目标行为在发布前仍需要全部发布目标验证。
 
@@ -26,6 +26,6 @@ Status: implemented
 
 ## 后果
 
-每个拉取请求都会承担一次标准托管 Linux exe 与 wheel 包构建，`all checks passed` 也会等待该作业。这使第一方 Python 分发成为合并时约定，并复用发布实现，而不维护一条更小的替代流水线。
+每个已就绪且非草稿的 PR 都会承担一次标准托管 Linux exe 与 wheel 包构建，`all checks passed` 也会等待该作业。这使第一方 Python 分发成为合并时约定，并复用发布实现，而不维护一条更小的替代流水线。
 
 单一必需架构无法检测 macOS 或 Linux ARM64 打包回归。发布前仍必须执行显式完整发布验证，并由该验证负责这些平台特定结果。

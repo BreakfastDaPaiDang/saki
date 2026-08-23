@@ -1,0 +1,76 @@
+# Agent Note: Saki recoverable control intents
+
+Status: proposed
+
+English | [中文](2026-08-18-saki-recoverable-control-intents.zh.md)
+
+## Problem
+
+One Saki action can change local control-plane records and invoke DSH, Git, GitHub, or a model provider. The existing `storageDomain` interface serializes a domain's writes and makes one record update atomic, but it has no cross-table transaction. External systems could not join such a transaction even if Saki added one. Naive ordered writes would leave ambiguous partial state after process termination and could duplicate external work on retry. The Intent must also preserve who exercised which authority without trusting client attribution, equating an Agent Run with a security identity, or letting later Grant changes rewrite history.
+
+## Proposal
+
+The Saki control-plane Module implements [ADR 0005](../../../../docs/adr/0005-recoverable-control-intents.md), [ADR 0008](../../../../docs/adr/0008-principals-grants-and-actor-attribution.md), and [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.md) through one write interface that accepts an idempotent Control Intent request plus trusted authentication context. The control plane resolves the Principal, evaluates current Grants and Automation Policy, and derives an immutable Actor; caller-supplied Actor or Grant fields cannot confer authority. The envelope records a branded Intent id, Actor, Grant revisions, submission time, optional expected revision, Project scope, and a closed payload union. Reusing one id with the same payload returns the recorded receipt; reusing it with different content rejects.
+
+Principal and Grant remain durable versioned records. A Grant names its issuer, subject, actions, resource scope, validity, delegation limit, optional parent, revision, and revocation state. A Project using automatic mode acts through its own Project Automation Principal and requires both Grants and a satisfied Automation Policy. A one-off Agent Run receives a parent-subset delegation without becoming a Principal; a durable Agent Identity may receive its own Grants. Ambient DSH initiator or Session lineage remains provenance, not authority, consistent with the [Agent initiator scope](../../implemented/architecture/2026-07-15-agent-initiator-scope.md).
+
+One Installation Access aggregate owns distinct branded, revisioned Bootstrap Challenge and Browser Session entries. A single expected-revision record update validates an `issued` challenge and atomically records terminal `consumed` plus one `active` session before the transport emits `Set-Cookie`. Response loss does not prove cookie delivery, reopen the challenge, or create another session. Terminal states are monotonic under the server clock; restart reconciles only already-expired entries, generation replacement and Principal retirement invalidate affected sessions, and retained terminal entries become cleanup-eligible without making an id or secret reusable.
+
+The clear bootstrap secret exists only in the launcher handoff and exact exchange POST body; the raw cookie exists only in the `Set-Cookie` and Cookie headers and browser's HttpOnly jar; the derived request token exists only in authenticated Access and the request-forgery header. Durable storage keeps bootstrap and cookie digests plus non-secret request-token derivation version and domain metadata. The server authenticates the presented raw cookie by constant-time digest comparison, then uses the versioned cryptographic HMAC or KDF with domain separation to derive the Access request token from that same cookie; mutations recompute and constant-time compare the header. No independent verifier secret exists, and restart needs no raw token in storage. Outside their named transports, clear secrets and tokens never enter durable records, receipts, snapshots, unrelated wire payloads or Projections, URLs, analytics, logs, diagnostics, traces, events, error text, crash artifacts, adapter errors, or exports. The unauthenticated Access read leaks no Installation or security-object identifier or secret failure class.
+
+Revocation blocks new Intents, new delegation, and any not-yet-started external effect that requires the revoked Grant. Inspection, cancellation, reconciliation, and compensation remain available for an effect that may already have occurred. Active Host capability boundaries check the current Grant revision rather than treating the Intent's historical Actor snapshot as permanent authority.
+
+The Module persists the Intent before crossing a capability seam. Intent lifecycle records distinguish prepared, reserved, dispatched, waiting, completed, failed, canceled, and reconciliation-required outcomes. Each external adapter receives the Intent id, returns stable external identifiers and plain data, and supports either idempotent redispatch or inspection sufficient for reconciliation. External calls never run inside a `storageDomain` update callback.
+
+The implemented [existing-directory Project registration](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.md) applies this ordering to one bounded Workspace-creation effect and the first Project Registry in control-domain version 2. This note remains proposed because generalized Intent phases, Execution Dispatch, Execution Leases, Intervention Requests, compensation, and the other external adapters are not implemented.
+
+When an accepted Intent requires creating or resuming an Execution, the control plane persists a separate Execution Dispatch before waking a Host. Dispatch delivery, claims, Host operation identity, and recovery belong to the [durable dispatch proposal](2026-08-18-saki-durable-dispatch-intervention-and-attention.md), while the Intent continues to own authorization, attribution, and the requested product mutation. An Intent waiting for human input links a durable Intervention Request; Attention Inbox derives that pending work and never becomes another command owner.
+
+An Execution Lease record keyed by Resource Binding owns the single hard admission fact for writable work. Its atomic read-modify-write either grants one Agent Run the worktree or reports the current holder. The Intent is written before lease acquisition; a crash between those writes leaves a retryable prepared Intent, while a crash after acquisition leaves the Intent id and proposed Run facts on the Lease so recovery can finish or release it without admitting a competing writer.
+
+Installation Access, Principal, Grant, Development Project, Work Item control metadata, Work Session, Agent Run, Provider Account Profile, Context Policy, Generation Job, Control Intent, and Execution Lease remain separate versioned records. Bootstrap Challenge and Browser Session are entries inside the one aggregate so challenge consumption and session insertion share one record commit; no other cross-record links claim atomicity. Each record has one owning module and identifies cached external facts by source and observation time. Cross-record links converge through Intent recovery.
+
+The control-plane Module exposes `SakiAccess.readAccess(presentedSession?, signal)`, `exchangeBootstrap(transportContext, request, signal)`, and `logoutCurrentSession(authentication, requestToken, signal)` beside `SakiControlPlane.submit(authentication, intent, signal)`, `query(authentication, query, signal)`, and `onChanged`. Host API alone uses a package-private SakiAccess resolver to turn the HTTP cookie and transport facts into trusted `AuthenticationContext`; neither resolver nor context is a wire API. Bootstrap exchange and logout are the only product mutations outside Control Intent and modify only Installation Access. Every protected query and submit revalidates the active session and Installation generation, Principal lifecycle, and current Grant revision and resource scope. Principal or Grant changes invalidate affected Projections. Post-commit change notifications carry identifiers and invalidation scope so clients refetch projections; they are not durable commands or an event-sourced fact log. Per-Project in-process serialization reduces contention but does not replace persistent revisions, Intent recovery, or Execution Leases.
+
+Startup recovery first reconciles access entries already expired by the server clock and rejects sessions from another Installation State Generation or an inactive Principal, then scans non-terminal Intents and occupied Leases before accepting automatic work. It redispatches only when the adapter contract makes the operation idempotent, otherwise it inspects the external identifier. Missing or contradictory evidence moves the Intent to reconciliation required and keeps the affected resource unavailable until a person or deterministic repair resolves it.
+
+## Alternatives considered
+
+**Sequential multi-record CRUD.** It has no durable commit marker for the whole action and cannot distinguish “dispatch never happened” from “dispatch succeeded but the acknowledgement was lost.” Retrying either assumption can lose or duplicate work.
+
+**One Development Project document.** It uses the available single-record atomicity but couples unrelated update rates, grows without a useful bound, and turns every history or provider change into a Project-wide rewrite. It still cannot commit external work atomically.
+
+**A Saki relational transaction layer.** Multi-row transactions improve only local commits. GitHub, DSH Sessions, Git, and providers still require durable dispatch and reconciliation, while the new layer creates a second schema, migration, backup, and adapter lifecycle beside DSH storage.
+
+**Full event sourcing.** It preserves every transition but adds event versioning, ordering, replay, projection recovery, and effect deduplication before Saki's commands and projections stabilize. Existing Session events remain authoritative for model-visible history; control-plane lifecycle records supply product traceability without making every domain object an event fold.
+
+**Process-local mutexes only.** They can serialize one running process but vanish on restart and cannot explain an already dispatched external effect. They remain an optimization, never the source of admission truth.
+
+**Trust Actor or permission fields from the caller.** A browser, Agent, webhook, or adapter could claim another identity or omit delegation. The trusted control plane derives attribution and authority from authentication context and durable Grants.
+
+**Use GitHub OAuth, a local password, or a persistent browser bearer for bootstrap.** External login makes local recovery depend on network identity and invites membership to become Host authority; a password adds a verifier and reset lifecycle; browser storage exposes bearer material to client code. The one-time local challenge and revocable HttpOnly Browser Session provide the bounded single-operator transport without changing the Principal and Grant model.
+
+**Use Automation Policy as authority.** Policy owns eligibility, budgets, and evidence, but making it the permission record would let a trigger edit grant Host access. A Project Automation Principal needs both an explicit Grant and satisfied policy.
+
+**Create a Principal for every Agent Run.** Disposable Runs have no independent continuing identity and would produce meaningless durable security records. Parent-subset delegation records their authority without confusing attempt identity with security identity.
+
+## Acceptance criteria
+
+- Repeating an Intent id with identical content never creates a second Agent Run, GitHub mutation, or Generation Job; conflicting reuse rejects.
+- One Resource Binding never grants two active writable Agent Runs, including across restart and recovery.
+- Crash-injection tests stop after each persistent lifecycle transition and prove deterministic resume, failure, or reconciliation-required behavior after reopening storage.
+- A lost adapter acknowledgement is resolved by stable external identity or becomes visibly reconciliation required; it is never assumed to have failed.
+- A committed Execution Dispatch or Intervention Request survives restart independently of any live Agent, scheduler, browser connection, or pending Promise.
+- Product Views distinguish requested, externally observed, completed, failed, and reconciliation-required states without treating `domain/changed` as durable evidence.
+- A client cannot obtain authority by supplying Actor, Principal, Grant, Session-lineage, or GitHub-membership claims; accepted Intents record the control-plane-derived Actor and exact Grant revisions.
+- Installation Access proves atomic issued-to-consumed challenge transition and active-session insertion in one record commit before `Set-Cookie`; response loss cannot reopen the challenge or create another session.
+- Challenge and session tests cover server-clock expiry, terminal-state monotonicity, ordinary restart, logout, revocation, Principal retirement, generation replacement, retained-terminal cleanup, and non-reuse of ids or secrets.
+- Each clear authentication material appears only in its named handoff, cookie, or request-token transport and never enters durable records, receipts, snapshots, URLs, analytics, logs, diagnostics, traces, events, unrelated wire payloads or Projections, error text, crash artifacts, adapter errors, or exports; no independent verifier secret exists.
+- Unauthenticated Access and bootstrap failures disclose no Installation, challenge, Principal, Grant, Host, or Project identifier; state-changing browser requests require exact Origin and session-bound request-forgery protection.
+- Grant revocation rejects new Intents, delegation, and undispatched effects while preserving safe inspection, cancellation, reconciliation, and compensation.
+- Automatic work requires a Project Automation Principal, an explicit Grant, and a satisfied Automation Policy; one-off Agent Runs receive only parent-subset delegations.
+- No control-plane Interface exposes a storage handle, Host path, live DSH handle, provider token, or adapter-specific response object.
+
+## Risks
+
+Recovery logic can become a distributed state machine spread across adapters unless the control-plane Module owns lifecycle transitions and adapters expose only dispatch and reconciliation facts. Grant checks at active capability boundaries add revocation propagation and race handling; tests must distinguish an undispatched effect from one whose outcome is unknown so revocation never causes unsafe blind retry. Mutable lifecycle records do not provide an immutable global audit log, so any later compliance requirement may require an append-only journal. A single-process `storageDomain` and per-Project queue do not support active-active control planes; multi-Host control-plane execution requires a new lease and consistency mechanism rather than extending the local assumption silently.

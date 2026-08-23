@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
+import { CREDENTIAL_PROTECTION_PLAINTEXT, credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ApiProxy, GoalRef, HostFrame, MuxFrame, RpcMessage, RpcRequest, RpcResponse } from '@deepseek-ai/dsh-host-apiproxy'
 import { InProcessApiClient, RpcId, toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
@@ -745,7 +746,19 @@ describe('config unary surface', () => {
         mutate: record('settings.mutate', r => ok(r, view)),
       },
       credentials: {
-        describe: record('credentials.describe', r => ok(r, { credentials: { OPENAI_API_KEY: { configured: true, source: 'file', writable: true } } })),
+        describe: record('credentials.describe', r => ok(r, {
+          credentials: {
+            OPENAI_API_KEY: {
+              ref: credentialRef('OPENAI_API_KEY'),
+              configured: true,
+              source: 'file',
+              protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+              writable: true,
+              health: 'available',
+              observedAt: 0,
+            },
+          },
+        })),
         set: record('credentials.set', r => ok(r, {})),
         unset: record('credentials.unset', r => ok(r, {})),
       },
@@ -771,7 +784,22 @@ describe('config unary surface', () => {
     })
     expect(mutated.result).toEqual({ ok: true, value: view })
     const creds = await c.credentials.describe({ refs: ['OPENAI_API_KEY'] })
-    expect(creds.result).toEqual({ ok: true, value: { credentials: { OPENAI_API_KEY: { configured: true, source: 'file', writable: true } } } })
+    expect(creds.result).toEqual({
+      ok: true,
+      value: {
+        credentials: {
+          OPENAI_API_KEY: {
+            ref: 'OPENAI_API_KEY',
+            configured: true,
+            source: 'file',
+            protectionLevel: 'plaintext',
+            writable: true,
+            health: 'available',
+            observedAt: 0,
+          },
+        },
+      },
+    })
     expect((await c.credentials.set({ ref: 'OPENAI_API_KEY', value: 'sk-x' })).result).toEqual({ ok: true, value: {} })
     expect((await c.credentials.unset({ ref: 'OPENAI_API_KEY' })).result).toEqual({ ok: true, value: {} })
     const providers = await c.llm.providers({})

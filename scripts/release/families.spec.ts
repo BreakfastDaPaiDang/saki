@@ -52,7 +52,8 @@ describe('release families', () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-release-version-'))
     roots.push(root)
     write(join(root, 'package.json'), '{"version":"0.0.1"}\n')
-    write(join(root, 'packages/experimental/prototype/package.json'), '{"version":"0.0.1","private":true}\n')
+    write(join(root, 'packages/experimental/prototype/package.json'), '{"name":"@deepseek-ai/dsh-experimental-prototype","version":"0.0.1","private":true}\n')
+    write(join(root, 'packages/saki/control-plane/package.json'), '{"name":"@breakfastdapaidang/saki-control-plane","version":"0.1.0","private":true}\n')
     write(join(root, 'packages/core/unselected/package.json'), '{"version":"0.0.1"}\n')
 
     const dsh = releaseFamily('dsh')
@@ -63,6 +64,26 @@ describe('release families', () => {
       { path: 'package.json', tag: undefined },
       { path: 'packages/core/published/package.json', tag: 'dsh-v0.0.2' },
       { path: 'packages/experimental/prototype/package.json', tag: undefined },
+    ])
+  })
+
+  it('excludes private Saki packages from the DSH release family', () => {
+    const root = mkdtempSync(join(tmpdir(), 'saki-release-family-'))
+    roots.push(root)
+    mkdirSync(join(root, 'apps/cli'), { recursive: true })
+    mkdirSync(join(root, 'packages/saki/bundle'), { recursive: true })
+    writeFileSync(join(root, 'apps/cli/package.json'), JSON.stringify({
+      name: '@deepseek-ai/dsh',
+      version: '0.1.0',
+    }))
+    writeFileSync(join(root, 'packages/saki/bundle/package.json'), JSON.stringify({
+      name: '@breakfastdapaidang/saki-bundle',
+      version: '0.1.0',
+      private: true,
+    }))
+
+    expect(releaseFamily('dsh').members(root).map(entry => entry.name)).toEqual([
+      '@deepseek-ai/dsh',
     ])
   })
 

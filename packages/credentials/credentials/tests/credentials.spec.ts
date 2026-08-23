@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { credentialRef, isCredentialKeySegment } from '../src/index.ts'
+import {
+  CREDENTIAL_PROTECTION_EPHEMERAL,
+  CREDENTIAL_PROTECTION_LOCAL_USER_TRUST,
+  credentialProtectionLevel,
+  credentialRef,
+  isCredentialKeySegment,
+} from '../src/index.ts'
 import type { CredentialRef } from '../src/index.ts'
 import { MemoryCredentials } from './memory.ts'
 
@@ -39,17 +45,67 @@ describe('isCredentialKeySegment', () => {
   })
 })
 
+describe('credentialProtectionLevel', () => {
+  it('accepts descriptive identifiers and rejects every other shape', () => {
+    expect(credentialProtectionLevel('external-secret-manager')).toBe('external-secret-manager')
+    for (const invalid of ['', 'LOCAL_USER', 'local_user', '-local', 'local-']) {
+      expect(() => credentialProtectionLevel(invalid)).toThrow(TypeError)
+    }
+  })
+})
+
 describe('the credentials seam through the memory provider', () => {
+  it('requires the resolved value to carry the requested protection level', async () => {
+    const ctx = await boot({ DEEPSEEK_API_KEY: 'sk-seeded' })
+
+    await expect(ctx.credentials.resolveRequired(REF, CREDENTIAL_PROTECTION_EPHEMERAL)).resolves.toEqual({
+      value: 'sk-seeded',
+      source: 'memory',
+      protectionLevel: CREDENTIAL_PROTECTION_EPHEMERAL,
+    })
+    await expect(ctx.credentials.resolveRequired(REF, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST))
+      .rejects.toThrow(/requires protection level "local-user-trust".*reported "ephemeral"/)
+  })
+
+  it('fails a protection requirement for a missing value', async () => {
+    const ctx = await boot()
+    await expect(ctx.credentials.resolveRequired(REF, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST))
+      .rejects.toThrow(/is not configured/)
+  })
+
   it('mounts as ctx.credentials and resolves a seeded reference with its source', async () => {
     const ctx = await boot({ DEEPSEEK_API_KEY: 'sk-seeded' })
-    expect(await ctx.credentials.resolve(REF)).toEqual({ value: 'sk-seeded', source: 'memory' })
-    expect(await ctx.credentials.describe(REF)).toEqual({ configured: true, source: 'memory', writable: true })
+    expect(await ctx.credentials.resolve(REF)).toEqual({
+      value: 'sk-seeded',
+      source: 'memory',
+      protectionLevel: CREDENTIAL_PROTECTION_EPHEMERAL,
+    })
+    const info = await ctx.credentials.describe(REF)
+    expect(info.observedAt).toBeGreaterThan(0)
+    expect(info).toEqual({
+      ref: REF,
+      configured: true,
+      source: 'memory',
+      protectionLevel: CREDENTIAL_PROTECTION_EPHEMERAL,
+      writable: true,
+      health: 'available',
+      observedAt: info.observedAt,
+    })
   })
 
   it('treats an empty stored value as absent everywhere', async () => {
     const ctx = await boot({ DEEPSEEK_API_KEY: '' })
     expect(await ctx.credentials.resolve(REF)).toBeUndefined()
-    expect(await ctx.credentials.describe(REF)).toEqual({ configured: false, writable: true })
+    const info = await ctx.credentials.describe(REF)
+    expect(info.observedAt).toBeGreaterThan(0)
+    expect(info).toEqual({
+      ref: REF,
+      configured: false,
+      protectionLevel: CREDENTIAL_PROTECTION_EPHEMERAL,
+      writable: true,
+      health: 'missing',
+      observedAt: info.observedAt,
+    })
   })
 
   it('stores through set, removes through unset, and emits the committed change', async () => {
@@ -58,7 +114,11 @@ describe('the credentials seam through the memory provider', () => {
     ctx.on('credentials/reference-updated', ref => void events.push(ref))
 
     await ctx.credentials.set(REF, 'sk-live')
-    expect(await ctx.credentials.resolve(REF)).toEqual({ value: 'sk-live', source: 'memory' })
+    expect(await ctx.credentials.resolve(REF)).toEqual({
+      value: 'sk-live',
+      source: 'memory',
+      protectionLevel: CREDENTIAL_PROTECTION_EPHEMERAL,
+    })
     await ctx.credentials.unset(REF)
     expect(await ctx.credentials.resolve(REF)).toBeUndefined()
     expect(events).toEqual([REF, REF])

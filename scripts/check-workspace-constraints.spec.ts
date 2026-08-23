@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   checkExperimentalDependencyIsolation,
   checkExperimentalManifest,
+  expectedProductPackageFiles,
   type WorkspaceManifest,
 } from './check-workspace-constraints.ts'
 
@@ -71,6 +72,17 @@ describe('experimental workspace constraints', () => {
 
     expect(checkExperimentalDependencyIsolation(manifests)).toEqual([
       '@deepseek-ai/dsh-python-runtime: dependencies.@deepseek-ai/dsh-experimental-prototype must not reference an experimental package',
+    ])
+  })
+})
+
+describe('workspace publication constraints', () => {
+  it('publishes the credentials record-normalization entry without a shared chunk', () => {
+    expect(expectedProductPackageFiles({ name: '@deepseek-ai/dsh-credentials' })).toEqual([
+      'lib/index.js',
+      'lib/invariant.js',
+      'lib/record-normalization.js',
+      'lib/types/**/*.d.ts',
     ])
   })
 })

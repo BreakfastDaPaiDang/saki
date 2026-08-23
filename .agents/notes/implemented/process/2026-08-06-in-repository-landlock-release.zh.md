@@ -20,7 +20,7 @@ Status: implemented
 
 公开 npm 分发边界由 3 个归组织所有的包组成，它们共用一个启动器包家族版本：`@deepseek-ai/node-addon-landlock-run`、`@deepseek-ai/node-addon-landlock-run-linux-x64` 和 `@deepseek-ai/node-addon-landlock-run-linux-arm64`。入口包继续通过 `optionalDependencies` 声明两个平台包；它们在 manifest（元数据清单）中的 `os` 和 `cpu` 字段让 npm 只安装兼容的包。仓库约束要求这 3 个包名设置 `publishConfig.access: public`，并要求其版本与私有启动器 workspace 根包一致。原先的非 scoped 包名不属于本仓库的发布目标。这 3 个已不再是唯一的公开包：[按序列区分 access 的决策](2026-08-13-public-vendor-and-native-sequences.zh.md)让 vendored 框架九包也公开发布，而 dsh 族保持受限。
 
-主仓库同时负责原生 CI 和发布。`Landlock Run` 会为相关 PR 和 `master` 推送运行，并在各自匹配的原生 runner 上构建每个平台包。手动触发的 `Landlock Run Release` 工作流会构建两个平台的二进制文件，将其作为工作流产物传递，组装并验证完整的包家族，打包出内容不可变的 npm tarball，安装并实际运行这些 tarball，之后才允许受保护的发布作业执行。发布顺序是平台 tarball 在前，最后发布将它们列为可选依赖的入口 tarball。发布使用 `landlock-run-vX.Y.Z` tag，避免启动器版本与 monorepo 中其他发布家族发生冲突；预发布版本使用 npm 的 `next` dist-tag。
+主仓库同时负责原生 CI 和发布。`Landlock Run` 会为相关的已就绪 PR 或显式手动 dispatch 运行，并在各自匹配的原生 runner 上构建每个平台包；依据 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.zh.md)，它不会在合并后重复运行。手动触发的 `Landlock Run Release` 工作流会构建两个平台的二进制文件，将其作为工作流产物传递，组装并验证完整的包家族，打包出内容不可变的 npm tarball，安装并实际运行这些 tarball，之后才允许受保护的发布作业执行。发布顺序是平台 tarball 在前，最后发布将它们列为可选依赖的入口 tarball。发布使用 `landlock-run-vX.Y.Z` tag，避免启动器版本与 monorepo 中其他发布家族发生冲突；预发布版本使用 npm 的 `next` dist-tag。
 
 沙箱打包安装演练不再允许 npm 注册表提供启动器。它会将当前 checkout 的入口包、匹配的原生包和 harness 依赖闭包一起打包，把这些本地 tarball 安装到仓库外部的纯 Node 消费方中，并在测试约束效果或失败闭合行为之前，证明所安装的启动器可执行、与原生构建产物字节完全一致，且具有正确的 ELF 架构。
 

@@ -17,7 +17,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_PLAINTEXT, credentialRef } from '@deepseek-ai/dsh-credentials'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import FileSettingsProvider from '@deepseek-ai/dsh-settings-file'
@@ -126,7 +126,11 @@ describe('llm-deepseek real dynamic composition', () => {
     }, { timeout: 5000 })
     await writeFile(credentialsPath, 'version: 1\nrefs:\n  DEEPSEEK_API_KEY: rotated-key\n', { mode: 0o600 })
     await vi.waitFor(async () => {
-      expect(await ctx.get('credentials')!.resolve(KEY_REF)).toEqual({ value: 'rotated-key', source: 'file' })
+      expect(await ctx.get('credentials')!.resolve(KEY_REF)).toEqual({
+        value: 'rotated-key',
+        source: 'file',
+        protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
     }, { timeout: 5000 })
 
     await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
@@ -143,8 +147,17 @@ describe('llm-deepseek real dynamic composition', () => {
     const boot = await loadComposition({ withDynamic: true, baseURL: first.url })
     const home = root!
     await boot.ctx.get('credentials')!.set(KEY_REF, 'stored-by-ui')
-    expect(await boot.ctx.get('credentials')!.describe(KEY_REF))
-      .toEqual({ configured: true, source: 'file', writable: true })
+    const firstInfo = await boot.ctx.get('credentials')!.describe(KEY_REF)
+    expect(firstInfo.observedAt).toBeGreaterThan(0)
+    expect(firstInfo).toEqual({
+      ref: KEY_REF,
+      configured: true,
+      source: 'file',
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true,
+      health: 'available',
+      observedAt: firstInfo.observedAt,
+    })
     await assemble(boot.ctx, { model: 'deepseek-v4-flash', messages: [] })
     expect(first.headers[0]?.authorization).toBe('Bearer stored-by-ui')
     await boot.ctx.fiber.dispose()
@@ -155,8 +168,22 @@ describe('llm-deepseek real dynamic composition', () => {
     const credentials = restarted.ctx.get('credentials')!
     // The stored key is still the provider's own writable file entry — not a
     // read-only launch override, which is what hoisting it would have made it.
-    expect(await credentials.resolve(KEY_REF)).toEqual({ value: 'stored-by-ui', source: 'file' })
-    expect(await credentials.describe(KEY_REF)).toEqual({ configured: true, source: 'file', writable: true })
+    expect(await credentials.resolve(KEY_REF)).toEqual({
+      value: 'stored-by-ui',
+      source: 'file',
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    const restartedInfo = await credentials.describe(KEY_REF)
+    expect(restartedInfo.observedAt).toBeGreaterThan(0)
+    expect(restartedInfo).toEqual({
+      ref: KEY_REF,
+      configured: true,
+      source: 'file',
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable: true,
+      health: 'available',
+      observedAt: restartedInfo.observedAt,
+    })
     // Rotation still works after the restart, and the next request uses it.
     await credentials.set(KEY_REF, 'rotated-after-restart')
     await assemble(restarted.ctx, { model: 'deepseek-v4-flash', messages: [] })

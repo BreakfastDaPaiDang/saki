@@ -29,6 +29,7 @@ import type {
 // Type-only: the brand constructor is host-side; the fixture casts at its
 // wire-fabrication boundary (the schema layer's one-cast-point posture).
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
+import type { CredentialProtectionLevel, CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 import type { CommandDescriptor, CommandExecution, CommandResult } from '@deepseek-ai/dsh-commands/types'
 import { deriveEventMessage, foldSurface } from '@deepseek-ai/dsh-session/surface'
 import type {
@@ -40,6 +41,9 @@ import type { RequestPayload, ResponseValue, RpcMethodMap } from '@deepseek-ai/d
 import { AbstractApiClient, RpcId, SESSION_SEARCH_RESULT_LIMIT } from './api.ts'
 import { randomUuid } from './random-uuid.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
+
+/** Fixture-owned wire value, validated by the real carrier schema in production. */
+const FIXTURE_PLAINTEXT_PROTECTION = 'plaintext' as CredentialProtectionLevel
 
 /** The fake carrier mints like a real one (business code never mints). */
 function rpcRequest<P>(payload: P): RpcRequest<P> {
@@ -3023,9 +3027,13 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
     credentials: {
       describe: request => ok(request, {
         credentials: Object.fromEntries(request.payload.refs.map(ref => [ref, {
+          ref: ref as CredentialRef,
           configured: fixtureCredentials.has(ref),
           ...fixtureCredentials.has(ref) ? { source: 'file' } : {},
+          protectionLevel: FIXTURE_PLAINTEXT_PROTECTION,
           writable: true,
+          health: fixtureCredentials.has(ref) ? 'available' as const : 'missing' as const,
+          observedAt: 0,
         }])),
       }),
       set: (request) => {
@@ -3090,7 +3098,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
   }
 
   const rpc: ClientConnectionRpc = {
-    call(channel, endpoint, payload) {
+    call(channel, endpoint, payload, _options) {
       if (channel !== '/api') {
         return Promise.reject(new Error(`fixture connection RPC channel ${JSON.stringify(channel)} is unavailable`))
       }

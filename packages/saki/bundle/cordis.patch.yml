@@ -1,0 +1,69 @@
+- insert:
+    - id: storage
+      name: '@deepseek-ai/dsh-storage'
+
+    - id: storage-json
+      name: '@deepseek-ai/dsh-storage-json'
+      config:
+        root: !!js dshHomePath('storages')
+
+    - id: saki-storage-sqlite
+      name: '@deepseek-ai/dsh-storage-sqlite'
+      config:
+        path: !!js process.env.SAKI_DATABASE_PATH ?? dshHomePath('saki', 'control.sqlite')
+        journalMode: wal
+
+    - id: storage-domain
+      name: '@deepseek-ai/dsh-storage-domain'
+      config:
+        backend: json
+        routes:
+          saki_control_plane: sqlite
+
+    - id: session
+      name: '@deepseek-ai/dsh-session'
+
+    - id: session-persistence-jsonl
+      name: '@deepseek-ai/dsh-session-persistence-jsonl'
+      config:
+        root: !!js dshHomePath('sessions')
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
+    - id: fs-local
+      name: '@deepseek-ai/dsh-fs-local'
+      config:
+        cwd: !!js process.cwd()
+
+    - id: subprocess
+      name: '@deepseek-ai/dsh-subprocess-local'
+
+    - id: saki-execution-local
+      name: '@breakfastdapaidang/saki-execution-local'
+
+    - id: saki-webserver
+      name: '@deepseek-ai/dsh-host-webserver'
+      config:
+        host: '127.0.0.1'
+        port: !!js "(() => { const port = Number(process.env.SAKI_PORT ?? 43119); if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SAKI_PORT must be an integer from 1 through 65535'); return port })()"
+
+    - id: saki-connection
+      name: '@deepseek-ai/dsh-client-connection'
+      config:
+        trustedHosts: []
+
+    - id: saki-control-plane
+      name: '@breakfastdapaidang/saki-control-plane'
+      config:
+        origin: !!js "'http://127.0.0.1:' + String(Number(process.env.SAKI_PORT ?? 43119))"
+        challengeTtlMs: 900000
+        sessionTtlMs: 43200000
+        terminalRetentionMs: 604800000
+        cookieName: saki_session
+
+    - id: saki-host-api
+      name: '@breakfastdapaidang/saki-host-api'
+
+    - id: saki-readiness
+      name: '@breakfastdapaidang/saki-bundle'

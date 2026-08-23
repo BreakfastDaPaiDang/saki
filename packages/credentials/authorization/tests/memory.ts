@@ -1,4 +1,4 @@
-import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_EPHEMERAL, CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type {
   CredentialInfo,
   CredentialKey,
@@ -24,8 +24,15 @@ export class MemoryCredentials extends CredentialProvider {
     return Promise.resolve(undefined)
   }
 
-  override describe(_ref: CredentialRef): Promise<CredentialInfo> {
-    return Promise.resolve({ configured: false, writable: true })
+  override describe(ref: CredentialRef): Promise<CredentialInfo> {
+    return Promise.resolve({
+      ref,
+      configured: false,
+      protectionLevel: CREDENTIAL_PROTECTION_EPHEMERAL,
+      writable: true,
+      health: 'missing',
+      observedAt: Date.now(),
+    })
   }
 
   override set(_ref: CredentialRef, _value: string): Promise<void> {

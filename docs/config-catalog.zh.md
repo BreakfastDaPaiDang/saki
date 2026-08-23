@@ -11,6 +11,54 @@
 
 `Requires:` 行列出插件通过 `inject` 注入的服务键：其 `cordis.yml` 树还必须加载这些服务的提供者。范围限定为 harness 层级（`packages/`）；配置树还可能加载的 vendored cordis 插件（`hmr`、控制台日志记录器等）固定为上游源代码（参见 [vendoring policy](../vendor/README.md)），未收录于此目录。
 
+<a id="breakfastdapaidangsaki-execution-local"></a>
+
+## `@breakfastdapaidang/saki-execution-local`
+
+需要：`fs` · `subprocess` · `workspaceRegistry`
+
+```ts config-catalog
+type ResolvedConfig = Required<Config>
+
+/** Local Git observation and baseline resource limits. */
+export interface Config {
+  /** Wall-clock bound for each Git process. */
+  gitCommandTimeoutMs?: number
+  /** TERM-to-KILL grace for each Git process tree. */
+  gitTerminationGraceMs?: number
+  /** Inclusive complete stdout bound for each Git process. */
+  maxGitStdoutBytes?: number
+  /** Inclusive complete stderr bound for each Git process. */
+  maxGitStderrBytes?: number
+  /** Maximum distinct paths in one complete repository inventory. */
+  inventoryMaxEntries?: number
+  /** Maximum exact path bytes across one complete repository inventory. */
+  inventoryMaxPathBytes?: number
+  /** Maximum raw Git stdout plus stderr bytes across one repository observation round. */
+  inventoryMaxGitOutputBytes?: number
+  /** Maximum retained raw evidence bytes from one inventory path. */
+  inventoryMaxFileBytes?: number
+  /** Maximum raw bytes read, including stability checks, across one repository inventory. */
+  inventoryMaxTotalFileBytes?: number
+  /** Wall-clock bound for one complete Git, filesystem, and Workspace observation round. */
+  inventoryMaxCaptureMs?: number
+  /** Maximum dirty entries in a complete inherited baseline. */
+  baselineMaxEntries?: number
+  /** Maximum sum of exact Git path bytes in a complete baseline. */
+  baselineMaxPathBytes?: number
+  /** Maximum allowlisted Git evidence bytes retained by one baseline. */
+  baselineMaxGitOutputBytes?: number
+  /** Maximum retained raw evidence bytes from one changed path. */
+  baselineMaxFileBytes?: number
+  /** Maximum bytes hashed across one complete baseline. */
+  baselineMaxTotalFileBytes?: number
+  /** Wall-clock bound for content baseline capture. */
+  baselineMaxCaptureMs?: number
+}
+```
+
+来源：[`packages/saki/execution-local/src/index.ts:54`](../packages/saki/execution-local/src/index.ts)
+
 <a id="deepseek-aidsh-acp"></a>
 
 ## `@deepseek-ai/dsh-acp`
@@ -420,7 +468,7 @@ export interface ConnectionConfig {
 }
 ```
 
-来源：[`packages/client/connection/src/index.ts:50`](../packages/client/connection/src/index.ts)
+来源：[`packages/client/connection/src/index.ts:55`](../packages/client/connection/src/index.ts)
 
 <a id="deepseek-aidsh-client-hmr"></a>
 
@@ -575,7 +623,23 @@ export interface Config {
 }
 ```
 
-来源：[`packages/credentials/credentials-local/src/index.ts:64`](../packages/credentials/credentials-local/src/index.ts)
+来源：[`packages/credentials/credentials-local/src/index.ts:72`](../packages/credentials/credentials-local/src/index.ts)
+
+<a id="deepseek-aidsh-credentials-windows-dpapi"></a>
+
+## `@deepseek-ai/dsh-credentials-windows-dpapi`
+
+```ts config-catalog
+/** Plugin config: the Host-local encrypted document location. */
+export interface Config {
+  /** Encrypted document path; defaults under the Harness home. */
+  path?: string
+  /** Harness home used when `path` is omitted; defaults to `$DSH_HOME` or `~/.dsh`. */
+  dshHome?: string
+}
+```
+
+来源：[`packages/credentials/credentials-windows-dpapi/src/index.ts:49`](../packages/credentials/credentials-windows-dpapi/src/index.ts)
 
 <a id="deepseek-aidsh-e2b"></a>
 
@@ -3224,6 +3288,8 @@ export interface Config {
 
 这些插件通过 `cordis.yml` 中不含 `config:` 块的条目加载；它们未声明任何配置接口。
 
+- `@breakfastdapaidang/saki-bundle`（[`packages/saki/bundle/src/index.ts`](../packages/saki/bundle/src/index.ts)）
+- `@breakfastdapaidang/saki-host-api` — 需要 `connection` · `sakiControlPlane`（[`packages/saki/host-api/src/index.ts`](../packages/saki/host-api/src/index.ts)）
 - `@deepseek-ai/dsh-agent`（[`packages/core/agent/src/index.ts`](../packages/core/agent/src/index.ts)）
 - `@deepseek-ai/dsh-api-gateway` — 需要 `typert`（[`packages/api/gateway/src/index.ts`](../packages/api/gateway/src/index.ts)）
 - `@deepseek-ai/dsh-api-remotes`（[`packages/api/remotes/src/index.ts`](../packages/api/remotes/src/index.ts)）
@@ -3299,6 +3365,7 @@ export interface Config {
 
 抽象服务类——部署时应改为加载具体的实现包（参见[能力 seam](../.agents/notes/implemented/architecture/2026-06-13-capability-seams.zh.md)）。
 
+- `@breakfastdapaidang/saki-execution` — 抽象 `SakiHostExecution`（[`packages/saki/execution/src/index.ts`](../packages/saki/execution/src/index.ts)）
 - `@deepseek-ai/dsh-attachment` — 抽象 `AttachmentStore`（[`packages/attachment/attachment/src/index.ts`](../packages/attachment/attachment/src/index.ts)）
 - `@deepseek-ai/dsh-code-runtime` — 抽象 `CodeRuntime`（[`packages/code-runtime/code-runtime/src/index.ts`](../packages/code-runtime/code-runtime/src/index.ts)）
 - `@deepseek-ai/dsh-compaction` — 抽象 `CompactionEngine`（[`packages/compaction/compaction/src/index.ts`](../packages/compaction/compaction/src/index.ts)）
@@ -3319,6 +3386,7 @@ export interface Config {
 
 由其他包作为库导入；`cordis.yml` 无法加载它们。
 
+- `@breakfastdapaidang/saki-control-plane`（[`packages/saki/control-plane/src/index.ts`](../packages/saki/control-plane/src/index.ts)）
 - `@deepseek-ai/dsh-acp-snapshot`（[`packages/test-support/acp-snapshot/src/index.ts`](../packages/test-support/acp-snapshot/src/index.ts)）
 - `@deepseek-ai/dsh-agent-loop-testkit`（[`packages/test-support/agent-loop-testkit/src/index.ts`](../packages/test-support/agent-loop-testkit/src/index.ts)）
 - `@deepseek-ai/dsh-anonymous-user-id`（[`packages/identity/anonymous-user-id/src/index.ts`](../packages/identity/anonymous-user-id/src/index.ts)）

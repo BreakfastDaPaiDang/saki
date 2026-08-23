@@ -18,6 +18,7 @@ import type {
   ConnectionRpcEndpointMatcher,
   ConnectionRpcHandler,
   ConnectionRpcHandlerOptions,
+  ConnectionRpcRequestMetadata,
   HostConnectionHandle,
   HostConnectionRpc,
 } from './rpc.ts'
@@ -80,7 +81,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
           return fallback.fetch(request)
         }
         if (interceptor.options.authority === 'loopback' && !isTrustedApiRequest(request, [])) {
-          return Promise.resolve(new Response('forbidden', { status: 403 }))
+          return Promise.resolve(failureResponse(403, 'forbidden', interceptor.options))
         }
         return interceptor.fetchHandler.fetch(request)
       },
@@ -95,17 +96,23 @@ export class HostConnectionService extends Service implements HostConnectionHand
   ): () => Promise<void> {
     assertChannel(channel)
     const trustedHosts = options.authority === 'loopback' ? [] : this.trustedHosts
-    const fetchHandler = rpcFetchHandler(channel, handler)
+    const fetchHandler = rpcFetchHandler(channel, handler, options)
     const route: WebRoute = {
       kind: 'prefix',
       path: channel,
       handler: async (req, res) => {
         if (!isTrustedApiRequest(req, trustedHosts)) {
-          res.writeHead(403)
-          res.end('forbidden')
+          const headers = responseHeaders(options.requiredResponseHeaders)
+          res.writeHead(403, Object.fromEntries(headers.entries()))
+          res.end(failureMessage('forbidden', options))
           return
         }
-        await bridge(req, res, fetchHandler)
+        await bridge(req, res, fetchHandler, undefined, {
+          ...(options.requiredResponseHeaders === undefined
+            ? {}
+            : { headers: options.requiredResponseHeaders }),
+          ...(options.opaqueError === undefined ? {} : { body: options.opaqueError.message }),
+        })
       },
     }
     return owner.effect(
@@ -126,7 +133,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
     }
     const interceptor: ConnectionRpcInterceptor = {
       matches,
-      fetchHandler: rpcFetchHandler(channel, handler),
+      fetchHandler: rpcFetchHandler(channel, handler, options),
       options,
     }
     return owner.effect(() => {
@@ -144,29 +151,30 @@ export class HostConnectionService extends Service implements HostConnectionHand
 function rpcFetchHandler(
   channel: string,
   handler: ConnectionRpcHandler,
+  options: ConnectionRpcHandlerOptions,
 ): FetchHandler {
   return {
     async fetch(request: Request): Promise<Response> {
       const endpoint = endpointFromPath(channel, new URL(request.url).pathname)
       if (request.method !== 'POST' || endpoint === undefined) {
-        return new Response('not found', { status: 404 })
+        return failureResponse(404, 'not found', options)
       }
 
       const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
       if (mediaType !== 'application/json') {
-        return new Response('content type must be application/json', { status: 415 })
+        return failureResponse(415, 'content type must be application/json', options)
       }
 
       let body: unknown
       try {
         body = await request.json()
       } catch {
-        return new Response('body is not JSON', { status: 400 })
+        return failureResponse(400, 'body is not JSON', options)
       }
 
       const envelope = clientRequestSchema.safeParse(body)
       if (!envelope.success) {
-        return invalidEnvelopeResponse(body, envelope.error.issues)
+        return invalidEnvelopeResponse(body, envelope.error.issues, options)
       }
       const message: ClientRequest = envelope.data
       if (message.method !== endpoint) {
@@ -174,27 +182,31 @@ function rpcFetchHandler(
           code: 'bad-request',
           message: `method ${JSON.stringify(message.method)} does not match endpoint ${JSON.stringify(endpoint)}`,
           details: { issues: [] },
-        })
+        }, options)
       }
 
       try {
-        const result = await handler(endpoint, message.payload, request.signal)
-        return fullResponse(message.rpcId, result)
+        const reply = await handler(endpoint, message.payload, request.signal, requestMetadata(request))
+        return fullResponse(message.rpcId, applyOpaqueError(reply.result, options), options, reply.headers)
       } catch (error) {
-        return new Response(`handler failure: ${String(error)}`, { status: 500 })
+        return failureResponse(500, `handler failure: ${String(error)}`, options)
       }
     },
   }
 }
 
-function invalidEnvelopeResponse(body: unknown, issues: RpcErrorDetailsMap['bad-request']['issues']): Response {
+function invalidEnvelopeResponse(
+  body: unknown,
+  issues: RpcErrorDetailsMap['bad-request']['issues'],
+  options: ConnectionRpcHandlerOptions,
+): Response {
   const rawId = (body as { rpcId?: unknown } | null)?.rpcId
   const rpcId = typeof rawId === 'string' ? RpcId(rawId) : INVALID_REQUEST_RPC_ID
   return errorResponse(rpcId, {
     code: 'bad-request',
     message: 'invalid client-request message',
     details: { issues },
-  })
+  }, options)
 }
 
 function endpointFromPath(channel: string, pathname: string): string | undefined {
@@ -208,13 +220,67 @@ function endpointFromPath(channel: string, pathname: string): string | undefined
   return endpoint
 }
 
-function errorResponse(rpcId: RpcIdType, error: RpcError): Response {
-  return fullResponse(rpcId, { ok: false, error })
+function errorResponse(
+  rpcId: RpcIdType,
+  error: RpcError,
+  options: ConnectionRpcHandlerOptions,
+): Response {
+  return fullResponse(rpcId, applyOpaqueError({ ok: false, error }, options), options)
 }
 
-function fullResponse(rpcId: RpcIdType, result: RpcServerResponse['result']): Response {
+function fullResponse(
+  rpcId: RpcIdType,
+  result: RpcServerResponse['result'],
+  options: ConnectionRpcHandlerOptions,
+  headers?: Readonly<Record<string, string>>,
+): Response {
   const body: RpcServerResponse = { type: 'server-response', rpcId, result }
-  return Response.json(body)
+  const framedHeaders = responseHeaders(options.requiredResponseHeaders, headers)
+  framedHeaders.set('content-type', 'application/json')
+  return Response.json(body, { headers: framedHeaders })
+}
+
+function applyOpaqueError(
+  result: RpcServerResponse['result'],
+  options: ConnectionRpcHandlerOptions,
+): RpcServerResponse['result'] {
+  return !result.ok && options.opaqueError !== undefined
+    ? { ok: false, error: options.opaqueError }
+    : result
+}
+
+function failureResponse(
+  status: number,
+  fallbackMessage: string,
+  options: ConnectionRpcHandlerOptions,
+): Response {
+  return new Response(failureMessage(fallbackMessage, options), {
+    status,
+    headers: responseHeaders(options.requiredResponseHeaders),
+  })
+}
+
+function failureMessage(fallback: string, options: ConnectionRpcHandlerOptions): string {
+  return options.opaqueError?.message ?? fallback
+}
+
+function responseHeaders(
+  required?: Readonly<Record<string, string>>,
+  provided?: Readonly<Record<string, string>>,
+): Headers {
+  const headers = new Headers(provided)
+  for (const [name, value] of Object.entries(required ?? {})) headers.set(name, value)
+  return headers
+}
+
+function requestMetadata(request: Request): ConnectionRpcRequestMetadata {
+  return Object.freeze({
+    url: request.url,
+    headers: Object.freeze({
+      get: (name: string) => request.headers.get(name),
+      has: (name: string) => request.headers.has(name),
+    }),
+  })
 }
 
 function assertChannel(channel: string): void {

@@ -7,6 +7,7 @@
     "bwrap",
     "icacls",
     "musl-gcc",
+    "pwsh",
     "python3",
     "sandbox-exec",
     "tar",
@@ -40,6 +41,7 @@
     "examples": {
       "entry": [
         "headless-agent/tests/fixtures/cli-mock-llm.ts",
+        "headless-agent/tests/fixtures/credentials/credentials-windows-dpapi/driver.ts",
         "headless-agent/tests/fixtures/semantic-checkpoint-agent.ts",
         "headless-agent/tests/fixtures/subagent-diagnostic-agent.ts",
         "headless-agent/tests/fixtures/subagent-inheritance-agent.ts",
@@ -209,6 +211,26 @@
       "project": [
         "src/**/*.ts",
         "tests/**/*.ts"
+      ]
+    },
+    "packages/saki/bundle": {
+      "entry": [
+        "tests/**/*.spec.ts",
+        "tests/**/*.e2e.ts",
+        "tests/fixtures/pending-readiness.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "tests/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "@breakfastdapaidang/saki-execution-local",
+        "@breakfastdapaidang/saki-host-api",
+        "@deepseek-ai/dsh-fs-local",
+        "@deepseek-ai/dsh-session-persistence-jsonl",
+        "@deepseek-ai/dsh-storage-json",
+        "@deepseek-ai/dsh-storage-sqlite",
+        "@deepseek-ai/dsh-subprocess-local"
       ]
     },
     "packages/typert/generator": {

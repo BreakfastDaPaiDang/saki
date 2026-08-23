@@ -9,6 +9,7 @@ The credential capability family separates reference resolution from its provide
 | [`credentials/`](credentials/README.md) | Credential-reference and credential-record seam | `ctx.credentials` |
 | [`credentials-local/`](credentials-local/README.md) | Environment and local-file provider | registers `ctx.credentials` |
 | [`authorization/`](authorization/README.md) | Plugin-owned flows that obtain a credential by asking a human | `ctx.authorization` |
+| [`credentials-windows-dpapi/`](credentials-windows-dpapi/README.md) | Windows current-user DPAPI provider | registers `ctx.credentials` |
 
 Configuration carries references, not secret values. Consumers resolve those references at their operation boundary; the child READMEs own mutation, precedence, and storage semantics. An authorization flow writes a credential record and is keyed by it, so the two seams meet at the record and nowhere else.
 

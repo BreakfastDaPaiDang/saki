@@ -44,9 +44,17 @@ import { Document, isMap, isScalar, parseDocument, type YAMLError } from 'yaml'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { canonicalizeWatchPath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
-import { CredentialProvider, credentialRef, parseCredentialKey } from '@deepseek-ai/dsh-credentials'
+import {
+  CREDENTIAL_PROTECTION_PLAINTEXT,
+  CredentialProvider,
+  credentialRef,
+  parseCredentialKey,
+} from '@deepseek-ai/dsh-credentials'
+import {
+  normalizeCredentialRecord,
+  normalizeJsonValue,
+} from '@deepseek-ai/dsh-credentials/record-normalization'
 import type {
-  ApiKeyRecord,
   CredentialInfo,
   CredentialKey,
   CredentialRecord,
@@ -214,7 +222,7 @@ export function parseCredentialsDocument(text: string, filename: string): Creden
   }
   if (fields['version'] !== DOCUMENT_VERSION) {
     throw new Error(
-      `credentials-local: ${filename} declares version ${JSON.stringify(fields['version'])};`
+      `credentials-local: ${filename} declares an unsupported document version;`
       + ` this build reads version ${DOCUMENT_VERSION}`,
     )
   }
@@ -296,26 +304,6 @@ function parseRecords(section: unknown, filename: string): Map<string, Credentia
   return entries
 }
 
-/**
- * Refuse an api-key record the read path could not admit, before it is
- * rendered: an empty key, an env name outside the reference grammar, or an
- * empty env value would persist a document `parseRecord` rejects at the next
- * boot — a durable-boundary write is validated where it is written.
- * @param key - the record's credential key, for the failure message.
- * @param record - the api-key record a mutation returned.
- */
-function assertStorableApiKey(key: CredentialKey, record: ApiKeyRecord): void {
-  if (record.key !== undefined && record.key.length === 0) {
-    throw new TypeError(`credentials-local: record "${key}" has an empty key; omit the field instead`)
-  }
-  for (const [name, value] of Object.entries(record.env ?? {})) {
-    credentialRef(name)
-    if (value.length === 0) {
-      throw new TypeError(`credentials-local: record "${key}" env "${name}" must be a non-empty string`)
-    }
-  }
-}
-
 /** One section of the document as a plain mapping; absent and null both mean empty. */
 function asSection(section: unknown, name: string, filename: string): Record<string, unknown> {
   if (section === undefined || section === null) return {}
@@ -350,11 +338,16 @@ function parseRecord(key: string, value: unknown, filename: string): CredentialR
     if (!('payload' in fields)) {
       throw new Error(`credentials-local: record "${key}" in ${filename} has no payload`)
     }
-    assertJsonValue(`record "${key}" payload in ${filename}`, fields['payload'], new Set())
-    return { kind: 'grant', payload: fields['payload'] }
+    return {
+      kind: 'grant',
+      payload: normalizeJsonValue(
+        fields['payload'],
+        `credentials-local: record "${key}" payload in ${filename}`,
+      ),
+    }
   }
   if (kind === undefined) throw new Error(`credentials-local: record "${key}" in ${filename} has no kind`)
-  throw new Error(`credentials-local: record "${key}" in ${filename} has unknown kind ${JSON.stringify(kind)}`)
+  throw new Error(`credentials-local: record "${key}" in ${filename} has an unknown kind`)
 }
 
 /** Reject a field the tag does not define, so a typo is not silently dropped. */
@@ -380,39 +373,9 @@ function parseRecordEnv(key: string, env: unknown, filename: string): Record<str
         `credentials-local: record "${key}" env "${name}" in ${filename} must be a non-empty string`,
       )
     }
-    parsed[name] = value
+    Object.defineProperty(parsed, name, { value, enumerable: true, configurable: true, writable: true })
   }
   return parsed
-}
-
-/**
- * Reject a payload that cannot survive a JSON round trip, on the way in and on
- * the way out. The seam promises owners their payload comes back exactly as
- * written, and both directions can break that: a document may spell `.inf` or
- * an alias cycle, and an owner may hand over a `Date`, a class instance, or a
- * `bigint` that this document has no faithful spelling for. Neither the value
- * nor any nested value is quoted in a diagnostic.
- * @param where - the subject named in a diagnostic, already free of any value.
- * @param value - the payload or nested value to admit.
- * @param seen - objects on the current path, for cycle detection.
- * @throws TypeError naming `where` when the value cannot round-trip.
- */
-function assertJsonValue(where: string, value: unknown, seen: Set<object>): void {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return
-  if (typeof value === 'number') {
-    if (Number.isFinite(value)) return
-    throw new TypeError(`credentials-local: ${where} holds a non-finite number`)
-  }
-  if (typeof value === 'object') {
-    if (seen.has(value)) throw new TypeError(`credentials-local: ${where} is cyclic`)
-    if (Object.getPrototypeOf(value) === Object.prototype || Array.isArray(value)) {
-      seen.add(value)
-      for (const nested of Object.values(value)) assertJsonValue(where, nested, seen)
-      seen.delete(value)
-      return
-    }
-  }
-  throw new TypeError(`credentials-local: ${where} holds a value JSON cannot represent`)
 }
 
 /**
@@ -491,7 +454,7 @@ function deleteSectionEntry(document: Document, section: 'refs' | 'records', key
 
 /**
  * Structural equality over two admitted JSON values. Records reach this after
- * {@link assertJsonValue}, so the walk meets only JSON shapes; key order is
+ * normalization, so the walk meets only JSON values; key order is
  * ignored because an external editor may reorder a record's fields without
  * changing what it stores.
  * @param left - one value.
@@ -505,7 +468,7 @@ function sameJsonValue(left: unknown, right: unknown): boolean {
   const leftKeys = Object.keys(left)
   const rightKeys = Object.keys(right)
   if (leftKeys.length !== rightKeys.length) return false
-  return leftKeys.every(key => key in right
+  return leftKeys.every(key => Object.hasOwn(right, key)
     && sameJsonValue((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]))
 }
 
@@ -616,11 +579,21 @@ export class LocalCredentialProvider extends CredentialProvider {
 
   override resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
     const inherited = this.inherited(ref)
-    if (inherited !== undefined) return Promise.resolve({ value: inherited, source: 'env' })
+    if (inherited !== undefined) {
+      return Promise.resolve({ value: inherited, source: 'env', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT })
+    }
     const stored = this.values.get(ref)
-    if (stored !== undefined) return Promise.resolve({ value: stored, source: 'file' })
+    if (stored !== undefined) {
+      return Promise.resolve({ value: stored, source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT })
+    }
     const fallback = this.dotenvFallback(ref)
-    if (fallback !== undefined) return Promise.resolve({ value: fallback.value, source: fallback.source })
+    if (fallback !== undefined) {
+      return Promise.resolve({
+        value: fallback.value,
+        source: fallback.source,
+        protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      })
+    }
     return Promise.resolve(undefined)
   }
 
@@ -629,13 +602,28 @@ export class LocalCredentialProvider extends CredentialProvider {
     // process cannot edit. A user `.env` value is writable in the sense that
     // matters — storing a key replaces it as the effective one.
     if (this.inherited(ref) !== undefined) {
-      return Promise.resolve({ configured: true, source: 'env', writable: false })
+      return Promise.resolve(this.description(ref, 'env', false))
     }
+    const writable = !this.isClosed()
     const stored = this.values.get(ref)
-    if (stored !== undefined) return Promise.resolve({ configured: true, source: 'file', writable: true })
+    if (stored !== undefined) return Promise.resolve(this.description(ref, 'file', writable))
     const fallback = this.dotenvFallback(ref)
-    if (fallback !== undefined) return Promise.resolve({ configured: true, source: fallback.source, writable: true })
-    return Promise.resolve({ configured: false, writable: true })
+    if (fallback !== undefined) return Promise.resolve(this.description(ref, fallback.source, writable))
+    return Promise.resolve(this.description(ref, undefined, writable))
+  }
+
+  /** Build one safe observation for the effective plaintext source. */
+  private description(ref: CredentialRef, source: string | undefined, writable: boolean): CredentialInfo {
+    const configured = source !== undefined
+    return {
+      ref,
+      configured,
+      ...configured ? { source } : {},
+      protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+      writable,
+      health: configured ? 'available' : 'missing',
+      observedAt: Date.now(),
+    }
   }
 
   override async set(ref: CredentialRef, value: string): Promise<void> {
@@ -650,7 +638,10 @@ export class LocalCredentialProvider extends CredentialProvider {
   }
 
   override readRecord(key: CredentialKey): Promise<CredentialRecord | undefined> {
-    return Promise.resolve(this.records.get(key))
+    const record = this.records.get(key)
+    return Promise.resolve(record === undefined
+      ? undefined
+      : normalizeCredentialRecord(record, `credentials-local: record "${key}"`))
   }
 
   override describeRecord(key: CredentialKey): Promise<CredentialRecordInfo> {
@@ -659,8 +650,9 @@ export class LocalCredentialProvider extends CredentialProvider {
     // a record, so nothing can shadow one, and an api-key record carrying
     // neither a key nor environment values is a deliberate statement rather
     // than a blank.
-    if (stored === undefined) return Promise.resolve({ configured: false, writable: true })
-    return Promise.resolve({ configured: true, kind: stored.kind, writable: true })
+    const writable = !this.isClosed()
+    if (stored === undefined) return Promise.resolve({ configured: false, writable })
+    return Promise.resolve({ configured: true, kind: stored.kind, writable })
   }
 
   override listRecords(): Promise<readonly CredentialRecordEntry[]> {
@@ -687,21 +679,27 @@ export class LocalCredentialProvider extends CredentialProvider {
         // have rotated it since.
         await this.reconcileFromDisk()
         const current = this.records.get(key)
-        const next = await mutate(current)
-        if (next === undefined) return current
+        const mutationInput = current === undefined
+          ? undefined
+          : normalizeCredentialRecord(current, `credentials-local: record "${key}"`)
+        const next = await mutate(mutationInput)
+        if (next === undefined) {
+          return current === undefined
+            ? undefined
+            : normalizeCredentialRecord(current, `credentials-local: record "${key}"`)
+        }
         // Admitted before it is rendered: what the read path would refuse is
         // refused here first, so a caller can never persist a document the
         // next boot rejects, and a value refused here has not been stored.
-        if (next.kind === 'grant') assertJsonValue(`record "${key}" payload`, next.payload, new Set())
-        else assertStorableApiKey(key, next)
-        const nextText = renderRecord(this.text, key, next)
+        const normalized = normalizeCredentialRecord(next, `credentials-local: record "${key}"`)
+        const nextText = renderRecord(this.text, key, normalized)
         // 0600: a document holding secrets is never world-readable.
         await writeFileAtomic(this.spec.filename, nextText, { mode: 0o600, dirMode: 0o700 })
         this.text = nextText
-        this.records.set(key, next)
+        this.records.set(key, normalized)
         // After the commit, on the same terms as a reference write.
         this.notifyRecordUpdated(key)
-        return next
+        return normalizeCredentialRecord(normalized, `credentials-local: record "${key}"`)
       }, { waitMs: DOCUMENT_LOCK_WAIT_MS })
     })
   }

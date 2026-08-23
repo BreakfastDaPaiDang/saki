@@ -224,21 +224,47 @@ describe('createFixtureApi', () => {
     const initial = await api.credentials.describe(req({ refs: ['DEEPSEEK_API_KEY', 'TEST_API_KEY'] }))
     if (!initial.result.ok) throw new Error('credential describe failed')
     expect(initial.result.value.credentials).toEqual({
-      DEEPSEEK_API_KEY: { configured: true, source: 'file', writable: true },
-      TEST_API_KEY: { configured: false, writable: true },
+      DEEPSEEK_API_KEY: {
+        ref: 'DEEPSEEK_API_KEY',
+        configured: true,
+        source: 'file',
+        protectionLevel: 'plaintext',
+        writable: true,
+        health: 'available',
+        observedAt: 0,
+      },
+      TEST_API_KEY: {
+        ref: 'TEST_API_KEY',
+        configured: false,
+        protectionLevel: 'plaintext',
+        writable: true,
+        health: 'missing',
+        observedAt: 0,
+      },
     })
     await api.credentials.set(req({ ref: 'TEST_API_KEY', value: 'write-only-fixture-secret' }))
     const configured = await api.credentials.describe(req({ refs: ['TEST_API_KEY'] }))
     if (!configured.result.ok) throw new Error('credential describe failed')
     expect(configured.result.value.credentials.TEST_API_KEY).toEqual({
+      ref: 'TEST_API_KEY',
       configured: true,
       source: 'file',
+      protectionLevel: 'plaintext',
       writable: true,
+      health: 'available',
+      observedAt: 0,
     })
     await api.credentials.unset(req({ ref: 'TEST_API_KEY' }))
     const cleared = await api.credentials.describe(req({ refs: ['TEST_API_KEY'] }))
     if (!cleared.result.ok) throw new Error('credential describe failed')
-    expect(cleared.result.value.credentials.TEST_API_KEY).toEqual({ configured: false, writable: true })
+    expect(cleared.result.value.credentials.TEST_API_KEY).toEqual({
+      ref: 'TEST_API_KEY',
+      configured: false,
+      protectionLevel: 'plaintext',
+      writable: true,
+      health: 'missing',
+      observedAt: 0,
+    })
   })
 
   it('emits the todo/write snapshot at the real tool boundary: between tool/call and tool/result, timestamps monotonic', async () => {

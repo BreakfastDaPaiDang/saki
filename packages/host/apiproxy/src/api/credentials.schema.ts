@@ -9,15 +9,27 @@ import { z } from 'zod'
 import type { RequestPayload, ResponseValue } from './rpc-map.ts'
 import type { Wire } from './rpc.schema.ts'
 import type { CredentialView } from './credentials.ts'
+import type { CredentialProtectionLevel, CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 
 /** POSIX-portable environment-variable name (the seam's `credentialRef` pattern). */
 export const credentialRefNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
 
+/** CredentialRef response value: one brand cast after reference validation. */
+export const credentialRefSchema = credentialRefNameSchema as unknown as z.ZodType<CredentialRef>
+
+/** CredentialProtectionLevel: one brand cast after vocabulary validation. */
+export const credentialProtectionLevelSchema = z.string()
+  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/) as unknown as z.ZodType<CredentialProtectionLevel>
+
 /** CredentialView entry of credentials.describe. */
 export const credentialViewSchema = z.object({
+  ref: credentialRefSchema,
   configured: z.boolean(),
   source: z.string().optional(),
+  protectionLevel: credentialProtectionLevelSchema,
   writable: z.boolean(),
+  health: z.enum(['available', 'missing', 'unavailable']),
+  observedAt: z.number().nonnegative(),
 }) satisfies z.ZodType<Wire<CredentialView>>
 
 /** credentials.describe request payload. */

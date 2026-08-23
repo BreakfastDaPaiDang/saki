@@ -1,0 +1,40 @@
+---
+name: implement
+description: Implement one approved Saki specification or Work Item with test-first slices, focused evidence, and two-axis review.
+disable-model-invocation: true
+metadata:
+  saki:
+    upstream: https://github.com/mattpocock/skills
+    commit: 9c9f36ccd3995266cd675468af71639c8dde1ec5
+    dsh-capabilities:
+      - read
+      - write
+      - edit
+      - glob
+      - grep
+      - skill
+      - subagent
+    one-of-capabilities:
+      - bash
+      - pwsh
+    optional-capabilities: []
+    host-commands:
+      - git
+    mutation: git
+---
+
+# Implement
+
+Implement the approved specification or Work Item in the current checkout. Treat its acceptance criteria, repository instructions, domain glossaries, and ADRs as the authority for scope.
+
+## DSH compatibility preflight
+
+Before mutation, confirm `read`, `write`, `edit`, `glob`, `grep`, `skill`, and `subagent`, plus one of `bash` or `pwsh`. Resolve `git`, confirm the repository and branch, and inspect the working tree without discarding existing changes. If anything is missing or unrelated work overlaps the requested files, stop with the exact blocker before editing.
+
+Load `tdd` through the DSH `skill` capability. Identify the observable public interfaces and prioritized behaviors already fixed by the specification; ask only when a missing choice would materially change the result.
+
+Work in vertical red–green slices. Run the narrow test for each slice and typecheck only as often as the affected interface requires. Follow the repository's `dsh-pre-push-checks` instructions for final evidence; do not reflexively run the full suite.
+
+Before completion, load `code-review` through the `skill` capability and review the diff against its fixed base and originating specification. Resolve material findings, then repeat only evidence invalidated by the fix.
+
+Commit or push only when the user or Work Item authorizes that workflow. Preserve unrelated changes and use the repository's normal history and pre-push rules.

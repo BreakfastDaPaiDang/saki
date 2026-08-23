@@ -4,12 +4,12 @@ English | [中文](README.zh.md)
 
 File-backed [credentials](../credentials/README.md) provider: four layers, one honest precedence.
 
-| Layer | Source id | Writable | Wins |
-|---|---|---|---|
-| Inherited process environment | `env` | no | always |
-| `$DSH_HOME/.credentials.yaml` document | `file` | yes (`set`/`unset`) | over both `.env` layers |
-| `<invocation cwd>/.env` | `project-env` | not here | over the user `.env` |
-| `$DSH_HOME/.env` | `user-env` | not here | otherwise |
+| Layer | Source id | Protection | Writable | Wins |
+|---|---|---|---|---|
+| Inherited process environment | `env` | `plaintext` | no | always |
+| `$DSH_HOME/.credentials.yaml` document | `file` | `plaintext` | yes (`set`/`unset`) | over both `.env` layers |
+| `<invocation cwd>/.env` | `project-env` | `plaintext` | not here | over the user `.env` |
+| `$DSH_HOME/.env` | `user-env` | `plaintext` | not here | otherwise |
 
 The launching environment wins because a per-run override (`DEEPSEEK_API_KEY=… dsh`, a CI secret, a container `-e`) is operator intent for this run — and because it cannot be edited from inside, it must be *visibly* read-only: `describe()` reports `source: 'env', writable: false`, and `set`/`unset` reject instead of writing a change the reader would never see.
 
@@ -75,7 +75,7 @@ External edits publish `credentials/reference-updated` per changed reference aft
 
 The document is `0600` under a `0700` directory, which stops other OS users — **not** the model. Tool processes (bash, the filesystem tools) run as the same user, and the shipped `workspace-write` file policy confines mutations rather than reads, so they can read this file exactly like any other file the user owns; no sandbox mode singles it out. What the harness does hold to is narrower: it never hands the model a resolved path to the document, and never loads it into the process environment — unlike `$DSH_HOME/.env`, which is the user's ordinary environment layer (see [app-boot's Harness-home layers](../../boot/app-boot/README.md#profiles)) — so reaching the value takes a deliberate read of a path the agent was not given.
 
-That is discretion, not a boundary. A deployment that must keep provider keys away from its own agent cannot get there with file permissions; an OS-keychain provider — a store the model's processes cannot read at all — is the deferred answer and belongs beside this provider as a sibling package.
+That is discretion, not a boundary. [`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.md) is the sibling for encrypted Windows storage at rest, but its current-user scope still trusts deliberate processes running as the same Windows user. Keeping provider keys away from those processes requires a separately isolated Credential Broker or external secret manager.
 
 ## Model Experience
 
@@ -88,6 +88,6 @@ No direct invalidation; credentials never enter a request prefix.
 ## Known Limitations and Deferred Work
 
 - **Same-reference concurrent writes are last-write-wins** — the writer lock and the read-modify-write keep concurrent writers from dropping each other's entries, but two writers editing one reference still resolve to the later write; there is no revision check.
-- **A same-UID process can read the document** — see [Security boundary](#security-boundary): the file-effect sandbox modes do not deny reads, and an OS-keychain provider is deferred.
+- **A same-UID process can read the document** — see [Security boundary](#security-boundary): the file-effect sandbox modes do not deny reads. The Windows DPAPI sibling removes plaintext at rest but does not establish same-user process isolation.
 - **Environment changes are invisible** — the snapshot is frozen at launch, so a variable exported after startup reaches neither resolution nor `describe`; changing an environment-sourced credential takes a restart.
 - **Atomic, not crash-durable** — inherited from `dsh-atomic-write`; the store re-reads on boot.

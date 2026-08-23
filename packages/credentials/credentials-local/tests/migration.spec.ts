@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_PLAINTEXT, credentialRef } from '@deepseek-ai/dsh-credentials'
 import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { LocalCredentialProvider, renderFlatLayoutMigration } from '../src/index.ts'
 
@@ -73,12 +73,16 @@ describe('flat-layout boot migration', () => {
     const ctx = await boot({ path, watch: false })
     expect(await readFile(path, 'utf8')).toBe(MIGRATED)
     if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o600)
-    expect(await ctx.credentials.resolve(credentialRef('DSH_CRED_TEST'))).toEqual({ value: 'stored', source: 'file' })
+    expect(await ctx.credentials.resolve(credentialRef('DSH_CRED_TEST'))).toEqual({
+      value: 'stored', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
     expect(await ctx.credentials.resolve(credentialRef('DSH_CRED_OTHER')))
-      .toEqual({ value: 'quoted value', source: 'file' })
+      .toEqual({ value: 'quoted value', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT })
     expect(await ctx.credentials.resolve(credentialRef('DSH_CRED_BLOCK')))
-      .toEqual({ value: 'first line\nsecond line\n', source: 'file' })
-    expect(await ctx.credentials.resolve(credentialRef('records'))).toEqual({ value: 'tricky', source: 'file' })
+      .toEqual({ value: 'first line\nsecond line\n', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT })
+    expect(await ctx.credentials.resolve(credentialRef('records'))).toEqual({
+      value: 'tricky', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('a second boot reads the migrated document without touching it', async () => {
@@ -88,7 +92,9 @@ describe('flat-layout boot migration', () => {
     await boot({ path, watch: false })
     const ctx = await boot({ path, watch: false })
     expect(await readFile(path, 'utf8')).toBe(MIGRATED)
-    expect(await ctx.credentials.resolve(credentialRef('DSH_CRED_TEST'))).toEqual({ value: 'stored', source: 'file' })
+    expect(await ctx.credentials.resolve(credentialRef('DSH_CRED_TEST'))).toEqual({
+      value: 'stored', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('yields to a concurrent migrator under the writer lock', async () => {
@@ -113,7 +119,9 @@ describe('flat-layout boot migration', () => {
     await holder
     const ctx = await booting
     expect(await readFile(path, 'utf8')).toBe(winner)
-    expect(await ctx.credentials.resolve(credentialRef('DSH_CRED_TEST'))).toEqual({ value: 'winner', source: 'file' })
+    expect(await ctx.credentials.resolve(credentialRef('DSH_CRED_TEST'))).toEqual({
+      value: 'winner', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('leaves an empty flow mapping alone', async () => {

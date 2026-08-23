@@ -118,6 +118,21 @@ describe('gate graph validation', () => {
     })
   })
 
+  it.each(['ci-primary', 'ci-static', 'ci-windows-blocking'] as const)(
+    'keeps the repository-owned skill-pack behavior in %s',
+    (mode) => {
+      const ids = withPnpmEntrypoint(() => gatesForMode(mode).map(subject => subject.id))
+
+      expect(ids).toContain('saki-skill-pack-tests')
+    },
+  )
+
+  it('keeps the repository-owned skill-pack provenance in documentation checks', () => {
+    const ids = withPnpmEntrypoint(() => gatesForMode('doc-sync').map(subject => subject.id))
+
+    expect(ids).toContain('saki-skill-pack')
+  })
+
   it.each(['ci-primary', 'ci-static', 'check-all'] as const)(
     'keeps the DSH package license policy in %s',
     (mode) => {
@@ -155,6 +170,8 @@ describe('gate graph validation', () => {
       ]))
       expect(completeGate?.needs).toEqual(gate.needs)
     }
+    expect(byId.get('saki-powershell-bootstrap')?.allowFailure).not.toBe(true)
+    expect(byId.get('duplication')?.allowFailure).toBe(true)
   })
 
   it('applies one configured test and polling timeout to both coverage gates', () => {
@@ -402,6 +419,7 @@ describe('Node 24 lane ownership', () => {
     })
     expect(subject.find(item => item.id === 'built-bin-smoke')?.args).toEqual(
       expect.arrayContaining([
+        'packages/saki/bundle/tests/built-bin.e2e.ts',
         'packages/subagent/subagent-codex/tests/loader-composition.e2e.ts',
         'packages/subagent/subagent-claude-code/tests/loader-composition.e2e.ts',
       ]),

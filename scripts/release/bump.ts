@@ -3,8 +3,9 @@
  * readable from the repository rather than derived inside CI
  * ([rationale](../../.agents/notes/implemented/process/2026-08-10-npm-release-sequences.md)).
  *
- * The dsh family shares one version across its publishable members, private
- * package manifests, and the workspace root:
+ * The dsh family shares one version across its publishable members, private DSH
+ * package manifests, and the workspace root. Private Saki packages keep their
+ * independent product version:
  * `major`, `minor`, `patch`, or an explicit `x.y.z` (including a prerelease such
  * as `0.0.1-rc.1`). The vendored family has one version line per package, but
  * every release advances and publishes the complete family so the next release
@@ -18,6 +19,7 @@
 import { globSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, matchesGlob } from 'node:path'
 import { parseArgs } from 'node:util'
+import { classifyProductPackage } from '../repository-package-policy.ts'
 import { releaseFamily, type ReleaseFamily, type ReleaseMember } from './families.ts'
 import { capture, isEntry } from './process.ts'
 
@@ -263,6 +265,7 @@ function privateDshVersions(root: string): PrivateDshVersion[] {
       }
       const manifest = parsed as Record<string, unknown>
       if (manifest.private !== true) return []
+      if (typeof manifest.name !== 'string' || classifyProductPackage(manifest.name)?.family !== 'dsh') return []
       if (typeof manifest.version !== 'string') {
         throw new Error(`${manifestPath} must declare a string version`)
       }
@@ -276,7 +279,7 @@ function privateDshVersions(root: string): PrivateDshVersion[] {
 
 /**
  * Plan the dsh family's rewrite: one version for every publishable member,
- * private package, and the root.
+ * private DSH package, and the root.
  * @param family - the dsh family.
  * @param root - repository root.
  * @param members - the family's members.

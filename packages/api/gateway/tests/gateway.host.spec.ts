@@ -3,7 +3,12 @@ import type { AddressInfo } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { Context, Service, symbols } from '@deepseek-ai/cordis'
 import { z } from 'zod'
-import { apply as applyConnection, inject as connectionInject } from '@deepseek-ai/dsh-client-connection'
+import {
+  apply as applyConnection,
+  inject as connectionInject,
+  type ConnectionRpcHandler,
+  type ConnectionRpcRequestMetadata,
+} from '@deepseek-ai/dsh-client-connection'
 import type { WebServer, WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import {
   bindTypertRemote,
@@ -96,11 +101,12 @@ class GoalService extends Service {
   }
 }
 
-type FakeRpcResult =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly details: object } }
+type FakeRpcHandler = ConnectionRpcHandler
 
-type FakeRpcHandler = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<FakeRpcResult>
+const REQUEST_METADATA: ConnectionRpcRequestMetadata = {
+  url: 'http://127.0.0.1/api/fixture',
+  headers: { get: () => null, has: () => false },
+}
 
 class FakeConnectionService extends Service {
   channel: string | undefined
@@ -976,15 +982,17 @@ describe('TypertGatewayService', () => {
     if (handler === undefined) throw new Error('fixture Connection did not retain the /api interceptor')
     await expect(handler('goals/create', {
       args: { agentId: 'agent-1', request: { title: 'ship' } },
-    }, signal)).resolves.toEqual({
-      ok: true,
-      value: { agentId: 'agent-1', title: 'ship', scope: 'rpc-caller' },
+    }, signal, REQUEST_METADATA)).resolves.toEqual({
+      result: {
+        ok: true,
+        value: { agentId: 'agent-1', title: 'ship', scope: 'rpc-caller' },
+      },
     })
     const service = rawGoalService(ctx)
     expect(service.lastSignal).toBe(signal)
     abort.abort(new Error('client disconnected'))
     expect(service.lastSignal?.aborted).toBe(true)
-    const invalid = await handler('goals/create', { invalid: true }, signal)
+    const invalid = (await handler('goals/create', { invalid: true }, signal, REQUEST_METADATA)).result
     expect(invalid).toMatchObject({
       ok: false,
       error: { code: 'internal' },
@@ -992,23 +1000,21 @@ describe('TypertGatewayService', () => {
     if (invalid.ok) throw new Error('invalid Remote payload unexpectedly succeeded')
     expect(invalid.error.message).toMatch(/exactly one plain-object args field/)
 
-    await expect(handler('goals/maybe', { args: {} }, signal)).resolves.toEqual({
-      ok: true,
-      value: undefined,
+    await expect(handler('goals/maybe', { args: {} }, signal, REQUEST_METADATA)).resolves.toEqual({
+      result: { ok: true, value: undefined },
     })
-    await expect(handler('goals/maybe', { args: { value: null } }, signal)).resolves.toEqual({
-      ok: true,
-      value: null,
+    await expect(handler('goals/maybe', { args: { value: null } }, signal, REQUEST_METADATA)).resolves.toEqual({
+      result: { ok: true, value: null },
     })
 
     for (const endpoint of ['goals', '/create', 'goals/', 'goals/create/extra']) {
-      const result = await handler(endpoint, { args: {} }, signal)
+      const result = (await handler(endpoint, { args: {} }, signal, REQUEST_METADATA)).result
       expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
       if (result.ok) throw new Error('invalid Remote endpoint unexpectedly succeeded')
       expect(result.error.message).toContain('invalid Remote endpoint')
     }
     for (const payload of [null, [], { args: {}, extra: true }, { only: true }, { args: null }, { args: [] }]) {
-      const result = await handler('goals/create', payload, signal)
+      const result = (await handler('goals/create', payload, signal, REQUEST_METADATA)).result
       expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
       if (result.ok) throw new Error('invalid Remote payload unexpectedly succeeded')
       expect(result.error.message).toContain('plain-object args field')
@@ -1019,9 +1025,12 @@ describe('TypertGatewayService', () => {
       'goals/fail',
       { args: { request: null } },
       new AbortController().signal,
+      REQUEST_METADATA,
     )).resolves.toEqual({
-      ok: false,
-      error: { code: 'internal', message: 'non-error failure', details: {} },
+      result: {
+        ok: false,
+        error: { code: 'internal', message: 'non-error failure', details: {} },
+      },
     })
 
     // A business rejection observed while the carrier signal is already aborted
@@ -1033,12 +1042,15 @@ describe('TypertGatewayService', () => {
       'goals/fail',
       { args: { request: null } },
       cancelledCall.signal,
+      REQUEST_METADATA,
     )).resolves.toEqual({
-      ok: false,
-      error: {
-        code: 'cancelled',
-        message: 'Remote invocation "goals/fail" was aborted',
-        details: {},
+      result: {
+        ok: false,
+        error: {
+          code: 'cancelled',
+          message: 'Remote invocation "goals/fail" was aborted',
+          details: {},
+        },
       },
     })
 
@@ -1067,7 +1079,9 @@ describe('TypertGatewayService', () => {
 
     await expect(handler('goals/create', {
       args: { agentId: 'agent-1', request: { title: 'ship' } },
-    }, new AbortController().signal)).resolves.toEqual({ ok: false, error: failure })
+    }, new AbortController().signal, REQUEST_METADATA)).resolves.toEqual({
+      result: { ok: false, error: failure },
+    })
   })
 
   it('caches SRC ownership until the Cordis Service set changes', async () => {

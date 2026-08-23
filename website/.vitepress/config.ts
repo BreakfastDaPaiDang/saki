@@ -2,11 +2,12 @@
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { DefaultTheme, PageData, SiteConfig } from 'vitepress'
+import type { DefaultTheme, SiteConfig } from 'vitepress'
 import type { ViteDevServer } from 'vite'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 import { landingLink, localeCollections, orderedPages, routeLink, sectionSpec, type DocsLocale, type DocsPage, type DocsSidebar } from '../docs.ts'
 import { docsSourceFiles, emitRawMarkdownPages, llmsTxt, projectDocs, rawMarkdownRoute } from '../../scripts/project-doc-site.ts'
+import { repositoryThemeLinks } from './repository-theme.ts'
 
 projectDocs()
 
@@ -155,6 +156,8 @@ function escapeVueInterpolation(html: string): string {
   return html.replaceAll('{{', '&#123;&#123;').replaceAll('}}', '&#125;&#125;')
 }
 
+const repositoryLinks = repositoryThemeLinks(process.env)
+
 const sharedTheme: Pick<DefaultTheme.Config, 'search' | 'socialLinks' | 'editLink'> = {
   search: {
     provider: 'local',
@@ -186,18 +189,8 @@ const sharedTheme: Pick<DefaultTheme.Config, 'search' | 'socialLinks' | 'editLin
       },
     },
   },
-  socialLinks: [
-    { icon: 'github', link: 'https://github.com/deepseek-ai/deepseek-harness' },
-  ],
-  editLink: {
-    pattern: ({ frontmatter }: PageData) => {
-      const data: unknown = frontmatter
-      const editSource: unknown = typeof data === 'object' && data !== null ? Reflect.get(data, 'editSource') : undefined
-      if (typeof editSource !== 'string') throw new Error('Projected documentation page has no editSource frontmatter.')
-      return `https://github.com/deepseek-ai/deepseek-harness/edit/master/${editSource}`
-    },
-    text: '在 GitHub 上编辑此页',
-  },
+  socialLinks: repositoryLinks.socialLinks,
+  editLink: repositoryLinks.editLink('在 GitHub 上编辑此页'),
 }
 
 /** Site base path, carrying the leading and trailing slashes VitePress requires. */
@@ -352,15 +345,7 @@ export default withMermaid({
           '/en/develop/': sidebar('en', 'en-develop'),
           '/en/reference/': sidebar('en', 'en-reference'),
         },
-        editLink: {
-          pattern: ({ frontmatter }: PageData) => {
-            const data: unknown = frontmatter
-            const editSource: unknown = typeof data === 'object' && data !== null ? Reflect.get(data, 'editSource') : undefined
-            if (typeof editSource !== 'string') throw new Error('Projected documentation page has no editSource frontmatter.')
-            return `https://github.com/deepseek-ai/deepseek-harness/edit/master/${editSource}`
-          },
-          text: 'Edit this page on GitHub',
-        },
+        editLink: repositoryLinks.editLink('Edit this page on GitHub'),
         outline: { label: 'On this page' },
         docFooter: { prev: 'Previous', next: 'Next' },
       },

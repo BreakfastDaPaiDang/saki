@@ -2,13 +2,15 @@
 
 English | [中文](README.zh.md)
 
-Credential Service Definition (`ctx.credentials`). One doctrine, three consequences:
+Credential Service Definition (`ctx.credentials`). One doctrine, four consequences:
 
 **Configuration carries references to secrets, never the secrets.** A settings section or `cordis.yml` entry says `apiKeyEnv: DEEPSEEK_API_KEY`; the value behind that reference lives with a credential provider. So the settings document stays safe to sync and to render in a configuration UI, `describe()` can answer "is this configured, where from, can I write it" without ever holding a value, and rotating a secret touches no configuration file.
 
 **Consumers resolve per operation.** `resolve(ref)` is called at the start of each operation (the LLM adapters resolve once per model request) and never cached across operations — that read is what makes a changed credential reach the very next request without restarting any plugin.
 
 **An empty stored value is absent.** Everywhere: `resolve` skips it, `describe` reports it unconfigured. A blank can never masquerade as a configured secret.
+
+**Every source names its protection model.** `resolve()` reports the protection level of the exact value it returned, while `describe()` reports the same safe metadata with availability and observation time. The typed Provider interface requires that field; parsers validate it when constructing results from untyped input. `resolveRequired()` compares one exact provider-defined identifier and rejects a missing value or different level before the caller receives the value. Protection levels are descriptive, not an ordered strength scale.
 
 ## Two key spaces, two questions
 
@@ -22,13 +24,14 @@ The key is `<scope>/<id>`, where `scope` is the **owning plugin's registered nam
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
-import { credentialKey, credentialRef } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_LOCAL_USER_TRUST, credentialKey, credentialRef } from '@deepseek-ai/dsh-credentials'
 
 declare const ctx: Context
 
 const ref = credentialRef('DEEPSEEK_API_KEY')            // POSIX shell identifier, branded
-const hit = await ctx.credentials.resolve(ref)           // { value, source } | undefined
-const info = await ctx.credentials.describe(ref)         // { configured, source?, writable } — never the value
+const hit = await ctx.credentials.resolve(ref)           // { value, source, protectionLevel } | undefined
+const protectedHit = await ctx.credentials.resolveRequired(ref, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST)
+const info = await ctx.credentials.describe(ref)         // safe identity/source/protection/health metadata — never the value
 await ctx.credentials.set(ref, 'sk-…')                   // rejects while a read-only source shadows the ref
 await ctx.credentials.unset(ref)                         // no-op when absent; same shadowing rule
 
@@ -44,7 +47,9 @@ await ctx.credentials.deleteRecord(key)                  // no-op when absent
 
 `listRecords` exists even though the reference half has no enumeration by design. References are discovered from settings schemas (`apiKeyEnv` fields); records have no such path, so a surface that cannot list them cannot show what a user is authorized for, nor find an orphan left by an uninstalled plugin.
 
-A `grant` record's `payload` is opaque: the seam never reads, validates, or reshapes it. The one constraint is that it survives a JSON round trip, which the provider enforces on the way in and on the way out — a value the store could not read back exactly as written is refused rather than stored lossily.
+A `grant` record's `payload` is semantically opaque: the seam never interprets its fields or changes admitted JSON content. The one structural constraint is that it survives a JSON round trip, which the provider enforces on the way in and on the way out — a value the store could not read back exactly as written is refused rather than stored lossily.
+
+Host providers apply the Node-only `@deepseek-ai/dsh-credentials/record-normalization` helper before serialization or process-owned caching. It snapshots the record root, environment, payload, and native arrays into fresh plain data while rejecting accessors, Proxies, serializer hooks, and properties JSON would omit without invoking them; serializers, caches, and mutation callbacks therefore never retain a caller-owned object graph.
 
 `credentials/reference-updated (ref)` fires after a committed change to a provider-managed source — a `set`, an `unset`, or an external edit observed in storage. Ambient process-environment changes are not observable and never emit. Consumers do not need the event (they re-resolve per operation); it exists for configuration UIs refreshing a "configured" badge. Its declaration lives in the client-safe `./types` subpath export together with the `CredentialRef` type it names (the package root re-exports the type), so a consumer outside the Host compilation face reads the very signature the Host emits instead of restating it.
 
@@ -52,7 +57,7 @@ The shadowing rule on `set`/`unset` is deliberate fail-loud: when a read-only so
 
 ## Providers
 
-[`dsh-credentials-local`](../credentials-local/README.md) layers the inherited process environment over its managed `$DSH_HOME/.credentials.yaml` document, with the launcher's project and user `.env` layers as fallbacks. The seam shape leaves room for keyring-, helper-command-, and KMS-backed providers; a remote settings provider never needs to carry secrets.
+[`dsh-credentials-local`](../credentials-local/README.md) layers the inherited process environment over its managed plaintext `$DSH_HOME/.credentials.yaml` document, with the launcher's project and user `.env` layers as fallbacks. [`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.md) instead owns a versioned Windows current-user DPAPI ciphertext document and never falls back to an ambient or plaintext source. The seam leaves room for keyring-, helper-command-, and KMS-backed providers; a remote settings provider never needs to carry secrets.
 
 ## Model Experience
 
@@ -68,3 +73,4 @@ No direct invalidation; credentials never enter a request prefix.
 - **References are environment-variable-shaped** — one flat POSIX-identifier namespace, because a reference doubles as the environment name it resolves through. Records carry the richer `<owner>/<id>` addressing.
 - **Process-environment changes are invisible** — no event can fire for them; a UI only re-reads `describe()` on its own navigation.
 - **A record's owner is its scope, and nothing verifies the scope is mounted** — the seam stores what it is given and reports what it stores. Recognizing an orphan is the caller's join between `listRecords()` and whatever registry owns that scope; the seam has no registry of its own to check against.
+- **Protection identifiers are not ordered** — consumers state the exact recovery model they accept; the seam does not infer that one provider is universally stronger than another.

@@ -7,7 +7,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { credentialKey, credentialRef } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_PLAINTEXT, credentialKey, credentialRef } from '@deepseek-ai/dsh-credentials'
 import { LocalCredentialProvider } from '../src/index.ts'
 
 /** Credential documents are seeded owner-only, exactly as the provider creates them. */
@@ -56,7 +56,9 @@ describe('read-modify-write', () => {
     expect(text).toContain(`${ALPHA}: two`)
     // The fold published the unobserved entry before the write's own commit.
     expect(seen).toEqual([ALPHA, BETA, ALPHA])
-    expect(await ctx.credentials.resolve(BETA)).toEqual({ value: 'external', source: 'file' })
+    expect(await ctx.credentials.resolve(BETA)).toEqual({
+      value: 'external', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('keeps both refs when two providers write the same document concurrently', async () => {
@@ -69,8 +71,12 @@ describe('read-modify-write', () => {
       (async () => { for (const value of ['1', '2', '3'] as const) await second.credentials.set(BETA, value) })(),
     ])
     const third = await boot({ path, watch: false })
-    expect(await third.credentials.resolve(ALPHA)).toEqual({ value: '3', source: 'file' })
-    expect(await third.credentials.resolve(BETA)).toEqual({ value: '3', source: 'file' })
+    expect(await third.credentials.resolve(ALPHA)).toEqual({
+      value: '3', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
+    expect(await third.credentials.resolve(BETA)).toEqual({
+      value: '3', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('creates the credentials directory owner-only', async () => {
@@ -107,7 +113,9 @@ describe('read-modify-write', () => {
     ])
     await slow
     const reread = await boot({ path, watch: false })
-    expect(await reread.credentials.resolve(ALPHA)).toEqual({ value: 'waited', source: 'file' })
+    expect(await reread.credentials.resolve(ALPHA)).toEqual({
+      value: 'waited', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
     expect(await reread.credentials.readRecord(doomed)).toBeUndefined()
     expect(await reread.credentials.readRecord(slowKey)).toEqual({ kind: 'api-key', key: 'slow' })
   })
@@ -124,7 +132,9 @@ describe('contained update fan-out', () => {
     ctx.on('credentials/reference-updated', second)
     await expect(ctx.credentials.set(ALPHA, 'one')).resolves.toBeUndefined()
     expect(second).toHaveBeenCalledWith(ALPHA)
-    expect(await ctx.credentials.resolve(ALPHA)).toEqual({ value: 'one', source: 'file' })
+    expect(await ctx.credentials.resolve(ALPHA)).toEqual({
+      value: 'one', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 
   it('contains an async listener rejection', async () => {
@@ -151,7 +161,9 @@ describe('contained update fan-out', () => {
     // Harness-fatal by design — but the write itself committed first.
     expect(second).toHaveBeenCalledWith(ALPHA)
     expect(await readFile(path, 'utf8')).toContain(`${ALPHA}: one`)
-    expect(await ctx.credentials.resolve(ALPHA)).toEqual({ value: 'one', source: 'file' })
+    expect(await ctx.credentials.resolve(ALPHA)).toEqual({
+      value: 'one', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
   })
 })
 
@@ -166,7 +178,7 @@ describe('document editor', () => {
     expect(await readFile(path, 'utf8'))
       .toBe(`version: 1\nrefs:\n  DSH_REVIEW_WRAPPED: |-\n    line1\n    line2\n  ${ALPHA}: b\n`)
     expect(await ctx.credentials.resolve(credentialRef('DSH_REVIEW_WRAPPED')))
-      .toEqual({ value: 'line1\nline2', source: 'file' })
+      .toEqual({ value: 'line1\nline2', source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT })
   })
 
   it('stores a value that looks like another entry without creating one', async () => {
@@ -177,7 +189,9 @@ describe('document editor', () => {
     // own structure would silently mint a credential nobody stored.
     await ctx.credentials.set(ALPHA, `${INNER}: injected`)
     const reread = await boot({ path, watch: false })
-    expect(await reread.credentials.resolve(ALPHA)).toEqual({ value: `${INNER}: injected`, source: 'file' })
+    expect(await reread.credentials.resolve(ALPHA)).toEqual({
+      value: `${INNER}: injected`, source: 'file', protectionLevel: CREDENTIAL_PROTECTION_PLAINTEXT,
+    })
     expect(await reread.credentials.resolve(INNER)).toBeUndefined()
   })
 })

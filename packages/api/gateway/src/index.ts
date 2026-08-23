@@ -5,7 +5,7 @@
  */
 
 import { Context, Service, symbols } from '@deepseek-ai/cordis'
-import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
+import type { ConnectionRpcReply } from '@deepseek-ai/dsh-client-connection'
 import {
   remoteMethods,
   TypertLookupFailure,
@@ -36,7 +36,7 @@ interface ResolvedBinding {
   readonly original: object
 }
 
-type ConnectionRpcResult = Awaited<ReturnType<ConnectionRpcHandler>>
+type ConnectionRpcResult = ConnectionRpcReply['result']
 type ConnectionRpcError = Extract<ConnectionRpcResult, { readonly ok: false }>['error']
 const NEVER_ABORTED_SIGNAL = new AbortController().signal
 
@@ -187,8 +187,8 @@ export class TypertGatewayService extends Service implements TypertGateway {
     endpoint: string,
     payload: unknown,
     signal: AbortSignal,
-  ): Promise<ConnectionRpcResult> {
-    return this.invokeRpc(endpoint, payload, signal)
+  ): Promise<ConnectionRpcReply> {
+    return { result: await this.invokeRpc(endpoint, payload, signal) }
   }
 
   private async invokeRpc(endpoint: string, payload: unknown, signal: AbortSignal): Promise<ConnectionRpcResult> {
