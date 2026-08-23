@@ -18,6 +18,8 @@ Status: proposed
 
 提议中的 [domain KV 存储与 Workspace](2026-07-24-domain-kv-storage-and-workspace.md) Agent Note 拥有 DSH Workspace 的 `fs.realpath` 唯一性与不可变记录；本提案拥有 Saki 更高层的绑定身份、Git 观察、rebind 与 lease 语义。提议中的 [Installation 维护](2026-08-18-saki-forward-migrations-and-installation-maintenance.md) Agent Note 拥有替换 Host 恢复，并把 `needs-rebind` 接入该生命周期。
 
+已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.md)建立首个稳定 Project 与 Resource Binding id、重复 worktree 身份检查和启动重新验证。本 Agent Note 保持 proposed，因为重绑定、退役、repair、Execution Lease、后继 Session 与物理 worktree 生命周期尚未实现。
+
 ## 考虑过的方案
 
 **使用规范路径作为身份。** 它只能在位置存在时防止别名，无法跨越位置迁移或 Host 替换。

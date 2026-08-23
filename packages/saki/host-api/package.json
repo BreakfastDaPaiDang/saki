@@ -52,6 +52,7 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
+    "@breakfastdapaidang/saki-execution": "workspace:^",
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
@@ -59,12 +60,18 @@
   },
   "devDependencies": {
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
+    "@breakfastdapaidang/saki-execution": "workspace:^",
+    "@breakfastdapaidang/saki-execution-local": "workspace:^",
+    "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
+    "@deepseek-ai/dsh-fs-local": "workspace:^",
     "@deepseek-ai/dsh-host-webserver": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
     "@deepseek-ai/dsh-storage-domain": "workspace:^",
+    "@deepseek-ai/dsh-storage-json": "workspace:^",
     "@deepseek-ai/dsh-storage-sqlite": "workspace:^",
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/dsh-subprocess-local": "workspace:^",
+    "@deepseek-ai/dsh-workspace": "workspace:^"
   }
 }

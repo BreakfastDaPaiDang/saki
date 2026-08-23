@@ -1,5 +1,5 @@
 /**
- * Deep Saki control-plane module for Installation access and B01 Projections.
+ * Deep Saki control-plane module for Installation access and Project registration.
  * @module @breakfastdapaidang/saki-control-plane/src/service
  */
 
@@ -9,6 +9,8 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { isLoopbackHostname } from '@deepseek-ai/dsh-client-connection'
 import type { DomainChanged, KvTable } from '@deepseek-ai/dsh-storage-domain'
+import type {} from '@deepseek-ai/dsh-workspace'
+import type {} from '@breakfastdapaidang/saki-execution'
 import { SakiAuthenticationContext } from './authentication.ts'
 import type {
   SakiAuthenticationRequest,
@@ -16,6 +18,8 @@ import type {
 } from './authentication.ts'
 import {
   CONTROL_STATE_KEY,
+  DEVELOPMENT_PROJECT_REGISTRY_KEY,
+  registerDevelopmentProjectIntentSchema,
   sakiControlPlaneDomainSpec,
 } from './spec.ts'
 import type {
@@ -27,7 +31,11 @@ import type {
   InstallationAccessRecord,
   InstallationRecord,
   PrincipalRecord,
+  DevelopmentProjectRegistryRecord,
+  RegistrationActor,
+  RegistrationIntentRecord,
 } from './spec.ts'
+import { baselineMatches, DevelopmentProjects } from './projects.ts'
 import {
   bootstrapDigest,
   constantTimeTextEqual,
@@ -58,7 +66,10 @@ import type {
   SakiPrincipalId,
   SakiProjectionKey,
   SakiQuery,
+  SakiQueryMap,
   SakiQueryResult,
+  RegisterDevelopmentProjectIntent,
+  SakiControlIntentId,
 } from './types.ts'
 
 /** Composition configuration for local Saki access. */
@@ -121,7 +132,7 @@ export interface SakiAccess {
   ): Promise<SakiAccessLogoutResult>
 }
 
-/** Public deep-module operations used by Host and future automation Consumers. */
+/** Control-plane operations used by trusted Consumers. */
 export interface SakiControlPlaneModule {
   /** Access lifecycle separated from Control Intent authority. */
   readonly access: SakiAccess
@@ -137,22 +148,24 @@ export interface SakiControlPlaneModule {
   /**
    * Query one protected Projection after revalidating current authority.
    * @param authentication - trusted server-derived AuthenticationContext.
-   * @param query - closed B01 Projection query.
+   * @param query - closed Projection query.
    * @param signal - caller cancellation.
-   * @returns authorized Projection or safe denial.
+   * @returns the authorized Projection or that query kind's typed failure:
+   * `denied` or `unavailable`, plus `stale` or `not-found` for Development Workspace reads.
    */
-  query(
+  query<K extends keyof SakiQueryMap>(
     authentication: SakiAuthenticationContext,
-    query: SakiQuery,
+    query: SakiQueryMap[K]['request'],
     signal: AbortSignal,
-  ): Promise<SakiQueryResult>
+  ): Promise<SakiQueryResult<K>>
 
   /**
-   * Reject the empty B01 Intent map after revalidating current authority.
+   * Submit one durable Project-registration Intent after current authorization.
    * @param authentication - trusted server-derived AuthenticationContext.
-   * @param intent - absent only while the merge-extensible Intent map is empty.
+   * @param intent - bounded immutable registration content.
    * @param signal - caller cancellation.
-   * @returns stable unavailable receipt.
+   * @returns a confirmed receipt or typed `denied`, `unavailable`, `conflict`,
+   * `failure`, or `reconciliation-required` result with only phase-valid receipt fields.
    */
   submit(
     authentication: SakiAuthenticationContext,
@@ -174,6 +187,8 @@ type HostTable = KvTable<SakiHostId, HostRecord>
 type PrincipalTable = KvTable<SakiPrincipalId, PrincipalRecord>
 type GrantTable = KvTable<SakiGrantId, GrantRecord>
 type AccessTable = KvTable<SakiInstallationAccessId, InstallationAccessRecord>
+type ProjectRegistryTable = KvTable<typeof DEVELOPMENT_PROJECT_REGISTRY_KEY, DevelopmentProjectRegistryRecord>
+type RegistrationIntentTable = KvTable<SakiControlIntentId, RegistrationIntentRecord>
 
 interface CurrentFoundation {
   readonly control: ControlStateRecord
@@ -197,7 +212,7 @@ const SESSION_REQUIRED: AccessProjection = Object.freeze({
 
 /** Concrete single-writer Saki control plane. */
 export class SakiControlPlaneService extends Service implements SakiControlPlaneModule {
-  static inject = ['storageDomain']
+  static inject = ['storageDomain', 'sakiHostExecution', 'workspaceRegistry']
   static Config: z<Config> = z.object({
     origin: z.string().required(),
     challengeTtlMs: z.natural().min(1).default(15 * 60 * 1_000),
@@ -212,16 +227,33 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private principalTable!: PrincipalTable
   private grantTable!: GrantTable
   private accessTable!: AccessTable
+  private projectRegistryTable!: ProjectRegistryTable
+  private registrationIntentTable!: RegistrationIntentTable
+  private projects!: DevelopmentProjects
   private pendingBootstrap: SakiBootstrapHandoff | undefined
   private readonly listeners = new Set<(keys: readonly SakiProjectionKey[]) => void>()
+  private readonly intentOperationTails = new Map<SakiControlIntentId, Promise<void>>()
+  private readonly activeOperations = new Set<Promise<void>>()
+  private operationAdmissionOpen = true
+  private readonly lifetime = new AbortController()
+  private startupSettled: Promise<void> = Promise.resolve()
 
   /** Access interface with no storage or trusted resolver exposure. */
   readonly access: SakiAccess = {
-    readAccess: (presentedSession, signal) => this.readAccess(presentedSession, signal),
+    readAccess: (presentedSession, signal) => this.runOwnedOperation(
+      signal,
+      operationSignal => this.readAccess(presentedSession, operationSignal),
+    ),
     exchangeBootstrap: (transportContext, request, signal) =>
-      this.exchangeBootstrap(transportContext, request, signal),
+      this.runOwnedOperation(
+        signal,
+        operationSignal => this.exchangeBootstrap(transportContext, request, operationSignal),
+      ),
     logoutCurrentSession: (authentication, requestToken, signal) =>
-      this.logoutCurrentSession(authentication, requestToken, signal),
+      this.runOwnedOperation(
+        signal,
+        operationSignal => this.logoutCurrentSession(authentication, requestToken, operationSignal),
+      ),
   }
 
   /** Process-local one-shot launcher handoff. */
@@ -245,7 +277,12 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     }
     ctx.on('domain/changed', (change: DomainChanged) => {
       if (change.domain !== sakiControlPlaneDomainSpec.name) return
-      this.notify(['access', 'project-index'])
+      if (change.table === 'registration_intents') return
+      if (change.table === 'development_project_registry') {
+        this.notify(['project-index', 'development-workspace'])
+        return
+      }
+      this.notify(['access', 'project-index', 'development-workspace'])
     })
     ctx.effect(() => () => {
       this.listeners.clear()
@@ -256,30 +293,60 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   /** Open, resume, validate, and reconcile the single Installation domain. */
   protected async [Service.init](): Promise<void> {
     const domain = await this.ctx.storageDomain.open(sakiControlPlaneDomainSpec)
-    this.ctx.effect(() => () => domain.close(), 'saki-control-plane.domainClose')
+    this.ctx.effect(() => async () => {
+      this.operationAdmissionOpen = false
+      this.lifetime.abort(new Error('saki control plane is disposing'))
+      await Promise.all([
+        this.startupSettled,
+        ...this.activeOperations,
+        ...this.intentOperationTails.values(),
+      ])
+      await domain.close()
+    }, 'saki-control-plane.domainClose')
     this.controlStateTable = domain.table('control_state')
     this.installationTable = domain.table('installations')
     this.hostTable = domain.table('hosts')
     this.principalTable = domain.table('principals')
     this.grantTable = domain.table('grants')
     this.accessTable = domain.table('installation_access')
+    this.projectRegistryTable = domain.table('development_project_registry')
+    this.registrationIntentTable = domain.table('registration_intents')
 
-    let control = this.controlStateTable.get(CONTROL_STATE_KEY)
-    if (control === undefined) {
-      this.assertEmptyUnprovisionedDomain()
-      control = this.createControlState()
-      await this.controlStateTable.put(CONTROL_STATE_KEY, control)
-    } else if (this.controlStateTable.size !== 1) {
-      throw new Error('saki control plane has unexpected provisioning owner records')
-    }
+    let settleStartup!: () => void
+    this.startupSettled = new Promise((resolve) => { settleStartup = resolve })
+    try {
+      let control = this.controlStateTable.get(CONTROL_STATE_KEY)
+      if (control === undefined) {
+        this.assertEmptyUnprovisionedDomain()
+        control = this.createControlState()
+        await this.controlStateTable.put(CONTROL_STATE_KEY, control)
+      } else if (this.controlStateTable.size !== 1) {
+        throw new Error('saki control plane has unexpected provisioning owner records')
+      }
 
-    if (control.phase === 'provisioning') {
-      await this.resumeProvisioning(control)
+      if (control.phase === 'provisioning') {
+        await this.resumeProvisioning(control)
+      }
+      this.requireFoundation()
+      this.validateAccess(this.requireAccess())
+      this.projects = new DevelopmentProjects({
+        registryTable: this.projectRegistryTable,
+        intentTable: this.registrationIntentTable,
+        execution: this.ctx.sakiHostExecution,
+        workspaces: this.ctx.workspaceRegistry,
+        authorityCurrent: actor => this.registrationAuthorityCurrent(actor),
+        validateActorReference: (actor) => {
+          this.validateRegistrationActorReference(actor)
+        },
+      })
+      const projects = this.projects.validateDurableState()
+      await this.reconcileAccess(Date.now())
+      await this.projects.initializeValidated(projects, this.lifetime.signal)
+      this.lifetime.signal.throwIfAborted()
+      await this.issueStartupChallenge()
+    } finally {
+      settleStartup()
     }
-    this.requireFoundation()
-    this.validateAccess(this.requireAccess())
-    await this.reconcileAccess(Date.now())
-    await this.issueStartupChallenge()
   }
 
   /** @returns stable Installation and independently enrolled current Host identities. */
@@ -300,17 +367,20 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     request: SakiAuthenticationRequest,
     signal: AbortSignal,
   ): Promise<SakiAuthenticationResolution> {
-    signal.throwIfAborted()
-    if (presentedSession === undefined) return { ok: false, reason: 'unavailable' }
-    const authenticated = await this.authenticateCookie(presentedSession)
-    if (authenticated === undefined) return { ok: false, reason: 'unavailable' }
-    if (request.mutation) {
-      if (request.origin !== this.config.origin
-        || !authenticated.matchesRequestToken(request.requestToken ?? '')) {
-        return { ok: false, reason: 'unavailable' }
+    return await this.runOwnedOperation(signal, async (operationSignal) => {
+      operationSignal.throwIfAborted()
+      if (presentedSession === undefined) return { ok: false, reason: 'unavailable' }
+      const authenticated = await this.authenticateCookie(presentedSession)
+      operationSignal.throwIfAborted()
+      if (authenticated === undefined) return { ok: false, reason: 'unavailable' }
+      if (request.mutation) {
+        if (request.origin !== this.config.origin
+          || !authenticated.matchesRequestToken(request.requestToken ?? '')) {
+          return { ok: false, reason: 'unavailable' }
+        }
       }
-    }
-    return { ok: true, authentication: authenticated }
+      return { ok: true, authentication: authenticated }
+    })
   }
 
   /**
@@ -322,27 +392,154 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   }
 
   /** @inheritdoc */
-  query(
+  async query<K extends keyof SakiQueryMap>(
     authentication: SakiAuthenticationContext,
-    _query: SakiQuery,
+    query: SakiQueryMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<SakiQueryResult<K>> {
+    return await this.runOwnedOperation(signal, async (operationSignal) => {
+      const result = await this.queryCurrent(authentication, query, operationSignal)
+      return result as SakiQueryResult<K>
+    })
+  }
+
+  private async queryCurrent(
+    authentication: SakiAuthenticationContext,
+    query: SakiQuery,
     signal: AbortSignal,
   ): Promise<SakiQueryResult> {
     signal.throwIfAborted()
-    if (!this.authorized(authentication, 'project-index:read')) {
-      return Promise.resolve({ ok: false, reason: 'denied' })
+    switch (query.type) {
+      case 'inspect-project-selection': {
+        if (!this.authorized(authentication, 'inspect-project-selection')
+          || query.hostId !== this.requireFoundation().host.id) {
+          return { ok: false, reason: 'denied' }
+        }
+        const result = await this.ctx.sakiHostExecution.inspectProjectSelection({
+          hostId: query.hostId,
+          directoryLocator: query.directoryLocator,
+        }, signal)
+        signal.throwIfAborted()
+        return {
+          ok: true,
+          projection: {
+            type: 'inspect-project-selection',
+            result: result.ok
+              ? { ok: true, selection: result.inspection.projection }
+              : result,
+          },
+        }
+      }
+      case 'project-index': {
+        if (!this.authorized(authentication, 'project-index:read')) return { ok: false, reason: 'denied' }
+        const host = this.requireFoundation().host
+        return {
+          ok: true,
+          projection: this.projects.projectIndex({ id: host.id, revision: host.revision, state: 'enrolled' }),
+        }
+      }
+      case 'development-workspace': {
+        if (!this.authorized(authentication, 'development-workspace:read')) return { ok: false, reason: 'denied' }
+        const projection = this.projects.developmentWorkspace(query.projectId, query.expectedRegistryRevision)
+        return typeof projection === 'string'
+          ? { ok: false, reason: projection }
+          : { ok: true, projection }
+      }
+      /* v8 ignore next 2 -- SakiQuery is closed and Host wire parsing rejects unknown tags before dispatch. */
+      default: return assertNever(query)
     }
-    return Promise.resolve({ ok: true, projection: { type: 'project-index', revision: 0, projects: [] } })
   }
 
   /** @inheritdoc */
-  submit(
+  async submit(
     authentication: SakiAuthenticationContext,
-    _intent: SakiIntentInput,
+    intent: SakiIntentInput,
     signal: AbortSignal,
   ): Promise<SakiIntentReceipt> {
+    const parsed = registerDevelopmentProjectIntentSchema.parse(intent)
+    return await this.runOwnedOperation(signal, (operationSignal) => {
+      return this.enqueueIntentOperation(parsed.intentId, async () => {
+        operationSignal.throwIfAborted()
+        if (!this.authorized(authentication, 'development-project:register')) {
+          return { ok: false, reason: 'denied' }
+        }
+        return await this.registerDevelopmentProject(authentication, parsed, operationSignal)
+      })
+    })
+  }
+
+  private async registerDevelopmentProject(
+    authentication: SakiAuthenticationContext,
+    intent: RegisterDevelopmentProjectIntent,
+    signal: AbortSignal,
+  ): Promise<SakiIntentReceipt> {
+    const replay = await this.projects.replayExisting(intent, signal)
+    if (replay !== undefined) return replay
+    const beforeInspection = this.requireFoundation()
+    if (intent.hostId !== beforeInspection.host.id) return { ok: false, reason: 'denied' }
+    const inspected = await this.ctx.sakiHostExecution.inspectProjectSelection({
+      hostId: intent.hostId,
+      directoryLocator: intent.directoryLocator,
+    }, signal)
     signal.throwIfAborted()
-    if (!this.authorized(authentication)) return Promise.resolve({ ok: false, reason: 'denied' })
-    return Promise.resolve({ ok: false, reason: 'intent-unavailable' })
+    if (!inspected.ok) {
+      return inspected.reason === 'unavailable'
+        ? { ok: false, reason: 'unavailable' }
+        : { ok: false, reason: 'conflict' }
+    }
+    if (!isDeepStrictEqual(inspected.inspection.projection.fingerprint, intent.confirmedFingerprint)
+      || !baselineMatches(inspected.inspection.projection.baseline, intent.confirmedBaseline)) {
+      return { ok: false, reason: 'conflict' }
+    }
+    signal.throwIfAborted()
+    if (!this.authorized(authentication, 'development-project:register')) {
+      return { ok: false, reason: 'denied' }
+    }
+    const foundation = this.requireFoundation()
+    const actor: RegistrationActor = {
+      installationId: foundation.installation.id,
+      installationGenerationId: foundation.installation.currentInstallationGenerationId,
+      hostId: foundation.host.id,
+      principalId: foundation.principal.id,
+      principalRevision: foundation.principal.revision,
+      grantId: foundation.grant.id,
+      grantRevision: foundation.grant.revision,
+    }
+    return await this.projects.register(intent, actor, inspected.inspection, signal)
+  }
+
+  private enqueueIntentOperation<T>(
+    intentId: SakiControlIntentId,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.intentOperationTails.get(intentId) ?? Promise.resolve()
+    const result = previous.then(operation)
+    const tail = result.then(() => undefined, () => undefined)
+    this.intentOperationTails.set(intentId, tail)
+    return result.finally(() => {
+      if (this.intentOperationTails.get(intentId) === tail) this.intentOperationTails.delete(intentId)
+    })
+  }
+
+  private operationSignal(signal: AbortSignal): AbortSignal {
+    return AbortSignal.any([signal, this.lifetime.signal])
+  }
+
+  private runOwnedOperation<T>(
+    signal: AbortSignal,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (!this.operationAdmissionOpen) {
+      return Promise.reject(new Error('saki control plane is disposing'))
+    }
+    const operationSignal = this.operationSignal(signal)
+    const result = Promise.resolve().then(async () => {
+      operationSignal.throwIfAborted()
+      return await operation(operationSignal)
+    })
+    const settled = result.then(() => undefined, () => undefined)
+    this.activeOperations.add(settled)
+    return result.finally(() => { this.activeOperations.delete(settled) })
   }
 
   /** @inheritdoc */
@@ -552,7 +749,44 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     return grant.state === 'active'
       && grant.principalId === authentication.principalId
       && grant.installationId === foundation.installation.id
+      && grant.scope.installationId === foundation.installation.id
       && (action === undefined || grant.actions.includes(action))
+  }
+
+  private registrationAuthorityCurrent(actor: RegistrationActor): boolean {
+    const foundation = this.requireFoundation()
+    return foundation.installation.id === actor.installationId
+      && foundation.installation.state === 'active'
+      && foundation.installation.currentInstallationGenerationId === actor.installationGenerationId
+      && foundation.host.id === actor.hostId
+      && foundation.host.state === 'enrolled'
+      && foundation.principal.id === actor.principalId
+      && foundation.principal.state === 'active'
+      && foundation.grant.id === actor.grantId
+      && foundation.grant.state === 'active'
+      && foundation.grant.scope.installationId === foundation.installation.id
+      && foundation.grant.actions.includes('development-project:register')
+  }
+
+  private validateRegistrationActorReference(actor: RegistrationActor): void {
+    const control = this.requireControlStateTable().get(CONTROL_STATE_KEY)
+    const installation = this.requireInstallation(actor.installationId)
+    const host = this.requireHost(actor.hostId)
+    const principal = this.requirePrincipal(actor.principalId)
+    const grant = this.requireGrant(actor.grantId)
+    if (control === undefined
+      || installation.id !== control.installationId
+      || (actor.installationGenerationId !== control.initialInstallationGenerationId
+        && actor.installationGenerationId !== installation.currentInstallationGenerationId)
+      || host.installationId !== installation.id
+      || principal.kind !== 'human'
+      || actor.principalRevision > principal.revision
+      || grant.installationId !== installation.id
+      || grant.principalId !== principal.id
+      || grant.scope.installationId !== installation.id
+      || actor.grantRevision > grant.revision) {
+      throw new Error('Saki registration Intent actor reference is inconsistent')
+    }
   }
 
   private activeAuthentication(authentication: SakiAuthenticationContext): boolean {
@@ -674,6 +908,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private async resumeProvisioning(control: ControlStateRecord): Promise<void> {
     this.assertProvisioningRows(control)
+    this.validateProvisioningChildren(control)
     await this.ensureInstallation(control)
     await this.ensureHost(control)
     await this.ensurePrincipal(control)
@@ -691,63 +926,119 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   }
 
   private async ensureInstallation(control: ControlStateRecord): Promise<void> {
-    const expected: InstallationRecord = {
+    const expected = this.expectedInstallation(control)
+    const table = this.requireInstallationTable()
+    const existing = table.get(expected.id)
+    if (existing === undefined) await table.put(expected.id, expected)
+  }
+
+  private async ensureHost(control: ControlStateRecord): Promise<void> {
+    const expected = this.expectedHost(control)
+    const table = this.requireHostTable()
+    const existing = table.get(expected.id)
+    if (existing === undefined) await table.put(expected.id, expected)
+  }
+
+  private async ensurePrincipal(control: ControlStateRecord): Promise<void> {
+    const expected = this.expectedPrincipal(control)
+    const table = this.requirePrincipalTable()
+    const existing = table.get(expected.id)
+    if (existing === undefined) await table.put(expected.id, expected)
+  }
+
+  private async ensureGrant(control: ControlStateRecord): Promise<void> {
+    const expected = this.expectedGrant(control)
+    const table = this.requireGrantTable()
+    const existing = table.get(expected.id)
+    if (existing === undefined) await table.put(expected.id, expected)
+  }
+
+  private async ensureAccess(control: ControlStateRecord): Promise<void> {
+    const expected = this.expectedAccess(control)
+    const table = this.requireAccessTable()
+    const existing = table.get(expected.id)
+    if (existing === undefined) await table.put(expected.id, expected)
+  }
+
+  private validateProvisioningChildren(control: ControlStateRecord): void {
+    this.assertProvisioningRecord(
+      this.requireInstallationTable(),
+      this.expectedInstallation(control),
+      'Installation',
+    )
+    this.assertProvisioningRecord(this.requireHostTable(), this.expectedHost(control), 'Host')
+    this.assertProvisioningRecord(
+      this.requirePrincipalTable(),
+      this.expectedPrincipal(control),
+      'Principal',
+    )
+    this.assertProvisioningRecord(this.requireGrantTable(), this.expectedGrant(control), 'Grant')
+    this.assertProvisioningRecord(
+      this.requireAccessTable(),
+      this.expectedAccess(control),
+      'Installation Access',
+    )
+  }
+
+  private assertProvisioningRecord<K extends string, V extends object>(
+    table: KvTable<K, V>,
+    expected: V & { readonly id: K },
+    name: string,
+  ): void {
+    const existing = table.get(expected.id)
+    if (existing !== undefined && !this.sameRecord(existing, expected)) {
+      throw new Error(`saki provisioning ${name} is inconsistent`)
+    }
+  }
+
+  private expectedInstallation(control: ControlStateRecord): InstallationRecord {
+    return {
       id: control.installationId,
       revision: 0,
       state: 'active',
       currentInstallationGenerationId: control.initialInstallationGenerationId,
       currentHostId: control.initialHostId,
     }
-    const table = this.requireInstallationTable()
-    const existing = table.get(expected.id)
-    if (existing === undefined) await table.put(expected.id, expected)
-    else if (!this.sameRecord(existing, expected)) throw new Error('saki provisioning Installation is inconsistent')
   }
 
-  private async ensureHost(control: ControlStateRecord): Promise<void> {
-    const expected: HostRecord = {
+  private expectedHost(control: ControlStateRecord): HostRecord {
+    return {
       id: control.initialHostId,
       revision: 0,
       installationId: control.installationId,
       state: 'enrolled',
     }
-    const table = this.requireHostTable()
-    const existing = table.get(expected.id)
-    if (existing === undefined) await table.put(expected.id, expected)
-    else if (!this.sameRecord(existing, expected)) throw new Error('saki provisioning Host is inconsistent')
   }
 
-  private async ensurePrincipal(control: ControlStateRecord): Promise<void> {
-    const expected: PrincipalRecord = {
+  private expectedPrincipal(control: ControlStateRecord): PrincipalRecord {
+    return {
       id: control.hostOperatorPrincipalId,
       revision: 0,
       kind: 'human',
       displayName: 'Host Operator',
       state: 'active',
     }
-    const table = this.requirePrincipalTable()
-    const existing = table.get(expected.id)
-    if (existing === undefined) await table.put(expected.id, expected)
-    else if (!this.sameRecord(existing, expected)) throw new Error('saki provisioning Principal is inconsistent')
   }
 
-  private async ensureGrant(control: ControlStateRecord): Promise<void> {
-    const expected: GrantRecord = {
+  private expectedGrant(control: ControlStateRecord): GrantRecord {
+    return {
       id: control.hostOperatorGrantId,
       revision: 0,
       installationId: control.installationId,
       principalId: control.hostOperatorPrincipalId,
       state: 'active',
-      actions: ['project-index:read'],
+      actions: [
+        'inspect-project-selection',
+        'project-index:read',
+        'development-workspace:read',
+        'development-project:register',
+      ],
+      scope: { kind: 'installation', installationId: control.installationId },
     }
-    const table = this.requireGrantTable()
-    const existing = table.get(expected.id)
-    if (existing === undefined) await table.put(expected.id, expected)
-    else if (!this.sameRecord(existing, expected)) throw new Error('saki provisioning Grant is inconsistent')
   }
 
-  private async ensureAccess(control: ControlStateRecord): Promise<void> {
-    const expected: InstallationAccessRecord = {
+  private expectedAccess(control: ControlStateRecord): InstallationAccessRecord {
+    return {
       id: control.installationAccessId,
       schemaVersion: 1,
       revision: 0,
@@ -758,10 +1049,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       challenges: [],
       sessions: [],
     }
-    const table = this.requireAccessTable()
-    const existing = table.get(expected.id)
-    if (existing === undefined) await table.put(expected.id, expected)
-    else if (!this.sameRecord(existing, expected)) throw new Error('saki provisioning Installation Access is inconsistent')
   }
 
   private createControlState(): ControlStateRecord {
@@ -794,7 +1081,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     if (initialHost.installationId !== installation.id
       || host.installationId !== installation.id
       || grant.installationId !== installation.id
-      || grant.principalId !== principal.id) {
+      || grant.principalId !== principal.id
+      || grant.scope.installationId !== installation.id) {
       throw new Error('saki control-plane entity relationships are inconsistent')
     }
     return { control, installation, host, principal, grant }
@@ -1002,12 +1290,18 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       || this.requireHostTable().size !== 0
       || this.requirePrincipalTable().size !== 0
       || this.requireGrantTable().size !== 0
-      || this.requireAccessTable().size !== 0) {
+      || this.requireAccessTable().size !== 0
+      || this.requireProjectRegistryTable().size !== 0
+      || this.requireRegistrationIntentTable().size !== 0) {
       throw new Error('saki control state is missing from a non-empty domain')
     }
   }
 
   private assertProvisioningRows(control: ControlStateRecord): void {
+    if (this.requireProjectRegistryTable().size !== 0
+      || this.requireRegistrationIntentTable().size !== 0) {
+      throw new Error('saki provisioning contains Development Project product records')
+    }
     this.assertOnlyProvisioningRow(this.requireInstallationTable(), control.installationId)
     this.assertOnlyProvisioningRow(this.requireHostTable(), control.initialHostId)
     this.assertOnlyProvisioningRow(this.requirePrincipalTable(), control.hostOperatorPrincipalId)
@@ -1068,6 +1362,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     return this.accessTable
   }
 
+  private requireProjectRegistryTable(): ProjectRegistryTable {
+    return this.projectRegistryTable
+  }
+
+  private requireRegistrationIntentTable(): RegistrationIntentTable {
+    return this.registrationIntentTable
+  }
+
   private requireInstallation(id: SakiInstallationId): InstallationRecord {
     const record = this.requireInstallationTable().get(id)
     if (record === undefined) throw new Error(`saki Installation ${JSON.stringify(id)} is missing`)
@@ -1126,5 +1428,11 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private browserSessionId = (accessId: SakiInstallationAccessId, value: number): SakiBrowserSessionId =>
     `${accessId}:session:${String(value)}` as SakiBrowserSessionId
 }
+
+/* v8 ignore start -- the closed SakiQuery switch above exhausts every same-process variant. */
+function assertNever(value: never): never {
+  throw new Error(`unhandled Saki operation: ${JSON.stringify(value)}`)
+}
+/* v8 ignore stop */
 
 export default SakiControlPlaneService

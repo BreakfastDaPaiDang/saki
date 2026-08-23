@@ -6,13 +6,13 @@ status: accepted
 
 [English](0014-stable-resource-bindings-over-canonical-worktrees.md) | 中文
 
-一个 Development Project 及其所有 Execution Lease 都寻址同一个稳定 Resource Binding id。本地绑定存储其 DSH Workspace 与 Git worktree 位置的带 revision 观察，但路径、分支、remote 或 Git object id 都不会成为绑定身份。登记会规范化可用目录与 Git 管理路径，防止别名创建第二个可写绑定。位置迁移与替换 Host 恢复只能通过带归因的 rebind 操作更新观察结果。
+一个 Development Project 及其所有 Execution Lease 都寻址同一个稳定 Resource Binding id。本地绑定存储其 DSH Workspace 与 Git worktree 位置的带 revision 观察，但路径、分支、remote 或 Git object id 都不会成为绑定身份。登记会规范化已接受的普通目录拼写及其 Git 管理路径；直接 symlink 或 junction locator 会被拒绝，而不会被当作别名。位置迁移与替换 Host 恢复只能通过带归因的 rebind 操作更新观察结果。
 
 ## 决策原因
 
 同一个物理 worktree 可以通过不同盘符大小写、分隔符、junction、symlink 或包含 `..` 的路径访问。若按调用者提供的拼写确定 Execution Lease 键，两个 Development Project 就可能同时写入同一批文件。按分支确定键同样错误，因为 worktree 可以使用 detached HEAD，也可以在不变成另一项资源的情况下切换分支。
 
-Git 通过各 worktree 私有管理数据区分主 worktree 与 linked worktree。`git rev-parse --git-dir` 标识该私有管理位置，而 `--git-common-dir` 标识共享 Repository 家族。这些路径在 worktree 可用时是很强的重复检测证据，但主 Repository 被移动、复制到另一 Host 或从 clone 重建后都可能改变。Git 不提供可供 Saki 作为永久权威使用的可迁移 Repository UUID。
+Git 通过各 worktree 私有管理数据区分主 worktree 与 linked worktree。`.git` marker、`commondir` 与双向 `gitdir` 控制文件可以标识私有管理位置和共享 Repository 家族，而无需让 repository-aware Git 发现它们。这些路径在 worktree 可用时是很强的重复检测证据，但主 Repository 被移动、复制到另一 Host 或从 clone 重建后都可能改变。Git 不提供可供 Saki 作为永久权威使用的可迁移 Repository UUID。
 
 DSH Workspace 已经在一个经 `fs.realpath` 规范化的目录之上提供稳定生成 id，但它的路径不可变。历史 DSH Session 也保留原始 cwd。因此 Saki 不能通过重写其中任何一项来表示位置迁移，也不能假装旧 Session 历史在新路径执行。
 
@@ -20,9 +20,9 @@ DSH Workspace 已经在一个经 `fs.realpath` 规范化的目录之上提供稳
 
 ### 登记与重复检测
 
-0.1.0 版本登记已有目录。它不创建、移动、移除、prune 或 repair Git worktree。Host 使用 `fs.realpath` 解析目录，验证它是目录，并向 Git 查询绝对 top level、每个 worktree 的 Git directory、common Git directory、HEAD、分支或 detached 状态、object format 和 remote。它解析 `git worktree list --porcelain -z`，而不是本地化的人类输出，并确认所选 top level 只属于一个已报告 worktree。
+0.1.0 版本登记已有目录。它不创建、移动、移除、prune 或 repair Git worktree。Host 使用 `fs.realpath` 解析目录，验证它是目录，并从文件系统控制文件发现 top level、每 worktree Git directory 与 common Git directory。它先验证 linked-worktree 双向关系或本地 separate Git directory 布局，再把已准入 config、HEAD、当前 ref、index，以及 repository-local exclude 与 attribute 文件复制到私有控制目录。随后，固定的只读 Git 查询集合会基于该私有控制快照与 live 的已准入 worktree 和 object database 读取 HEAD、分支或 detached 状态、object format、remote 与 inventory。
 
-Host 使用 `fs.realpath` 规范化 Git 返回的每个已存在文件系统位置。它不会把路径转换为小写，因为 Windows 目录可能启用区分大小写语义。若候选项的规范 worktree root 或规范的每 worktree Git directory 与同一 Host 上的可用绑定相同，它就与该绑定冲突。Common Git directory 只用于对相关 worktree 分组，不会让它们成为同一绑定。
+Host 使用 `fs.realpath` 规范化从文件系统发现的每个 worktree 与管理位置。它不会把路径转换为小写，因为 Windows 目录可能启用区分大小写语义。直接 reparse locator，或最终 Git marker、管理目录、控制文件、对象目录或配置 worktree 会闭合失败，而不会成为候选项的另一种拼写。若候选项的规范 worktree root 或规范的每 worktree Git directory 与同一 Host 上的可用绑定相同，它就与该绑定冲突。Common Git directory 只用于对相关 worktree 分组，不会让它们成为同一绑定。
 
 若所选目录位于 Git top level 之下，登记会展示解析后的 top level 并要求确认，而不会静默改变 scope。Saki 为该规范 top level 创建或复用 DSH Workspace，创建一个稳定 Resource Binding id 和 revision，并把已检查的路径与 Git 事实保存为观察结果。每个 Agent Run 和 Host Operation 都记录自己使用的绑定 revision。
 
@@ -62,4 +62,4 @@ Host 使用 `fs.realpath` 规范化 Git 返回的每个已存在文件系统位�
 
 位置迁移是 Project 生命周期操作，而不是路径编辑。UI 必须展示绑定健康状态、观察位置、绑定 revision、Git 事实、继承变更，以及恢复可写执行前所需的操作。它不得把推测出的移动显示为已修复。
 
-Host 测试覆盖盘符大小写别名、分隔符、`..`、symlink、junction、共享一个 common directory 的 linked worktree、detached HEAD、缺失路径、移动的主 worktree 和 linked worktree、Git repair、替换 clone、dirty 登记、重启、陈旧绑定 revision、rebind 完全停稳状态，以及保留的历史 Session。Git 机制遵循官方 [git-worktree](https://git-scm.com/docs/git-worktree) 和 [git-rev-parse](https://git-scm.com/docs/git-rev-parse) 接口。
+Host 测试覆盖 ordinary、linked、detached 与本地 separate Git directory 布局，直接 reparse locator 与 Git 控制 entry，共享一个 common directory 的 linked worktree，缺失路径，dirty 登记，观察间 source-control 变化，私有 config 优先级，非 files ref-storage 拒绝，split-index 拒绝，以及 source object-alternate 拒绝。控制面测试在已实现登记子集内覆盖重复规范观察、重启、陈旧绑定 revision 与保留的历史 Session；移动、repair、替换 clone、rebind 完全停稳状态及其余 binding 生命周期仍然暂缓。Git 机制遵循官方 [git-worktree](https://git-scm.com/docs/git-worktree) 配置规则，而 repository-aware 查询会基于私有控制快照运行。

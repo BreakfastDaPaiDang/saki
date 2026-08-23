@@ -193,6 +193,9 @@ flowchart LR
   pkg_saki_control_plane["saki/control-plane"]
   svc_sakiControlPlane["ctx.sakiControlPlane<br/>Saki product control plane"]
   pkg_saki_host_api["saki/host-api"]
+  pkg_saki_execution["saki/execution"]
+  svc_sakiHostExecution["ctx.sakiHostExecution<br/>Saki Host Execution"]
+  pkg_saki_execution_local["saki/execution-local"]
   pkg_cordis_host_runner["cordis-host-runner"]
   svc_dynamicCordisRunner["ctx.dynamicCordisRunner<br/>Dynamic Cordis package host runner"]
   svc_cordisInspect["ctx.cordisInspect<br/>Dynamic Cordis inspect registry"]
@@ -242,6 +245,8 @@ flowchart LR
   pkg_plan_mode --> svc_planMode
   pkg_pwsh_local --> svc_shell
   pkg_saki_control_plane --> svc_sakiControlPlane
+  pkg_saki_execution --> svc_sakiHostExecution
+  pkg_saki_execution_local --> svc_sakiHostExecution
   pkg_sandbox --> svc_sandbox
   pkg_sandbox_local --> svc_sandbox
   pkg_sandbox_policy --> svc_sandboxPolicy
@@ -333,6 +338,7 @@ flowchart LR
   svc_llm --> pkg_compaction_basic
   svc_lsp --> pkg_tool_lsp
   svc_sakiControlPlane --> pkg_saki_host_api
+  svc_sakiHostExecution --> pkg_saki_control_plane
   svc_sandbox --> pkg_bash_sandbox
   svc_sandbox --> pkg_terminal_bash
   svc_sandboxPolicy --> pkg_bash_sandbox
@@ -471,6 +477,7 @@ flowchart LR
 | `ctx.lsp` | `seam` | [`lsp`](../packages/lsp/lsp) | `lsp-local` | [`tool-lsp`](../packages/lsp/tool-lsp) | - | Provider registration and selection plus normalized query execution over exactly four operations; the seam offers no protocol escape hatch, so a backend translates into the normalized request and result. |
 | `ctx.apiProxy` | `core` | `apiproxy` | - | `connection` | - | The transport-agnostic host gateway face: it dispatches browser API calls, and each open host stream subscribes to the events it forwards rather than being pushed to through a broadcast verb. |
 | `ctx.sakiControlPlane` | `core` | [`saki/control-plane`](../packages/saki/control-plane) | - | [`saki/host-api`](../packages/saki/host-api) | - | Owns Installation Access, current local authority, protected product Projections, and Control Intent admission; the Host API adapts its narrow interfaces to the browser transport. |
+| `ctx.sakiHostExecution` | `seam` | [`saki/execution`](../packages/saki/execution) | [`saki/execution-local`](../packages/saki/execution-local) | [`saki/control-plane`](../packages/saki/control-plane) | - | The Local Host resolves untrusted project selections and returns detached Git evidence; the control plane owns authorization, Project policy, and durable product records. |
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Owns the in-memory definition registry, the vm sandbox for host halves, and the request-run round trip; browser pages reach the same service over the wire through its remote namespace. |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Registers host inspect providers, mirrors the client provider manifest, and routes client queries through the dynamic Cordis transport. |
 

@@ -6,19 +6,32 @@ import {
   sakiAccessExchangeResultSchema,
   sakiAccessLogoutResultSchema,
   sakiAccessProjectionSchema,
-  sakiQueryResultSchema,
+  sakiDevelopmentWorkspaceResultSchema,
+  sakiInspectProjectSelectionResultSchema,
+  sakiIntentResultSchema,
+  sakiProjectIndexResultSchema,
 } from '../wire.ts'
 import type {
   SakiWireAccessExchangeResult,
   SakiWireAccessLogoutResult,
   SakiWireAccessProjection,
-  SakiWireQueryResult,
+  SakiWireDevelopmentWorkspaceResult,
+  SakiWireHostId,
+  SakiWireInspectProjectSelectionResult,
+  SakiWireIntent,
+  SakiWireIntentResult,
+  SakiWireProjectId,
+  SakiWireProjectIndexResult,
 } from '../wire.ts'
 
 const CHANNEL = '/saki'
 const REQUEST_TOKEN_HEADER = 'x-saki-request-token'
 
-/** Browser operations exposed by the B01 Host API. */
+/**
+ * Browser operations exposed by the Saki Host API.
+ * Business outcomes are returned as typed values; cancellation, Connection RPC
+ * failures, and invalid outbound payloads reject the returned Promise.
+ */
 export interface SakiHostClient {
   /** @param signal - optional cancellation. @returns current display-safe Access state. */
   readAccess(signal?: AbortSignal): Promise<SakiWireAccessProjection>
@@ -26,8 +39,42 @@ export interface SakiHostClient {
   exchangeBootstrap(secret: string, signal?: AbortSignal): Promise<SakiWireAccessExchangeResult>
   /** @param requestToken - current session-derived request token. @param signal - optional cancellation. @returns logout outcome. */
   logout(requestToken: string, signal?: AbortSignal): Promise<SakiWireAccessLogoutResult>
-  /** @param signal - optional cancellation. @returns authorized empty Project index or denial. */
-  queryProjectIndex(signal?: AbortSignal): Promise<SakiWireQueryResult>
+  /** @param signal - optional cancellation. @returns the revisioned Project index or `denied`/`unavailable`. */
+  queryProjectIndex(signal?: AbortSignal): Promise<SakiWireProjectIndexResult>
+  /**
+   * Inspect a selected local project directory.
+   * @param hostId - selected enrolled Host.
+   * @param directoryLocator - untrusted selected directory.
+   * @param signal - optional cancellation.
+   * @returns an authorized Projection containing either a safe selection or a
+   * bounded selection rejection, or an outer `denied`/`unavailable` result.
+   */
+  inspectProjectSelection(
+    hostId: SakiWireHostId,
+    directoryLocator: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireInspectProjectSelectionResult>
+  /**
+   * Read one Development Workspace Projection.
+   * @param projectId - stable Project id.
+   * @param expectedRegistryRevision - caller-observed registry revision.
+   * @param signal - optional cancellation.
+   * @returns the current Development Workspace or `denied`, `unavailable`, `stale`, or `not-found`.
+   */
+  queryDevelopmentWorkspace(
+    projectId: SakiWireProjectId,
+    expectedRegistryRevision: number,
+    signal?: AbortSignal,
+  ): Promise<SakiWireDevelopmentWorkspaceResult>
+  /**
+   * Submit a confirmed Project-registration Intent.
+   * @param intent - complete confirmed registration Intent.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns a confirmed receipt or typed `denied`, `unavailable`, `conflict`,
+   * `failure`, or `reconciliation-required` result with only phase-valid receipt fields.
+   */
+  registerDevelopmentProject(intent: SakiWireIntent, requestToken: string, signal?: AbortSignal): Promise<SakiWireIntentResult>
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -73,8 +120,48 @@ export class SakiHostClientService extends Service implements SakiHostClient {
   }
 
   /** @inheritdoc */
-  async queryProjectIndex(signal?: AbortSignal): Promise<SakiWireQueryResult> {
-    return sakiQueryResultSchema.parse(await this.call('control/query', { type: 'project-index' }, signal))
+  async queryProjectIndex(signal?: AbortSignal): Promise<SakiWireProjectIndexResult> {
+    return sakiProjectIndexResultSchema.parse(await this.call('control/query', { type: 'project-index' }, signal))
+  }
+
+  /** @inheritdoc */
+  async inspectProjectSelection(
+    hostId: SakiWireHostId,
+    directoryLocator: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireInspectProjectSelectionResult> {
+    return sakiInspectProjectSelectionResultSchema.parse(await this.call(
+      'control/query',
+      { type: 'inspect-project-selection', hostId, directoryLocator },
+      signal,
+    ))
+  }
+
+  /** @inheritdoc */
+  async queryDevelopmentWorkspace(
+    projectId: SakiWireProjectId,
+    expectedRegistryRevision: number,
+    signal?: AbortSignal,
+  ): Promise<SakiWireDevelopmentWorkspaceResult> {
+    return sakiDevelopmentWorkspaceResultSchema.parse(await this.call(
+      'control/query',
+      { type: 'development-workspace', projectId, expectedRegistryRevision },
+      signal,
+    ))
+  }
+
+  /** @inheritdoc */
+  async registerDevelopmentProject(
+    intent: SakiWireIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireIntentResult> {
+    return sakiIntentResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
   }
 
   private async call(

@@ -11,7 +11,9 @@ import * as StorageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import SakiControlPlane, {
   type AccessProjection,
   type Config,
+  type SakiControlIntentId,
   type SakiControlPlaneModule,
+  type SakiDevelopmentProjectId,
 } from '../src/index.ts'
 import { SakiAuthenticationContext } from '../src/authentication.ts'
 import {
@@ -75,6 +77,13 @@ async function startControlPlane(
   ctx: Context,
   config: Required<Config> = CONTROL_PLANE_CONFIG,
 ): Promise<RunningHarness> {
+  ctx.provide('sakiHostExecution', {
+    inspectProjectSelection: () => Promise.resolve({ ok: false, reason: 'unavailable' }),
+  } as never)
+  ctx.provide('workspaceRegistry', {
+    list: () => [],
+    create: () => Promise.reject(new Error('workspace creation is outside B01 access tests')),
+  } as never)
   const fiber = await ctx.plugin(SakiControlPlane, config)
   return {
     ctx,
@@ -548,7 +557,7 @@ describe('Saki Installation access', () => {
     await second.close()
   })
 
-  it('returns an authenticated empty Project index and revalidates the current Grant', async () => {
+  it('returns the current Host with an empty Project index and revalidates the current Grant', async () => {
     const running = await start(await database())
     const { cookie } = await bootstrap(running.controlPlane)
     const resolution = await resolveSakiAuthentication(
@@ -565,7 +574,12 @@ describe('Saki Installation access', () => {
       AbortSignal.timeout(1_000),
     )).toEqual({
       ok: true,
-      projection: { type: 'project-index', revision: 0, projects: [] },
+      projection: {
+        type: 'project-index',
+        revision: 0,
+        hosts: [{ id: running.controlPlane.identity().hostId, revision: 0, state: 'enrolled' }],
+        projects: [],
+      },
     })
 
     const control = controlState(running)
@@ -579,11 +593,11 @@ describe('Saki Installation access', () => {
       { type: 'project-index' },
       AbortSignal.timeout(1_000),
     )).toEqual({ ok: false, reason: 'denied' })
-    expect(await running.controlPlane.submit(
-      resolution.authentication,
-      undefined,
-      AbortSignal.timeout(1_000),
-    )).toEqual({ ok: false, reason: 'denied' })
+    expect(await running.controlPlane.query(resolution.authentication, {
+      type: 'development-workspace',
+      projectId: 'project-00000000-0000-4000-8000-000000000902' as SakiDevelopmentProjectId,
+      expectedRegistryRevision: 0,
+    }, AbortSignal.timeout(1_000))).toEqual({ ok: false, reason: 'denied' })
     expect(await running.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)))
       .toMatchObject({ kind: 'authenticated' })
     await running.close()
@@ -597,9 +611,23 @@ describe('Saki Installation access', () => {
       { type: 'project-index' },
       AbortSignal.timeout(1_000),
     )).toEqual({ ok: false, reason: 'denied' })
+    const hostId = running.controlPlane.identity().hostId
     expect(await running.controlPlane.submit(
       foreign,
-      undefined,
+      {
+        type: 'register-development-project',
+        intentId: 'intent-00000000-0000-4000-8000-000000000901' as SakiControlIntentId,
+        projectTitle: 'Foreign request',
+        hostId,
+        directoryLocator: '.',
+        expectedRegistryRevision: 0,
+        confirmedFingerprint: { version: 1, digest: '0'.repeat(64) },
+        confirmedBaseline: {
+          kind: 'unavailable',
+          reason: 'io-failure',
+          observed: { entries: 0, pathBytes: 0, gitOutputBytes: 0, hashedBytes: 0, elapsedMs: 0 },
+        },
+      },
       AbortSignal.timeout(1_000),
     )).toEqual({ ok: false, reason: 'denied' })
     expect(await running.controlPlane.access.logoutCurrentSession(
@@ -715,7 +743,7 @@ describe('Saki Installation access', () => {
     }))
 
     await running.close()
-    expect(observed).toEqual([['access', 'project-index']])
+    expect(observed).toEqual([['access', 'project-index', 'development-workspace']])
     expect(diagnostic).toHaveBeenCalledTimes(1)
     expect(diagnostic).toHaveBeenCalledWith('[saki-control-plane] Projection listener failed')
     expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('listener-secret-sentinel')
@@ -1028,21 +1056,4 @@ describe('Saki Installation access', () => {
     expect(serialized).not.toContain(access.requestToken)
   })
 
-  it('publishes a closed empty Intent map and a stable unavailable receipt', async () => {
-    const running = await start(await database())
-    const { cookie, access } = await bootstrap(running.controlPlane)
-    const resolution = await resolveSakiAuthentication(
-      running.controlPlane,
-      cookie,
-      { origin: ORIGIN, mutation: true, requestToken: access.requestToken },
-      AbortSignal.timeout(1_000),
-    )
-    if (!resolution.ok) throw new Error('authentication unexpectedly failed')
-    expect(await running.controlPlane.submit(
-      resolution.authentication,
-      undefined,
-      AbortSignal.timeout(1_000),
-    )).toEqual({ ok: false, reason: 'intent-unavailable' })
-    await running.close()
-  })
 })

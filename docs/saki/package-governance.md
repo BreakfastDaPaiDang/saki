@@ -2,7 +2,7 @@
 
 English | [中文](package-governance.zh.md)
 
-[ADR 0002](../adr/0002-plugin-first-single-repository.md) owns the decision to keep Saki-specific plugins in this repository. This reference defines how their private product packages coexist with the vendored DeepSeek Harness package tree; the [package-family Agent Note](../../.agents/notes/implemented/architecture/2026-08-18-saki-private-package-foundation.md) records why repository checks share one classifier and why the first slice contains only an empty bundle.
+[ADR 0002](../adr/0002-plugin-first-single-repository.md) owns the decision to keep Saki-specific plugins in this repository. This reference defines how their private product packages coexist with the vendored DeepSeek Harness package tree; the [package-family Agent Note](../../.agents/notes/implemented/architecture/2026-08-18-saki-private-package-foundation.md) records why repository checks share one classifier and why composition includes only implemented product slices.
 
 ## Namespace and location
 
@@ -16,11 +16,11 @@ Private does not mean unchecked. Saki packages use the same ESM entry layout, Co
 
 The second namespace changes classification only. Existing `@deepseek-ai/dsh-*` checks, versions, payload rules, catalogs, examples, and publish membership retain their prior meaning.
 
-## First bundle and local entry
+## Current bundle and local entry
 
-`@breakfastdapaidang/saki-bundle` is the only initial Saki package. Its empty root plus declared patch mounts one readiness row, proving workspace discovery, source and artifact resolution, complete boot activation, deterministic output, and clean shutdown without credentials. `pnpm run saki` is a repository development entry; it does not read or replace a user's `start-dsh-with-clash.ps1` or other host-local startup wrapper.
+The current package family is listed in [`packages/saki`](../../packages/saki/README.md). `@breakfastdapaidang/saki-bundle` keeps an empty root config and owns the declared patch that composes local access, existing-directory inspection, first Project registration, and one readiness row. The storage domain uses JSON by default and routes `saki_control_plane` to its dedicated SQLite database; Session logs retain their JSONL persistence. `pnpm run saki` is a repository development entry; it does not read or replace a user's `start-dsh-with-clash.ps1` or other host-local startup wrapper.
 
-The readiness row provides the stable record, and the launcher emits its one JSON line and exits zero only after `boot()` completes the entry-activation audit. A readiness output or exit-callback failure disposes the application and enters the launcher's failure path. A keyless snapshot covers the source entry, and a plain-Node smoke covers the built executable when artifacts exist.
+The launcher emits the stable readiness record only after `boot()` completes the entry-activation audit. `SAKI_ONESHOT=1` then exits zero without consuming a bootstrap handoff; normal mode emits one clear-secret launcher-handoff JSON line and remains alive until `SIGINT` or `SIGTERM`. A readiness output or exit-callback failure disposes the application and enters the launcher's failure path. A keyless snapshot covers the source entry, and a plain-Node smoke covers the built executable when artifacts exist.
 
 ## Expansion rule
 

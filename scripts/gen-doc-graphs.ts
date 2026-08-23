@@ -556,6 +556,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Owns Installation Access, current local authority, protected product Projections, and Control Intent admission; the Host API adapts its narrow interfaces to the browser transport.',
   },
   {
+    key: 'sakiHostExecution',
+    pkg: 'saki/execution',
+    title: 'Saki Host Execution',
+    mode: 'seam',
+    implementations: ['saki/execution-local'],
+    consumers: ['saki/control-plane'],
+    note: 'The Local Host resolves untrusted project selections and returns detached Git evidence; the control plane owns authorization, Project policy, and durable product records.',
+  },
+  {
     key: 'dynamicCordisRunner',
     pkg: 'cordis-host-runner',
     title: 'Dynamic Cordis package host runner',

@@ -21,6 +21,9 @@
       "path": "../../client/connection/tsconfig.host.json"
     },
     {
+      "path": "../execution"
+    },
+    {
       "path": "../../runtime-diagnostics/invariants"
     },
     {
@@ -28,6 +31,9 @@
     },
     {
       "path": "../../util/brand"
+    },
+    {
+      "path": "../../workspace/workspace"
     }
   ]
 }

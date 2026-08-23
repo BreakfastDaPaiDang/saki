@@ -11,7 +11,7 @@ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { WorkspaceId } from './types.ts'
 
 /** Workspace id schema at the durable boundary; branding has no runtime representation. */
-const workspaceId = z.string().transform(value => value as WorkspaceId)
+export const workspaceIdSchema = z.string().transform(value => value as WorkspaceId)
 
 /**
  * Durable shape of one workspace record. `path` is the `fs.realpath` canon
@@ -35,8 +35,8 @@ export type WorkspaceRecord = z.infer<typeof workspaceRecord>
  * registry operation from unexplained medium corruption.
  */
 const workspacePendingMutation = z.discriminatedUnion('operation', [
-  z.object({ operation: z.literal('create'), workspaceId }),
-  z.object({ operation: z.literal('delete'), workspaceId }),
+  z.object({ operation: z.literal('create'), workspaceId: workspaceIdSchema }),
+  z.object({ operation: z.literal('delete'), workspaceId: workspaceIdSchema }),
 ])
 
 /**
@@ -50,7 +50,7 @@ const workspacePendingMutation = z.discriminatedUnion('operation', [
  */
 export const workspaceDomainState = z.object({
   initialized: z.boolean(),
-  workspaceIds: z.array(workspaceId),
+  workspaceIds: z.array(workspaceIdSchema),
   archivedSessionIds: z.array(z.string().transform(SessionId)).default([]),
   pendingMutation: workspacePendingMutation.optional(),
 })

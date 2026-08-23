@@ -2,6 +2,16 @@
 
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
+import { workspaceIdSchema } from '@deepseek-ai/dsh-workspace'
+import {
+  canonicalDigest,
+  inheritedChangeBaselineIdentityMaterial,
+  inheritedChangeBaselineSchema,
+  isAbsoluteHostPath,
+  MAX_TRUSTED_PATH_CHARS,
+  projectInspectionWorkspaceIndependentMaterial,
+  projectSelectionInspectionSchema,
+} from '@breakfastdapaidang/saki-execution'
 import type {
   SakiBootstrapChallengeId,
   SakiBrowserSessionId,
@@ -11,6 +21,10 @@ import type {
   SakiInstallationGenerationId,
   SakiInstallationId,
   SakiPrincipalId,
+  SakiControlIntentId,
+  SakiDevelopmentProjectId,
+  SakiIntentReceiptId,
+  SakiResourceBindingId,
 } from './types.ts'
 
 const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -29,13 +43,21 @@ const grantId = brandedId<SakiGrantId>('grant')
 const installationAccessId = brandedId<SakiInstallationAccessId>('access')
 const bootstrapChallengeId = accessChildId<SakiBootstrapChallengeId>('challenge')
 const browserSessionId = accessChildId<SakiBrowserSessionId>('session')
+const developmentProjectId = brandedId<SakiDevelopmentProjectId>('project')
+const resourceBindingId = brandedId<SakiResourceBindingId>('binding')
+const controlIntentId = brandedId<SakiControlIntentId>('intent')
+const intentReceiptId = brandedId<SakiIntentReceiptId>('receipt')
 const revision = z.number().int().nonnegative()
 const ordinal = z.number().int().nonnegative()
 const timestamp = z.number().int().nonnegative()
 const digest = z.string().regex(/^[0-9a-f]{64}$/)
+const projectTitle = z.string().min(1).max(200).refine(value => value.trim().length > 0)
+const trustedPath = z.string().min(1).max(MAX_TRUSTED_PATH_CHARS).refine(isAbsoluteHostPath)
 
 /** Stable key of the one provisioning owner record. */
 export const CONTROL_STATE_KEY = 'control-state' as const
+/** Stable key of the singleton Development Project Registry aggregate. */
+export const DEVELOPMENT_PROJECT_REGISTRY_KEY = 'development-project-registry' as const
 
 /** Provisioning owner that records child identities before any child write. */
 export const controlStateRecordSchema = z.object({
@@ -95,7 +117,16 @@ export const grantRecordSchema = z.object({
   installationId,
   principalId,
   state: z.enum(['active', 'revoked']),
-  actions: z.array(z.literal('project-index:read')),
+  actions: z.array(z.enum([
+    'inspect-project-selection',
+    'project-index:read',
+    'development-workspace:read',
+    'development-project:register',
+  ])),
+  scope: z.object({
+    kind: z.literal('installation'),
+    installationId,
+  }).strict(),
 }).strict()
 
 /** Parsed durable Grant entity. */
@@ -172,10 +203,280 @@ export const installationAccessRecordSchema = z.object({
 /** Parsed durable Installation Access aggregate. */
 export type InstallationAccessRecord = z.infer<typeof installationAccessRecordSchema>
 
-/** Saki control-plane domain declaration for B01 records. */
+/** One titled Development Project child record. */
+export const developmentProjectRecordSchema = z.object({
+  id: developmentProjectId,
+  revision,
+  projectTitle,
+  resourceBindingId,
+  state: z.literal('active'),
+  createdAt: timestamp,
+}).strict()
+
+/** Parsed durable Development Project child. */
+export type DevelopmentProjectRecord = z.infer<typeof developmentProjectRecordSchema>
+
+/** One Host-owned Resource Binding child with registration and current observations. */
+export const resourceBindingRecordSchema = z.object({
+  id: resourceBindingId,
+  revision,
+  projectId: developmentProjectId,
+  hostId,
+  workspaceId: workspaceIdSchema,
+  health: z.enum(['active', 'missing', 'repair-required']),
+  registrationInspection: projectSelectionInspectionSchema,
+  currentInspection: projectSelectionInspectionSchema.optional(),
+  inheritedChangeBaseline: inheritedChangeBaselineSchema,
+  createdAt: timestamp,
+  observedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  if (value.observedAt < value.createdAt) {
+    context.addIssue({ code: 'custom', message: 'binding observation predates creation', path: ['observedAt'] })
+  }
+  if (value.registrationInspection.projection.hostId !== value.hostId
+    || (value.currentInspection !== undefined && value.currentInspection.projection.hostId !== value.hostId)) {
+    context.addIssue({ code: 'custom', message: 'binding inspection belongs to another Host' })
+  }
+  if (canonicalDigest('saki/inherited-baseline/identity/v1',
+    inheritedChangeBaselineIdentityMaterial(value.registrationInspection.projection.baseline))
+    !== canonicalDigest('saki/inherited-baseline/identity/v1',
+      inheritedChangeBaselineIdentityMaterial(value.inheritedChangeBaseline))) {
+    context.addIssue({ code: 'custom', message: 'binding inherited baseline differs from registration evidence' })
+  }
+  if (value.health === 'active' && value.currentInspection === undefined) {
+    context.addIssue({ code: 'custom', message: 'active binding has no current inspection' })
+  }
+  if (value.health === 'missing' && value.currentInspection !== undefined) {
+    context.addIssue({ code: 'custom', message: 'missing binding retains a current inspection' })
+  }
+  if (value.currentInspection !== undefined) {
+    if (value.currentInspection.projection.workspaceId === undefined
+      || value.currentInspection.projection.workspaceId !== value.workspaceId) {
+      context.addIssue({ code: 'custom', message: 'binding current inspection disagrees with Workspace identity' })
+    }
+    if (value.currentInspection.trusted.canonicalWorktreePath
+        !== value.registrationInspection.trusted.canonicalWorktreePath
+      || value.currentInspection.trusted.canonicalGitDirectory
+        !== value.registrationInspection.trusted.canonicalGitDirectory
+      || value.currentInspection.trusted.canonicalCommonGitDirectory
+        !== value.registrationInspection.trusted.canonicalCommonGitDirectory
+      || value.currentInspection.trusted.gitDirectoryIdentity.digest
+        !== value.registrationInspection.trusted.gitDirectoryIdentity.digest
+      || value.currentInspection.trusted.commonGitDirectoryIdentity.digest
+        !== value.registrationInspection.trusted.commonGitDirectoryIdentity.digest) {
+      context.addIssue({ code: 'custom', message: 'binding current inspection changed resource identity' })
+    }
+  }
+})
+
+/** Parsed durable Resource Binding child. */
+export type ResourceBindingRecord = z.infer<typeof resourceBindingRecordSchema>
+
+/** One canonical-path duplicate index entry owned by the registry aggregate. */
+const bindingPathIndexSchema = z.object({
+  hostId,
+  path: trustedPath,
+  resourceBindingId,
+}).strict()
+
+/** One accepted Intent-to-created-children mapping. */
+const registryIntentMappingSchema = z.object({
+  intentId: controlIntentId,
+  projectId: developmentProjectId,
+  resourceBindingId,
+  registryRevision: revision,
+}).strict()
+
+/** Singleton Development Project Registry aggregate. */
+export const developmentProjectRegistryRecordSchema = z.object({
+  id: z.literal(DEVELOPMENT_PROJECT_REGISTRY_KEY),
+  schemaVersion: z.literal(1),
+  revision,
+  projects: z.array(developmentProjectRecordSchema),
+  resourceBindings: z.array(resourceBindingRecordSchema),
+  canonicalWorktreeIndex: z.array(bindingPathIndexSchema),
+  gitDirectoryIndex: z.array(bindingPathIndexSchema),
+  intentMappings: z.array(registryIntentMappingSchema),
+}).strict()
+
+/** Parsed singleton Development Project Registry aggregate. */
+export type DevelopmentProjectRegistryRecord = z.infer<typeof developmentProjectRegistryRecordSchema>
+
+/** Strict durable first Control Intent payload. */
+export const registerDevelopmentProjectIntentSchema = z.object({
+  type: z.literal('register-development-project'),
+  intentId: controlIntentId,
+  projectTitle,
+  hostId,
+  directoryLocator: z.string().min(1).max(32_768),
+  expectedRegistryRevision: revision,
+  confirmedFingerprint: z.object({ version: z.literal(1), digest }).strict(),
+  confirmedBaseline: inheritedChangeBaselineSchema,
+}).strict()
+
+/** Server-derived authority evidence retained in the immutable Intent digest. */
+export const registrationActorSchema = z.object({
+  installationId,
+  installationGenerationId,
+  hostId,
+  principalId,
+  principalRevision: revision,
+  grantId,
+  grantRevision: revision,
+}).strict()
+
+/** Parsed server-derived registration authority evidence. */
+export type RegistrationActor = z.infer<typeof registrationActorSchema>
+
+/** Persisted recoverable registration Intent. */
+export const registrationIntentRecordSchema = z.object({
+  id: controlIntentId,
+  schemaVersion: z.literal(1),
+  revision,
+  receiptId: intentReceiptId,
+  payloadDigest: digest,
+  payload: z.object({
+    intent: registerDevelopmentProjectIntentSchema,
+    actor: registrationActorSchema,
+  }).strict(),
+  inspection: projectSelectionInspectionSchema,
+  workspaceInspection: projectSelectionInspectionSchema.optional(),
+  phase: z.enum([
+    'prepared',
+    'workspace-dispatching',
+    'workspace-observed',
+    'registry-committed',
+    'confirmed',
+    'conflict',
+    'failure',
+    'reconciliation-required',
+  ]),
+  workspaceId: workspaceIdSchema.optional(),
+  projectId: developmentProjectId.optional(),
+  resourceBindingId: resourceBindingId.optional(),
+  registryRevision: revision.optional(),
+  terminalReason: z.enum([
+    'expected-revision', 'duplicate-binding', 'authority', 'workspace', 'observation',
+  ]).optional(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  const terminal = value.phase === 'conflict'
+    || value.phase === 'failure'
+    || value.phase === 'reconciliation-required'
+  if (value.updatedAt < value.createdAt) {
+    context.addIssue({ code: 'custom', message: 'Intent update predates creation', path: ['updatedAt'] })
+  }
+  if (terminal !== (value.terminalReason !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'Intent terminal reason disagrees with phase', path: ['terminalReason'] })
+  }
+  if (value.id !== value.payload.intent.intentId) {
+    context.addIssue({ code: 'custom', message: 'Intent id disagrees with immutable payload', path: ['id'] })
+  }
+  if (value.receiptId !== value.id.replace(/^intent-/u, 'receipt-')) {
+    context.addIssue({ code: 'custom', message: 'receipt id disagrees with Intent id', path: ['receiptId'] })
+  }
+  if (value.payload.actor.hostId !== value.payload.intent.hostId) {
+    context.addIssue({ code: 'custom', message: 'registration actor belongs to another Host' })
+  }
+  if (value.payload.intent.hostId !== value.inspection.projection.hostId
+    || value.payload.intent.confirmedFingerprint.digest !== value.inspection.projection.fingerprint.digest
+    || canonicalDigest('saki/inherited-baseline/identity/v1',
+      inheritedChangeBaselineIdentityMaterial(value.payload.intent.confirmedBaseline))
+      !== canonicalDigest('saki/inherited-baseline/identity/v1',
+        inheritedChangeBaselineIdentityMaterial(value.inspection.projection.baseline))) {
+    context.addIssue({ code: 'custom', message: 'Intent confirmation disagrees with retained inspection' })
+  }
+  if (canonicalDigest('saki/register-development-project/v1', value.payload) !== value.payloadDigest) {
+    context.addIssue({ code: 'custom', message: 'Intent payload digest is stale', path: ['payloadDigest'] })
+  }
+  const hasWorkspace = value.workspaceId !== undefined
+  if (value.workspaceInspection !== undefined && value.workspaceId === undefined) {
+    context.addIssue({ code: 'custom', message: 'Workspace inspection has no retained identity' })
+  }
+  if (value.workspaceInspection !== undefined && value.workspaceId !== undefined) {
+    if (value.workspaceInspection.projection.hostId !== value.payload.intent.hostId) {
+      context.addIssue({ code: 'custom', message: 'Workspace observation disagrees with retained identity' })
+    }
+    const requiresCasEvidence = value.phase === 'workspace-observed'
+      || value.phase === 'registry-committed'
+      || value.phase === 'confirmed'
+      || value.phase === 'conflict'
+    if (requiresCasEvidence) {
+      if (value.workspaceInspection.projection.workspaceId === undefined
+        || value.workspaceInspection.projection.workspaceId !== value.workspaceId) {
+        context.addIssue({ code: 'custom', message: 'Workspace observation disagrees with retained identity' })
+      }
+      const originalWorkspaceId = value.inspection.projection.workspaceId
+      if (originalWorkspaceId !== undefined && originalWorkspaceId !== value.workspaceId) {
+        context.addIssue({ code: 'custom', message: 'Existing Workspace identity changed during registration' })
+      }
+      if (canonicalDigest('saki/project-inspection/workspace-independent/v1',
+        projectInspectionWorkspaceIndependentMaterial(
+          value.workspaceInspection.projection,
+          value.workspaceInspection.trusted,
+        ))
+        !== canonicalDigest('saki/project-inspection/workspace-independent/v1',
+          projectInspectionWorkspaceIndependentMaterial(value.inspection.projection, value.inspection.trusted))) {
+        context.addIssue({ code: 'custom', message: 'Workspace observation changed repository evidence' })
+      }
+    }
+  }
+  const committedFields = [
+    value.projectId,
+    value.resourceBindingId,
+    value.registryRevision,
+  ]
+  const committedCount = committedFields.filter(field => field !== undefined).length
+  if (committedCount !== 0 && committedCount !== committedFields.length) {
+    context.addIssue({ code: 'custom', message: 'registry commit fields must appear together' })
+  }
+  if ((value.phase === 'prepared' || value.phase === 'workspace-dispatching') && (hasWorkspace || committedCount !== 0)) {
+    context.addIssue({ code: 'custom', message: 'early Intent phase contains later-phase evidence' })
+  }
+  if (value.phase === 'workspace-observed' && (!hasWorkspace || committedCount !== 0)) {
+    context.addIssue({ code: 'custom', message: 'workspace-observed phase evidence is incomplete' })
+  }
+  if ((value.phase === 'registry-committed' || value.phase === 'confirmed')
+    && (!hasWorkspace || value.workspaceInspection === undefined
+      || committedCount !== committedFields.length)) {
+    context.addIssue({ code: 'custom', message: 'committed Intent phase evidence is incomplete' })
+  }
+  if (terminal && committedCount !== 0) {
+    context.addIssue({ code: 'custom', message: 'terminal Intent contains registry commit evidence' })
+  }
+  if (value.registryRevision !== undefined
+    && value.registryRevision !== value.payload.intent.expectedRegistryRevision + 1) {
+    context.addIssue({ code: 'custom', message: 'Intent commit revision disagrees with expected revision' })
+  }
+  if (value.phase === 'conflict'
+    && value.terminalReason !== 'expected-revision'
+    && value.terminalReason !== 'duplicate-binding') {
+    context.addIssue({ code: 'custom', message: 'conflict phase has an invalid terminal reason' })
+  }
+  if (value.phase === 'conflict' && (!hasWorkspace || value.workspaceInspection === undefined)) {
+    context.addIssue({ code: 'custom', message: 'conflict phase has no Workspace evidence' })
+  }
+  if (value.phase === 'failure' && value.terminalReason !== 'authority') {
+    context.addIssue({ code: 'custom', message: 'failure phase has an invalid terminal reason' })
+  }
+  if (value.phase === 'failure' && hasWorkspace) {
+    context.addIssue({ code: 'custom', message: 'authority failure contains Workspace evidence' })
+  }
+  if (value.phase === 'reconciliation-required'
+    && value.terminalReason !== 'workspace'
+    && value.terminalReason !== 'observation') {
+    context.addIssue({ code: 'custom', message: 'reconciliation phase has an invalid terminal reason' })
+  }
+})
+
+/** Parsed durable registration Intent. */
+export type RegistrationIntentRecord = z.infer<typeof registrationIntentRecordSchema>
+
+/** Exact Saki control-plane domain declaration. */
 export const sakiControlPlaneDomainSpec = defineDomain({
   name: 'saki_control_plane',
-  version: 1,
+  version: 2,
   tables: {
     control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
     installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
@@ -183,5 +484,10 @@ export const sakiControlPlaneDomainSpec = defineDomain({
     principals: domainTable<SakiPrincipalId, PrincipalRecord>(principalRecordSchema),
     grants: domainTable<SakiGrantId, GrantRecord>(grantRecordSchema),
     installation_access: domainTable<SakiInstallationAccessId, InstallationAccessRecord>(installationAccessRecordSchema),
+    development_project_registry: domainTable<
+      typeof DEVELOPMENT_PROJECT_REGISTRY_KEY,
+      DevelopmentProjectRegistryRecord
+    >(developmentProjectRegistryRecordSchema),
+    registration_intents: domainTable<SakiControlIntentId, RegistrationIntentRecord>(registrationIntentRecordSchema),
   },
 })

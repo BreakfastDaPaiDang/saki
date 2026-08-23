@@ -243,6 +243,8 @@
     { "path": "./packages/bundle/base" },
     { "path": "./packages/bundle/headless" },
     { "path": "./packages/bundle/web-app" },
+    { "path": "./packages/saki/execution" },
+    { "path": "./packages/saki/execution-local" },
     { "path": "./packages/saki/control-plane" },
     { "path": "./packages/saki/host-api/tsconfig.host.json" },
     { "path": "./packages/saki/bundle" },

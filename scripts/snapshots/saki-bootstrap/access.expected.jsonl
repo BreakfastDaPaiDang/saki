@@ -1,7 +1,13 @@
 {"step":"first-launcher","purpose":"initial-bootstrap"}
 {"step":"first-access","access":{"kind":"bootstrap-required","message":"Local bootstrap is required."}}
 {"step":"bootstrap-exchange","ok":true,"cookie":"set"}
-{"step":"project-index","result":{"ok":true,"projection":{"type":"project-index","revision":0,"projects":[]}}}
+{"step":"initial-project-index","result":{"ok":true,"revision":0,"hosts":1,"projects":0}}
+{"step":"project-inspection","result":{"ok":true,"displayLocation":"repository","detached":false,"inheritedChangeEntryCount":0,"baseline":"complete","automaticMutationEligible":true,"workspace":"absent"}}
+{"step":"project-registration","result":{"ok":true,"state":"confirmed","registryRevision":1}}
+{"step":"registered-project-index","result":{"revision":1,"hosts":1,"projects":1,"projectTitle":"Snapshot project","binding":{"health":"active","displayLocation":"repository","head":"present","branch":"present","detached":false,"inheritedChangeEntryCount":0,"baseline":"complete","automaticMutationEligible":true,"configurationGaps":[]}}}
+{"step":"development-workspace","result":{"revision":1,"projectTitle":"Snapshot project","recovery":{"state":"ready","reasons":[]},"current":{"inheritedChangeEntryCount":0,"workspace":"present"}}}
 {"step":"restart-launcher","purpose":"local-reauthentication"}
 {"step":"restart-access","access":{"kind":"authenticated","principal":"Host Operator","session":"restored","requestToken":"derived"}}
-{"step":"restart-project-index","result":{"ok":true,"projection":{"type":"project-index","revision":0,"projects":[]}}}
+{"step":"restart-registration-replay","result":{"state":"confirmed","sameReceipt":true}}
+{"step":"restart-project-index","result":{"revision":1,"hosts":1,"projects":1,"projectTitle":"Snapshot project","stableProjectId":true,"stableBindingId":true,"binding":{"health":"active","displayLocation":"repository","head":"present","branch":"present","detached":false,"inheritedChangeEntryCount":0,"baseline":"complete","automaticMutationEligible":true,"configurationGaps":[]}}}
+{"step":"restart-development-workspace","result":{"revision":1,"projectTitle":"Snapshot project","recovery":{"state":"ready","reasons":[]},"current":{"inheritedChangeEntryCount":0,"workspace":"present","stableWorkspaceId":true}}}
