@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
@@ -6,26 +6,46 @@ import { isRecord, loadWorkflow, workflowEvent, workflowJob } from './workflow-t
 
 const root = resolve(import.meta.dirname, '..')
 const runnerPrivatePnpmDestination = '${{ runner.temp }}/setup-pnpm'
+const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js'
 
 describe('CI workflow', () => {
   it('isolates every pnpm action setup destination per runner', () => {
-    const workflow: unknown = yaml.load(readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8'))
-    if (!isRecord(workflow) || !isRecord(workflow.jobs)) throw new TypeError('CI workflow must define jobs')
-
-    const setups = Object.entries(workflow.jobs).flatMap(([jobName, job]) => {
-      if (!isRecord(job) || !Array.isArray(job.steps)) return []
-      return job.steps.flatMap((step) => {
-        if (!isRecord(step) || typeof step.uses !== 'string' || !step.uses.startsWith('pnpm/action-setup@')) return []
-        return [{ jobName, step }]
-      })
-    })
+    const files = ['.github/workflows/ci.yml']
+    const setups: Array<{ jobName: string; step: unknown }> = []
+    for (const file of files) {
+      const workflow: unknown = yaml.load(readFileSync(resolve(root, file), 'utf8'))
+      if (!isRecord(workflow) || !isRecord(workflow.jobs)) throw new TypeError(`${file} must define jobs`)
+      for (const [jobName, job] of Object.entries(workflow.jobs)) {
+        if (!isRecord(job) || !Array.isArray(job.steps)) continue
+        for (const step of job.steps) {
+          if (!isRecord(step) || typeof step.uses !== 'string' || !step.uses.startsWith('pnpm/action-setup@')) continue
+          setups.push({ jobName, step })
+        }
+      }
+    }
 
     expect(setups.length).toBeGreaterThan(0)
     for (const { jobName, step } of setups) {
       expect(step, `${jobName} must not share pnpm/action-setup's default destination`).toMatchObject({
-        with: { dest: runnerPrivatePnpmDestination },
+        with: {
+          dest: jobName === 'windows-native'
+            ? nativeWindowsPnpmDestination
+            : runnerPrivatePnpmDestination,
+        },
       })
+      if (jobName === 'windows-native') expect(step).not.toMatchObject({ with: { standalone: true } })
     }
+  })
+
+  it('does not run CI on master pushes', () => {
+    expect(existsSync(resolve(root, '.github/workflows/ci-master.yml'))).toBe(false)
+  })
+
+  it('builds the same Saki source links as the Pages deployment', () => {
+    const workflow = loadWorkflow('.github/workflows/ci.yml')
+    if (!isRecord(workflow.env)) throw new TypeError('CI workflow must define environment configuration')
+    expect(workflow.env.DOCS_REPOSITORY).toBe('BreakfastDaPaiDang/saki')
+    expect(workflow.env.DOCS_REPOSITORY_REF).toBe('master')
   })
 
   it('keeps required Wine coverage and makes native Windows an explicit standard-runner suite', () => {
@@ -64,7 +84,8 @@ describe('CI workflow', () => {
     expect(windowsNative.env).toMatchObject({
       DSH_COVERAGE_TEST_TIMEOUT_MS: '30000',
     })
-    const nativeCommandSteps = (windowsNative.steps as unknown[]).filter((step): step is Record<string, unknown> & { run: string } => (
+    const nativeSteps = windowsNative.steps as unknown[]
+    const nativeCommandSteps = nativeSteps.filter((step): step is Record<string, unknown> & { run: string } => (
       isRecord(step) && typeof step.run === 'string'
     ))
     expect(nativeCommandSteps.map(step => step.run)).toContain('pnpm run check:ci:windows-complete')
@@ -88,10 +109,12 @@ describe('CI workflow', () => {
     }
     expect(node24.env.DSH_GATE_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(node24Coverage.env.DSH_COVERAGE_MAX_WORKERS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
+    expect(node24Coverage.env.DSH_COVERAGE_PARTITIONS).toBe('4')
     expect(node24Coverage.env.DSH_GATE_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '1'")
     expect(node24Consumers.env.DSH_GATE_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '1'")
     expect(node24Consumers.env.DSH_OXLINT_THREADS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(node24Consumers.env.DSH_PUBLINT_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
+    expect(node24Consumers.env.DSH_WEB_SNAPSHOT_WORKERS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(node24Consumers.env.DSH_SNAPSHOT_MAX_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(aggregate['runs-on']).toContain('DSH_CI_FAILOVER_LINUX')
     expect(aggregate['runs-on']).not.toContain('DSH_CI_FAILOVER_WINDOWS')
@@ -105,7 +128,6 @@ describe('CI workflow', () => {
     }
 
     expect(workflow.concurrency['cancel-in-progress']).toBe(true)
-
     for (const name of ['larger-runner-benchmark', 'consolidated-runner-benchmark']) {
       const job = workflow.jobs[name]
       if (!isRecord(job) || !isRecord(job.strategy)) {
@@ -149,6 +171,20 @@ describe('CI workflow', () => {
 
     expect(config).not.toContain("pool: process.platform === 'win32' ? 'threads' : 'forks'")
     expect(config.match(/pool: 'forks'/g)).toHaveLength(2)
+  })
+})
+
+describe('DeepSeek e2e workflow', () => {
+  it('prepares bubblewrap from the pinned payload without a package transaction', () => {
+    const workflow = loadWorkflow('.github/workflows/e2e.yml')
+    const e2e = workflowJob(workflow, 'e2e')
+    if (!Array.isArray(e2e.steps)) throw new TypeError('DeepSeek e2e workflow must define steps')
+
+    const steps = e2e.steps.filter(isRecord)
+    expect(steps.find(step => step.name === 'Prepare bubblewrap (unrestrict userns)')).toMatchObject({
+      run: 'bash scripts/prepare-ci-bubblewrap.sh',
+    })
+    expect(JSON.stringify(steps)).not.toContain('apt-get')
   })
 })
 
@@ -209,7 +245,10 @@ describe('Python release workflows', () => {
       },
     })
     expect(pythonCompat.strategy).toMatchObject({ matrix: { python: ['3.10', '3.14'] } })
-    expect(JSON.stringify(pythonCompat.steps)).toContain('deepseek-harness-sdk==${{ steps.compatibility-version.outputs.version }}')
+    const pythonCompatSteps = JSON.stringify(pythonCompat.steps)
+    expect(pythonCompatSteps).toContain('dist/deepseek_harness_sdk-$VERSION-py3-none-any.whl')
+    expect(pythonCompatSteps).toContain('dist/deepseek_harness_runtime_bin-$VERSION-py3-none-manylinux_2_28_x86_64.whl')
+    expect(pythonCompatSteps).not.toContain('--find-links')
     const validateSteps = JSON.stringify(validate.steps)
     const authorize = validate.steps.filter(isRecord).find(step => step.name === 'Authorize publication request')
     if (!isRecord(authorize) || typeof authorize.run !== 'string') {
@@ -285,7 +324,14 @@ describe('Python release workflows', () => {
     expect(plan.if).toContain('inputs.ci')
     expect(plan.if).toContain('inputs.release')
     expect(JSON.stringify(plan.steps)).toContain('pep440_version')
-    expect(JSON.stringify(workflow)).toContain('macosx_14_0_arm64')
+    const workflowJson = JSON.stringify(workflow)
+    expect(workflowJson).toContain('macosx_14_0_arm64')
+    expect(workflowJson).toContain('dist-python/$SDK_WHEEL')
+    expect(workflowJson).toContain('dist-python/$RUNTIME_WHEEL')
+    expect(workflowJson).toContain('/work/dist-python/$SDK_WHEEL')
+    expect(workflowJson).toContain('/work/dist-python/$RUNTIME_WHEEL')
+    expect(workflowJson).not.toContain('--find-links dist-python')
+    expect(workflowJson).not.toContain('--find-links /work/dist-python')
     expect(manylinuxAddon).toMatchObject({ if: "runner.os == 'Linux'" })
     expect(JSON.stringify(manylinuxAddon)).toContain('manylinux_2_28_x86_64')
     expect(JSON.stringify(manylinuxAddon)).toContain('manylinux_2_28_aarch64')
@@ -320,21 +366,91 @@ describe('Python release workflows', () => {
 })
 
 describe('Issue lifecycle workflow', () => {
-  it('uses explicit review handoff events without rerunning when a draft becomes ready', () => {
+  it('runs the lifecycle job on every PR/review event but gates token and board steps', () => {
     const lifecycle = loadWorkflow('.github/workflows/issue-lifecycle.yml')
+    const policy = loadWorkflow('.github/workflows/issue-policy.yml')
+    const lifecycleJob = workflowJob(lifecycle, 'lifecycle')
+    if (!Array.isArray(lifecycleJob.steps)) throw new TypeError('Issue lifecycle job must define steps')
+
+    // The job has no job-level `if`, so it is listed on every pull_request /
+    // pull_request_review event and reports success instead of a gray skip. The
+    // write-capable steps are gated at step level so approved/commented reviews
+    // never mint a Project/Issue App token nor touch the board.
+    expect(lifecycle.on).toHaveProperty('pull_request')
+    expect(lifecycle.on).toHaveProperty('pull_request_review')
+    expect(lifecycleJob.if).toBeUndefined()
+    // Keep the subscription-type gates: issue-lifecycle does not re-subscribe
+    // ready_for_review (issue-policy owns that) and only reacts to submitted
+    // review events.
     const lifecyclePullRequest = workflowEvent(lifecycle, 'pull_request')
     const lifecycleReview = workflowEvent(lifecycle, 'pull_request_review')
-    const lifecycleJob = workflowJob(lifecycle, 'lifecycle')
-    const policy = loadWorkflow('.github/workflows/issue-policy.yml')
-    const policyPullRequest = workflowEvent(policy, 'pull_request')
-
     expect(lifecyclePullRequest.types).not.toContain('ready_for_review')
     expect(lifecyclePullRequest.types).toContain('review_requested')
     expect(lifecycleReview.types).toEqual(['submitted'])
-    expect(lifecycleJob.if).toBe(
-      "${{ github.event_name != 'pull_request_review' || (github.event.action == 'submitted' && github.event.review.state == 'changes_requested') }}",
-    )
+    const gated = "${{ github.event_name != 'pull_request_review' || github.event.review.state == 'changes_requested' }}"
+    const steps = lifecycleJob.steps.filter(isRecord)
+    const tokenStep = steps.find(s => s.name === 'Create project token')
+    const handleStep = steps.find(s => s.name === 'Handle repository event')
+    expect(tokenStep).toMatchObject({ if: gated })
+    expect(handleStep).toMatchObject({ if: gated })
+
+    // issue-policy owns PR validation; it is read-only and a real gate.
+    const policyPullRequest = workflowEvent(policy, 'pull_request')
     expect(policyPullRequest.types).toContain('ready_for_review')
+  })
+})
+
+describe('npm release workflows', () => {
+  it('keeps publication dispatch-only and separate from pack workflows', () => {
+    // Tag/manual pack workflows carry no credentialed publication job.
+    for (const file of ['release.yml', 'release-vendor.yml']) {
+      const workflow = loadWorkflow(`.github/workflows/${file}`)
+      if (!isRecord(workflow.jobs)) throw new TypeError(`${file} must define jobs`)
+      expect(Object.keys(workflow.jobs).sort()).toEqual(['pack'])
+    }
+
+    // publication is workflow_dispatch-only (never a PR check) and keeps the
+    // npm-publish environment plus the shared dist-tag group.
+    for (const file of ['release-publish.yml', 'release-vendor-publish.yml']) {
+      const workflow = loadWorkflow(`.github/workflows/${file}`)
+      if (!isRecord(workflow.on) || !isRecord(workflow.jobs)) throw new TypeError(`${file} must define on and jobs`)
+      expect(Object.keys(workflow.on)).toEqual(['workflow_dispatch'])
+      const publish = workflow.jobs.publish
+      if (!isRecord(publish)) throw new TypeError(`${file} must define a publish job`)
+      expect(publish.environment).toBe('npm-publish')
+      expect(publish.concurrency).toMatchObject({ group: 'Release-publish' })
+    }
+  })
+})
+
+describe('Documentation site publication', () => {
+  it('keeps Pages deployment on Saki release tags or explicit dispatch', () => {
+    const workflow = loadWorkflow('.github/workflows/docs-pages.yml')
+    const build = workflowJob(workflow, 'build')
+    const deploy = workflowJob(workflow, 'deploy')
+    if (!isRecord(workflow.on) || !isRecord(workflow.env) || !Array.isArray(build.steps)) {
+      throw new TypeError('Documentation deployment must define on, env, and build steps')
+    }
+
+    expect(workflow.on).toEqual({
+      push: { tags: ['saki-v*'] },
+      workflow_dispatch: null,
+    })
+
+    const steps = build.steps.filter(isRecord)
+    const checkout = steps.find(
+      step => typeof step.uses === 'string' && step.uses.startsWith('actions/checkout@'),
+    )
+    expect(steps).not.toContainEqual(expect.objectContaining({ name: 'Verify release version' }))
+    expect(checkout).toMatchObject({ with: { 'persist-credentials': false } })
+
+    // Projected source links stay on the public repository's current source
+    // tree instead of depending on retained historical release tags.
+    expect(workflow.env.DOCS_REPOSITORY).toBe('BreakfastDaPaiDang/saki')
+    expect(workflow.env.DOCS_REPOSITORY_REF).toBe('master')
+
+    // The environment owns the deployment tag policy and the required reviewers.
+    expect(deploy.environment).toMatchObject({ name: 'github-pages' })
   })
 })
 

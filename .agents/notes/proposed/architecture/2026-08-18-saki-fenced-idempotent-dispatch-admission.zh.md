@@ -12,7 +12,7 @@ Dispatch 交付时间短于结果 Execution。让一条 claim 覆盖完整 Agent
 
 ## 提案
 
-Saki dispatch module 实现 [ADR 0010](../../../../docs/adr/0010-fenced-idempotent-dispatch-admission.md)，作为 [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.md)之下的精确 claim 与 admission 协议。Execution Dispatch、Dispatch Claim、Host Operation、Agent Run 与 Execution Lease 保持为不同记录，并具有不同的完成含义。
+Saki dispatch module 实现 [ADR 0010](../../../../docs/adr/0010-fenced-idempotent-dispatch-admission.zh.md)，作为 [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.zh.md)之下的精确 claim 与 admission 协议。Execution Dispatch、Dispatch Claim、Host Operation、Agent Run 与 Execution Lease 保持为不同记录，并具有不同的完成含义。
 
 ### 状态与所有权
 

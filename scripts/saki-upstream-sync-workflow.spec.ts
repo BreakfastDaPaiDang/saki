@@ -86,7 +86,7 @@ describe('Saki upstream sync workflow', () => {
     expect(mergeOffset).toBeGreaterThan(emailOffset)
   })
 
-  it('routes conflicts and failed CI to one Agent-ready compatibility issue', () => {
+  it('routes current non-draft CI results to one Agent-ready compatibility issue', () => {
     const workflow = loadWorkflow()
     const syncScript = jobScript(workflow, 'sync')
     const routeScript = jobScript(workflow, 'route-ci')
@@ -97,6 +97,12 @@ describe('Saki upstream sync workflow', () => {
     if (!isRecord(workflow.jobs) || !isRecord(workflow.jobs['route-ci'])) {
       throw new TypeError('Upstream sync workflow must define route-ci')
     }
-    expect(workflow.jobs['route-ci'].if).toContain("head_branch == 'automation/upstream-sync'")
+    const route = workflow.jobs['route-ci']
+    expect(route.if).toContain("head_branch == 'automation/upstream-sync'")
+    expect(route.if).toContain('head_repository.full_name == github.repository')
+    expect(routeScript).toContain("pr_head_sha=$(jq -r '.[0].head.sha // empty'")
+    expect(routeScript).toContain('[[ "$pr_head_sha" == "$HEAD_SHA" ]] || exit 0')
+    expect(routeScript).toContain("pr_is_draft=$(jq -r '.[0].draft // true'")
+    expect(routeScript).toContain('[[ "$pr_is_draft" == \'false\' ]] || exit 0')
   })
 })

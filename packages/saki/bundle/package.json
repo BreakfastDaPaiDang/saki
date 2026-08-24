@@ -30,8 +30,8 @@
     "lib/index.js",
     "lib/invariant.js",
     "lib/bin.js",
-    "cordis.yml",
     "cordis.patch.yml",
+    "cordis.yml",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",

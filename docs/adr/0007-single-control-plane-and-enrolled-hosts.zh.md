@@ -36,7 +36,7 @@ Cordis 生命周期管理可以回滚通过其上下文产生的 effect，但它
 
 原始 secret 保留在 Host 上的 capability Provider 内。控制面可以持久化不透明 credential reference、capability 与 health 状态、带来源的 usage 和 routing 决策，但不保存 secret value。因此，迁移 Installation 需要明确的 backup、restore 与 Host 重新登记流程；复制数据目录不会让两个活动写入者自动成为受支持模式。
 
-可迁移路径是 [ADR 0012](0012-forward-migrations-and-installation-maintenance.md) 定义的加密 Installation Export，而不是活动数据目录副本。替换 restore 保留 Installation id、创建新 Host id，并要求在自动工作恢复前完成资源重新绑定、凭据重新授权、未解决 operation 对账与旧 Host 退役。
+可迁移路径是 [ADR 0012](0012-forward-migrations-and-installation-maintenance.zh.md) 定义的加密 Installation Export，而不是活动数据目录副本。替换 restore 保留 Installation id、创建新 Host id，并要求在自动工作恢复前完成资源重新绑定、凭据重新授权、未解决 operation 对账与旧 Host 退役。
 
 0.1.0 默认把 Web surface 绑定到 loopback，并引导一个本地 Host Operator。仅增加 GitHub 登录或开放端口不会获得多用户安全性。Principal identity、grant、浏览器 session 安全和主动启用非 loopback 部署仍是独立决策。
 

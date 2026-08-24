@@ -18,9 +18,9 @@ Board checkpoint 与定向 PR、CI、Milestone、tag、Release、Commit 和祖�
 
 单一版本化 Milestone Delivery record 拥有 Saki 的 Planned、In Progress、Ready to Release 或 Canceled phase，以及可选不可变 Release Evidence。带 expected revision 的 finalization 验证准确官方 Upstream Baseline 存在于配置的 upstream repository，且是 peeled Release Commit 的祖先，然后在该 record 中原子嵌入 evidence。Released 只从匹配 evidence 派生；外部关闭或并发变化会进入 repair、conflict 或 reconciliation，不会发布局部结果。
 
-每个 installation-token 队列会让 mutation 读取、mutation、确认、登录与手动刷新优先于后台扫描。可配置保留量、GraphQL cost 事实、REST 条件读取、`Retry-After` 与有界退避保护交互工作，并防止 secondary-limit 重试风暴。[ADR 0013](../../../../docs/adr/0013-polling-first-staged-github-synchronization.md)拥有完整协议。
+每个 installation-token 队列会让 mutation 读取、mutation、确认、登录与手动刷新优先于后台扫描。可配置保留量、GraphQL cost 事实、REST 条件读取、`Retry-After` 与有界退避保护交互工作，并防止 secondary-limit 重试风暴。[ADR 0013](../../../../docs/adr/0013-polling-first-staged-github-synchronization.zh.md)拥有完整协议。
 
-已实现的 [Saki 上游同步](../../implemented/process/2026-08-15-saki-upstream-synchronization.md)拥有 repository 纳入工作流，与产品 GitHub 同步及 Release Evidence 相互独立。
+已实现的 [Saki 上游同步](../../implemented/process/2026-08-15-saki-upstream-synchronization.zh.md)拥有 repository 纳入工作流，与产品 GitHub 同步及 Release Evidence 相互独立。
 
 ## 考虑过的方案
 

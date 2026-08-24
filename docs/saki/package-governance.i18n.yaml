@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/package-governance.md
 package-governance.md: dd5df11a3b062250841c97c4e1d6fb83624ed131
-package-governance.zh.md: 6b75bd5abc637d02c5a399f7438f5850021d552e
+package-governance.zh.md: a077d2b60905740bbd0ac8d96ba0578afd6ab246

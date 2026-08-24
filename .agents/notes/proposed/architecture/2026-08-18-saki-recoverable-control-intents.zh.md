@@ -10,9 +10,9 @@ Status: proposed
 
 ## 提案
 
-Saki 控制面 Module 通过一个接收幂等 Control Intent request 与可信认证上下文的写接口，实现 [ADR 0005](../../../../docs/adr/0005-recoverable-control-intents.md)、[ADR 0008](../../../../docs/adr/0008-principals-grants-and-actor-attribution.md)和 [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.md)。控制面解析 Principal、评估当前 Grant 与 Automation Policy，并派生不可变 Actor；调用方提供的 Actor 或 Grant 字段不能产生权限。Envelope 记录带品牌类型的 Intent id、Actor、Grant revision、提交时间、可选 expected revision、Project 范围和封闭 payload union。以相同 payload 重用同一 id 时返回已有 receipt，以不同内容重用时拒绝。
+Saki 控制面 Module 通过一个接收幂等 Control Intent request 与可信认证上下文的写接口，实现 [ADR 0005](../../../../docs/adr/0005-recoverable-control-intents.zh.md)、[ADR 0008](../../../../docs/adr/0008-principals-grants-and-actor-attribution.zh.md)和 [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.zh.md)。控制面解析 Principal、评估当前 Grant 与 Automation Policy，并派生不可变 Actor；调用方提供的 Actor 或 Grant 字段不能产生权限。Envelope 记录带品牌类型的 Intent id、Actor、Grant revision、提交时间、可选 expected revision、Project 范围和封闭 payload union。以相同 payload 重用同一 id 时返回已有 receipt，以不同内容重用时拒绝。
 
-Principal 与 Grant 保持为持久版本化记录。Grant 标明签发者、目标主体、操作、资源范围、有效期、委派限制、可选父级、revision 和撤销状态。启用自动模式的 Project 通过独立 Project Automation Principal 行动，并且必须同时具备 Grant 与满足 Automation Policy。一次性 Agent Run 接收父级子集授权，不会成为 Principal；持久 Agent Identity 可以接收自己的 Grant。环境中的 DSH initiator 或 Session lineage 仍是来源信息，不是权限；这与 [Agent initiator scope](../../implemented/architecture/2026-07-15-agent-initiator-scope.md)一致。
+Principal 与 Grant 保持为持久版本化记录。Grant 标明签发者、目标主体、操作、资源范围、有效期、委派限制、可选父级、revision 和撤销状态。启用自动模式的 Project 通过独立 Project Automation Principal 行动，并且必须同时具备 Grant 与满足 Automation Policy。一次性 Agent Run 接收父级子集授权，不会成为 Principal；持久 Agent Identity 可以接收自己的 Grant。环境中的 DSH initiator 或 Session lineage 仍是来源信息，不是权限；这与 [Agent initiator scope](../../implemented/architecture/2026-07-15-agent-initiator-scope.zh.md)一致。
 
 单一 Installation Access aggregate 拥有不同的 branded、revisioned Bootstrap Challenge 与 Browser Session entry。一次 expected-revision record update 验证 `issued` challenge，并在 transport 发出 `Set-Cookie` 前原子记录终态 `consumed` 与一个 `active` session。响应丢失不会证明 cookie 已送达、重新打开 challenge 或创建另一个 session。终态按服务端时钟保持单调；重启只 reconcile 已经过期的 entry，generation 替换与 Principal 退役会使受影响 session 失效，retained terminal entry 可以进入 cleanup，但绝不让 id 或 secret 可复用。
 
@@ -22,9 +22,9 @@ Principal 与 Grant 保持为持久版本化记录。Grant 标明签发者、目
 
 Module 在跨越 capability seam 前持久化 Intent。Intent 生命周期记录区分 prepared、reserved、dispatched、waiting、completed、failed、canceled 和 reconciliation-required 结果。每个外部 adapter 都接收 Intent id，返回稳定外部标识与普通数据，并支持幂等重新派发，或者提供足以对账的检查能力。外部调用不得在 `storageDomain` update callback 内运行。
 
-已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.md)把这一顺序应用于一项有界 Workspace 创建 effect，以及控制域 version 2 中的第一版 Project Registry。本 Agent Note 保持 proposed，因为通用 Intent phase、Execution Dispatch、Execution Lease、Intervention Request、补偿与其他外部 adapter 尚未实现。
+已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.zh.md)把这一顺序应用于一项有界 Workspace 创建 effect，以及控制域 version 2 中的第一版 Project Registry。本 Agent Note 保持 proposed，因为通用 Intent phase、Execution Dispatch、Execution Lease、Intervention Request、补偿与其他外部 adapter 尚未实现。
 
-已接受 Intent 需要创建或恢复 Execution 时，控制面会在唤醒 Host 前持久化独立 Execution Dispatch。Dispatch 交付、claim、Host operation identity 与恢复归[持久派发提案](2026-08-18-saki-durable-dispatch-intervention-and-attention.md)所有，Intent 则继续拥有授权、归因与请求的产品 mutation。等待人工输入的 Intent 会关联持久 Intervention Request；Attention Inbox 从该待处理工作派生，绝不会成为另一个命令 owner。
+已接受 Intent 需要创建或恢复 Execution 时，控制面会在唤醒 Host 前持久化独立 Execution Dispatch。Dispatch 交付、claim、Host operation identity 与恢复归[持久派发提案](2026-08-18-saki-durable-dispatch-intervention-and-attention.zh.md)所有，Intent 则继续拥有授权、归因与请求的产品 mutation。等待人工输入的 Intent 会关联持久 Intervention Request；Attention Inbox 从该待处理工作派生，绝不会成为另一个命令 owner。
 
 以 Resource Binding 为键的 Execution Lease 记录拥有可写工作的唯一强准入事实。它通过原子读改写授予一个 Agent Run 工作树使用权，或者返回当前持有者。Intent 先于 Lease 获取写入；两次写入之间崩溃会留下可重试的 prepared Intent，获取 Lease 后崩溃则会在 Lease 上留下 Intent id 与拟创建 Run 的事实，使恢复逻辑能完成或释放它，而不允许竞争写入者进入。
 

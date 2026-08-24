@@ -6,7 +6,7 @@ Status: proposed
 
 ## 问题
 
-持久投影缓存（[决策记录](2026-07-27-session-projection-and-command-log.md)，已作为 `dsh-session-projection-cache` 落地）暴露了它所依托的存储基座的两个缺口。二者都是 domain-KV 栈（[设计](2026-07-24-domain-kv-storage-and-workspace.md)）的属性而非缓存自身的问题，且都首先咬到缓存——因为它是这条栈上第一个*派生*介质。
+持久投影缓存（[决策记录](2026-07-27-session-projection-and-command-log.zh.md)，已作为 `dsh-session-projection-cache` 落地）暴露了它所依托的存储基座的两个缺口。二者都是 domain-KV 栈（[设计](2026-07-24-domain-kv-storage-and-workspace.zh.md)）的属性而非缓存自身的问题，且都首先咬到缓存——因为它是这条栈上第一个*派生*介质。
 
 **文件到底存在哪（根错位已收口，resolve-once 残余仍开放）。** 共享 base 将会话存储默认为全局 harness home（`$DSH_HOME/sessions`，默认 `~/.dsh/sessions`），而出厂 Web overlay 曾给 json 后端相对根 `./.storages`：`workspace.json` 和 `session_projcache.json` 落在 `<启动目录>/.storages/` 下——从两个不同目录启动，会话相同，工作区注册表和投影缓存却各是一份，而缓存存在的意义恰恰是跨会话冷列表，凡上次在别的启动目录下缓存过的会话全部 miss。这一错位已消除：overlay 现以与会话根同一段 `!!js` 表达式把 `storage-json.root` 锚定到 `$DSH_HOME/storages`（`apps/cli/config/web.cordis.yml`）。残余隐患：`JsonStorageBackend` 仍从不 resolve 根——每次打开 unit 都把路径 join 到当时的 `process.cwd()` 上（packages/storage/storage-json/src/index.ts）；出厂 overlay 的根已是绝对路径不受影响，但任何相对根（裸 Loader 启动、测试）仍会被后续 cwd 变化劈开，JSONL 会话后端用「构造时 resolve 一次」防住的正是它（"later process.cwd() changes cannot split one backend across roots"，packages/session/session-persistence-jsonl/src/index.ts）。
 
@@ -27,7 +27,7 @@ Status: proposed
 - `DomainSpec` 增加 `recovery?: 'reject' | 'reset'`（默认 `'reject'`）。spec 对象已经是一个域的身份与布局的真源；其介质是权威还是派生属于同类事实，落在同一处。`session_projcache` 声明 `'reset'`；`workspace` 保持默认。
 - `KvFacet` 增加一个原语：`destroy(descriptor): Promise<void>`——整体移除该 unit 的介质（json：删文件；sqlite：drop 该 unit 的表）。与 `open` 一样，它是后端存储原语，不是策略。
 - `DomainFacility.open` 在 spec 声明 `'reset'` 且 open 恰以损坏类错误失败时——`StorageError('version-mismatch' | 'malformed-medium')` 或 `DomainError('invalid-record')`——记一条命名该域和被丢弃介质的警告，调用 `destroy`，再空开一次。其余一切失败（`backend-not-found`、`facet-unsupported`、`already-open`、I/O 错误）无论声明与否都保持大声：配置错误和环境故障不是介质损坏。重试单发——第二次失败原样传播，持续失败的介质不会成环。
-- 一个 domain 不能把 `'reset'` 与为 [Saki 向前兼容状态](2026-08-18-saki-forward-migrations-and-installation-maintenance.md)提议的 migration registry 组合使用。派生 medium 执行 reset；权威兼容状态执行 migrate 或 reject，而且 migration failure 绝不触发删除。
+- 一个 domain 不能把 `'reset'` 与为 [Saki 向前兼容状态](2026-08-18-saki-forward-migrations-and-installation-maintenance.zh.md)提议的 migration registry 组合使用。派生 medium 执行 reset；权威兼容状态执行 migrate 或 reject，而且 migration failure 绝不触发删除。
 - 有了这个，缓存域 spec 的 version 字段才获得其本意：bump `version`（或让 zod 拒绝漂移行）真正丢弃整个介质，缓存经正常写点和冷读重建——恢复阶梯的最外一档，与已落地的行级各档对齐。
 
 ## 备选方案

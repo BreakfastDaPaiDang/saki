@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-fenced-idempotent-dispatch-admission.md
 2026-08-18-saki-fenced-idempotent-dispatch-admission.md: 798052296a8df3b115e0aea1a1894271b0fc2eb1
-2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md: 8c6302a63ad42fc278116974d4aec8d343b54d80
+2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md: f8a83ce73b3a07b4b343dd2f00a682ebf8d393e6

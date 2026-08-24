@@ -10,7 +10,7 @@ Saki 0.1.0 开始持久化不可替代的控制面关系，而 DSH `storageDomai
 
 ## 提案
 
-分两层实现 [ADR 0012](../../../../docs/adr/0012-forward-migrations-and-installation-maintenance.md)。扩展 `packages/storage/storage-domain`，提供可选、后端无关的向前迁移机制。增加 `packages/saki/installation-maintenance` 作为 Saki 产品 Consumer，由它让控制面停稳、创建并校验 state generation、调用 domain migration、发布活动 generation、导出可迁移状态，并在替换 Host 上恢复 Installation。
+分两层实现 [ADR 0012](../../../../docs/adr/0012-forward-migrations-and-installation-maintenance.zh.md)。扩展 `packages/storage/storage-domain`，提供可选、后端无关的向前迁移机制。增加 `packages/saki/installation-maintenance` 作为 Saki 产品 Consumer，由它让控制面停稳、创建并校验 state generation、调用 domain migration、发布活动 generation、导出可迁移状态，并在替换 Host 上恢复 Installation。
 
 把 Saki 权威控制面 domain 路由到专用 `storage-sqlite` backend 与数据库文件。其他 DSH domain 保留各自配置的路由和生命周期。JSON 仍用于 Saki 控制面 contract suite 和确实很小、便于人工阅读的 domain；生产 Saki 状态不会根据记录数量自动切换 backend。
 
@@ -18,7 +18,7 @@ Saki 0.1.0 开始持久化不可替代的控制面关系，而 DSH `storageDomai
 
 可迁移 domain 声明当前版本、每个保留源版本的校验 schema，以及每个受支持相邻版本对之间的一项 migration。Registry 会拒绝重复步骤、从受支持源版本到当前版本之间的缺口、非整数版本，以及端点不是 `N -> N+1` 的步骤。没有该 registry 的 domain 保留当前 `version-mismatch` 行为。
 
-Migration 与[声明式派生 medium reset proposal](2026-07-28-storage-root-and-derived-medium-recovery.md)是互斥 policy。派生 domain 可以丢弃并重建损坏或版本不匹配 medium；承诺兼容的权威 domain 必须迁移或拒绝。任何 domain 都不得在 migration 失败后回退为 reset。
+Migration 与[声明式派生 medium reset proposal](2026-07-28-storage-root-and-derived-medium-recovery.zh.md)是互斥 policy。派生 domain 可以丢弃并重建损坏或版本不匹配 medium；承诺兼容的权威 domain 必须迁移或拒绝。任何 domain 都不得在 migration 失败后回退为 reset。
 
 Domain 层通过通用存储 operation 检查磁盘 unit 版本，使用匹配的历史 descriptor 打开源端，加载并校验一份 detached snapshot，关闭源端，应用一个 migration step，并在继续前用下一个版本完整校验输出。Step 接收 JSON 兼容记录并返回新的 JSON 兼容记录；它不能获得 backend、Cordis context、credential resolver、clock、network client 或可变 domain handle。Migration 不发送普通 `domain/changed` event，因为没有活动 domain 观察 candidate。
 

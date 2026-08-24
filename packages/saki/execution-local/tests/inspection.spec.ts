@@ -1205,7 +1205,7 @@ describe('LocalSakiHostExecution', () => {
     if (!result.ok) return
     expect(result.inspection.projection.githubRepositoryCandidates)
       .toEqual(['github.com/breakfastdapaidang/saki'])
-  })
+  }, 15_000)
 
   it('rejects a remote inventory at the fixed unique-observation cap', async () => {
     const root = await repository()

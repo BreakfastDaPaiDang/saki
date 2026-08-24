@@ -16,9 +16,9 @@ Status: implemented
 
 在 VitePress 启动或构建之前，`scripts/project-doc-site.ts` 会把 manifest 投影到被忽略的 `website/.generated/` 目录。生成目录树遵循公开路由，使 VitePress 导航、locale 检测和本地搜索使用同一套路由命名。每个页面都会获得一个指向其权威仓库文件的 `editSource` frontmatter 字段；编辑链接回调只读取该页面的数据，因此公开 URL 与源文件布局彼此独立。
 
-各 locale 的首页投影只保留权威 YAML frontmatter。面向仓库的正文保留其 H1 和双语源文件链接；frontmatter 实现[保持 locale 不变的快速开始重定向](../simplification/2026-08-11-quickstart-documentation-home.md)，网站导航负责切换 locale。
+各 locale 的首页投影只保留权威 YAML frontmatter。面向仓库的正文保留其 H1 和双语源文件链接；frontmatter 实现[保持 locale 不变的快速开始重定向](../simplification/2026-08-11-quickstart-documentation-home.zh.md)，网站导航负责切换 locale。
 
-投影器解析 Markdown 链接，但不会重新序列化文档。指向另一个已发布源文件的链接会变成站内相对路由；指向未发布仓库文件的链接会变成 `deepseek-ai/deepseek-harness` 仓库主页下的源文件链接；仓库图片会被拷贝进生成树并从那里引用（[原因](2026-08-06-doc-site-carries-its-images.md)）。相对目标不存在时，投影会失败。单元测试会锁定这些转换行为，`docs:check` 则运行投影器测试和 VitePress 生产构建，并将二者纳入 `doc-sync` 和并行文档门禁。
+投影器解析 Markdown 链接，但不会重新序列化文档。指向另一个已发布源文件的链接会变成站内相对路由；指向未发布仓库文件的链接会变成 `deepseek-ai/deepseek-harness` 仓库主页下的源文件链接；仓库图片会被拷贝进生成树并从那里引用（[原因](2026-08-06-doc-site-carries-its-images.zh.md)）。相对目标不存在时，投影会失败。单元测试会锁定这些转换行为，`docs:check` 则运行投影器测试和 VitePress 生产构建，并将二者纳入 `doc-sync` 和并行文档门禁。
 
 `verify-public-repository-links` 会拒绝已跟踪文件中指向不可用旧仓库的引用。源文件链接和编辑链接使用当前仓库主页。
 
@@ -26,7 +26,9 @@ Status: implemented
 
 Mermaid 渲染权威图表。网站工作区显式声明 `vitepress-plugin-mermaid` 要求 Vite 预打包的 5 个包，因为 pnpm 的严格依赖隔离会使本地开发服务器无法使用这些传递依赖；Knip 将这种仅运行时使用记录为有意的依赖例外。
 
-网站发布与网站构建保持分离。专用 GitHub Actions 工作流运行现有文档门禁，将 `website/.dist` 作为 Pages 产物上传，并只在构建成功后部署。根据 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.md)，该工作流由 `saki-v*` tag 或手动 dispatch 触发，并且两个作业都要求 `SAKI_DOCS_PAGES_ENABLED == 'true'`。`actions/configure-pages` 在构建时向 VitePress 提供目标位置的 base path，因此私有 Pages 源站、未来的公开项目路径和自定义域名不需要各自的检入配置。Pages 可见性仍是仓库托管设置，而不是工作流权限。
+配置后的 Markdown 渲染器会在单次构建期间缓存非 Mermaid、非 snippet 代码围栏，缓存键包含确切正文、info string、分隔符和 token 属性。双语投影中约半数代码围栏是重复内容，因此 Shiki 只渲染一次每种不同表示。Mermaid 围栏不会进入缓存，因为插件输出包含 token 位置 id；VitePress snippet 则在渲染期间解析源文件。缓存仅在生产构建中启用，每次构建后会随渲染器一同丢弃，并且不会改变生成的围栏 HTML。
+
+网站发布与网站构建保持分离。专用 GitHub Actions 工作流运行现有文档门禁，将 `website/.dist` 作为 Pages 产物上传，并只在构建成功后部署。根据 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.zh.md)，该工作流由 `saki-v*` tag 或手动 dispatch 触发，并且两个作业都要求 `SAKI_DOCS_PAGES_ENABLED == 'true'`。`actions/configure-pages` 在构建时向 VitePress 提供目标位置的 base path，因此私有 Pages 源站、未来的公开项目路径和自定义域名不需要各自的检入配置。Pages 可见性仍是仓库托管设置，而不是工作流权限。
 
 ## 考虑过的替代方案
 

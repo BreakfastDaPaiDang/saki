@@ -6,15 +6,15 @@ Status: implemented
 
 ## 问题
 
-[ADR 0002](../../../../docs/adr/0002-plugin-first-single-repository.md)要求 Saki 特有插件留在本仓库，同时不把产品语义写入 DSH 核心。工作区会发现每个 `packages/*/*` manifest（元数据清单），但仓库检查把这棵目录树视为可发布的 `@deepseek-ai/dsh-*` 包族。因此，第二个产品命名空间需要一套统一分类机制：保持 DSH 行为不变，阻止 Saki 私有包进入发布，并在不提前创建 [ADR 0006](../../../../docs/adr/0006-modular-control-plane-and-four-capability-seams.md)所列包拓扑的情况下提供可运行的首个切片。
+[ADR 0002](../../../../docs/adr/0002-plugin-first-single-repository.zh.md)要求 Saki 特有插件留在本仓库，同时不把产品语义写入 DSH 核心。工作区会发现每个 `packages/*/*` manifest（元数据清单），但仓库检查把这棵目录树视为可发布的 `@deepseek-ai/dsh-*` 包族。因此，第二个产品命名空间需要一套统一分类机制：保持 DSH 行为不变，阻止 Saki 私有包进入发布，并在不提前创建 [ADR 0006](../../../../docs/adr/0006-modular-control-plane-and-four-capability-seams.zh.md)所列包拓扑的情况下提供可运行的首个切片。
 
 ## 决策
 
 **集中执行产品包族分类。** `classifyProductPackage` 只识别既有 DSH 包族与 `@breakfastdapaidang/saki-*`；`privateSakiPackageViolations` 把 Saki 命名空间与具有相同后缀的 `packages/saki/<pkg>`、`private: true`、缺少 npm 发布元数据及包自身的有效 SemVer 绑定。manifest 校验把 SemVer 语法交给维护中的 `semver` 解析器。工作区约束、许可证检查、依赖图与发布工具使用同一个分类器，不再各自复制前缀规则。
 
-**明确决定发布成员。** DSH `ReleaseFamily` 与旧 npm-baseline 命令即使在发现范围中包含 `packages/saki/*`，也会排除 Saki 包族；基线打包只处理已发现发布集合中的确切 DSH 与 vendor 目录。既有 DSH 发布语义继续由 [npm 发布序列](../process/2026-08-10-npm-release-sequences.md)负责；发布 Saki 必须另行决定发布族，不能因宽泛 glob 而继承 DSH 成员身份。
+**明确决定发布成员。** DSH `ReleaseFamily`、DSH 版本 bump 命令与旧 npm-baseline 命令即使在发现范围中包含 `packages/saki/*`，也会排除 Saki 包族；发布选择和版本更新使用共享产品分类器，而不是宽泛目录 glob。基线打包只处理已发现发布集合中的确切 DSH 与 vendor 目录。既有 DSH 发布语义继续由 [npm 发布序列](../process/2026-08-10-npm-release-sequences.zh.md)负责；发布 Saki 必须另行决定发布族，不能因其工作区位置而继承 DSH 成员身份。
 
-**让工程检查不依赖包族。** 共享包规则、源码平面映射、项目引用、许可证与不变式检查、生成目录、模块图和组合包解析均接受两个已分类产品包族。[包治理参考](../../../../docs/saki/package-governance.md)负责完整的当前包与发布规则。
+**让工程检查不依赖包族。** 共享包规则、源码平面映射、项目引用、许可证与不变式检查、生成目录、模块图和组合包解析均接受两个已分类产品包族。[包治理参考](../../../../docs/saki/package-governance.zh.md)负责完整的当前包与发布规则。
 
 **让组合证据随产品切片落地。** `@breakfastdapaidang/saki-bundle` 拥有空 Cordis 基础配置、一层补丁与仓库本地启动器。该补丁只挂载已经实现的产品切片和稳定的就绪配置项。当前组合把 JSON 作为默认存储后端，把 Saki 控制面 domain 路由到 SQLite，并挂载 Session 持久化、Workspace、本地文件系统与子进程提供方、Local Host 执行提供方、回环 Host 传输、`saki-control-plane` 和 `saki-host-api`。启动器只在 `boot()` 完成配置项激活审计后输出就绪记录，并在 Saki Host 生命周期内持续运行；报告失败会先对应用执行 dispose（资源释放），再进入启动器失败路径。后续包随可独立验证的产品切片加入；规划中的名称不足以支持提前创建占位目录。
 

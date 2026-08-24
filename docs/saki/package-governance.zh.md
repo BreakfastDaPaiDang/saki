@@ -2,7 +2,7 @@
 
 [English](package-governance.md) | 中文
 
-[ADR 0002](../adr/0002-plugin-first-single-repository.md)记录将 Saki 特有插件留在本仓库的决定。本文档定义 Saki 私有产品包如何与 vendor 目录中的 DeepSeek Harness 包树共存；[包族 Agent Note](../../.agents/notes/implemented/architecture/2026-08-18-saki-private-package-foundation.md)记录仓库检查为何共享一个分类器，以及组合配置为何只包含已经实现的产品切片。
+[ADR 0002](../adr/0002-plugin-first-single-repository.zh.md)记录将 Saki 特有插件留在本仓库的决定。本文档定义 Saki 私有产品包如何与 vendor 目录中的 DeepSeek Harness 包树共存；[包族 Agent Note](../../.agents/notes/implemented/architecture/2026-08-18-saki-private-package-foundation.zh.md)记录仓库检查为何共享一个分类器，以及组合配置为何只包含已经实现的产品切片。
 
 ## 命名空间与位置
 
@@ -18,7 +18,7 @@
 
 ## 当前组合包与本地入口
 
-[`packages/saki`](../../packages/saki/README.md)列出当前包族。`@breakfastdapaidang/saki-bundle` 保持空根配置，并拥有声明的 patch；该 patch 组合本地访问、已有目录检查、首次 Project 登记与一条就绪配置项。存储域默认使用 JSON，并把 `saki_control_plane` 路由到专用 SQLite 数据库；Session 日志继续使用 JSONL 持久化。`pnpm run saki` 是仓库开发入口；它不会读取或替代用户的 `start-dsh-with-clash.ps1` 或其他宿主本地启动包装层。
+[`packages/saki`](../../packages/saki/README.zh.md)列出当前包族。`@breakfastdapaidang/saki-bundle` 保持空根配置，并拥有声明的 patch；该 patch 组合本地访问、已有目录检查、首次 Project 登记与一条就绪配置项。存储域默认使用 JSON，并把 `saki_control_plane` 路由到专用 SQLite 数据库；Session 日志继续使用 JSONL 持久化。`pnpm run saki` 是仓库开发入口；它不会读取或替代用户的 `start-dsh-with-clash.ps1` 或其他宿主本地启动包装层。
 
 启动器只在 `boot()` 完成配置项激活审计后输出稳定的就绪记录。`SAKI_ONESHOT=1` 随后以零退出且不消费 bootstrap 交接值；普通模式会另输出一行含明文 secret 的 launcher-handoff JSON，并持续运行至收到 `SIGINT` 或 `SIGTERM`。就绪输出或退出回调失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。无密钥快照覆盖源码入口；构建产物存在时，普通 Node 冒烟测试覆盖构建后的可执行文件。
 

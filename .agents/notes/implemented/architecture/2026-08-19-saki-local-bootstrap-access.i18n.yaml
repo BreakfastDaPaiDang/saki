@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-19-saki-local-bootstrap-access.md
 2026-08-19-saki-local-bootstrap-access.md: bad4f9a3a970dd949e43160f4fc09c836972a16d
-2026-08-19-saki-local-bootstrap-access.zh.md: e3cfe0e1ea522a3ef1a676aab7f58be7fce952fb
+2026-08-19-saki-local-bootstrap-access.zh.md: e49a24b76a7f7e1426fc207c198454ed8c823f17

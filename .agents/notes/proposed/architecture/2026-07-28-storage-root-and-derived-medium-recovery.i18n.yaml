@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-07-28-storage-root-and-derived-medium-recovery.md
 2026-07-28-storage-root-and-derived-medium-recovery.md: c51337e39e21ef10dd185a37ce4f8d54796be826
-2026-07-28-storage-root-and-derived-medium-recovery.zh.md: fd56d1c5117595b05eba8638115aac9ee8282acf
+2026-07-28-storage-root-and-derived-medium-recovery.zh.md: b49360ee32db86c7e85c9a2d2dd3b8fa20d513b1

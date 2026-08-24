@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-07-21-serial-cross-platform-ci-reference.md
 2026-07-21-serial-cross-platform-ci-reference.md: 4cc22055725ee5b9cc2adc4eab8381cdf8cf5bf8
-2026-07-21-serial-cross-platform-ci-reference.zh.md: bfcfbcc20bf11671c21ded189d48901c49081d90
+2026-07-21-serial-cross-platform-ci-reference.zh.md: 44e56bd5585050cb96acad0ce2b8d4979e85e075

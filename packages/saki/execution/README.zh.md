@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Saki 私有 Host Execution Service Definition 注册 `ctx.sakiHostExecution`。它定义与 Host 实现无关的检查值，以及唯一的只读操作 `inspectProjectSelection(request, signal)`；[Saki 控制面](../control-plane/README.md)拥有授权、Project 策略和持久产品记录。[Saki 后端架构](../../../docs/saki/architecture/0.1.0-backend.md)定义更完整的控制面与执行面划分。
+Saki 私有 Host Execution Service Definition 注册 `ctx.sakiHostExecution`。它定义与 Host 实现无关的检查值，以及唯一的只读操作 `inspectProjectSelection(request, signal)`；[Saki 控制面](../control-plane/README.zh.md)拥有授权、Project 策略和持久产品记录。[Saki 后端架构](../../../docs/saki/architecture/0.1.0-backend.zh.md)定义更完整的控制面与执行面划分。
 
 ## 项目选择检查
 

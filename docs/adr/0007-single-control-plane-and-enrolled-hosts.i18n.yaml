@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/adr/0007-single-control-plane-and-enrolled-hosts.md
 0007-single-control-plane-and-enrolled-hosts.md: e2dd227ecd01ee4c930b98714eff033de3be9387
-0007-single-control-plane-and-enrolled-hosts.zh.md: 5fdcdaf5975e6b0a4b031820f105640e6b38e9ec
+0007-single-control-plane-and-enrolled-hosts.zh.md: 9e9901ae4565f2556b4abd8ca52647e1b34f37c2

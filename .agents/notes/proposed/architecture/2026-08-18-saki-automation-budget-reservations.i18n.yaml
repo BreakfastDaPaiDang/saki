@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-automation-budget-reservations.md
 2026-08-18-saki-automation-budget-reservations.md: 03921037de0d37ff1ec2d3cf840f2b337352f9b0
-2026-08-18-saki-automation-budget-reservations.zh.md: eb73678763fd2bf51d43c67cbc243cd7f6a59430
+2026-08-18-saki-automation-budget-reservations.zh.md: 8f947b74d52857c76c20c5c400d8b7ad9b270c9e

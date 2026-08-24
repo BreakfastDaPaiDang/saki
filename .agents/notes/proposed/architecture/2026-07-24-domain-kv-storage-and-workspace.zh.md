@@ -13,7 +13,7 @@ host 侧唯一的持久化面是 session 事件日志（`packages/session/sessio
 
 另外，Session 删除需要 `SessionPersistence` 删除原语和 `session.delete` 端点。该空白的设计随本 Note 定案，但实现仍属未来工作。
 
-后续的 [Workspace 注册记录删除决策](../../implemented/feature/2026-07-27-workspace-registration-deletion.md)取代的仅是上述耦合关系：删除 Workspace 注册记录会保留相关 Session 及其日志，Session 删除仍是独立的未来工作。因此，下文的级联设计并不是 Workspace GUI 的删除语义。
+后续的 [Workspace 注册记录删除决策](../../implemented/feature/2026-07-27-workspace-registration-deletion.zh.md)取代的仅是上述耦合关系：删除 Workspace 注册记录会保留相关 Session 及其日志，Session 删除仍是独立的未来工作。因此，下文的级联设计并不是 Workspace GUI 的删除语义。
 
 ## 方案
 
@@ -158,7 +158,7 @@ export interface KvTable<K extends string, V> {
 - **一级 mapping**：key → 记录，不做嵌套表；层级需求用复合 key 或值内字段。两后端因此同构（JSON object 一层 ↔ SQLite 一行）。
 - **记录是纯数据**：可直接 JSON 序列化的不可变 POJO；`get`/`entries` 返回值不得原地改（TypeScript readonly 投影，不做运行时冻结）。带行为的领域对象属于消费方包。
 - **写串行**：域内一条 promise 链，`put`/`delete`/`update`/`global.set` 全排队；`update` 的 fn 在链上执行，并发不交错。不做 active-record（取出可变对象自动落盘——落盘时机不可控，与整域原子覆写冲突）。
-- **版本默认 fail loud**：磁盘版本与 spec 不同时直接报错，除非 owning domain 通过 [Saki migration proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.md)登记完整可选向前序列。没有该序列时不迁移也不重建。
+- **版本默认 fail loud**：磁盘版本与 spec 不同时直接报错，除非 owning domain 通过 [Saki migration proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.zh.md)登记完整可选向前序列。没有该序列时不迁移也不重建。
 - **变更事件**：每次写落盘 resolve 后 emit `domain/changed`（`@mode emit`），逐条发、不带旧值（对齐仓库"新快照 + 操作判别"惯例，范本 `goal/changed`）；payload `DomainChanged` 是 put/deleted 判别联合——域名 + 表名 + key（global 变更两者为 `''`）+ operation，put 支带新快照 value、deleted 支无 value（`packages/storage/storage-domain/src/events.ts`）。此为下期 RPC 推帧的事件源。错误词汇 `DomainError`，码表：`already-open` / `facet-unsupported` / `invalid-record`（带 `{ table, key }`）/ `missing-key` / `closed`。
 
 ### Future work：session 侧删除（设计定案，本期不实施）
@@ -243,7 +243,7 @@ export class WorkspaceRegistry extends Service {
 - **path 规范**：落盘值 = `fs.realpath(输入)`（尾斜杠、`..`、符号链接全解析）；唯一性 = 规范化后字符串相等（符号链接指向同一目录算撞）。目录不存在时 create 直接 reject（realpath 失败——workspace 必须指向存在目录；"Create new = 建目录"是上层交互，先 mkdir 再 create）。attach 校验的 session cwd 同口径。cwd 单值 + path 唯一 ⇒ 一个 session 结构上最多归属一个 workspace，双重记账写侧不可能。
 - **title**：显示名，默认 `basename(path)`，可改，允许重复。归属不用 cwd 派生兜底——cwd 表达不了排序，归属是 workspace 侧事实；headless 直开的 session 不属于任何 workspace。
 - 消费方只见 `Workspace` 接口，`WorkspaceEntity` 不出包（单实现不预拆 seam）；实体按 id 唯一（注册表缓存），记录快照写后原地换新，外部只见 getter；所有写收敛到实体内 `mutate(fn)` → `table.update`，`updatedAt` 在 mutate 内统一刷。领域对象不过 RPC，下期 wire 层把记录投影成 zod wire schema。
-- **Session 删除仍属未来工作。** 后续的 [Workspace 注册记录删除决策](../../implemented/feature/2026-07-27-workspace-registration-deletion.md)已将 `ctx.workspaceRegistry.delete(id)` 作为仅删除元数据、保留 Session 与日志的操作交付。递归删除 Session、运行中检查和崩溃重跑收敛属于独立的 `session.delete` 能力。
+- **Session 删除仍属未来工作。** 后续的 [Workspace 注册记录删除决策](../../implemented/feature/2026-07-27-workspace-registration-deletion.zh.md)已将 `ctx.workspaceRegistry.delete(id)` 作为仅删除元数据、保留 Session 与日志的操作交付。递归删除 Session、运行中检查和崩溃重跑收敛属于独立的 `session.delete` 能力。
 
 一致性口径（账 = 归属唯一依据；实现与测试基准）：
 
@@ -291,7 +291,7 @@ export class WorkspaceRegistry extends Service {
 | `log` facet 与 session 后端迁移 | 本期后任意期启动 | 介质操作下沉（复用审计表即施工清单） | facet 结构已留位；两后端介质代码本期即按可下沉形状组织 |
 | 多进程并发写保护 | 两 host 进程同写一介质 | JSON 后端文件锁；SQLite WAL 天然多进程 | 写全经 domain 单点串行，加锁只动后端 |
 | 跨进程变更观测 | GUI 断线重连感知 | revision 模式（抄 session-persistence） | 进程内已有 `domain/changed` |
-| 数据迁移 | 持久 consumer 承诺跨版本兼容 | 通过 [Saki migration proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.md)实现可选、版本驱动的逐 domain migration | 版本号从第一天进入 medium；没有完整 chain 的 domain 仍然 fail loud |
+| 数据迁移 | 持久 consumer 承诺跨版本兼容 | 通过 [Saki migration proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.zh.md)实现可选、版本驱动的逐 domain migration | 版本号从第一天进入 medium；没有完整 chain 的 domain 仍然 fail loud |
 | 大表性能 | 千级记录域挂 json | `routes` 改指 sqlite，数据手工导一次 | 路由即配置，消费方零改动 |
 | 多段 key | 两段 key 消费方出现（每 workspace 每 session 维度数据） | key 泛型换 tuple、SQLite 复合主键、JSON 嵌套层 | 一级表 = 段数 1 特例；不做任意深度嵌套；不拼字符串 key |
 | scope 维度 | "每 workspace 一份"的域出现且复合 key 表达不动 | DomainSpec 加 scope + 文件名 scope 段（encodeSegment） | 名字字符集已收紧，文件名不冲突 |

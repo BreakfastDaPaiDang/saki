@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ctx.workspaceRegistry` 与同一 Host 的文件系统元数据实现 [`ctx.sakiHostExecution`](../execution/README.md)。它检查不可信的本地目录选择并返回分离证据；它不拥有 Project 策略、Resource Binding、Workspace 创建流程或持久产品记录。
+Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ctx.workspaceRegistry` 与同一 Host 的文件系统元数据实现 [`ctx.sakiHostExecution`](../execution/README.zh.md)。它检查不可信的本地目录选择并返回分离证据；它不拥有 Project 策略、Resource Binding、Workspace 创建流程或持久产品记录。
 
 ## 检查行为
 

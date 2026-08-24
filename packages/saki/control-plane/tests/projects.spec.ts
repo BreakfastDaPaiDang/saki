@@ -463,11 +463,12 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
 
     const changed = await harness.control.submit(harness.authentication, { ...accepted, projectTitle: 'Changed title' }, new AbortController().signal)
     expect(changed).toEqual({ ok: false, reason: 'conflict' })
-    const aliasSelection = await inspected(harness, `${repo}/.`)
+    const alias = `${repo}/`
+    const aliasSelection = await inspected(harness, alias)
     const duplicate = intent(
       'intent-33333333-3333-4333-8333-333333333333',
       'Alias',
-      `${repo}/.`,
+      alias,
       1,
       aliasSelection,
     )

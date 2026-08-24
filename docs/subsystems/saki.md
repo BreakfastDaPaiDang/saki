@@ -26,7 +26,7 @@ The `project-index` query returns the current Registry revision, enrolled Host c
 
 ## Cordis API
 
-Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — this section is byte-identical in both language sides of the page. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
 <a id="ctxsakicontrolplane--sakicontrolplanemodule"></a>
 
@@ -69,7 +69,7 @@ submit( authentication: SakiAuthenticationContext, intent: SakiIntentInput, sign
 onChanged(listener: (keys: readonly SakiProjectionKey[]) => void): SakiChangedDisposer
 ```
 
-Source: [`packages/saki/control-plane/src/service.ts:136`](../../packages/saki/control-plane/src/service.ts)
+Source: [`packages/saki/control-plane/src/service.ts`](../../packages/saki/control-plane/src/service.ts)
 
 <a id="ctxsakihostexecution--sakihostexecution-abstract-seam"></a>
 
@@ -88,5 +88,5 @@ Host Execution capability. Providers resolve untrusted locators in their own exe
 abstract inspectProjectSelection( request: InspectProjectSelectionRequest, signal: AbortSignal, ): Promise<InspectProjectSelectionResult>
 ```
 
-Source: [`packages/saki/execution/src/index.ts:90`](../../packages/saki/execution/src/index.ts)
+Source: [`packages/saki/execution/src/index.ts`](../../packages/saki/execution/src/index.ts)
 <!-- END GENERATED cordis-surface -->

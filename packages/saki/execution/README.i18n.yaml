@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/saki/execution/README.md
 README.md: 66ead443cb51979fd4b02ed133ffbbbc9bebbc8c
-README.zh.md: 664a5d8467aef3183cce49af82790082ddef5603
+README.zh.md: ba4d5aeb16646724ccd185ba306552a64611e647

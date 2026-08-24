@@ -40,7 +40,7 @@ import z from '@deepseek-ai/schemastery'
 import { watch as chokidarWatch } from 'chokidar'
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { Document, parseDocument, type YAMLError } from 'yaml'
+import { Document, isMap, isScalar, parseDocument, type YAMLError } from 'yaml'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { canonicalizeWatchPath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
@@ -48,8 +48,21 @@ import {
   CREDENTIAL_PROTECTION_PLAINTEXT,
   CredentialProvider,
   credentialRef,
+  parseCredentialKey,
 } from '@deepseek-ai/dsh-credentials'
-import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
+import {
+  normalizeCredentialRecord,
+  normalizeJsonValue,
+} from '@deepseek-ai/dsh-credentials/record-normalization'
+import type {
+  CredentialInfo,
+  CredentialKey,
+  CredentialRecord,
+  CredentialRecordEntry,
+  CredentialRecordInfo,
+  CredentialRef,
+  ResolvedCredential,
+} from '@deepseek-ai/dsh-credentials'
 import type { LaunchEnvironmentEntry } from '@deepseek-ai/dsh-launch-environment'
 
 /** Basename of the credentials document inside the harness home. */
@@ -90,6 +103,21 @@ export function resolveSpec(config: Config): ResolvedSpec {
 
 /** Permission bits outside the owner; a credentials document must have none of them. */
 const GROUP_OTHER_BITS = 0o077
+
+/**
+ * How long a record write waits for the cross-process writer lock. A record
+ * mutation runs its caller's decision while holding the lock, and for the
+ * operation this half exists to serve — an owner refreshing an expired token —
+ * that decision includes a network round trip. The file-work default would
+ * fail every other writer of this document for its duration. A contender's
+ * wait is sized by the longest holder it can meet, and refs and records share
+ * one file and one lock, so every writer of this document — reference writes
+ * and record deletes included — waits this long, not only the mutation that
+ * holds it. Like the retry cadence in `dsh-atomic-write`, this is a
+ * robustness bound of the write protocol rather than a deployment choice: it
+ * is sized by what a provider request costs, which no deployment varies.
+ */
+const DOCUMENT_LOCK_WAIT_MS = 30_000
 
 /**
  * Reject a credentials document other OS users can read, before its contents
@@ -143,19 +171,29 @@ function describeYamlError(error: YAMLError): string {
   return `${error.code}${where}`
 }
 
+/** The document layout this build reads and writes. */
+export const DOCUMENT_VERSION = 1
+
+/** One parsed credentials document: the two key spaces it stores, keyed as written. */
+export interface CredentialsDocument {
+  /** Reference entries, keyed by {@link CredentialRef}. */
+  refs: Map<string, string>
+  /** Stored records, keyed by {@link CredentialKey}. */
+  records: Map<string, CredentialRecord>
+}
+
 /**
- * Parse one credentials document into its entries. The document is a strict
- * mapping of {@link CredentialRef} to non-empty string: a non-mapping root, a
- * key that is not a POSIX identifier, a non-string value, and an empty string
- * are all rejected rather than skipped, because this file holds nothing but
- * credentials and a silently ignored entry reads as "the key I stored has no
- * effect". Duplicate keys surface as parser errors. An empty document is an
- * empty store.
+ * Parse one credentials document. Everything is rejected rather than skipped —
+ * an unversioned root, an unknown top-level key, a key that is not addressable,
+ * a wrong-typed value, an unknown record tag or field — because this file holds
+ * nothing but credentials and a silently ignored entry reads as "the credential
+ * I stored has no effect". Duplicate keys surface as parser errors. An empty
+ * document is an empty store and needs no version.
  * @param text - the document's text.
  * @param filename - absolute path, quoted in errors.
- * @returns the parsed entries, keyed by reference.
+ * @returns the parsed references and records.
  */
-export function parseCredentialsDocument(text: string, filename: string): Map<string, string> {
+export function parseCredentialsDocument(text: string, filename: string): CredentialsDocument {
   // `prettyErrors` is on only for `linePos`; `error.message` is never used,
   // because the parser quotes the offending source line and in this document
   // that line is a secret. Only the code and position leave this function, and
@@ -168,10 +206,77 @@ export function parseCredentialsDocument(text: string, filename: string): Map<st
   }
   const root: unknown = document.toJS() ?? {}
   if (typeof root !== 'object' || root === null || Array.isArray(root)) {
-    throw new TypeError(`credentials-local: ${filename} must be a mapping of credential reference to value`)
+    throw new TypeError(`credentials-local: ${filename} must be a mapping`)
   }
+  const fields = root as Record<string, unknown>
+  const keys = Object.keys(fields)
+  // An empty (or comment-only) document is the empty store and needs no
+  // version: there is nothing in it a later layout could have meant.
+  if (keys.length === 0) return { refs: new Map(), records: new Map() }
+  if (!('version' in fields)) {
+    throw new Error(
+      `credentials-local: ${filename} uses the pre-release flat layout. Add \`version: ${DOCUMENT_VERSION}\``
+      + ` and nest the existing ${keys.length} ${keys.length === 1 ? 'entry' : 'entries'} under \`refs:\`.`
+      + ' No values need to change.',
+    )
+  }
+  if (fields['version'] !== DOCUMENT_VERSION) {
+    throw new Error(
+      `credentials-local: ${filename} declares an unsupported document version;`
+      + ` this build reads version ${DOCUMENT_VERSION}`,
+    )
+  }
+  for (const key of keys) {
+    if (key !== 'version' && key !== 'refs' && key !== 'records') {
+      throw new Error(`credentials-local: unknown top-level key "${key}" in ${filename}`)
+    }
+  }
+  return { refs: parseRefs(fields['refs'], filename), records: parseRecords(fields['records'], filename) }
+}
+
+/**
+ * Render the version-1 layout for a pre-release flat document, or `undefined`
+ * for anything else. The flat layout is recognized exactly — a non-empty
+ * top-level mapping of addressable reference names to non-empty string
+ * scalars, with no `version` key and no document directives — and the rewrite
+ * nests the original lines verbatim under `refs:` at two spaces' indent, so
+ * comments, blank lines, and each value's spelling survive byte for byte.
+ * Anything the recognizer declines keeps {@link parseCredentialsDocument}'s
+ * loud rejection: a document this build cannot prove it understands is never
+ * rewritten. Remove with the pre-release stance at the first tagged release.
+ * @param text - the document's text.
+ * @returns the migrated text, or `undefined` when the text is not the recognized flat layout.
+ */
+export function renderFlatLayoutMigration(text: string): string | undefined {
+  const document = parseDocument(text, { prettyErrors: true, uniqueKeys: true })
+  if (document.errors.length > 0) return undefined
+  const flat = document.contents
+  if (!isMap(flat) || flat.items.length === 0) return undefined
+  for (const line of text.split('\n')) {
+    // A directive or document marker would not survive being indented into
+    // the `refs:` block; no shipped writer ever emitted one here.
+    if (/^(%|---|\.\.\.)/.test(line)) return undefined
+  }
+  for (const pair of flat.items) {
+    if (!isScalar(pair.key) || typeof pair.key.value !== 'string' || pair.key.value === 'version') return undefined
+    try {
+      credentialRef(pair.key.value)
+    } catch {
+      // Only credentialRef's rejection of a non-POSIX name lands here; the
+      // flat reader refused such a key too, so this is not the recognized
+      // layout and the loud rejection stands.
+      return undefined
+    }
+    if (!isScalar(pair.value) || typeof pair.value.value !== 'string' || pair.value.value.length === 0) return undefined
+  }
+  const body = text.split('\n').map(line => (line.length === 0 ? line : `  ${line}`)).join('\n')
+  return `version: ${DOCUMENT_VERSION}\nrefs:\n${body}${text.endsWith('\n') ? '' : '\n'}`
+}
+
+/** Admit a `refs` section: POSIX-identifier keys over non-empty string values. */
+function parseRefs(section: unknown, filename: string): Map<string, string> {
   const entries = new Map<string, string>()
-  for (const [key, value] of Object.entries(root as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(asSection(section, 'refs', filename))) {
     // credentialRef throws on anything that is not a POSIX identifier, which
     // is exactly the constraint a stored reference must satisfy to be
     // addressable through the seam.
@@ -189,22 +294,182 @@ export function parseCredentialsDocument(text: string, filename: string): Map<st
   return entries
 }
 
+/** Admit a `records` section: `<scope>/<id>` keys over tagged record mappings. */
+function parseRecords(section: unknown, filename: string): Map<string, CredentialRecord> {
+  const entries = new Map<string, CredentialRecord>()
+  for (const [key, value] of Object.entries(asSection(section, 'records', filename))) {
+    parseCredentialKey(key)
+    entries.set(key, parseRecord(key, value, filename))
+  }
+  return entries
+}
+
+/** One section of the document as a plain mapping; absent and null both mean empty. */
+function asSection(section: unknown, name: string, filename: string): Record<string, unknown> {
+  if (section === undefined || section === null) return {}
+  if (typeof section !== 'object' || Array.isArray(section)) {
+    throw new TypeError(`credentials-local: "${name}" in ${filename} must be a mapping`)
+  }
+  return section as Record<string, unknown>
+}
+
+/** Admit one record entry, rejecting an unknown tag or field rather than dropping it. */
+function parseRecord(key: string, value: unknown, filename: string): CredentialRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError(`credentials-local: record "${key}" in ${filename} must be a mapping`)
+  }
+  const fields = value as Record<string, unknown>
+  const kind = fields['kind']
+  if (kind === 'api-key') {
+    assertFields(key, fields, ['kind', 'key', 'env'], filename)
+    const apiKey = fields['key']
+    if (apiKey !== undefined && (typeof apiKey !== 'string' || apiKey.length === 0)) {
+      throw new TypeError(`credentials-local: record "${key}" in ${filename} has a non-string or empty key`)
+    }
+    const env = parseRecordEnv(key, fields['env'], filename)
+    return {
+      kind: 'api-key',
+      ...apiKey === undefined ? {} : { key: apiKey },
+      ...env === undefined ? {} : { env },
+    }
+  }
+  if (kind === 'grant') {
+    assertFields(key, fields, ['kind', 'payload'], filename)
+    if (!('payload' in fields)) {
+      throw new Error(`credentials-local: record "${key}" in ${filename} has no payload`)
+    }
+    return {
+      kind: 'grant',
+      payload: normalizeJsonValue(
+        fields['payload'],
+        `credentials-local: record "${key}" payload in ${filename}`,
+      ),
+    }
+  }
+  if (kind === undefined) throw new Error(`credentials-local: record "${key}" in ${filename} has no kind`)
+  throw new Error(`credentials-local: record "${key}" in ${filename} has an unknown kind`)
+}
+
+/** Reject a field the tag does not define, so a typo is not silently dropped. */
+function assertFields(key: string, fields: Record<string, unknown>, allowed: string[], filename: string): void {
+  for (const field of Object.keys(fields)) {
+    if (!allowed.includes(field)) {
+      throw new Error(`credentials-local: record "${key}" in ${filename} has unknown field "${field}"`)
+    }
+  }
+}
+
+/** Admit an api-key record's provider environment: POSIX names over non-empty strings. */
+function parseRecordEnv(key: string, env: unknown, filename: string): Record<string, string> | undefined {
+  if (env === undefined) return undefined
+  if (typeof env !== 'object' || env === null || Array.isArray(env)) {
+    throw new TypeError(`credentials-local: record "${key}" in ${filename} has a non-mapping env`)
+  }
+  const parsed: Record<string, string> = {}
+  for (const [name, value] of Object.entries(env as Record<string, unknown>)) {
+    credentialRef(name)
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new TypeError(
+        `credentials-local: record "${key}" env "${name}" in ${filename} must be a non-empty string`,
+      )
+    }
+    Object.defineProperty(parsed, name, { value, enumerable: true, configurable: true, writable: true })
+  }
+  return parsed
+}
+
 /**
- * Render the next document text with one reference set or deleted. Editing
- * the parsed document rather than rebuilding it keeps comments and the
- * formatting of every untouched entry; an absent document starts a fresh one.
+ * The comment-preserving mutable tree one edit renders from. Editing the
+ * parsed document rather than rebuilding it keeps comments and the formatting
+ * of every untouched entry; an absent document starts a fresh one.
+ * @param text - the current document text, `undefined` while the file is absent.
+ * @returns the tree to edit, carrying this build's version stamp.
+ */
+function mutableDocument(text: string | undefined): Document {
+  // `text` only ever caches content that parsed successfully, so this re-parse
+  // for the mutable comment-preserving tree cannot fail.
+  const document = text === undefined ? new Document({}) : parseDocument(text)
+  // Stamped on every edit so a document this provider creates is readable by
+  // the same parser that admitted the one it edits; an existing stamp is
+  // rewritten to the identical value.
+  document.setIn(['version'], DOCUMENT_VERSION)
+  return document
+}
+
+/**
+ * Render the next document text with one reference set or deleted.
  * @param text - the current document text, `undefined` while the file is absent.
  * @param ref - the reference to write.
  * @param value - the new value, or `undefined` to delete the key.
  * @returns the text to persist.
  */
-function renderDocument(text: string | undefined, ref: CredentialRef, value: string | undefined): string {
-  // `text` only ever caches content that parsed successfully, so this re-parse
-  // for the mutable comment-preserving tree cannot fail.
-  const document = text === undefined ? new Document({}) : parseDocument(text)
-  if (value === undefined) document.deleteIn([ref])
-  else document.setIn([ref], value)
+function renderRef(text: string | undefined, ref: CredentialRef, value: string | undefined): string {
+  const document = mutableDocument(text)
+  if (value === undefined) deleteSectionEntry(document, 'refs', ref)
+  else document.setIn(['refs', ref], value)
   return document.toString()
+}
+
+/**
+ * Render the next document text with one record written or deleted. The record
+ * node is replaced wholesale rather than edited field by field: records are
+ * machine-written, so there is no hand formatting inside one to preserve.
+ * @param text - the current document text, `undefined` while the file is absent.
+ * @param key - the record to write.
+ * @param record - the new record, or `undefined` to delete it.
+ * @returns the text to persist.
+ */
+function renderRecord(text: string | undefined, key: CredentialKey, record: CredentialRecord | undefined): string {
+  const document = mutableDocument(text)
+  if (record === undefined) deleteSectionEntry(document, 'records', key)
+  else document.setIn(['records', key], record)
+  return document.toString()
+}
+
+/**
+ * Remove one entry from a section, taking its annotation with it. A comment
+ * block written above a section's first entry annotates that entry, but the
+ * parser attaches it to the section's map rather than to the pair — leaving it
+ * behind would move it onto whichever entry became first, which reads as an
+ * annotation of a credential nobody wrote it for.
+ * @param document - the mutable tree being edited.
+ * @param section - the section holding the entry.
+ * @param key - the entry to remove.
+ */
+function deleteSectionEntry(document: Document, section: 'refs' | 'records', key: string): void {
+  const map: unknown = document.get(section, true)
+  /* v8 ignore next -- both callers render a delete only for an entry they just
+     found in the parsed snapshot, so the section it lives in is always a map;
+     the guard is what narrows `get`'s `unknown`. */
+  if (isMap(map)) {
+    const first = map.items[0]
+    /* v8 ignore next -- a map that holds the entry has a first item, and the
+       parser admits only scalar keys, so only the identity test can be false. */
+    if (first !== undefined && isScalar(first.key) && first.key.value === key) {
+      map.commentBefore = null
+    }
+  }
+  document.deleteIn([section, key])
+}
+
+/**
+ * Structural equality over two admitted JSON values. Records reach this after
+ * normalization, so the walk meets only JSON values; key order is
+ * ignored because an external editor may reorder a record's fields without
+ * changing what it stores.
+ * @param left - one value.
+ * @param right - the other value.
+ * @returns whether the two carry the same JSON content.
+ */
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (typeof left !== 'object' || typeof right !== 'object' || left === null || right === null) return false
+  if (Array.isArray(left) !== Array.isArray(right)) return false
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) return false
+  return leftKeys.every(key => Object.hasOwn(right, key)
+    && sameJsonValue((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]))
 }
 
 /** File-backed credentials provider (`$DSH_HOME/.credentials.yaml`). */
@@ -226,8 +491,10 @@ export class LocalCredentialProvider extends CredentialProvider {
    * which is also the self-write suppression.
    */
   private text: string | undefined
-  /** Parsed document snapshot; replaced wholesale on every reload. */
+  /** Parsed reference snapshot; replaced wholesale on every reload. */
   private values = new Map<string, string>()
+  /** Parsed record snapshot; replaced wholesale on every reload. */
+  private records = new Map<string, CredentialRecord>()
   /**
    * Single exclusive operation chain: watcher reloads and line edits run one
    * at a time in queue order (settled tail), so an edit can never render from
@@ -337,11 +604,12 @@ export class LocalCredentialProvider extends CredentialProvider {
     if (this.inherited(ref) !== undefined) {
       return Promise.resolve(this.description(ref, 'env', false))
     }
+    const writable = !this.isClosed()
     const stored = this.values.get(ref)
-    if (stored !== undefined) return Promise.resolve(this.description(ref, 'file', true))
+    if (stored !== undefined) return Promise.resolve(this.description(ref, 'file', writable))
     const fallback = this.dotenvFallback(ref)
-    if (fallback !== undefined) return Promise.resolve(this.description(ref, fallback.source, true))
-    return Promise.resolve(this.description(ref, undefined, true))
+    if (fallback !== undefined) return Promise.resolve(this.description(ref, fallback.source, writable))
+    return Promise.resolve(this.description(ref, undefined, writable))
   }
 
   /** Build one safe observation for the effective plaintext source. */
@@ -367,6 +635,92 @@ export class LocalCredentialProvider extends CredentialProvider {
 
   override async unset(ref: CredentialRef): Promise<void> {
     await this.write(ref, undefined)
+  }
+
+  override readRecord(key: CredentialKey): Promise<CredentialRecord | undefined> {
+    const record = this.records.get(key)
+    return Promise.resolve(record === undefined
+      ? undefined
+      : normalizeCredentialRecord(record, `credentials-local: record "${key}"`))
+  }
+
+  override describeRecord(key: CredentialKey): Promise<CredentialRecordInfo> {
+    const stored = this.records.get(key)
+    // Presence is the whole fact here: no layer ranks above this document for
+    // a record, so nothing can shadow one, and an api-key record carrying
+    // neither a key nor environment values is a deliberate statement rather
+    // than a blank.
+    const writable = !this.isClosed()
+    if (stored === undefined) return Promise.resolve({ configured: false, writable })
+    return Promise.resolve({ configured: true, kind: stored.kind, writable })
+  }
+
+  override listRecords(): Promise<readonly CredentialRecordEntry[]> {
+    return Promise.resolve([...this.records].map(([key, record]) => ({
+      // The parser has already proven every stored key addressable.
+      key: parseCredentialKey(key),
+      kind: record.kind,
+    })))
+  }
+
+  override async modifyRecord(
+    key: CredentialKey,
+    mutate: (current: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>,
+  ): Promise<CredentialRecord | undefined> {
+    if (this.isClosed()) throw new Error(`credentials-local is disposed: cannot modify "${key}"`)
+    return this.enqueue(async () => {
+      if (this.isClosed()) {
+        throw new Error(`credentials-local was disposed before the queued "${key}" modify ran`)
+      }
+      await mkdir(dirname(this.spec.filename), { recursive: true, mode: 0o700 })
+      return withFileLock(this.spec.filename, async () => {
+        // Read-modify-write: `mutate` must decide against the record as it
+        // stands now, not as this process last saw it — another process may
+        // have rotated it since.
+        await this.reconcileFromDisk()
+        const current = this.records.get(key)
+        const mutationInput = current === undefined
+          ? undefined
+          : normalizeCredentialRecord(current, `credentials-local: record "${key}"`)
+        const next = await mutate(mutationInput)
+        if (next === undefined) {
+          return current === undefined
+            ? undefined
+            : normalizeCredentialRecord(current, `credentials-local: record "${key}"`)
+        }
+        // Admitted before it is rendered: what the read path would refuse is
+        // refused here first, so a caller can never persist a document the
+        // next boot rejects, and a value refused here has not been stored.
+        const normalized = normalizeCredentialRecord(next, `credentials-local: record "${key}"`)
+        const nextText = renderRecord(this.text, key, normalized)
+        // 0600: a document holding secrets is never world-readable.
+        await writeFileAtomic(this.spec.filename, nextText, { mode: 0o600, dirMode: 0o700 })
+        this.text = nextText
+        this.records.set(key, normalized)
+        // After the commit, on the same terms as a reference write.
+        this.notifyRecordUpdated(key)
+        return normalizeCredentialRecord(normalized, `credentials-local: record "${key}"`)
+      }, { waitMs: DOCUMENT_LOCK_WAIT_MS })
+    })
+  }
+
+  override async deleteRecord(key: CredentialKey): Promise<void> {
+    if (this.isClosed()) throw new Error(`credentials-local is disposed: cannot delete "${key}"`)
+    await this.enqueue(async () => {
+      if (this.isClosed()) {
+        throw new Error(`credentials-local was disposed before the queued "${key}" delete ran`)
+      }
+      await mkdir(dirname(this.spec.filename), { recursive: true, mode: 0o700 })
+      await withFileLock(this.spec.filename, async () => {
+        await this.reconcileFromDisk()
+        if (!this.records.has(key)) return
+        const nextText = renderRecord(this.text, key, undefined)
+        await writeFileAtomic(this.spec.filename, nextText, { mode: 0o600, dirMode: 0o700 })
+        this.text = nextText
+        this.records.delete(key)
+        this.notifyRecordUpdated(key)
+      }, { waitMs: DOCUMENT_LOCK_WAIT_MS })
+    })
   }
 
   /* jscpd:ignore-start -- the operation-chain and reload lifecycle is the same
@@ -417,7 +771,7 @@ export class LocalCredentialProvider extends CredentialProvider {
         await this.reconcileFromDisk()
         const existing = this.values.get(ref)
         if (value === undefined && existing === undefined) return
-        const nextText = renderDocument(this.text, ref, value)
+        const nextText = renderRef(this.text, ref, value)
         // 0600: a document holding secrets is never world-readable.
         await writeFileAtomic(this.spec.filename, nextText, { mode: 0o600, dirMode: 0o700 })
         this.text = nextText
@@ -426,7 +780,7 @@ export class LocalCredentialProvider extends CredentialProvider {
         // After the commit: a broken observer must never make the durable
         // write look failed (an INVARIANT failure still rethrows).
         this.notifyUpdated(ref)
-      })
+      }, { waitMs: DOCUMENT_LOCK_WAIT_MS })
     })
   }
 
@@ -447,7 +801,10 @@ export class LocalCredentialProvider extends CredentialProvider {
   /**
    * Boot read: an absent file is an empty store; an invalid one fails the
    * plugin's activation, because a credentials document that exists but
-   * cannot be trusted must never be treated as "no credentials stored".
+   * cannot be trusted must never be treated as "no credentials stored". The
+   * one exception is the recognized pre-release flat layout, which is
+   * upgraded in place first — a key stored by an earlier build must survive
+   * the layout change without a hand edit.
    */
   private async loadInitial(): Promise<void> {
     await assertOwnerOnly(this.spec.filename)
@@ -458,8 +815,42 @@ export class LocalCredentialProvider extends CredentialProvider {
       if (!isENOENT(error)) throw error
       return
     }
-    this.values = parseCredentialsDocument(text, this.spec.filename)
+    if (renderFlatLayoutMigration(text) !== undefined) text = await this.migrateFlatDocument()
+    const document = parseCredentialsDocument(text, this.spec.filename)
+    this.values = document.refs
+    this.records = document.records
     this.text = text
+  }
+
+  /**
+   * One-shot upgrade of the recognized pre-release flat layout, before the
+   * watcher exists. The rewrite runs under the document's writer lock and
+   * re-reads first — a concurrent boot may have migrated already — and
+   * whatever the re-read finds that is not the flat layout is returned
+   * untouched for the ordinary parse. Values are carried verbatim; only the
+   * enclosing layout changes. Remove with the pre-release stance at the
+   * first tagged release.
+   * @returns the document text this boot should parse.
+   */
+  private async migrateFlatDocument(): Promise<string> {
+    return withFileLock(this.spec.filename, async () => {
+      const current = await readFile(this.spec.filename, 'utf8')
+      const migrated = renderFlatLayoutMigration(current)
+      /* v8 ignore next 2 -- the losing side of the cross-process migration race:
+         another boot rewrote the document between the unlocked recognize and
+         this lock. That interleaving cannot be scheduled deterministically
+         through a whole boot (migration.spec drives it best-effort); the
+         decision itself is the recognizer's covered versioned-document decline. */
+      if (migrated === undefined) return current
+      // 0600: a document holding secrets is never world-readable.
+      await writeFileAtomic(this.spec.filename, migrated, { mode: 0o600, dirMode: 0o700 })
+      this.ctx.logger.info(
+        'credentials-local: migrated %s to the version %d layout; values are unchanged',
+        this.spec.filename,
+        DOCUMENT_VERSION,
+      )
+      return migrated
+    }, { waitMs: DOCUMENT_LOCK_WAIT_MS })
   }
 
   /* jscpd:ignore-start -- same deliberate mirror of settings-file's reload and
@@ -502,11 +893,16 @@ export class LocalCredentialProvider extends CredentialProvider {
       text = undefined
     }
     if (text === this.text || this.isClosed()) return
-    const next = text === undefined ? new Map<string, string>() : parseCredentialsDocument(text, this.spec.filename)
-    const changed = this.changedRefs(this.values, next)
+    const next = text === undefined
+      ? { refs: new Map<string, string>(), records: new Map<string, CredentialRecord>() }
+      : parseCredentialsDocument(text, this.spec.filename)
+    const changedRefs = this.changedRefs(this.values, next.refs)
+    const changedRecords = this.changedRecords(this.records, next.records)
     this.text = text
-    this.values = next
-    for (const ref of changed) this.notifyUpdated(ref)
+    this.values = next.refs
+    this.records = next.records
+    for (const ref of changedRefs) this.notifyUpdated(ref)
+    for (const key of changedRecords) this.notifyRecordUpdated(key)
   }
   /* jscpd:ignore-end */
 
@@ -516,6 +912,19 @@ export class LocalCredentialProvider extends CredentialProvider {
     for (const key of new Set([...prev.keys(), ...next.keys()])) {
       if (prev.get(key) === next.get(key)) continue
       changed.push(credentialRef(key))
+    }
+    return changed
+  }
+
+  /** Records whose stored value changed; the parser has already proven every key addressable. */
+  private changedRecords(
+    prev: Map<string, CredentialRecord>,
+    next: Map<string, CredentialRecord>,
+  ): CredentialKey[] {
+    const changed: CredentialKey[] = []
+    for (const key of new Set([...prev.keys(), ...next.keys()])) {
+      if (sameJsonValue(prev.get(key), next.get(key))) continue
+      changed.push(parseCredentialKey(key))
     }
     return changed
   }

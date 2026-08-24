@@ -10,9 +10,9 @@ Saki 需要一个由仓库拥有的系统来处理工作流入、Agent 路由、
 
 ## Decision
 
-GitHub Issue 是 Saki 的 Work Item 存储。五个分诊标签按照 [`docs/agents/triage-labels.md`](../../../../docs/agents/triage-labels.md) 路由尚未认领的工作，而 Work Item Status 独立于路由和阻塞记录交付进度。
+GitHub Issue 是 Saki 的 Work Item 存储。五个分诊标签按照 [`docs/agents/triage-labels.zh.md`](../../../../docs/agents/triage-labels.zh.md) 路由尚未认领的工作，而 Work Item Status 独立于路由和阻塞记录交付进度。
 
-[`CONTEXT-MAP.md`](../../../../CONTEXT-MAP.md) 标识 Saki 的领域上下文。每个上下文拥有自己的词汇表，架构决策位于 [`docs/agents/domain.md`](../../../../docs/agents/domain.md) 所述的相应 ADR 路径下。Work Management 是第一个上下文，定义 Work Item、里程碑、发布、tag、commit 和已纳入的 DeepSeek Harness 基线之间的关系。
+[`CONTEXT-MAP.md`](../../../../CONTEXT-MAP.md) 标识 Saki 的领域上下文。每个上下文拥有自己的词汇表，架构决策位于 [`docs/agents/domain.zh.md`](../../../../docs/agents/domain.zh.md) 所述的相应 ADR 路径下。Work Management 是第一个上下文，定义 Work Item、里程碑、发布、tag、commit 和已纳入的 DeepSeek Harness 基线之间的关系。
 
 仓库变量 `SAKI_CI_RUNNERS=standard` 为必需的 Pull Request job 选择 GitHub 托管的 Linux 和 Windows runner。Saki 不依赖 DeepSeek 的私有 runner 标签；当有意配置兼容的自托管池时，继承的故障转移变量仍然可用。
 

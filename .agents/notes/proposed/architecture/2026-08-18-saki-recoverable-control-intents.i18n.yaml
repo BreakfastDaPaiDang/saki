@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-recoverable-control-intents.md
 2026-08-18-saki-recoverable-control-intents.md: 865941de8cea3eef2270b05a30e0f7a71ca32fd6
-2026-08-18-saki-recoverable-control-intents.zh.md: ee25c640433652b5e277516a482f79f59cedf35d
+2026-08-18-saki-recoverable-control-intents.zh.md: 41d8beee158bbaee225b857a8d9a0fc8dc250dee

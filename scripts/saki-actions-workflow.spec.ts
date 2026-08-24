@@ -84,18 +84,9 @@ describe('Saki Actions cost policy', () => {
     expect(workflowEvent(dsh, 'push')).toEqual({ tags: ['dsh-v*'] })
     expect(workflowEvent(vendor, 'push')).toEqual({ tags: ['vendor-*-v*'] })
     for (const workflow of [dsh, vendor]) {
-      const dispatch = workflowEvent(workflow, 'workflow_dispatch')
-      if (!isRecord(dispatch.inputs) || !isRecord(dispatch.inputs.publish)) {
-        throw new TypeError('release workflow must define the publish input')
-      }
-      expect(dispatch.inputs.publish).toMatchObject({
-        type: 'boolean',
-        default: false,
-        required: true,
-      })
+      expect(workflowEvents(workflow).workflow_dispatch).toBeNull()
+      expect(workflowJobNames(workflow)).toEqual(['pack'])
     }
-    expect(workflowJob(dsh, 'publish').if).toBe("github.event_name == 'workflow_dispatch' && inputs.publish")
-    expect(workflowJob(vendor, 'publish').if).toBe("github.event_name == 'workflow_dispatch' && inputs.publish")
   })
 
   it('keeps reference and documentation work on version tags or manual dispatch', () => {

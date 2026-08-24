@@ -15,19 +15,22 @@ on:
           - larger-runner-benchmark
           - consolidated-runner-benchmark
 
-# A newer run on the same ref replaces stale validation or a stale manual suite.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
 env:
   PRIMARY_NODE_VERSION: '24'
+  # Build the same repository links that the Saki Pages workflow deploys.
+  DOCS_REPOSITORY: BreakfastDaPaiDang/saki
+  DOCS_REPOSITORY_REF: master
   # CI runs must never report to the production telemetry endpoint baked
   # into apps/cli/cordis.yml (AppCLIEntry disables the row when set).
   DSH_TELEMETRY_DISABLED: '1'
+
+# A newer run on the same ref replaces stale validation or a stale manual suite.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
 
@@ -110,6 +113,7 @@ jobs:
       # instance may use eight while keeping the worst case at 8 × 6 = 48
       # workers; process-bound suites remain isolated in forks.
       DSH_COVERAGE_MAX_WORKERS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '8' || '6' }}
+      DSH_COVERAGE_PARTITIONS: '4'
       DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '1' || '3' }}
     steps:
       - uses: actions/checkout@v6
@@ -173,6 +177,7 @@ jobs:
       DSH_NODE_COMPAT_SKIP_TYPECHECK: '1'
       DSH_OXLINT_THREADS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
       DSH_PUBLINT_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
+      DSH_WEB_SNAPSHOT_WORKERS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '6' }}
       # Saki uses two snapshot workers; upstream failover halves concurrency
       # for the shared 64-core VM while the dedicated pool retains 32.
       DSH_SNAPSHOT_MAX_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '12' || '32' }}
@@ -280,6 +285,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run compatibility smokes
+        env:
+          DSH_BUILD_CLIENT_PROFILE: official
         run: pnpm run check:node-compat
 
   python-sdk:
@@ -374,7 +381,17 @@ jobs:
       - name: Install Wine
         run: |
           if compgen -G "$HOME/wine-debs/*.deb" > /dev/null; then
-            sudo apt-get install -y --no-install-recommends "$HOME"/wine-debs/*.deb
+            # The restored archive is the full --download-only closure of
+            # `wine` for this runner image, so installing the .debs directly
+            # with dpkg needs no repository access. apt-get would instead
+            # re-download the same 100+ MB closure from the mirror, which has
+            # stalled the job past its budget on a degraded runner network.
+            # If the archive cannot satisfy the closure, fall back to the apt
+            # network install.
+            if ! sudo DEBIAN_FRONTEND=noninteractive dpkg -i "$HOME"/wine-debs/*.deb; then
+              sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
+              sudo apt-get install -y --no-install-recommends "$HOME"/wine-debs/*.deb
+            fi
           else
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends --download-only wine
@@ -398,11 +415,12 @@ jobs:
     name: windows node 24 / native complete
     timeout-minutes: 120
     env:
-      DSH_COVERAGE_MAX_WORKERS: '2'
+      DSH_COVERAGE_MAX_WORKERS: '6'
+      DSH_COVERAGE_PARTITIONS: '8'
       # Instrumented process and polling fixtures can exceed Vitest's defaults
       # under the complete lane's concurrent gate load.
       DSH_COVERAGE_TEST_TIMEOUT_MS: '30000'
-      DSH_GATE_CONCURRENCY: '2'
+      DSH_GATE_CONCURRENCY: '4'
       DSH_PUBLINT_CONCURRENCY: '8'
     steps:
       - uses: actions/checkout@v6
@@ -417,7 +435,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-js
 
       - uses: actions/setup-node@v6
         with:

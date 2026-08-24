@@ -5,6 +5,7 @@ import {
   CREDENTIAL_PROTECTION_LOCAL_USER_TRUST,
   credentialProtectionLevel,
   credentialRef,
+  isCredentialKeySegment,
 } from '../src/index.ts'
 import type { CredentialRef } from '../src/index.ts'
 import { MemoryCredentials } from './memory.ts'
@@ -27,6 +28,19 @@ describe('credentialRef', () => {
   it('rejects every other shape', () => {
     for (const invalid of ['', '9LEADING', 'WITH-DASH', 'WITH SPACE', 'ns:key']) {
       expect(() => credentialRef(invalid)).toThrow(TypeError)
+    }
+  })
+})
+
+describe('isCredentialKeySegment', () => {
+  it('answers whether credentialKey would accept the segment', () => {
+    for (const valid of ['llm-pi-ai', 'openai-codex', 'a', 'z9']) {
+      expect(isCredentialKeySegment(valid)).toBe(true)
+    }
+    // The shapes an arbitrary settings dict key can take that a record id
+    // cannot: a consumer asks here instead of learning it from a throw.
+    for (const invalid of ['', 'My_Proxy', 'z.ai', 'UPPER', '9leading', 'a/b']) {
+      expect(isCredentialKeySegment(invalid)).toBe(false)
     }
   })
 })
@@ -97,7 +111,7 @@ describe('the credentials seam through the memory provider', () => {
   it('stores through set, removes through unset, and emits the committed change', async () => {
     const ctx = await boot()
     const events: CredentialRef[] = []
-    ctx.on('credentials/updated', ref => void events.push(ref))
+    ctx.on('credentials/reference-updated', ref => void events.push(ref))
 
     await ctx.credentials.set(REF, 'sk-live')
     expect(await ctx.credentials.resolve(REF)).toEqual({
@@ -113,7 +127,7 @@ describe('the credentials seam through the memory provider', () => {
   it('rejects an empty set and keeps an absent unset silent', async () => {
     const ctx = await boot()
     const events: CredentialRef[] = []
-    ctx.on('credentials/updated', ref => void events.push(ref))
+    ctx.on('credentials/reference-updated', ref => void events.push(ref))
 
     await expect(ctx.credentials.set(REF, '')).rejects.toThrow(/empty value/)
     await ctx.credentials.unset(REF)

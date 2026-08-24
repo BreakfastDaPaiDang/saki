@@ -32,4 +32,4 @@ pnpm run saki
 
 - **只支持首次登记生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 Development Workspace。尚未组合 Resource Binding 重绑定与退役、仓库修改、GitHub、agent（智能体）、模型提供方和渲染后的 Web 界面。
 - **可执行入口仅供仓库本地使用**——Saki 包保持私有，不属于任何 npm 发布族。
-- **仅限回环开发 Host**：固定的本地 bootstrap 流程不会授权远程浏览器，也不替代 [Saki Host 启动器](../../../docs/saki/host-launcher.md)所述的 Windows Host 包装层。
+- **仅限回环开发 Host**：固定的本地 bootstrap 流程不会授权远程浏览器，也不替代 [Saki Host 启动器](../../../docs/saki/host-launcher.zh.md)所述的 Windows Host 包装层。

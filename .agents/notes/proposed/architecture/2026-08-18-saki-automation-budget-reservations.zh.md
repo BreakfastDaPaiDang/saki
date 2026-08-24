@@ -14,9 +14,9 @@ Status: proposed
 
 0.1.0 版本对并发 Run、wall time、模型请求、input 与 output token、Generation Job 与 attempt、GitHub mutation、push 和由 Saki 引发的 CI trigger 设置硬限制。提供方报告单位、货币、allowance window 和观察到的 Actions 时长仍是类型化可选维度。Actions 分钟是事后暂停信号；Saki 可以硬限制自己引发的 push 与 dispatch，却不能承诺 GitHub 最终计费结果。
 
-策略为每条 route 选择 `pause-on-unknown` 或 `local-limits-only`。后者要求所有本地硬 limit 都有限，且没有观察到提供方耗尽或拒绝；审计会保留提供方全局成本或 quota 未知这一事实。Host Operator 一次性例外是带归因、精确 scope 的 Intent，不会扩张底层 Grant。[ADR 0015](../../../../docs/adr/0015-reserved-automation-budgets-and-usage-ledger.md)拥有记录与执行语义。
+策略为每条 route 选择 `pause-on-unknown` 或 `local-limits-only`。后者要求所有本地硬 limit 都有限，且没有观察到提供方耗尽或拒绝；审计会保留提供方全局成本或 quota 未知这一事实。Host Operator 一次性例外是带归因、精确 scope 的 Intent，不会扩张底层 Grant。[ADR 0015](../../../../docs/adr/0015-reserved-automation-budgets-and-usage-ledger.zh.md)拥有记录与执行语义。
 
-DSH token 用量与 timeout Agent Note 拥有证据机制，而不是产品预算权威；提议中的[可恢复 Control Intent](2026-08-18-saki-recoverable-control-intents.md)与[带 fencing 的 dispatch 准入](2026-08-18-saki-fenced-idempotent-dispatch-admission.md) Agent Note 分别拥有写入准入与交付安全。
+DSH token 用量与 timeout Agent Note 拥有证据机制，而不是产品预算权威；提议中的[可恢复 Control Intent](2026-08-18-saki-recoverable-control-intents.zh.md)与[带 fencing 的 dispatch 准入](2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md) Agent Note 分别拥有写入准入与交付安全。
 
 ## 考虑过的方案
 

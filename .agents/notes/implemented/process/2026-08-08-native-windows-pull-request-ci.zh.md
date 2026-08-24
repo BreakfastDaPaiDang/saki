@@ -12,15 +12,15 @@ PR 必需的 Windows 判定既需要快速的 win32 工具链信号，也不能�
 
 ## 决策
 
-Saki 保留 Wine 合并门禁，并依据 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.md)把 `windows-native` 作为在 `windows-latest` 上运行的默认显式手动套件。它仍不属于 `all-checks-passed.needs`；套件被 dispatch 时，完整的原生命令及其通道专用测试预算继续具有约束力。
+Saki 保留 Wine 合并门禁，并依据 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.zh.md)把 `windows-native` 作为在 `windows-latest` 上运行的默认显式手动套件。它仍不属于 `all-checks-passed.needs`；套件被 dispatch 时，完整的原生命令及其通道专用测试预算继续具有约束力。
 
 [ci.yml](../../../../.github/workflows/ci.yml) 中必需的 `windows` 作业仍是在 `ubuntu-latest` 上运行的 `windows node 24 / wine blocking`。它保留经过校验和验证的 Windows Node、Wine apt 与 pnpm 缓存、仅限工作区快照的 hoisted 安装，以及运行工作区构建与生产网站的[共享 Wine 门禁脚本](../../../../scripts/wine-windows-gates.sh)。Node 分发文件传输采用有界重试；nodejs.org 的大文件传输停滞时，由支持范围请求的传输镜像续传相同字节，但版本和 SHA-256 权威仍属于 nodejs.org，归档通过该校验前绝不会投入使用。稳定的 `windows` 作业 ID 仍是 `all checks passed` 的依赖项。[已归档的 Wine 实验](../../archived/process/2026-07-27-wine-windows-gates-experiment.md)保留其实测取舍，而本文负责当前双通道拓扑。
 
 显式 `windows-native` dispatch 会在 `windows-latest` 上启动独立的 `windows node 24 / native complete` 作业。该作业为工作区符号链接启用开发人员模式，通过 `pnpm/action-setup` 提供仓库固定版本的 pnpm，在不传输 store 归档的情况下执行不可变安装，并在原生 PowerShell 下运行 `pnpm run check:ci:windows-complete`。门禁卡住时，120 分钟超时会为其设定上限，同时不把实测性能目标当作正确性截止时间。
 
-原生作业被刻意排除在 `all-checks-passed.needs` 之外，且不使用 `continue-on-error`：聚合流程既不等待它，也不会因它改变结论；该作业则保留自身未被掩盖的结果。工作区构建、生产网站和逐文件 100% 覆盖率检查失败会使原生作业失败。更广泛的静态检查、文档、包和构建产物可移植性清单仍作为观测项报告。重复的 lint 与快照强制检查仍由 Linux 负责，原生 Windows 则独立强制执行受支持源码覆盖率。
+原生作业被刻意排除在 `all-checks-passed.needs` 之外，且不使用 `continue-on-error`：聚合流程既不等待它，也不会因它改变结论；该作业则保留自身未被掩盖的结果。工作区构建、生产网站和逐文件 100% 覆盖率检查失败会使原生作业失败。静态检查、文档、包、构建产物、lint 与快照清单在同一作业内作为观测性门禁运行；其失败保持可见，但不会改变原生聚合结果，因为这些检查的阻断性判定由 Linux 负责。
 
-标准托管通道为覆盖率分配 2 个工作线程，其中 1 个用于插桩套件，1 个用于免覆盖率项较多的套件；同时运行 2 项顶层门禁，并允许 8 个 publint 工作线程。每个 Vitest 项目都使用 fork 工作线程，因为 Node 24 的 CJS lexer 致命故障可在 Windows 与 POSIX 的共享工作线程中复现；双门禁调度可避免免覆盖率项较多的 Oxlint 探测与工作区构建在临时约定文件上发生竞态。两项覆盖率门禁都将 Vitest 默认的单测试和轮询时间预算设为 30 秒，因为在完整通道并发的 Windows 插桩下，多个互不相关的进程、Git、SQLite、watcher、语法和静态门禁 fixture 可能超过 15 秒。translation-pairing 合并套件只导入 `scripts/` 源码和子进程，因此放入免覆盖率项较多的门禁；V8 插桩不会为它贡献任何阈值覆盖率，却会放大 Git 进程延迟。Lefthook 并发 fixture 保留原有结果，采用 30 秒单用例预算与 10 秒进程就绪探测；安装器则允许被抢占的 lock 持有者在独占创建后用 5 秒发布记录。workspace-context 组合 fixture 使用测试自有、没有无关 1 秒截止时间的信号。这些只属于该通道的预算保留了原有断言结果，120 分钟的作业截止时间仍会约束卡死的运行。LSP 源码与 ACL 沙箱源码仍计入 Windows 分母：基于 stub 的失败路径套件把每个进程内 ACL 沙箱文件都带到 100%，只有 runner 入口保持排除——它只作为 spawn 出的子进程在插桩运行之外执行，其行为由 runner 套件端到端钉住。窄范围且带注释的 V8 ignore 只覆盖不可达分支（另一平台专属分支、生命周期内不可达的防御守卫），其行为测试仍保留在所属平台。
+标准托管通道为覆盖率分配 2 个工作线程，其中 1 个用于插桩套件，1 个用于免覆盖率项较多的套件；同时运行 2 项顶层门禁，并允许 8 个 publint 工作线程。每个 Vitest 项目都使用 fork 工作线程，因为 Node 24 的 CJS lexer 致命故障可在 Windows 与 POSIX 的共享工作线程中复现；双门禁调度可避免免覆盖率项较多的 Oxlint 探测与工作区构建在临时约定文件上发生竞态。两项覆盖率门禁都将 Vitest 默认的单测试和轮询时间预算设为 30 秒，因为在完整通道并发的 Windows 插桩下，多个互不相关的进程、Git、SQLite、watcher、语法和静态门禁 fixture 可能超过 15 秒。translation-pairing 合并套件只导入 `scripts/` 源码和子进程，因此放入免覆盖率项较多的门禁；V8 插桩不会为它贡献任何阈值覆盖率，却会放大 Git 进程延迟。Lefthook 并发 fixture 保留原有结果，采用 30 秒单用例预算与 10 秒进程就绪探测；安装器则允许被抢占的 lock 持有者在独占创建后用 5 秒发布记录。directory-picker 组合为防抖配置写入提供显式的 15 秒轮询预算；workspace-context 组合 fixture 使用测试自有、没有无关 1 秒截止时间的信号。这些只属于该通道的预算保留了原有断言结果，120 分钟的作业截止时间仍会约束卡死的运行。LSP 源码与 ACL 沙箱源码仍计入 Windows 分母：基于 stub 的失败路径套件把每个进程内 ACL 沙箱文件都带到 100%，只有 runner 入口保持排除——它只作为 spawn 出的子进程在插桩运行之外执行，其行为由 runner 套件端到端钉住。窄范围且带注释的 V8 ignore 只覆盖不可达分支（另一平台专属分支、生命周期内不可达的防御守卫），其行为测试仍保留在所属平台。
 
 早先的专用运行器测量用于校准这项清单，但不代表当前资源分配。16 核下的 6 个覆盖率工作线程曾分别以 6 分 27 秒和 7 分 50 秒跑出完整通过结果，后续的分支头精确复跑却先后在 4 个、3 个和 2 个插桩工作线程并发时暴露出不稳定的 fixture 与工作线程退出。32 核对比仅将聚合门禁时间缩短 1.47 秒，且仍在 fork 工作线程内触发 CJS lexer 致命故障。保留的双覆盖率工作线程与双门禁预算在 Saki 的标准 `windows-latest` 运行器上用 31 分 22 秒完成完整套件，其中门禁命令耗时 29 分 40 秒；支持当前手动配置的是这项标准运行器实跑结果，而非历史专用资源规格。
 
@@ -32,7 +32,7 @@ Saki 保留 Wine 合并门禁，并依据 [Saki Actions 策略](2026-08-18-saki-
 
 Windows 的持久 JSONL 路径会保留驱动器根目录的原生写法，并仅对后代路径与暂存路径应用扩展长度命名空间。ACP（Agent Client Protocol）拆卸阶梯使用真实 Node 子进程，以符合宿主语义的结果证明优雅终止与强制终止两个层级，并避免声称 Windows 会交付 POSIX 信号。产品接受裸命令时，可执行 fixture 会提供 `.cmd` 包装脚本与 `PATHEXT`。repository-cache 辅助包位于所选 Git 子路径内，因此它们声明的 `file:` 依赖会在 Windows 上以相同方式暴露命令包装脚本。随附的安装器会导出 pnpm 自有的 workspace-ignore 配置，保留 `PNPM_HOME` 作为 pnpm 数据配置，同时从生命周期 `PATH` 中移除该目录，并在 `PATHEXT` 中优先选择 `.CMD`；因此，嵌套 Git 包安装既不会重新加入外层 workspace，也不会让继承的 Windows pnpm 可执行文件抢在事务持有的 wrapper 之前。
 
-启动后，只有根 fiber 与 Loader 均处于活跃状态时，系统才会继续设置 profile watcher。只有当同一次调用所记录的信号已取得关闭流程所有权时，系统才会隔离并发设置错误；无关 HMR 故障仍会响亮失败。[进程关闭控制器](../bug-fix/2026-08-03-cli-signal-shutdown-escalation.md)会在根级 dispose 成功后让单次任务的正常完成流程排空 Node 剩余句柄，同时让拆卸失败、截止时间到期和信号升级继续强制退出。vendored Include 会串行化防抖写入，只对瞬时访问或忙碌故障执行有界退避重试，并确保每个由计时器触发的拒绝都得到观察。持久化最终失败后，该故障会保留在队列中，并重新抛给拆卸责任方；成功拆卸则会排空最新写入。
+启动后，只有根 fiber 与 Loader 均处于活跃状态时，系统才会继续设置 profile watcher。只有当同一次调用所记录的信号已取得关闭流程所有权时，系统才会隔离并发设置错误；无关 HMR 故障仍会响亮失败。[进程关闭控制器](../bug-fix/2026-08-03-cli-signal-shutdown-escalation.zh.md)会在根级 dispose 成功后让单次任务的正常完成流程排空 Node 剩余句柄，同时让拆卸失败、截止时间到期和信号升级继续强制退出。vendored Include 会串行化防抖写入，只对瞬时访问或忙碌故障执行有界退避重试，并确保每个由计时器触发的拒绝都得到观察。持久化最终失败后，该故障会保留在队列中，并重新抛给拆卸责任方；成功拆卸则会排空最新写入。
 
 Shiki 会禁用 TextMate 正则的延迟编译，并在用户内容进入保持不变的逐行 tokenization（词元化）预算前预热每种启动语法，从而避免调度器争用发布不完整的高亮流。Codex 真实产品 fixture 固定使用稳定版 0.147.0 schema，并选择实际提供的命令工具与对应参数形态；这样既保留由提供方负责的协议，也能在每种宿主上证明无人值守拒绝和整棵进程树退出。
 

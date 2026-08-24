@@ -16,7 +16,7 @@ The benchmark data below remains the evidence for choosing a larger hosted runne
 
 The required primary path stays on the [portable standard-runner boundary](2026-07-23-portable-required-pull-request-ci.md), while the [serial reference](2026-07-21-serial-cross-platform-ci-reference.md) retains complete diagnostic definitions without an automatic `master` trigger. `suite=larger-runner-benchmark` compares isolated critical lanes across any provisioned sizes, and `suite=consolidated-runner-benchmark` compares whole aggregates. Both are explicit manual suites; the default manual selection is the portable `windows-native` diagnostic so a routine dispatch cannot queue a missing larger-runner label.
 
-The former gate-level and coarse primary shard jobs are absent from the workflow. Their static, lint, coverage, snapshot, and scenario shard selectors are also absent from the repository, so an unused diagnostic path cannot preserve a second CI architecture.
+The former gate-level and coarse primary shard jobs are absent from the workflow. Their workflow-facing static, lint, coverage, snapshot, and scenario selectors are also absent, so an unused diagnostic path cannot preserve a second CI architecture. Instrumented coverage may use [process-local partitions inside its existing job](2026-08-18-in-job-partitioned-coverage.md); that coordinator neither selects workflow jobs nor transfers reports between runners.
 
 Saki's required Linux primary work uses three independent standard-hosted jobs. Coverage runs alone with its own worker bound, and the static scheduler owns source and documentation gates that do not consume emitted output. The third job owns the single Linux build, then starts lint, Node 24 runtime compatibility, build-backed snapshots, documentation typechecking, and all artifact consumers against that tree. This [independent consumer build](2026-07-30-independent-ci-consumer-build.md) lets all three jobs request runners immediately without duplicating compilation or transferring a run-scoped artifact. Generated NodeNext consumer directories are excluded from Oxlint discovery because the artifact check removes them while these processes overlap. The pnpm store is restored without putting cache uploads on the pull-request critical path; Oxlint has no repository-managed result cache. Performance reports use each job's `startedAt` to `completedAt` interval; runner queue delay is capacity evidence, not repository execution time. The 32-core data below describes the historical measured enterprise topology and the explicit comparison suites, not Saki's required allocation.
 
@@ -40,7 +40,7 @@ The same benchmark measured the required Windows build surfaces across every pro
 |---|---:|---:|---:|---:|---:|---:|
 | Active time | 152 s | 104 s | 104 s | 92 s | 103 s | 110 s |
 
-Repository work gains little above 16 Windows cores, but the 32-core pool can start the complete outer inventory together. A retargeted production validation completed the full one-box Windows inventory in 173 seconds, including coverage and snapshot replay, so Windows remains consolidated.
+Repository work gains little above 16 Windows cores. The measured dedicated native lane kept blocking build, production-site validation, and coverage together with the observational portability inventory in one 16-core job; a 32-core comparison improved its aggregate gate time by only 1.47 seconds and failed inside Node's CJS lexer. Saki's required Wine job remains separate from the manually dispatched standard-hosted native suite because it owns critical-path status rather than native-runner scaling.
 
 The larger client package graph makes cache mechanics and scheduler pressure part of the measured workload. In one exact-head candidate run, Linux spent 39 seconds in repository gates but 69 seconds in the complete job, while Windows spent 117 seconds in repository gates and 228 seconds in the complete job. The Windows pnpm cache downloaded its 154 MB archive in about two seconds but spent 27 seconds extracting it, followed by a 23-second install and a 14-second post-job save. A cacheless all-size trace completed the same 32-core Windows install in 27 seconds. A future larger-runner rollout therefore needs complete-job measurements rather than gate-only timing.
 
@@ -70,7 +70,7 @@ Complete serial Linux and macOS references remain disabled definitions, and comp
 
 **Make larger or self-hosted pools the required Saki path.** The measurements show lower active time for several larger Linux sizes, but Saki has no such pool and its current budget values predictable allocation over that latency gain. Standard GitHub-hosted capacity therefore owns the merge gate; the benchmark suites preserve a measured route to revisit the decision.
 
-**Keep required and observational Windows checks in separate jobs.** The split preserves status semantics at the workflow level but pays setup twice. `run-gates` preserves the same required versus non-blocking distinction inside one process.
+**Keep blocking and observational native Windows checks in separate jobs.** This would preserve their distinction at the workflow level but pay Windows setup twice. `run-gates` preserves the same blocking versus observational result inside one job.
 
 **Install Bubblewrap through the system package manager.** This uses the host's package database and can dominate the job even when the payload is tiny. Pinned extraction plus a confinement probe preserves the runtime contract without mutating the hosted image.
 
@@ -78,7 +78,7 @@ Complete serial Linux and macOS references remain disabled definitions, and comp
 
 The required topology retains no shard selectors. Every ready, non-draft pull request consumes standard GitHub-hosted Linux minutes; native Windows and larger-runner benchmarks add capacity only when explicitly dispatched.
 
-GitHub rounds each larger-runner execution up to a whole minute, so complete-job measurement exposes both billed time and workflow complexity. Splitting Linux repeats setup twice, but the consumer lane owns the only built tree and coverage, static gates, and post-build consumers enter runner allocation independently; consolidating Windows avoids repeating its slower setup.
+GitHub rounds each larger-runner execution up to a whole minute, so complete-job measurement exposes both billed time and workflow complexity. Splitting Linux repeats setup twice, but the consumer lane owns the only built tree and coverage, static gates, and post-build consumers enter runner allocation independently. Native Windows keeps its blocking and observational inventory in one setup, while Wine remains separate to preserve the required critical path.
 
 Performance targets are observations, not cancellation deadlines or correctness requirements. Manual all-size and serial suites remain available when image, dependency, scheduler, or pricing changes need remeasurement.
 

@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-stable-resource-bindings.md
 2026-08-18-saki-stable-resource-bindings.md: 62475d242f2bd1e94a3ed51543ab7b1ccfa37b64
-2026-08-18-saki-stable-resource-bindings.zh.md: b97c1946d4d1eba39265e0be835317e8393036e1
+2026-08-18-saki-stable-resource-bindings.zh.md: 67d7be832da5bbfaa9cdd4ab4e24bfd6efedc8cb

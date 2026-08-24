@@ -1,3 +1,9 @@
+# Publish the documentation website to GitHub Pages from a Saki release tag or
+# an explicit manual dispatch. It never listens to pull requests or branch
+# pushes, so documentation deployment does not become a merge check.
+#
+# The build signal does not depend on this workflow. Every pull request builds
+# the production site through `check:ci:static`.
 name: Deploy documentation
 
 on:
@@ -14,8 +20,9 @@ permissions:
 
 env:
   PRIMARY_NODE_VERSION: '24'
-  # Projected source links target the public repository, whose history can
-  # differ from this workflow's source repository.
+  DOCS_REPOSITORY: BreakfastDaPaiDang/saki
+  # Projected source links target the public repository's current source tree.
+  # Keeping them on master avoids depending on retained historical release tags.
   DOCS_REPOSITORY_REF: master
   # CI runs must never report to the production telemetry endpoint baked
   # into apps/cli/cordis.yml (AppCLIEntry disables the row when set).
@@ -30,6 +37,8 @@ jobs:
       pages: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
 

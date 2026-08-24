@@ -8,12 +8,19 @@ export const PROMPT_MARKER_PREFIX = '133;D;'
 /** Exact printable prompt emitted after the private marker. */
 export const CONTROLLED_PROMPT = 'dsh> '
 
-/** One sanitized chunk plus whether it contained the owned prompt marker. */
+interface CursorPositionRequest {
+  /** One-based column: exact line start or a conservative non-zero position. */
+  readonly column: 1 | 2
+}
+
+/** One sanitized chunk plus recognized terminal protocol facts. */
 export interface SanitizedChunk {
   text: string
   prompt: boolean
   /** Printable text after the latest owned marker in this chunk. */
   promptTail?: string
+  /** The first exact ANSI cursor-position request removed from this chunk. */
+  cursorPositionRequest?: CursorPositionRequest
 }
 
 /**
@@ -27,24 +34,27 @@ export class TerminalSanitizer {
   private discardOscEscape = false
   private trailingCarriageReturn = false
   private trackingPromptTail = false
+  private atLineStart = true
 
   constructor(private readonly maxPendingBytes: number) {}
 
   /**
    * Consume one decoded `node-pty` data chunk.
    * @param chunk - decoded terminal data.
-   * @returns Printable text and whether the private prompt marker completed.
+   * @returns Printable text, private prompt state, and the first removed exact cursor-position request.
    */
   push(chunk: string): SanitizedChunk {
     this.pending += this.discardPrefix(chunk)
     let text = ''
     let prompt = false
+    let cursorPositionRequest: CursorPositionRequest | undefined
     let includePromptTail = this.trackingPromptTail
     let promptTail = ''
     let index = 0
     const appendText = (value: string): void => {
       text += value
       if (this.trackingPromptTail) promptTail += value
+      this.trackLineStart(value)
     }
     while (index < this.pending.length) {
       const escape = this.pending.indexOf('\x1b', index)
@@ -92,10 +102,19 @@ export class TerminalSanitizer {
           index = escape
           break
         }
+        const sequence = this.pending.slice(escape, end + 1)
+        if (sequence === '\x1b[6n' && cursorPositionRequest === undefined) {
+          cursorPositionRequest = { column: this.atLineStart ? 1 : 2 }
+        }
+        const final = sequence.at(-1)
+        if (final !== 'm' && final !== 'n' && sequence !== '\x1b[?1h' && sequence !== '\x1b[?1l') {
+          this.atLineStart = false
+        }
         index = end + 1
         continue
       }
       // Two-byte escape family (save/restore cursor and similar).
+      this.atLineStart = false
       index = escape + 2
     }
     this.pending = this.pending.slice(index)
@@ -104,6 +123,7 @@ export class TerminalSanitizer {
       text: this.normalizeText(text),
       prompt,
       ...includePromptTail ? { promptTail } : {},
+      ...cursorPositionRequest !== undefined ? { cursorPositionRequest } : {},
     }
   }
 
@@ -133,9 +153,17 @@ export class TerminalSanitizer {
     return normalizeTerminalText(complete)
   }
 
+  private trackLineStart(text: string): void {
+    for (const character of text) {
+      if (character === '\r' || character === '\n') this.atLineStart = true
+      else if (character !== '\x07' && character !== '\0') this.atLineStart = false
+    }
+  }
+
   private enforcePendingBound(): void {
     if (Buffer.byteLength(this.pending) <= this.maxPendingBytes) return
     this.discardMode = this.pending[1] === ']' ? 'osc' : 'csi'
+    if (this.discardMode === 'csi') this.atLineStart = false
     this.pending = ''
   }
 
