@@ -285,7 +285,7 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
     process.env.DSH_TEST_SECRET = 'must-not-leak'
     try {
       const { ctx, root, agent } = await harness('danger-full-access', {
-        idleSilenceMs: 300,
+        idleSilenceMs: 3_000,
         handoffGraceMs: 300,
         timeoutMs: 8_000,
       }, 'pwsh')
@@ -298,13 +298,31 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
       })
       expect((await first.done).waitReason).toBe('stdin_read')
       const second = ctx.terminals.startSend(agent, created.sessionId, {
-        text: 'Write-Output "keep=$env:KEEP secret=$env:DSH_TEST_SECRET"',
+        text: 'Write-Output "keep=$env:KEEP secret=$env:DSH_TEST_SECRET readline=$(@(Get-Module PSReadLine).Count)"',
         submit: true,
       })
       const result = await second.done
       expect(result.viewport).toContain('keep=ok')
       expect(result.viewport).toContain('secret=')
+      expect(result.viewport).toContain('readline=0')
       expect(result.viewport).not.toContain('must-not-leak')
+
+      const blockedPrompt = ctx.terminals.startSend(agent, created.sessionId, {
+        text: 'try { Read-Host "must fail" } catch { Write-Output ("HOST_" + "PROMPT_BLOCKED") }',
+        submit: true,
+      })
+      await waitForOutput(blockedPrompt, 'HOST_PROMPT_BLOCKED')
+      const blockedPromptResult = await blockedPrompt.done
+      expectReadyForNextSend(blockedPromptResult.waitReason)
+      const transcript = ctx.terminals.read(agent, created.sessionId, { offset: 0, count: 100 }).text
+      expect(transcript.match(/HOST_PROMPT_BLOCKED/g)).toEqual(['HOST_PROMPT_BLOCKED'])
+
+      const afterBlockedPrompt = await ctx.terminals.startSend(agent, created.sessionId, {
+        text: 'Write-Output ("AFTER_" + "HOST_PROMPT")',
+        submit: true,
+      }).done
+      expectReadyForNextSend(afterBlockedPrompt.waitReason)
+      expect(afterBlockedPrompt.viewport.match(/AFTER_HOST_PROMPT/g)).toEqual(['AFTER_HOST_PROMPT'])
 
       expect(ctx.terminals.read(agent, created.sessionId, { offset: 0, count: 40 }).text).toContain('keep=ok')
       expect(await ctx.terminals.kill(agent, created.sessionId)).toBe(true)
@@ -339,6 +357,39 @@ describe.skipIf(!hasPwsh)('terminal-bash pwsh real shell', () => {
     })
     const result = await sent.done
     expect(result.viewport).toContain('中文 encoding-ok')
+    expect(result.viewport).toContain('中文 encoding-ok\ndsh> ')
+    await ctx.terminals.kill(agent, created.sessionId)
+  }, 30_000)
+
+  it('keeps a native child REPL interactive under the non-interactive pwsh host', async () => {
+    const { ctx, root, agent } = await harness('danger-full-access', {
+      idleSilenceMs: 3_000,
+      handoffGraceMs: 300,
+      timeoutMs: 8_000,
+    }, 'pwsh')
+    const created = await ctx.terminals.spawn(agent, { type: 'shell', name: 'main', cwd: root })
+
+    const nativeNoNewline = await ctx.terminals.startSend(agent, created.sessionId, {
+      text: 'node -e "process.stdout.write(\'NATIVE_NO_NL\')"',
+      submit: true,
+    }).done
+    expect(nativeNoNewline.viewport).toContain('NATIVE_NO_NL\ndsh> ')
+
+    await ctx.terminals.startSend(agent, created.sessionId, { text: 'node -i', submit: true }).done
+    const child = await ctx.terminals.startSend(agent, created.sessionId, {
+      text: 'console.log("CHILD_" + "REPL_OK")',
+      submit: true,
+    }).done
+    expect(child.viewport).toContain('CHILD_REPL_OK')
+    expect(child.viewport.match(/CHILD_REPL_OK/g)).toEqual(['CHILD_REPL_OK'])
+
+    await ctx.terminals.startSend(agent, created.sessionId, { text: '.exit', submit: true }).done
+    const shell = await ctx.terminals.startSend(agent, created.sessionId, {
+      text: 'Write-Output ("AFTER_" + "CHILD_REPL")',
+      submit: true,
+    }).done
+    expect(shell.viewport).toContain('AFTER_CHILD_REPL')
+    expect(shell.viewport.match(/AFTER_CHILD_REPL/g)).toEqual(['AFTER_CHILD_REPL'])
     await ctx.terminals.kill(agent, created.sessionId)
   }, 30_000)
 })

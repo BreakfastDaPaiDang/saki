@@ -83,11 +83,15 @@ function childEnvironment(spec: TerminalBackendSpawnSpec, dialect: ShellDialect)
 /**
  * The pwsh prompt function that emits the shared OSC `133;D;` + BEL marker
  * before every prompt, mirroring bash's PROMPT_COMMAND. `[char]27`/`[char]7`
- * build the control bytes at runtime because raw ESC characters in submitted
- * input are unreliable under PSReadLine.
+ * build the control bytes at runtime so the submitted setup line carries no
+ * raw terminal control bytes.
  */
 export const PWSH_PROMPT_SETUP =
   "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); '" + CONTROLLED_PROMPT + "' }"
+
+function endsInControlledPrompt(text: string): boolean {
+  return text.replace(/\r?\n$/, '').endsWith(CONTROLLED_PROMPT)
+}
 
 function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxExecutionPolicy): string[] {
   const argv = [config.shellPath, ...config.shellArgs]
@@ -106,6 +110,7 @@ function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxExecutio
 async function startupSession(
   session: LocalPtySession,
   dialect: ShellDialect,
+  timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<void> {
   const start = async (): Promise<void> => {
@@ -121,22 +126,31 @@ async function startupSession(
     // UTF-8, and an un-pinned console writes its host code page for
     // non-ASCII output. The banner-to-prompt gap can outlast the silence
     // bound, so the wait loops over follow-up sends until the controlled
-    // prompt is actually visible (in the viewport or the retained scrollback
-    // when it landed between sends), bounded by the send deadline.
+    // prompt is actually visible at the viewport or retained-scrollback tail
+    // when it landed between sends, bounded by one bootstrap deadline. Requiring
+    // the tail avoids mistaking pwsh's echoed setup source, which contains the
+    // prompt literal, for the installed prompt.
+    const timeoutError = new Error('PTY shell did not reach readiness before startup timeout')
+    const deadline = Promise.withResolvers<never>()
+    const timer = setTimeout(() => { deadline.reject(timeoutError) }, timeoutMs)
     let viewport = ''
-    for (;;) {
-      const first = viewport.length === 0
-      const operation = session.startSend({
-        text: first ? ENCODING_PREAMBLE + PWSH_PROMPT_SETUP : '',
-        submit: first,
-        ...signal !== undefined ? { signal } : {},
-      })
-      const result = await operation.done
-      if (result.waitReason === 'session_exit') throw new Error('PTY shell exited during startup')
-      if (result.waitReason === 'timeout') throw new Error('PTY shell did not reach readiness before startup timeout')
-      viewport = result.viewport
-      const scrollback = session.read({ offset: 0, count: 20 }).text
-      if (viewport.includes(CONTROLLED_PROMPT) || scrollback.includes(CONTROLLED_PROMPT)) break
+    try {
+      for (;;) {
+        const first = viewport.length === 0
+        const operation = session.startSend({
+          text: first ? ENCODING_PREAMBLE + PWSH_PROMPT_SETUP : '',
+          submit: first,
+          ...signal !== undefined ? { signal } : {},
+        })
+        const result = await Promise.race([operation.done, deadline.promise])
+        if (result.waitReason === 'session_exit') throw new Error('PTY shell exited during startup')
+        if (result.waitReason === 'timeout') throw timeoutError
+        viewport = result.viewport
+        const scrollback = session.read({ offset: 0, count: 20 }).text
+        if (endsInControlledPrompt(viewport) || endsInControlledPrompt(scrollback)) break
+      }
+    } finally {
+      clearTimeout(timer)
     }
     session.motd = viewport
   }
@@ -190,7 +204,7 @@ export class BashTerminalBackend implements TerminalBackend {
     })
     const session = this.createSession(terminal, this.config)
     try {
-      await startupSession(session, this.config.shellDialect, spec.signal)
+      await startupSession(session, this.config.shellDialect, this.config.timeoutMs, spec.signal)
       return session
     } catch (error) {
       try {

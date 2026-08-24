@@ -237,7 +237,7 @@ describe('SubagentHeaderLineage', () => {
     fireEvent.mouseEnter(trigger.parentElement!)
     await vi.advanceTimersByTimeAsync(149)
     expect(screen.queryByRole('tree')).toBeNull()
-    await vi.advanceTimersByTimeAsync(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
     const tree = screen.getByRole('tree')
     fireEvent.resize(window)
     fireEvent.mouseLeave(trigger.parentElement!)

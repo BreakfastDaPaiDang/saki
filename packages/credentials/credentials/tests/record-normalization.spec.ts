@@ -26,12 +26,45 @@ describe('credential record normalization', () => {
     sparse.length = 1
     const extra = ['kept']
     Object.assign(extra, { omitted: true })
+    const shiftedSparse: unknown[] = []
+    shiftedSparse.length = 2
+    shiftedSparse[1] = 'kept'
+    Object.assign(shiftedSparse, { omitted: true })
+    const nonEnumerableElement = ['kept']
+    Object.defineProperty(nonEnumerableElement, '0', { value: 'kept', enumerable: false })
+    const accessorElement = ['kept']
+    Object.defineProperty(accessorElement, '0', { enumerable: true, get: () => 'kept' })
     const nonEnumerable = { visible: true }
     Object.defineProperty(nonEnumerable, 'omitted', { value: true })
 
-    for (const value of [sparse, extra, nonEnumerable, { [Symbol('omitted')]: true }, -0, Number.NaN, 1n]) {
+    for (const value of [
+      sparse,
+      extra,
+      shiftedSparse,
+      nonEnumerableElement,
+      accessorElement,
+      nonEnumerable,
+      { [Symbol('omitted')]: true },
+      -0,
+      Number.NaN,
+      1n,
+    ]) {
       expect(() => normalizeJsonValue(value, SUBJECT)).toThrow(TypeError)
     }
+  })
+
+  it('rejects inherited serializer state without invoking a Proxy prototype', () => {
+    let trapCalls = 0
+    const proxyPrototype = new Proxy({ toJSON: 'ordinary field' }, {
+      getOwnPropertyDescriptor: () => {
+        trapCalls++
+        throw new Error('must not run')
+      },
+    })
+
+    expect(() => normalizeJsonValue(Object.create(proxyPrototype), SUBJECT)).toThrow(TypeError)
+    expect(() => normalizeJsonValue(Object.create({ toJSON: 'ordinary field' }), SUBJECT)).toThrow(TypeError)
+    expect(trapCalls).toBe(0)
   })
 
   it('rejects executable properties and proxies without invoking user code or exposing trap errors', () => {
@@ -79,9 +112,15 @@ describe('credential record normalization', () => {
 
   it('requires the exact closed record union and stable api-key fields', () => {
     const invalid = [
+      null,
+      'grant',
+      [],
+      Object.create(null),
       { kind: 'grant', payload: {}, extra: true },
       { kind: 'grant' },
       { kind: 'api-key', key: 1 },
+      { kind: 'api-key', key: 'token', env: {}, extra: true },
+      { kind: 'api-key', extra: true },
       { kind: 'api-key', env: { 'not a name': 'value' } },
       { kind: 'api-key', env: { AWS_PROFILE: '' } },
       { kind: 'unknown', payload: {} },

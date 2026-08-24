@@ -73,8 +73,8 @@ function markers(): CommandMarkers {
  * Escape a command body for embedding in the wrapper's double-quoted string.
  * Backtick escapes keep every character literal: backtick first so the
  * escapes this function inserts are never re-escaped, `$` so no expansion
- * happens at wrapper construction, and `\r\n`/ESC so multi-line commands and
- * raw control bytes ride one physical input line without PSReadLine mangling.
+ * happens at wrapper construction, and `\r\n`/ESC so PowerShell reconstructs
+ * multi-line commands and control bytes from one printable physical input line.
  * @param value - the model's PowerShell command text.
  * @returns the escaped double-quoted-string body.
  */
@@ -89,8 +89,8 @@ function quoteForPwsh(value: string): string {
 }
 
 function wrapCommand(command: string, marker: CommandMarkers): string {
-  // Keep the wrapper on one physical line: PSReadLine renders the echoed
-  // input, and a wrapped line would split the echo the extraction strips.
+  // Keep the wrapper on one physical line: the terminal renders echoed input,
+  // and a wrapped line would split the echo the extraction strips.
   // The echoed END nonce can never fabricate completion because the status
   // regex needs digits immediately after it and the echo continues with
   // quote characters.
@@ -118,7 +118,7 @@ function commandOutput(
   const startMarker = text.lastIndexOf(marker.start, end)
   const start = startMarker < 0 ? 0 : startMarker + marker.start.length
   let captured = text.slice(start, end)
-  // The PSReadLine echo carries the wrapper source (including both marker
+  // PTY input echo carries the wrapper source (including both marker
   // nonces) before the real markers; anchor on the real markers excludes it,
   // and stripping the wrapper covers the rare case where the real START
   // scrolled out and extraction fell back to the echoed copy.
@@ -255,8 +255,7 @@ async function respondToSessionExit(
 /**
  * The pwsh prompt function that overrides the backend bootstrap value with
  * this tool's own prompt. `[char]27`/`[char]7` build the OSC bytes at runtime
- * because raw ESC characters in submitted input are unreliable under
- * PSReadLine.
+ * so the submitted setup line carries no raw terminal control bytes.
  */
 const PWSH_PROMPT_SETUP =
   "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); '" + SHELL_PROMPT + "' }"

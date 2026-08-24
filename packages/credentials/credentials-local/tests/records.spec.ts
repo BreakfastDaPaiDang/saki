@@ -278,6 +278,19 @@ describe('record mutation', () => {
     expect(seen).toEqual([])
   })
 
+  it('returns undefined without writing when a mutation declines an absent record', async () => {
+    const dir = await tempDir()
+    const path = join(dir, '.credentials.yaml')
+    const ctx = await boot({ path, watch: false })
+    const seen = recordUpdates(ctx)
+
+    const result = await ctx.credentials.modifyRecord(CODEX, () => Promise.resolve(undefined))
+
+    expect(result).toBeUndefined()
+    await expect(readFile(path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(seen).toEqual([])
+  })
+
   it('isolates the cached record from caller and mutation references', async () => {
     const dir = await tempDir()
     const path = join(dir, '.credentials.yaml')

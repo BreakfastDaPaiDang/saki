@@ -240,8 +240,13 @@ export interface SubprocessTerminalHandle {
   /** Resolves when the top-level process exits; rejects only for a live transport failure. */
   readonly done: Promise<SubprocessOutcome>
   /**
-   * Write text to the terminal input.
+   * Begin one text delivery to the terminal input. Output caused by this input
+   * may arrive before or after the returned promise settles.
+   * Concurrent handle calls have no ordering guarantee. Awaiting this promise
+   * before another call orders provider acceptance, not target consumption or signal effects.
    * @param data - text to deliver without implicit newline conversion.
+   * @returns Resolves when the provider accepts the complete input for delivery;
+   * a rejection does not prove that it delivered no bytes.
    */
   write(data: string): Promise<void>
   /**

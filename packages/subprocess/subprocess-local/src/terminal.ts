@@ -73,7 +73,7 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
     })
   }
 
-  // node-pty writes synchronously; the seam returns a promise for remote transports.
+  // node-pty accepts write requests synchronously; the seam returns a promise for remote transports.
   // oxlint-disable-next-line typescript/require-await -- Preserve promise rejection semantics at the async provider contract.
   async write(data: string): Promise<void> {
     if (this.exited) throw new Error('terminal process has exited')

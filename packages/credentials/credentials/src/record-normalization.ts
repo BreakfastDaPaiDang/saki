@@ -19,9 +19,11 @@ interface DataObjectSnapshot {
 function inspectValue<T>(subject: string, inspect: () => T): T {
   try {
     return inspect()
+  /* v8 ignore start -- Proxy values are rejected before reflection; these built-ins cannot throw for an ordinary object. */
   } catch {
     throw new TypeError(`${subject} cannot be inspected as JSON data`)
   }
+  /* v8 ignore stop */
 }
 
 /** Reject an inherited serializer hook, stopping at the first property that shadows it. */
@@ -51,6 +53,7 @@ function inspectDataObject(subject: string, value: object): DataObjectSnapshot {
   for (const property of keys) {
     if (typeof property !== 'string') throw new TypeError(`${subject} holds a symbol-keyed property`)
     const descriptor = inspectValue(subject, () => Object.getOwnPropertyDescriptor(value, property))
+    /* v8 ignore next -- ownKeys and descriptor reads are synchronous; only a rejected Proxy can remove a reported key. */
     if (descriptor === undefined) throw new TypeError(`${subject} cannot be inspected as JSON data`)
     properties.set(property, descriptor)
   }

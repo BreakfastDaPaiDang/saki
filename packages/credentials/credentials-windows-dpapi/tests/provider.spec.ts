@@ -289,6 +289,12 @@ describe.runIf(process.platform === 'win32')('Windows current-user DPAPI credent
     const path = await tempStore()
     const ctx = await boot(path)
     const updates = recordUpdates(ctx)
+    await expect(ctx.credentials.modifyRecord(CODEX, (current) => {
+      expect(current).toBeUndefined()
+      return Promise.resolve(undefined)
+    })).resolves.toBeUndefined()
+    expect(updates).toEqual([])
+    await expect(readFile(path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await put(ctx, CODEX, { kind: 'grant', payload: { expires: 1 } })
     const seen: Array<CredentialRecord | undefined> = []
 

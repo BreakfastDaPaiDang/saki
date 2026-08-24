@@ -3,18 +3,22 @@
 import z from '@deepseek-ai/schemastery'
 import { resolvePwshPath } from '@deepseek-ai/dsh-pwsh-local'
 
-/** One supported interactive shell dialect. */
+/** One supported persistent shell dialect. */
 export type ShellDialect = 'bash' | 'pwsh'
 
 /** Public plugin configuration. */
 export interface Config {
   /** Backend registry type (default: `shell`). */
   backendType?: string
-  /** Interactive shell dialect (default: `bash`); selects the argv/env/startup defaults. */
+  /** Persistent shell dialect (default: `bash`); selects the argv/env/startup defaults. */
   shellDialect?: ShellDialect
-  /** Interactive shell executable (default per dialect: `/bin/bash`, or the resolved pwsh). */
+  /** Persistent shell executable (default per dialect: `/bin/bash`, or the resolved pwsh). */
   shellPath?: string
-  /** Shell arguments (default per dialect: bash `--noprofile --norc -i`, pwsh `-NoLogo -NoProfile`). */
+  /**
+   * Shell arguments (default per dialect: bash `--noprofile --norc -i`, pwsh
+   * `-NoLogo -NoProfile -NonInteractive`). Explicit pwsh arguments must equal
+   * that supported list; redirected-stdin modes are unsupported.
+   */
   shellArgs?: string[]
   /** Terminal rows. */
   rows?: number
@@ -37,7 +41,7 @@ export interface Config {
    * regain the foreground before `inferred_idle` settles; at least one `pollIntervalMs`.
    */
   handoffGraceMs?: number
-  /** Absolute send wait bound. */
+  /** Absolute wait bound for one send and for the whole pwsh bootstrap. */
   timeoutMs?: number
   /** Grace before teardown escalates to `SIGKILL`. */
   disposeGraceMs?: number
@@ -54,13 +58,14 @@ export type ResolvedConfig = Omit<Required<Config>, 'shellDialect' | 'shellPath'
 export const DEFAULT_BASH_SHELL = '/bin/bash'
 /** Bash dialect default arguments (interactive, profile-free). */
 export const DEFAULT_BASH_ARGS = ['--noprofile', '--norc', '-i']
-/** Pwsh dialect default arguments (interactive host, profile-free). */
-export const DEFAULT_PWSH_ARGS = ['-NoLogo', '-NoProfile']
+/** Pwsh defaults for a profile-free ConsoleHost session that does not auto-load PSReadLine. */
+export const DEFAULT_PWSH_ARGS = ['-NoLogo', '-NoProfile', '-NonInteractive']
 
 /**
  * Resolve the effective per-dialect shell specification. Defaulting is this
  * explicit step: an unset or empty `shellPath`/`shellArgs` selects the
- * dialect's defaults, while a non-empty explicit value always wins.
+ * dialect's defaults, while a non-empty explicit value is preserved for
+ * validation. Pwsh validation accepts only the supported default arguments.
  * (Schemastery materializes an absent optional array as `[]`, so emptiness —
  * not just `undefined` — means "dialect default".)
  * @param config - Schemastery-resolved plugin configuration.
@@ -100,7 +105,7 @@ export const Config: z<Config> = z.object({
 })
 
 /**
- * Assert every effective numeric config field is a positive safe integer and bounds compose.
+ * Assert the effective shell specification, numeric fields, and bounds compose.
  * @param config - Schemastery-resolved plugin configuration.
  * @returns Narrows the input to the fully resolved configuration.
  */
@@ -108,6 +113,12 @@ export function validateConfig(config: Config): asserts config is ResolvedConfig
   const resolved = config as ResolvedConfig
   if (resolved.backendType.length === 0) throw new Error('terminal-bash: backendType must be non-empty')
   if (resolved.shellPath.length === 0) throw new Error('terminal-bash: shellPath must be non-empty')
+  if (resolved.shellDialect === 'pwsh' && (
+    resolved.shellArgs.length !== DEFAULT_PWSH_ARGS.length
+    || !resolved.shellArgs.every((arg, index) => arg === DEFAULT_PWSH_ARGS[index])
+  )) {
+    throw new Error(`terminal-bash: pwsh shellArgs must be omitted or exactly ${DEFAULT_PWSH_ARGS.join(' ')}`)
+  }
   for (const [name, value] of Object.entries(resolved)) {
     if (typeof value === 'number' && (!Number.isSafeInteger(value) || value <= 0)) {
       throw new Error(`terminal-bash: ${name} must be a positive safe integer`)

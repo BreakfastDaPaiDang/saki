@@ -212,6 +212,7 @@ describe('LocalPtySession readiness and output', () => {
     inspector.pgid = 789
     terminal.emitData('Python\r\n>>> ')
     await vi.advanceTimersByTimeAsync(20)
+    await vi.advanceTimersByTimeAsync(10)
     expect(await operation.done).toMatchObject({ waitReason: 'stdin_read', viewport: 'Python\n>>> ', sessionStatus: { kind: 'running' } })
     expect(operation.cancel()).toBe(false)
   })
@@ -235,6 +236,8 @@ describe('LocalPtySession readiness and output', () => {
     expect(settled).toBe(false)
     inspector.waiting = true
     await vi.advanceTimersByTimeAsync(10)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(10)
     expect((await operation.done).waitReason).toBe('stdin_read')
   })
 
@@ -257,6 +260,8 @@ describe('LocalPtySession readiness and output', () => {
     await vi.advanceTimersByTimeAsync(10)
     inspector.waiting = true
     await vi.advanceTimersByTimeAsync(30)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(10)
     expect(settled).toBe(false)
     await vi.advanceTimersByTimeAsync(10)
     expect(settled).toBe(true)
@@ -335,8 +340,7 @@ describe('LocalPtySession readiness and output', () => {
     const operation = session.startSend({ text: 'must not execute', submit: true, signal: controller.signal })
     controller.abort()
     inspection.resolve({ processGroupId: 456, inputWaiting: false })
-    await Promise.resolve()
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(terminal.writes).toEqual([])
     expect(inspector.groups).toContainEqual([456, 'SIGINT'])
@@ -555,10 +559,8 @@ describe('LocalPtySession readiness and output', () => {
     writeGate.reject(new Error('write failed after cancellation'))
     await rejected
     expect(inspector.groups).toEqual([])
-
-    const next = session.startSend({ text: '', submit: false })
-    await vi.advanceTimersByTimeAsync(100)
-    expect((await next.done).waitReason).toBe('inferred_idle')
+    expect(session.status()).toEqual({ kind: 'exited', exitCode: null, signal: null })
+    expect(() => session.startSend({ text: '', submit: false })).toThrow('has exited')
   })
 
   it('releases a timed-out cancellation after the provider write and signal settle', async () => {
@@ -651,20 +653,16 @@ describe('LocalPtySession readiness and output', () => {
     expect(() => session.startSend({ text: 'must wait', submit: true })).toThrow('active send')
 
     writeGate.resolve(undefined)
-    await Promise.resolve()
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(0)
     const rejectedWrite = Promise.withResolvers<undefined>()
     terminal.write = async () => { await rejectedWrite.promise }
     const rejected = session.startSend({ text: 'late rejection', submit: true })
     await vi.advanceTimersByTimeAsync(100)
     expect((await rejected.done).waitReason).toBe('timeout')
     rejectedWrite.reject(new Error('write failed after timeout'))
-    await Promise.resolve()
-    await Promise.resolve()
-
-    const next = session.startSend({ text: '', submit: false })
-    await vi.advanceTimersByTimeAsync(100)
-    expect((await next.done).waitReason).toBe('inferred_idle')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.status()).toEqual({ kind: 'exited', exitCode: null, signal: null })
+    expect(() => session.startSend({ text: '', submit: false })).toThrow('has exited')
   })
 
   it('retains send ownership when cancellation signalling fails during an asynchronous write', async () => {
@@ -1044,6 +1042,26 @@ describe('LocalPtySession readiness and output', () => {
     expect((await current.done).waitReason).toBe('stdin_read')
   })
 
+  it('does not start readiness polling when closing races a successful write', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const writeStarted = Promise.withResolvers<undefined>()
+    const writeGate = Promise.withResolvers<undefined>()
+    terminal.write = async () => {
+      writeStarted.resolve(undefined)
+      await writeGate.promise
+    }
+    const session = new LocalPtySession(terminal, config())
+    const operation = session.startSend({ text: 'command', submit: true })
+    await writeStarted.promise
+
+    ;(session as unknown as { closing: boolean }).closing = true
+    writeGate.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    terminal.emitExit()
+    expect((await operation.done).waitReason).toBe('session_exit')
+  })
+
   it('contains stale timer, write, inspection, and interrupt continuations', async () => {
     vi.useFakeTimers()
     const settle = (operation: TerminalSendOperation): void => {
@@ -1128,6 +1146,1008 @@ describe('LocalPtySession readiness and output', () => {
 })
 
 describe('LocalPtySession bounds, signals, and teardown', () => {
+  it('answers terminal cursor-position requests throughout a pwsh session without exposing them', async () => {
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    const initialization = session.initialize()
+
+    terminal.emitData('\x1b[6')
+    terminal.emitData('n')
+    await Promise.resolve()
+    expect(terminal.writes).toEqual(['\x1b[1;1R'])
+
+    terminal.emitData('\x1b]133;D;0\x07dsh> ')
+    await initialization
+    expect(session.motd).toBe('dsh> ')
+
+    const operation = session.startSend({ text: 'command', submit: true })
+    await Promise.resolve()
+    await Promise.resolve()
+    terminal.emitData('partial\x1b[6n')
+    await vi.waitFor(() => { expect(terminal.writes).toHaveLength(3) })
+    expect(terminal.writes).toEqual(['\x1b[1;1R', 'command\r', '\x1b[1;2R'])
+
+    terminal.emitData('\r\n\x1b]133;D;0\x07dsh> ')
+    expect((await operation.done).viewport).toBe('partial\ndsh> ')
+  })
+
+  it('contains cursor-position reply failures and ignores later requests', async () => {
+    const terminal = new FakeTerminal()
+    terminal.throwWrite = true
+    terminal.autoExitOnKill = false
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    const operation = session.startSend({ text: '', submit: false })
+
+    terminal.emitData('\x1b[6n')
+    await expect(operation.done).rejects.toThrow('write failed')
+    expect(session.status()).toEqual({ kind: 'exited', exitCode: null, signal: null })
+
+    terminal.throwWrite = false
+    terminal.emitData('\x1b[6n')
+    await Promise.resolve()
+    expect(terminal.writes).toEqual([])
+
+    terminal.emitExit()
+    await expect(session.close('cursor reply failure')).rejects.toThrow('write failed')
+  })
+
+  it('does not start or surface stale cursor replies after close owns the session', async () => {
+    const terminal = new FakeTerminal()
+    terminal.autoExitOnKill = false
+    const reply = Promise.withResolvers<undefined>()
+    const replyStarted = Promise.withResolvers<undefined>()
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      replyStarted.resolve(undefined)
+      await reply.promise
+      throw new Error('stale cursor reply failure')
+    }
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+
+    terminal.emitData('\x1b[6n')
+    await replyStarted.promise
+    const closing = session.close('cursor reply race')
+    terminal.emitData('\x1b[6n')
+    reply.resolve(undefined)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(terminal.writes).toEqual(['\x1b[1;1R'])
+
+    terminal.emitExit()
+    await expect(closing).resolves.toBeUndefined()
+  })
+
+  it('serializes delayed command writes before cursor-position replies', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const inspector = new FakeInspector()
+    const session = makeSession(terminal, inspector, config({ shellDialect: 'pwsh' }))
+    await initialize(session, terminal)
+
+    const commandWrite = Promise.withResolvers<undefined>()
+    let concurrentWrites = 0
+    let maxConcurrentWrites = 0
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      concurrentWrites += 1
+      maxConcurrentWrites = Math.max(maxConcurrentWrites, concurrentWrites)
+      try {
+        if (data === 'command\r') await commandWrite.promise
+      } finally {
+        concurrentWrites -= 1
+      }
+    }
+
+    const operation = session.startSend({ text: 'command', submit: true })
+    let settled = false
+    void operation.done.then(() => { settled = true })
+    await Promise.resolve()
+    await Promise.resolve()
+    terminal.emitData('\x1b[6n')
+    terminal.emitData('output before the queued reply starts')
+    await Promise.resolve()
+    expect(terminal.writes).toEqual(['command\r'])
+
+    commandWrite.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes).toEqual(['command\r', '\x1b[1;2R'])
+    expect(maxConcurrentWrites).toBe(1)
+    inspector.waiting = true
+    await vi.advanceTimersByTimeAsync(30)
+    expect(settled).toBe(false)
+
+    terminal.emitData('\x1b]133;D;0\x07dsh> ')
+    await vi.advanceTimersByTimeAsync(10)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('does not publish startup readiness while a cursor reply is pending', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const cursorReply = Promise.withResolvers<undefined>()
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      await cursorReply.promise
+    }
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    const initialization = session.initialize()
+    let initialized = false
+    void initialization.then(() => { initialized = true })
+
+    terminal.emitData('PowerShell\r\n\x1b[6n')
+    await vi.advanceTimersByTimeAsync(60)
+    expect(initialized).toBe(false)
+
+    cursorReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(20)
+    expect(initialized).toBe(false)
+    terminal.emitData('\x1b]133;D;0\x07dsh> ')
+    await vi.advanceTimersByTimeAsync(10)
+    await initialization
+  })
+
+  it('does not settle readiness until the provider accepts a cursor reply and later output proves recovery', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const inspector = new FakeInspector()
+    const session = makeSession(terminal, inspector, config({ shellDialect: 'pwsh', timeoutMs: 500 }))
+    await initialize(session, terminal)
+
+    const cursorReply = Promise.withResolvers<undefined>()
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      if (data.startsWith('\x1b[')) await cursorReply.promise
+    }
+    const operation = session.startSend({ text: 'command', submit: true })
+    let settled = false
+    void operation.done.then(() => { settled = true })
+    await Promise.resolve()
+    await Promise.resolve()
+    inspector.waiting = true
+    terminal.emitData('partial\x1b[6n')
+
+    await vi.advanceTimersByTimeAsync(60)
+    expect(settled).toBe(false)
+    terminal.emitData('output before the reply write settles')
+    await vi.advanceTimersByTimeAsync(60)
+    expect(settled).toBe(false)
+    cursorReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(20)
+    expect(settled).toBe(true)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it.each(['one callback', 'split callbacks'] as const)(
+    'queues a complete-prompt cursor request behind a recovering reply in %s',
+    async (delivery) => {
+      vi.useFakeTimers()
+      const terminal = new FakeTerminal()
+      const inspector = new FakeInspector()
+      const session = makeSession(terminal, inspector, config({ shellDialect: 'pwsh', timeoutMs: 500 }))
+      await initialize(session, terminal)
+
+      const replyGates = [Promise.withResolvers<undefined>(), Promise.withResolvers<undefined>()]
+      let replyIndex = 0
+      let concurrentWrites = 0
+      let maxConcurrentWrites = 0
+      terminal.write = async (data: string) => {
+        terminal.writes.push(data)
+        concurrentWrites += 1
+        maxConcurrentWrites = Math.max(maxConcurrentWrites, concurrentWrites)
+        try {
+          if (data.startsWith('\x1b[')) {
+            const gate = replyGates[replyIndex]
+            replyIndex += 1
+            await gate?.promise
+          }
+        } finally {
+          concurrentWrites -= 1
+        }
+      }
+
+      const operation = session.startSend({ text: 'command', submit: true })
+      await vi.advanceTimersByTimeAsync(0)
+      inspector.waiting = true
+      terminal.emitData('partial\x1b[6n')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(terminal.writes).toEqual(['command\r', '\x1b[1;2R'])
+
+      if (delivery === 'one callback') {
+        terminal.emitData('\x1b]133;D;0\x07dsh> \x1b[6n')
+      } else {
+        terminal.emitData('\x1b]133;D;0\x07dsh> ')
+        terminal.emitData('\x1b[6n')
+      }
+      await vi.advanceTimersByTimeAsync(0)
+      expect(terminal.writes).toHaveLength(2)
+
+      replyGates[0]?.resolve(undefined)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(terminal.writes).toEqual(['command\r', '\x1b[1;2R', '\x1b[1;2R'])
+      let settled = false
+      void operation.done.then(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(50)
+      expect(settled).toBe(false)
+
+      replyGates[1]?.resolve(undefined)
+      await vi.advanceTimersByTimeAsync(20)
+      expect((await operation.done).waitReason).toBe('stdin_read')
+      expect(maxConcurrentWrites).toBe(1)
+
+      const successor = session.startSend({ text: 'next', submit: true })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(terminal.writes.at(-1)).toBe('next\r')
+      terminal.emitData('\x1b]133;D;0\x07dsh> ')
+      await vi.advanceTimersByTimeAsync(10)
+      expect((await successor.done).waitReason).toBe('stdin_read')
+    },
+  )
+
+  it('releases a native-prompt cursor reply so asynchronously prepared input can start', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh', timeoutMs: 500 }))
+    await initialize(session, terminal)
+
+    const inspection = Promise.withResolvers<{ processGroupId: number; inputWaiting: boolean }>()
+    const cursorReply = Promise.withResolvers<undefined>()
+    const replyStarted = Promise.withResolvers<undefined>()
+    terminal.inspectForeground = async () => await inspection.promise
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      if (data.startsWith('\x1b[')) {
+        replyStarted.resolve(undefined)
+        await cursorReply.promise
+      }
+    }
+
+    const operation = session.startSend({ text: 'bootstrap', submit: true })
+    terminal.emitData('PS> \x1b[6n')
+    await replyStarted.promise
+    inspection.resolve({ processGroupId: 456, inputWaiting: false })
+    cursorReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(terminal.writes).toEqual(['\x1b[1;2R', 'bootstrap\r'])
+    terminal.inspector.waiting = true
+    terminal.emitData('\x1b]133;D;0\x07dsh> ')
+    await vi.advanceTimersByTimeAsync(10)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('continues cursor replies while pwsh consumes buffered input', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh', timeoutMs: 500 }))
+    await initialize(session, terminal)
+
+    let replies = 0
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      if (data === 'command\r') {
+        terminal.emitData('\x1b[6n')
+      } else if (data.startsWith('\x1b[')) {
+        replies += 1
+        if (replies === 1) {
+          terminal.emitData('\x1b[6n')
+        } else {
+          terminal.inspector.waiting = true
+          terminal.emitData('\x1b]133;D;0\x07dsh> ')
+        }
+      }
+    }
+
+    const operation = session.startSend({ text: 'command', submit: true })
+    await vi.advanceTimersByTimeAsync(20)
+
+    expect(terminal.writes).toEqual(['command\r', '\x1b[1;2R', '\x1b[1;2R'])
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('keeps a consecutive cursor reply ahead of an already queued signal', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh', timeoutMs: 500 }))
+    await initialize(session, terminal)
+
+    const events: string[] = []
+    let replies = 0
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      events.push(data)
+      if (data === 'command\r') {
+        terminal.emitData('\x1b[6n')
+      } else if (data.startsWith('\x1b[')) {
+        replies += 1
+        if (replies === 2) {
+          terminal.inspector.waiting = true
+          terminal.emitData('\x1b]133;D;0\x07dsh> ')
+        }
+      }
+    }
+    terminal.signalForeground = async (signal) => {
+      events.push(signal)
+      return 456
+    }
+
+    const operation = session.startSend({ text: 'command', submit: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(events).toEqual(['command\r', '\x1b[1;2R'])
+
+    const signalling = session.signal('SIGTERM')
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(20)
+
+    await expect(signalling).resolves.toEqual({ delivered: true, targetPgid: 456 })
+    expect(events).toEqual(['command\r', '\x1b[1;2R', '\x1b[1;2R', 'SIGTERM'])
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('does not write input that times out while queued behind a cursor reply', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh', timeoutMs: 100 }))
+    await initialize(session, terminal)
+
+    const inspection = Promise.withResolvers<{ processGroupId: number; inputWaiting: boolean }>()
+    const cursorReply = Promise.withResolvers<undefined>()
+    const replyStarted = Promise.withResolvers<undefined>()
+    terminal.inspectForeground = async () => await inspection.promise
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      if (data.startsWith('\x1b[')) {
+        replyStarted.resolve(undefined)
+        await cursorReply.promise
+      }
+    }
+
+    const operation = session.startSend({ text: 'expired', submit: true })
+    terminal.emitData('PS> \x1b[6n')
+    await replyStarted.promise
+    inspection.resolve({ processGroupId: 456, inputWaiting: false })
+    await vi.advanceTimersByTimeAsync(100)
+    expect((await operation.done).waitReason).toBe('timeout')
+
+    cursorReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes).toEqual(['\x1b[1;2R'])
+  })
+
+  it('does not write canceled input queued behind a cursor reply', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const inspector = new FakeInspector()
+    const session = makeSession(terminal, inspector, config({ shellDialect: 'pwsh', timeoutMs: 500 }))
+    await initialize(session, terminal)
+
+    const inspection = Promise.withResolvers<{ processGroupId: number; inputWaiting: boolean }>()
+    const cursorReply = Promise.withResolvers<undefined>()
+    const replyStarted = Promise.withResolvers<undefined>()
+    const events: string[] = []
+    terminal.inspectForeground = async () => await inspection.promise
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      events.push(data)
+      if (data.startsWith('\x1b[')) {
+        replyStarted.resolve(undefined)
+        await cursorReply.promise
+      }
+    }
+    terminal.signalForeground = async (signal) => {
+      events.push(signal)
+      return 456
+    }
+
+    const operation = session.startSend({ text: 'canceled', submit: true })
+    terminal.emitData('PS> \x1b[6n')
+    await replyStarted.promise
+    inspection.resolve({ processGroupId: 456, inputWaiting: false })
+    await vi.advanceTimersByTimeAsync(0)
+    terminal.emitData('\x1b[6n')
+    expect(operation.cancel()).toBe(true)
+    cursorReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(events).toEqual(['\x1b[1;2R', '\x1b[1;2R', 'SIGINT'])
+
+    inspector.waiting = true
+    terminal.emitData('\x1b]133;D;130\x07dsh> ')
+    await vi.advanceTimersByTimeAsync(10)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('bounds cursor requests retained behind a complete prompt', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh', timeoutMs: 500 }))
+    await initialize(session, terminal)
+
+    const replyGates = [Promise.withResolvers<undefined>(), Promise.withResolvers<undefined>()]
+    let replyIndex = 0
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      if (data.startsWith('\x1b[')) {
+        const gate = replyGates[replyIndex]
+        replyIndex += 1
+        await gate?.promise
+      }
+    }
+
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    for (let index = 0; index < 1_000; index += 1) terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes).toEqual(['\x1b[1;2R'])
+    expect(() => session.startSend({ text: 'blocked', submit: true })).toThrow('draining terminal input')
+
+    replyGates[0]?.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes).toEqual(['\x1b[1;2R', '\x1b[1;2R'])
+    expect(() => session.startSend({ text: 'still blocked', submit: true })).toThrow('draining terminal input')
+
+    replyGates[1]?.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    const operation = session.startSend({ text: 'command', submit: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes.at(-1)).toBe('command\r')
+    terminal.inspector.waiting = true
+    terminal.emitData('\x1b]133;D;0\x07dsh> ')
+    await vi.advanceTimersByTimeAsync(10)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('reserves a retained cursor reply ahead of later terminal actions', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    await initialize(session, terminal)
+
+    const firstReply = Promise.withResolvers<undefined>()
+    const events: string[] = []
+    let replies = 0
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      events.push(data)
+      replies += 1
+      if (replies === 1) await firstReply.promise
+    }
+    terminal.signalForeground = async (signal) => {
+      events.push(signal)
+      return 456
+    }
+
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    terminal.emitData('\x1b[6n')
+    const signalling = session.signal('SIGTERM')
+    firstReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await expect(signalling).resolves.toEqual({ delivered: true, targetPgid: 456 })
+    expect(events).toEqual(['\x1b[1;2R', '\x1b[1;2R', 'SIGTERM'])
+  })
+
+  it('drops a retained cursor successor when close owns the session', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    await initialize(session, terminal)
+
+    const firstReply = Promise.withResolvers<undefined>()
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      await firstReply.promise
+    }
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    terminal.emitData('\x1b[6n')
+    firstReply.resolve(undefined)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(terminal.writes).toEqual(['\x1b[1;2R'])
+
+    const closing = session.close('retained cursor successor')
+    await vi.advanceTimersByTimeAsync(0)
+    await expect(closing).resolves.toBeUndefined()
+    expect(terminal.writes).toEqual(['\x1b[1;2R'])
+  })
+
+  it('blocks readiness when a cursor request arrives during foreground inspection', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    await initialize(session, terminal)
+
+    const readinessInspection = Promise.withResolvers<{ processGroupId: number; inputWaiting: boolean }>()
+    let inspections = 0
+    terminal.inspectForeground = async () => {
+      inspections += 1
+      return inspections === 1
+        ? { processGroupId: 456, inputWaiting: false }
+        : await readinessInspection.promise
+    }
+    const operation = session.startSend({ text: 'command', submit: true })
+    let settled = false
+    void operation.done.then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(inspections).toBe(2)
+
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    readinessInspection.resolve({ processGroupId: 456, inputWaiting: true })
+    await vi.advanceTimersByTimeAsync(50)
+    expect(settled).toBe(false)
+
+    terminal.emitData('\x1b]133;D;0\x07dsh> ')
+    await vi.advanceTimersByTimeAsync(10)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('delivers pwsh result output before the shell\'s next input wait settles', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({
+      shellDialect: 'pwsh',
+      exactProbeAfterMs: 10,
+      idleSilenceMs: 100,
+      timeoutMs: 500,
+    }))
+    await initialize(session, terminal)
+
+    const inspect = terminal.inspectForeground.bind(terminal)
+    let inspections = 0
+    terminal.inspectForeground = async () => {
+      inspections += 1
+      if (inspections === 2) {
+        terminal.inspector.waiting = true
+        setTimeout(() => {
+          terminal.emitData('EXECUTED\r\n')
+        }, 0)
+      }
+      return await inspect()
+    }
+    const operation = session.startSend({ text: 'command', submit: true })
+    let settled = false
+    void operation.done.then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(0)
+
+    await vi.advanceTimersByTimeAsync(10)
+    expect(settled).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(10)
+    expect(settled).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(10)
+    const result = await operation.done
+    expect(result.waitReason).toBe('stdin_read')
+    expect(result.viewport).toContain('EXECUTED\n')
+  })
+
+  it('reports a stable foreground input wait after one output-delivery turn', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({
+      exactProbeAfterMs: 20,
+      idleSilenceMs: 100,
+      timeoutMs: 500,
+    }))
+    await initialize(session, terminal)
+
+    const inspect = terminal.inspectForeground.bind(terminal)
+    let inspections = 0
+    terminal.inspectForeground = async () => {
+      inspections += 1
+      if (inspections === 3) terminal.inspector.waiting = true
+      return await inspect()
+    }
+    const operation = session.startSend({ text: 'read from terminal', submit: true })
+    let settled = false
+    void operation.done.then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(0)
+
+    await vi.advanceTimersByTimeAsync(20)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(10)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('delivers output queued during inspection before inferred idle settles', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({
+      exactProbeAfterMs: 100,
+      idleSilenceMs: 20,
+      timeoutMs: 200,
+    }))
+    await initialize(session, terminal)
+
+    terminal.inspector.pgid = undefined
+    const inspect = terminal.inspectForeground.bind(terminal)
+    let inspections = 0
+    terminal.inspectForeground = async () => {
+      inspections += 1
+      if (inspections === 3) {
+        setTimeout(() => { terminal.emitData('LATE_IDLE_OUTPUT') }, 0)
+      }
+      return await inspect()
+    }
+    const operation = session.startSend({ text: 'quiet command', submit: true })
+    let settled = false
+    void operation.done.then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(20)
+    expect(settled).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(30)
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(10)
+    const result = await operation.done
+    expect(result.waitReason).toBe('inferred_idle')
+    expect(result.viewport).toContain('LATE_IDLE_OUTPUT')
+  })
+
+  it('lets the absolute deadline win before an inferred-idle candidate is confirmed', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({
+      exactProbeAfterMs: 100,
+      idleSilenceMs: 50,
+      timeoutMs: 55,
+    }))
+    await initialize(session, terminal)
+
+    terminal.inspector.pgid = undefined
+    const operation = session.startSend({ text: 'deadline command', submit: true })
+    await vi.advanceTimersByTimeAsync(55)
+
+    expect((await operation.done).waitReason).toBe('timeout')
+  })
+
+  it('releases a cursor reply after an owned marker with a custom prompt tail', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({
+      shellDialect: 'pwsh',
+      exactProbeAfterMs: 20,
+      idleSilenceMs: 50,
+      timeoutMs: 500,
+    }))
+    await initialize(session, terminal)
+
+    const operation = session.startSend({ text: 'custom prompt', submit: true })
+    let settled = false
+    void operation.done.then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(0)
+    terminal.inspector.waiting = true
+    terminal.emitData('\x1b]133;D;0\x07__DSH_PERSISTENT_PWSH_PROMPT__ \x1b[6n')
+    await vi.advanceTimersByTimeAsync(70)
+
+    expect(terminal.writes).toContain('\x1b[1;2R')
+    expect(settled).toBe(true)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('drains a cursor reply before cancellation signals the foreground group', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const inspector = new FakeInspector()
+    const session = makeSession(terminal, inspector, config({ shellDialect: 'pwsh', timeoutMs: 500 }))
+    await initialize(session, terminal)
+
+    const cursorReply = Promise.withResolvers<undefined>()
+    const events: string[] = []
+    let concurrentInput = 0
+    let maxConcurrentInput = 0
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      events.push(data)
+      concurrentInput += 1
+      maxConcurrentInput = Math.max(maxConcurrentInput, concurrentInput)
+      try {
+        if (data.startsWith('\x1b[')) await cursorReply.promise
+      } finally {
+        concurrentInput -= 1
+      }
+    }
+    terminal.signalForeground = async (signal) => {
+      events.push(signal)
+      concurrentInput += 1
+      maxConcurrentInput = Math.max(maxConcurrentInput, concurrentInput)
+      try {
+        inspector.signalGroup(456, signal)
+        return 456
+      } finally {
+        concurrentInput -= 1
+      }
+    }
+
+    const operation = session.startSend({ text: 'command', submit: true })
+    await vi.advanceTimersByTimeAsync(0)
+    terminal.emitData('\x1b[6n')
+    await Promise.resolve()
+    expect(operation.cancel()).toBe(true)
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(events).toEqual(['command\r', '\x1b[1;2R'])
+
+    cursorReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(events).toEqual(['command\r', '\x1b[1;2R', '\x1b[1;2R'])
+    expect(maxConcurrentInput).toBe(1)
+
+    terminal.emitData('\x1b]133;D;130\x07dsh> ')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(events).toEqual(['command\r', '\x1b[1;2R', '\x1b[1;2R', 'SIGINT'])
+    await vi.advanceTimersByTimeAsync(10)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('queues a cursor reply behind an in-flight cancellation signal', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const inspector = new FakeInspector()
+    const session = makeSession(terminal, inspector, config({ shellDialect: 'pwsh', timeoutMs: 500 }))
+    await initialize(session, terminal)
+
+    const signalStarted = Promise.withResolvers<undefined>()
+    const signalGate = Promise.withResolvers<undefined>()
+    const events: string[] = []
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      events.push(data)
+    }
+    terminal.signalForeground = async (signal) => {
+      events.push(signal)
+      signalStarted.resolve(undefined)
+      await signalGate.promise
+      inspector.signalGroup(456, signal)
+      return 456
+    }
+
+    const operation = session.startSend({ text: 'command', submit: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(operation.cancel()).toBe(true)
+    await signalStarted.promise
+    terminal.emitData('\x1b[6n')
+    terminal.emitData('output before the queued reply starts')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(events).toEqual(['command\r', 'SIGINT'])
+
+    signalGate.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(events).toEqual(['command\r', 'SIGINT', '\x1b[1;2R'])
+
+    inspector.waiting = true
+    terminal.emitData('\x1b]133;D;130\x07dsh> ')
+    await vi.advanceTimersByTimeAsync(10)
+    expect((await operation.done).waitReason).toBe('stdin_read')
+  })
+
+  it('serializes explicit signals after a pending cursor reply', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    await initialize(session, terminal)
+
+    const cursorReply = Promise.withResolvers<undefined>()
+    const events: string[] = []
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      events.push(data)
+      await cursorReply.promise
+    }
+    terminal.signalForeground = async (signal) => {
+      events.push(signal)
+      return 456
+    }
+
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(() => session.startSend({ text: 'must wait', submit: true })).toThrow('draining terminal input')
+    const signalling = session.signal('SIGTERM')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(events).toEqual(['\x1b[1;2R'])
+
+    terminal.emitData('resumed')
+    cursorReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    await expect(signalling).resolves.toEqual({ delivered: true, targetPgid: 456 })
+    expect(events).toEqual(['\x1b[1;2R', 'SIGTERM'])
+
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    terminal.emitData('resumed again')
+    await session.close('explicit signal ordering')
+  })
+
+  it('retains a timed-out send until cursor recovery releases its input slot', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config({
+      shellDialect: 'pwsh',
+      exactProbeAfterMs: 1_000,
+      idleSilenceMs: 1_000,
+      timeoutMs: 100,
+    }))
+    await initialize(session, terminal)
+
+    const cursorReply = Promise.withResolvers<undefined>()
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      await cursorReply.promise
+    }
+    const operation = session.startSend({ text: '', submit: false })
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect((await operation.done).waitReason).toBe('timeout')
+    expect(() => session.startSend({ text: 'too early', submit: true })).toThrow('active send')
+    cursorReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(() => session.startSend({ text: 'still too early', submit: true })).toThrow('active send')
+
+    terminal.emitData('resumed')
+    await vi.advanceTimersByTimeAsync(0)
+    const successor = session.startSend({ text: '', submit: false })
+    terminal.emitExit()
+    expect((await successor.done).waitReason).toBe('session_exit')
+  })
+
+  it('does not start a queued cursor reply after close owns the session', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const inspector = new FakeInspector()
+    const session = makeSession(terminal, inspector, config({ shellDialect: 'pwsh' }))
+    await initialize(session, terminal)
+
+    const commandWrite = Promise.withResolvers<undefined>()
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      if (data === 'command\r') await commandWrite.promise
+    }
+    terminal.terminate = async () => {
+      commandWrite.reject(new Error('terminal terminated'))
+      terminal.emitExit(0, 15)
+    }
+
+    const operation = session.startSend({ text: 'command', submit: true })
+    await vi.advanceTimersByTimeAsync(0)
+    terminal.emitData('\x1b[6n')
+    const closing = session.close('queued cursor reply')
+
+    await expect(closing).resolves.toBeUndefined()
+    expect((await operation.done).waitReason).toBe('session_exit')
+    expect(terminal.writes).toEqual(['command\r'])
+  })
+
+  it('keeps a normal exit when an outstanding cursor reply rejects afterward', async () => {
+    const terminal = new FakeTerminal()
+    const reply = Promise.withResolvers<undefined>()
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      await reply.promise
+    }
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    const operation = session.startSend({ text: '', submit: false })
+
+    terminal.emitData('\x1b[6n')
+    await Promise.resolve()
+    const outputEnded = Promise.withResolvers<undefined>()
+    terminal.output.once('end', () => { outputEnded.resolve(undefined) })
+    terminal.output.end()
+    await outputEnded.promise
+    terminal.outcome.resolve({ exitCode: 0, signal: null })
+    reply.reject(new Error('write observed the normal exit'))
+
+    expect(await operation.done).toMatchObject({
+      waitReason: 'session_exit',
+      sessionStatus: { kind: 'exited', exitCode: 0, signal: null },
+    })
+    await expect(session.close('normal cursor exit')).resolves.toBeUndefined()
+  })
+
+  it('does not start queued input after normal output end and contains a late cursor acknowledgement', async () => {
+    const terminal = new FakeTerminal()
+    const cursorReply = Promise.withResolvers<undefined>()
+    const signals: string[] = []
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      await cursorReply.promise
+    }
+    terminal.signalForeground = async (signal) => {
+      signals.push(signal)
+      return 456
+    }
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+
+    terminal.emitData('\x1b[6n')
+    await Promise.resolve()
+    const signalling = session.signal('SIGTERM')
+    const outputEnded = Promise.withResolvers<undefined>()
+    terminal.output.once('end', () => { outputEnded.resolve(undefined) })
+    terminal.output.end()
+    await outputEnded.promise
+    terminal.outcome.resolve({ exitCode: 0, signal: null })
+    await vi.waitFor(() => {
+      expect(session.status()).toEqual({ kind: 'exited', exitCode: 0, signal: null })
+    })
+
+    cursorReply.resolve(undefined)
+    await expect(signalling).rejects.toThrow('has exited')
+    expect(signals).toEqual([])
+    await expect(session.close('normal queued input exit')).resolves.toBeUndefined()
+  })
+
+  it('does not start queued input after a live cursor transport failure', async () => {
+    const terminal = new FakeTerminal()
+    terminal.autoExitOnKill = false
+    const cursorReply = Promise.withResolvers<undefined>()
+    const signals: string[] = []
+    terminal.write = async () => { await cursorReply.promise }
+    terminal.signalForeground = async (signal) => {
+      signals.push(signal)
+      return 456
+    }
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    const operation = session.startSend({ text: '', submit: false })
+
+    terminal.emitData('\x1b[6n')
+    await Promise.resolve()
+    const signalling = session.signal('SIGTERM')
+    cursorReply.reject(new Error('cursor transport failed'))
+
+    await expect(operation.done).rejects.toThrow('cursor transport failed')
+    await expect(signalling).rejects.toThrow('has exited')
+    expect(signals).toEqual([])
+    terminal.emitExit()
+    await expect(session.close('cursor transport failure')).rejects.toThrow('cursor transport failed')
+  })
+
+  it('bounds cursor-position successors while continuing exact requests and never answers them for bash', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const firstReply = Promise.withResolvers<undefined>()
+    terminal.write = async (data: string) => {
+      terminal.writes.push(data)
+      if (terminal.writes.length === 1) await firstReply.promise
+    }
+    const session = new LocalPtySession(terminal, config({ shellDialect: 'pwsh' }))
+    const operation = session.startSend({ text: '', submit: false })
+    await vi.advanceTimersByTimeAsync(0)
+
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes).toEqual(['\x1b[1;1R'])
+
+    terminal.emitData('\x1b[6n'.repeat(1_000))
+    terminal.emitData('\x1b[6n')
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes).toEqual(['\x1b[1;1R'])
+
+    firstReply.resolve(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes).toEqual(['\x1b[1;1R', '\x1b[1;1R'])
+
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes).toEqual(['\x1b[1;1R', '\x1b[1;1R', '\x1b[1;1R'])
+
+    terminal.emitData('resumed')
+    terminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(terminal.writes).toEqual(['\x1b[1;1R', '\x1b[1;1R', '\x1b[1;1R', '\x1b[1;2R'])
+    terminal.emitExit()
+    await operation.done
+
+    const bashTerminal = new FakeTerminal()
+    const bashSession = new LocalPtySession(bashTerminal, config({ shellDialect: 'bash' }))
+    const bashOperation = bashSession.startSend({ text: '', submit: false })
+    bashTerminal.emitData('\x1b[6n')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(bashTerminal.writes).toEqual([])
+    bashTerminal.emitExit()
+    await bashOperation.done
+  })
+
   it('validates pagination and enforces line/UTF-8 bounds', async () => {
     vi.useFakeTimers()
     const terminal = new FakeTerminal()
@@ -1223,15 +2243,16 @@ describe('LocalPtySession bounds, signals, and teardown', () => {
     await initialize(session, terminal)
     const write = Promise.withResolvers<undefined>()
     terminal.write = async () => { await write.promise }
+    const terminate = terminal.terminate.bind(terminal)
+    terminal.terminate = async () => {
+      write.reject(new Error('write rejected during close'))
+      await terminate()
+    }
     const writeOperation = session.startSend({ text: 'pending write', submit: true })
     await Promise.resolve()
     await Promise.resolve()
     await session.close('pending write')
     expect((await writeOperation.done).waitReason).toBe('session_exit')
-    // The rejection lands after close released the send; it must stay contained.
-    write.reject(new Error('write rejected during close'))
-    await Promise.resolve()
-    await Promise.resolve()
   })
 
   it('settles a closing send when provider termination cancels a pending inspection', async () => {

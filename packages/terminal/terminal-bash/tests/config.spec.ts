@@ -39,19 +39,36 @@ describe('terminal-bash dialect resolution', () => {
     expect(shellArgs).toEqual(['--noprofile', '--norc', '-i'])
   })
 
-  it('defaults pwsh argv to the interactive profile-free form and resolves the executable', () => {
+  it('defaults pwsh argv to the profile-free ConsoleHost form and resolves the executable', () => {
     const resolved = resolveConfig({ backendType: 'shell', shellDialect: 'pwsh', rows: 24, cols: 80 })
     expect(resolved.shellDialect).toBe('pwsh')
     expect(resolved.shellPath.length).toBeGreaterThan(0)
-    expect(resolved.shellArgs).toEqual(['-NoLogo', '-NoProfile'])
+    expect(resolved.shellArgs).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive'])
   })
 
-  it('lets an explicit shell specification win over the dialect defaults', () => {
+  it('lets an explicit pwsh executable win while retaining the supported arguments', () => {
     const resolved = resolveConfig({
-      backendType: 'shell', shellDialect: 'pwsh', shellPath: '/custom/pwsh', shellArgs: ['-NoProfile'], rows: 24, cols: 80,
+      backendType: 'shell', shellDialect: 'pwsh', shellPath: '/custom/pwsh', rows: 24, cols: 80,
     })
     expect(resolved.shellPath).toBe('/custom/pwsh')
-    expect(resolved.shellArgs).toEqual(['-NoProfile'])
+    expect(resolved.shellArgs).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive'])
+    expect(() => { validateConfig(resolved) }).not.toThrow()
+  })
+
+  it('rejects pwsh arguments outside the supported ConsoleHost mode', () => {
+    const incomplete = resolveConfig({
+      backendType: 'shell', shellDialect: 'pwsh', shellArgs: ['-NoProfile'], rows: 24, cols: 80,
+    })
+    const redirected = resolveConfig({
+      backendType: 'shell', shellDialect: 'pwsh', shellArgs: ['-NoLogo', '-NoProfile', '-File'], rows: 24, cols: 80,
+    })
+    const legacyFileMode = resolveConfig({
+      backendType: 'shell', shellDialect: 'pwsh',
+      shellArgs: ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', '-'], rows: 24, cols: 80,
+    })
+    expect(() => { validateConfig(incomplete) }).toThrow('pwsh shellArgs must be omitted or exactly')
+    expect(() => { validateConfig(redirected) }).toThrow('pwsh shellArgs must be omitted or exactly')
+    expect(() => { validateConfig(legacyFileMode) }).toThrow('pwsh shellArgs must be omitted or exactly')
   })
 
   it('treats empty shell values as unset so Schemastery materialization cannot drop the dialect defaults', () => {
