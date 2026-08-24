@@ -104,6 +104,11 @@ function spec(command: string, overrides: SpecOverrides = {}) {
   }
 }
 
+function isVanishedProcEntryError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'ENOENT' || code === 'ESRCH'
+}
+
 /** Poll until a pid no longer exists, or is only a zombie on Linux. */
 async function waitGone(pid: number, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -119,7 +124,7 @@ async function waitGone(pid: number, timeoutMs = 5_000): Promise<void> {
         const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3)
         if (state === 'Z' || state === 'X') return
       } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        if (isVanishedProcEntryError(error)) return
         throw error
       }
     }
@@ -162,6 +167,12 @@ async function waitForPidFile(path: string, timeoutMs = 5_000): Promise<number> 
 }
 
 describe('spawnSubprocess', () => {
+  it('treats Linux missing-process read errors as a vanished proc entry', () => {
+    expect(isVanishedProcEntryError(Object.assign(new Error('missing entry'), { code: 'ENOENT' }))).toBe(true)
+    expect(isVanishedProcEntryError(Object.assign(new Error('vanished process'), { code: 'ESRCH' }))).toBe(true)
+    expect(isVanishedProcEntryError(Object.assign(new Error('permission denied'), { code: 'EACCES' }))).toBe(false)
+  })
+
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, MAX_TIMER_DELAY_MS + 1])(
     'rejects an invalid grace before spawning: %s',
     (graceMs) => {
