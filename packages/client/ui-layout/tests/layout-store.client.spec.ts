@@ -18,7 +18,16 @@ describe('createLayoutStore', () => {
       rightbarTrack: false,
       rightbarFullscreen: false,
       rightbarInstant: false,
+      surfaceKey: null,
     })
+  })
+
+  it('setSurface sets and clears the generic main-surface token', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.setSurface('product:work')
+    expect(store.getSnapshot().surfaceKey).toBe('product:work')
+    actions.setSurface(null)
+    expect(store.getSnapshot().surfaceKey).toBeNull()
   })
 
   it('creates independent instances without browser persistence', () => {

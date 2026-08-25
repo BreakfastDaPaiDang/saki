@@ -40,6 +40,11 @@ type LayoutState = {
   rightbarFullscreen: boolean
   /** Suppress transitions for a fullscreen exit until another geometry action. */
   rightbarInstant: boolean
+  /**
+   * The elected `main.surface` chain token, written by feature plugins through
+   * `ctx.layout.requestSurface`; null renders the conversation fallback.
+   */
+  surfaceKey: string | null
 }
 
 /**
@@ -53,6 +58,7 @@ type LayoutActions = {
   setRightbar: (draft: LayoutState, px: number) => void
   openRightbar: (draft: LayoutState, track: boolean, fullscreen: boolean) => void
   closeRightbar: (draft: LayoutState) => void
+  setSurface: (draft: LayoutState, key: string | null) => void
 }
 
 /**
@@ -75,6 +81,7 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
       rightbarTrack: false,
       rightbarFullscreen: false,
       rightbarInstant: false,
+      surfaceKey: null,
     }),
     actions: {
       setSidebar: (d, px: number) => {
@@ -118,6 +125,9 @@ export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutAction
         d.rightbarTrack = false
         d.rightbarFullscreen = false
       },
+      // The main-surface token is a generic string the shell never interprets;
+      // feature plugins set it to elect their `main.surface` chain entry.
+      setSurface: (d, key: string | null) => { d.surfaceKey = key },
     },
   })
   return handle

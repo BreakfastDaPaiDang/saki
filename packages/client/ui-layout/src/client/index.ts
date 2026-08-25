@@ -1,7 +1,7 @@
 /**
  * Layout plugin, browser half: one register() call contributes AppFrame into
  * the runtime's built-in 'root' slot and, in the same breath, declares the
- * four child slots (declaration = exclusive render authority), seats the
+ * five child slots (declaration = exclusive render authority), seats the
  * layout store (panel geometry), and wires the panel-action service face.
  * ctx.layout is the cross-plugin panel-action contract; navigation state lives
  * with the runtime sessions service. A second effect seats the theme
@@ -88,6 +88,19 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * `id` is added beside the shipped entries instead of replacing them.
      */
     'shell.overlay': { kind: 'list'; scope: 'root' }
+    /**
+     * The main content surface's takeover chain. Feature plugins register
+     * chain entries that nominate themselves from the owner props (today: the
+     * generic surface token from `ctx.layout.requestSurface`); the first
+     * matching entry renders inside the center column. With no election the
+     * frame falls back to the shipped `conversation` slot, so removing a
+     * takeover plugin restores the ordinary conversation surface with no
+     * residual navigation state.
+     *
+     * The fallback stays mounted (overlay) while a takeover is active, so the
+     * conversation's in-progress state survives switching away and back.
+     */
+    'main.surface': { kind: 'chain'; scope: 'root'; owner: MainSurfaceOwnerProps }
   }
 }
 
@@ -121,12 +134,22 @@ export interface RightbarOwnerProps {
   canShow: boolean
 }
 
+/**
+ * Main-surface chain owner share: the generic surface token set through
+ * `ctx.layout.requestSurface`. Selectors match their own token prefix and
+ * return null otherwise; the shell never interprets the value.
+ */
+export interface MainSurfaceOwnerProps {
+  /** The active surface token; null means the conversation fallback. */
+  surfaceKey: string | null
+}
+
 /** Required services (cordis fiber inject — the loader passes all module exports as an object plugin). */
 export const inject = ['slots', 'theme', 'locale']
 
 /**
  * Client plugin body: provide ctx.layout, then one register() call — AppFrame
- * into 'root' with the four child-slot declarations, the layout store seat,
+ * into 'root' with the five child-slot declarations, the layout store seat,
  * and the inject hook that hands the store's bound actions to the service.
  * @param ctx - client root context.
  */
@@ -142,6 +165,7 @@ export function apply(ctx: ClientContext): void {
         'conversation': { kind: 'single', scope: 'session-maybe' },
         'rightbar': { kind: 'single', scope: 'session' },
         'shell.overlay': { kind: 'list', scope: 'root' },
+        'main.surface': { kind: 'chain', scope: 'root' },
       },
       // Exclusive store: the factory itself — the framework instantiates per
       // entry and delivers useStore/actions to AppFrame as standard props.

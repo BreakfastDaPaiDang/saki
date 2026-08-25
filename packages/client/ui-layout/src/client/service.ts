@@ -33,6 +33,13 @@ export interface ILayout {
   openRightbar(track: boolean, fullscreen: boolean): void
   /** Report the right panel as hidden: no track, no handle. */
   closeRightbar(): void
+  /**
+   * Request the active main surface by generic token. The shell never
+   * interprets the key: a feature plugin sets it to elect its own
+   * `main.surface` chain entry, and clears it (null) to hand the center
+   * column back to the conversation fallback.
+   */
+  requestSurface(key: string | null): void
 }
 
 /** Cross-plugin panel-action face (ctx.layout). */
@@ -63,6 +70,11 @@ export class LayoutController implements ILayout {
   /** Report the right panel as hidden: no track, no handle. */
   closeRightbar(): void {
     this.#require().closeRightbar()
+  }
+
+  /** Request the active main surface by generic token (see ILayout). */
+  requestSurface(key: string | null): void {
+    this.#require().setSurface(key)
   }
 
   #require(): PanelActions {

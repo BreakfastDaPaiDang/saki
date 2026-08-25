@@ -28,7 +28,7 @@ import css from './AppFrame.module.css'
 /** Full composed props: runtime share + child-slot render share + store share. */
 export type AppFrameProps =
   & PropsRuntime<'root'>
-  & PropsRenderSlots<'sidebar' | 'conversation' | 'rightbar' | 'shell.overlay'>
+  & PropsRenderSlots<'sidebar' | 'conversation' | 'rightbar' | 'shell.overlay' | 'main.surface'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
   & PropsLocale<'common'>
 
@@ -120,6 +120,7 @@ export function AppFrame({
   renderSlot,
   SessionProvider,
   t,
+  renderSlotChain,
 }: AppFrameProps) {
   const panels = useStore(s => s)
   const documentTitle = useSessions((s) => {
@@ -224,8 +225,16 @@ export function AppFrame({
             paint — no loading gate: a bare status line reads worse than
             the shell's own pending rendering. The conversation is
             session-maybe; SessionProvider withholds the strict right-column
-            entry while no session is current. */}
-        <CenterColumn>{renderSlot('conversation', {})}</CenterColumn>
+            entry while no session is current. The center column is the
+            `main.surface` chain: a feature plugin's elected entry takes over
+            the surface, while the conversation fallback stays mounted
+            (overlay) so its in-progress state survives the switch. */}
+        <CenterColumn>
+          {renderSlotChain('main.surface', { surfaceKey: panels.surfaceKey }, {
+            fallback: renderSlot('conversation', {}),
+            overlay: true,
+          })}
+        </CenterColumn>
         <RightbarColumn>
           {/* Strict session entry: with no session there is no surface, and the
               column is an empty zero-width track. The occupant receives the
