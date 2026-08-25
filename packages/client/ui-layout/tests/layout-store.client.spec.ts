@@ -19,7 +19,15 @@ beforeEach(() => { localStorage.clear() })
 describe('createLayoutStore', () => {
   it('initializes the sidebar at its default width, details closed, wide viewport assumed', () => {
     const { store } = createLayoutStore().create()
-    expect(store.getSnapshot()).toEqual({ sidebar: SIDEBAR_DEFAULT, details: 0, narrow: false, narrowExpanded: false })
+    expect(store.getSnapshot()).toEqual({ sidebar: SIDEBAR_DEFAULT, details: 0, narrow: false, narrowExpanded: false, surfaceKey: null })
+  })
+
+  it('setSurface sets and clears the generic main-surface token', () => {
+    const { store, actions } = createLayoutStore().create()
+    actions.setSurface('product:work')
+    expect(store.getSnapshot().surfaceKey).toBe('product:work')
+    actions.setSurface(null)
+    expect(store.getSnapshot().surfaceKey).toBeNull()
   })
 
   it('each create() is an independent instance (factory is not a singleton)', () => {
@@ -55,7 +63,7 @@ describe('createLayoutStore', () => {
     actions.setSidebar(400)
     actions.setNarrow(true)
     actions.toggleSidebar()
-    expect(store.getSnapshot()).toEqual({ sidebar: 400, details: 0, narrow: true, narrowExpanded: true })
+    expect(store.getSnapshot()).toEqual({ sidebar: 400, details: 0, narrow: true, narrowExpanded: true, surfaceKey: null })
     actions.toggleSidebar()
     expect(store.getSnapshot().narrowExpanded).toBe(false)
     expect(store.getSnapshot().sidebar).toBe(400)
@@ -98,6 +106,7 @@ describe('createLayoutStore', () => {
       details: 0,
       narrow: false,
       narrowExpanded: false,
+      surfaceKey: null,
     })
   })
 })

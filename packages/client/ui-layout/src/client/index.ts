@@ -81,6 +81,19 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * `id` is added beside the shipped entries instead of replacing them.
      */
     'shell.overlay': { kind: 'list'; scope: 'root' }
+    /**
+     * The main content surface's takeover chain. Feature plugins register
+     * chain entries that nominate themselves from the owner props (today: the
+     * generic surface token from `ctx.layout.requestSurface`); the first
+     * matching entry renders inside the center column. With no election the
+     * frame falls back to the shipped `conversation` slot, so removing a
+     * takeover plugin restores the ordinary conversation surface with no
+     * residual navigation state.
+     *
+     * The fallback stays mounted (overlay) while a takeover is active, so the
+     * conversation's in-progress state survives switching away and back.
+     */
+    'main.surface': { kind: 'chain'; scope: 'root'; owner: MainSurfaceOwnerProps }
   }
 }
 
@@ -100,6 +113,16 @@ export interface SidebarOwnerProps {
 
 /** Conversation owner share: business state and actions belong to the registrant. */
 export interface ConvOwnerProps {}
+
+/**
+ * Main-surface chain owner share: the generic surface token set through
+ * `ctx.layout.requestSurface`. Selectors match their own token prefix and
+ * return null otherwise; the shell never interprets the value.
+ */
+export interface MainSurfaceOwnerProps {
+  /** The active surface token; null means the conversation fallback. */
+  surfaceKey: string | null
+}
 
 /** Details owner share: empty — sessionId arrives as a framework-standard prop. */
 export interface DetailsOwnerProps {}
@@ -124,6 +147,7 @@ export function apply(ctx: ClientContext): void {
         'conversation': { kind: 'single', scope: 'session-maybe' },
         'details': { kind: 'single', scope: 'session' },
         'shell.overlay': { kind: 'list', scope: 'root' },
+        'main.surface': { kind: 'chain', scope: 'root' },
       },
       // Exclusive store: the factory itself — the framework instantiates per
       // entry and delivers useStore/actions to AppFrame as standard props.

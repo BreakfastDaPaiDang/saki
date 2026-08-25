@@ -187,6 +187,12 @@ export function SidebarRoot({
         </button>
       </Tooltip>
 
+      {/* Primary navigation entries (product-layer destinations) sit directly
+          under New Session; each renders the rail form when collapsed. */}
+      <div className={css.primaryActions}>
+        {renderSlot('sidebar.primary.action', { wide })}
+      </div>
+
       {/* The browsing region fills the column between the controls and the
           foot in both states; its rail icon column rides the same slot. */}
       <div className={css.regionArea}>

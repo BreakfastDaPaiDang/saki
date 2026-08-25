@@ -25,6 +25,8 @@ import type {
 const selectedSession = { current: 's-test' as SessionId | undefined }
 const selectedSessionBlank = { current: false }
 const baselinesReady = { current: true }
+/** When set, the chain stub elects an entry whose token matches surfaceKey. */
+const chainMatch = { current: null as string | null }
 
 // Render-prop contract stub fed through the standard seat prop (the renderer
 // injects the real one in production): session mode runs children(id), empty
@@ -64,6 +66,21 @@ function mountFrame() {
     if (key === 'conversation.empty') return <div data-testid="empty-content" />
     return <div data-testid="other-content" />
   }) as AppFrameProps['renderSlot']
+  // Chain stub: records the owner currency; when chainMatch carries a surface
+  // key an entry elects and renders takeover content beside the fallback
+  // (overlay), otherwise the outlet renders the conversation fallback.
+  type ChainOwner = { surfaceKey: string | null }
+  type ChainOpts = { fallback?: React.ReactNode; overlay?: boolean }
+  const renderSlotChain = ((key: string, owner: ChainOwner, opts?: ChainOpts) => {
+    slotCalls.push({ key, props: owner })
+    const elected = chainMatch.current !== null && owner.surfaceKey === chainMatch.current
+    return (
+      <>
+        {elected ? <div data-testid="surface-content" /> : null}
+        {opts?.overlay ? <div style={elected ? { display: 'none' } : undefined}>{opts.fallback}</div> : elected ? null : opts?.fallback}
+      </>
+    )
+  }) as AppFrameProps['renderSlotChain']
   const useSessions = ((sel: (s: SessionListState) => unknown) => {
     const current = selectedSession.current
     const sessionState = {
@@ -85,6 +102,7 @@ function mountFrame() {
       useStore={hookOf(instance)}
       actions={instance.actions}
       renderSlot={renderSlot}
+      renderSlotChain={renderSlotChain}
       useSessions={useSessions}
       useWorkspaces={((sel: (s: WorkspaceListState) => unknown) => sel(workspaceState)) as never}
       SessionProvider={SessionProviderStub}
@@ -115,6 +133,7 @@ beforeEach(() => {
   selectedSession.current = 's-test' as SessionId
   selectedSessionBlank.current = false
   baselinesReady.current = true
+  chainMatch.current = null
   vi.useFakeTimers()
   vi.stubGlobal('ResizeObserver', ResizeObserverStub)
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => { cb(0) }, 16) as unknown as number)
@@ -161,6 +180,29 @@ describe('AppFrame', () => {
     const { slotCalls, getByTestId } = mountFrame()
     expect(getByTestId('center-content')).toBeTruthy()
     expect(slotCalls.map(c => c.key)).toContain('conversation')
+  })
+
+  it('main.surface renders the conversation fallback with a null surface token', () => {
+    const { slotCalls, getByTestId, queryByTestId } = mountFrame()
+    // The chain outlet receives the generic owner currency and no election.
+    expect(slotCalls.find(c => c.key === 'main.surface')!.props).toEqual({ surfaceKey: null })
+    expect(getByTestId('center-content')).toBeTruthy()
+    expect(queryByTestId('surface-content')).toBeNull()
+  })
+
+  it('main.surface elects the takeover while the conversation fallback stays mounted', () => {
+    chainMatch.current = 'product:work'
+    const { instance, getByTestId, queryByTestId } = mountFrame()
+    // No token: fallback only.
+    expect(queryByTestId('surface-content')).toBeNull()
+    act(() => { instance.actions.setSurface('product:work') })
+    expect(getByTestId('surface-content')).toBeTruthy()
+    // Overlay: the fallback conversation stays mounted under the takeover.
+    expect(getByTestId('center-content')).toBeTruthy()
+    // Clearing the token hands the surface back to the conversation fallback.
+    act(() => { instance.actions.setSurface(null) })
+    expect(queryByTestId('surface-content')).toBeNull()
+    expect(getByTestId('center-content')).toBeTruthy()
   })
 
   it('renders both column occupants before baselines settle (no loading gate)', () => {
