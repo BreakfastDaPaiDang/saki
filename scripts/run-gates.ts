@@ -701,6 +701,7 @@ function builtBinSmokeGate(needs: string[] = ['build']): Gate {
     'apps/cli/tests/built-bin.e2e.ts',
     'packages/examples/acp-demo/tests/built-bin.e2e.ts',
     'packages/saki/bundle/tests/built-bin.e2e.ts',
+    'packages/saki/installation-maintenance/tests/built-bin.e2e.ts',
     'packages/host/directory-picker-native/tests/built-worker.e2e.ts',
     'packages/sdk/server/tests/built-scope-carrier.e2e.ts',
     'packages/subagent/subagent-codex/tests/loader-composition.e2e.ts',

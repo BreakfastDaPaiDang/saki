@@ -10,11 +10,24 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
-import { DomainError } from './error.ts'
+import type { KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
+import { DomainError, parseStoredDomainValue } from './error.ts'
 import { descriptorOf } from './spec.ts'
 import type { DomainSpec } from './spec.ts'
 import { DomainImpl } from './domain.ts'
 import type { Domain } from './domain.ts'
+import {
+  assertDomainMigrationPlan,
+  runDomainMaterialization,
+  runDomainMigration,
+} from './migration.ts'
+import type {
+  DomainMaterializationOptions,
+  DomainMaterializationResult,
+  DomainMigrationOptions,
+  DomainMigrationPlan,
+  DomainMigrationResult,
+} from './migration.ts'
 
 export { DomainError } from './error.ts'
 export type { DomainErrorCode, DomainErrorOptions, InvalidRecordDetail } from './error.ts'
@@ -25,6 +38,17 @@ export type {
 } from './spec.ts'
 export type { DomainChanged } from './events.ts'
 export type { Domain, DomainGlobal, DomainGlobalHandleOf, KvTable } from './domain.ts'
+export { defineDomainMigrations } from './migration.ts'
+export type {
+  DomainMigrationOptions,
+  DomainMigrationPlan,
+  DomainMigrationPlanInput,
+  DomainMigrationResult,
+  DomainMigrationSnapshot,
+  DomainMigrationStep,
+  DomainMaterializationOptions,
+  DomainMaterializationResult,
+} from './migration.ts'
 
 declare module '@deepseek-ai/dsh-storage' {
   interface StorageForms {
@@ -70,6 +94,9 @@ export class DomainFacility {
   private readonly domains = new Map<string, DomainImpl>()
   /** Names reserved by an in-flight or completed open, so concurrent opens of one name fail loud. */
   private readonly reserved = new Set<string>()
+  /** Facility operations admitted before disposal; teardown waits for them. */
+  private readonly admittedOperations = new Set<Promise<undefined>>()
+  private disposing = false
 
   /**
    * @param ctx - Context of the domain plugin; open-domain effects and change
@@ -98,10 +125,14 @@ export class DomainFacility {
    * @returns the opened domain handle, typed by the spec.
    */
   async open<S extends DomainSpec>(spec: S): Promise<Domain<S>> {
+    if (this.disposing) {
+      throw new DomainError('closed', 'domain facility is disposing')
+    }
     if (this.reserved.has(spec.name)) {
       throw new DomainError('already-open', `domain '${spec.name}' is already open`)
     }
     this.reserved.add(spec.name)
+    const completeAdmission = this.admitOperation()
     try {
       const backendName = this.config.routes?.[spec.name] ?? this.config.backend
       const backend = this.ctx.storage.backend.get(backendName)
@@ -118,7 +149,7 @@ export class DomainFacility {
         for (const [table, tableSpec] of Object.entries(spec.tables)) {
           const records = new Map<string, unknown>()
           for (const [key, raw] of Object.entries(snapshot.tables[table] ?? {})) {
-            records.set(key, parseRecord(spec.name, table, key, () => tableSpec.valueSchema.parse(raw)))
+            records.set(key, parseStoredDomainValue(spec.name, table, key, () => tableSpec.valueSchema.parse(raw)))
           }
           tables.set(table, records)
         }
@@ -129,7 +160,7 @@ export class DomainFacility {
           ? undefined
           : snapshot.global === null
             ? globalSpec.initial
-            : parseRecord(spec.name, '', '', () => globalSpec.schema.parse(snapshot.global))
+            : parseStoredDomainValue(spec.name, '', '', () => globalSpec.schema.parse(snapshot.global))
         // The onClosed hook runs strictly after teardown completes: writes
         // landing during the drain still emit domain/changed, and the domain
         // stays resolvable (the package invariant cross-checks each event)
@@ -152,6 +183,67 @@ export class DomainFacility {
       // after it), so releasing the name reservation is unconditional.
       this.reserved.delete(spec.name)
       throw error
+    } finally {
+      completeAdmission()
+    }
+  }
+
+  /**
+   * Migrate one closed historical unit into a different missing target
+   * backend. The domain name is reserved against ordinary open and concurrent
+   * migration until every validation and committed readback phase settles.
+   * @param plan - Complete retained adjacent migration chain.
+   * @param options - Source/target backend names and caller cancellation.
+   * @returns backend-independent migration evidence.
+   */
+  async migrate(
+    plan: DomainMigrationPlan,
+    options: DomainMigrationOptions,
+  ): Promise<DomainMigrationResult> {
+    assertDomainMigrationPlan(plan)
+    if (this.disposing) {
+      throw new DomainError('closed', 'domain facility is disposing')
+    }
+    if (this.reserved.has(plan.current.name)) {
+      throw new DomainError('already-open', `domain '${plan.current.name}' is already open or migrating`)
+    }
+    this.reserved.add(plan.current.name)
+    const completeAdmission = this.admitOperation()
+    try {
+      return await runDomainMigration(this.ctx, plan, options)
+    } finally {
+      this.reserved.delete(plan.current.name)
+      completeAdmission()
+    }
+  }
+
+  /**
+   * Validate and atomically create one missing current-version domain on a
+   * selected backend. The name is reserved against ordinary open and other
+   * cold operations until the committed target has been read back and validated.
+   * @param spec - Current domain declaration.
+   * @param snapshot - Complete detached initial contents.
+   * @param options - Target backend and caller cancellation.
+   * @returns backend-independent materialization evidence.
+   */
+  async materialize(
+    spec: DomainSpec,
+    snapshot: KvUnitSnapshot,
+    options: DomainMaterializationOptions,
+  ): Promise<DomainMaterializationResult> {
+    if (this.disposing) {
+      throw new DomainError('closed', 'domain facility is disposing')
+    }
+    if (this.reserved.has(spec.name)) {
+      throw new DomainError('already-open', `domain '${spec.name}' is already open or migrating`)
+    }
+    this.reserved.add(spec.name)
+    const completeAdmission = this.admitOperation()
+    try {
+      return await runDomainMaterialization(this.ctx, spec, snapshot, options)
+    } finally {
+      this.reserved.delete(spec.name)
+      completeAdmission()
     }
   }
 
@@ -167,27 +259,30 @@ export class DomainFacility {
   }
 
   /**
-   * Close every domain still open on this facility. The unmount path for
-   * consumers that never called `Domain.close()` themselves; closing is
-   * idempotent, so double-closing an already-closed domain is harmless.
-   * @returns resolution after every unit is released.
+   * Attempt to close every domain still open on this facility and report
+   * failures only after all closes settle. The unmount path for consumers
+   * that never called `Domain.close()` themselves; closing is idempotent, so
+   * double-closing an already-closed domain is harmless.
+   * @returns resolution after every close settles.
    */
   async closeAll(): Promise<void> {
-    await Promise.all([...this.domains.values()].map(domain => domain.close()))
+    this.disposing = true
+    await Promise.allSettled([...this.admittedOperations])
+    const outcomes = await Promise.allSettled([...this.domains.values()].map(domain => domain.close()))
+    const failures: unknown[] = []
+    for (const outcome of outcomes) {
+      if (outcome.status === 'rejected') failures.push(outcome.reason as unknown)
+    }
+    throwFailures(failures, 'failed to close storage domains')
   }
-}
 
-/** Run one zod parse, translating failure to `invalid-record` with its location. */
-function parseRecord<T>(domain: string, table: string, key: string, parse: () => T): T {
-  try {
-    return parse()
-  } catch (error) {
-    const slot = table === '' ? 'global' : `record '${key}' in table '${table}'`
-    throw new DomainError(
-      'invalid-record',
-      `domain '${domain}': stored ${slot} does not match its schema`,
-      { detail: { table, key }, cause: error },
-    )
+  private admitOperation(): () => void {
+    const completion = Promise.withResolvers<undefined>()
+    this.admittedOperations.add(completion.promise)
+    return () => {
+      this.admittedOperations.delete(completion.promise)
+      completion.resolve(undefined)
+    }
   }
 }
 
@@ -208,13 +303,26 @@ export function apply(ctx: Context, config: Config): Promise<void> {
     domainCtx.effect(() => {
       const unmount = domainCtx.storage.mount('domain', facility)
       return async () => {
-        // Close leftovers before unmounting: draining writes still emit
-        // domain/changed, whose invariant resolves the facility through the hub.
-        await facility.closeAll()
-        unmount()
+        const failures: unknown[] = []
+        try {
+          await facility.closeAll()
+        } catch (error) {
+          failures.push(error)
+        }
+        try {
+          unmount()
+        } catch (error) {
+          failures.push(error)
+        }
+        throwFailures(failures, 'failed to close and unmount the domain facility')
       }
     })
     domainCtx.provide('storageDomain', facility)
   })
   return Promise.resolve(fiber).then(() => {})
+}
+
+function throwFailures(failures: readonly unknown[], message: string): void {
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) throw new AggregateError(failures, message)
 }

@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { isLoopbackHostname } from '@deepseek-ai/dsh-client-connection'
-import type { DomainChanged, KvTable } from '@deepseek-ai/dsh-storage-domain'
+import type { Domain, DomainChanged, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type {} from '@breakfastdapaidang/saki-execution'
 import { SakiAuthenticationContext } from './authentication.ts'
@@ -58,7 +58,6 @@ import type {
   SakiGrantId,
   SakiHostId,
   SakiInstallationAccessId,
-  SakiInstallationGenerationId,
   SakiInstallationId,
   SakiInstallationIdentity,
   SakiIntentInput,
@@ -71,6 +70,29 @@ import type {
   RegisterDevelopmentProjectIntent,
   SakiControlIntentId,
 } from './types.ts'
+import type { SakiInstallationState } from './installation-state.ts'
+import {
+  assertRegistrationActorReference,
+  validateCurrentSakiState,
+  validateInstallationAccessRecord,
+} from './state-validation.ts'
+import { sakiStorageGenerationDomainSpec } from './state-version.ts'
+
+async function closeOpenedDomains(
+  domains: readonly { close(): Promise<void> }[],
+  message: string,
+): Promise<void> {
+  const results = await Promise.allSettled(domains.map(domain => domain.close()))
+  const failures: unknown[] = []
+  for (const result of results) {
+    if (result.status === 'rejected') failures.push(result.reason as unknown)
+  }
+  if (failures.length === 1) {
+    const failure = failures[0]
+    throw failure instanceof Error ? failure : new Error(message, { cause: failure })
+  }
+  if (failures.length > 1) throw new AggregateError(failures, message)
+}
 
 /** Composition configuration for local Saki access. */
 export interface Config {
@@ -212,7 +234,7 @@ const SESSION_REQUIRED: AccessProjection = Object.freeze({
 
 /** Concrete single-writer Saki control plane. */
 export class SakiControlPlaneService extends Service implements SakiControlPlaneModule {
-  static inject = ['storageDomain', 'sakiHostExecution', 'workspaceRegistry']
+  static inject = ['storageDomain', 'sakiInstallationState', 'sakiHostExecution', 'workspaceRegistry']
   static Config: z<Config> = z.object({
     origin: z.string().required(),
     challengeTtlMs: z.natural().min(1).default(15 * 60 * 1_000),
@@ -237,6 +259,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private operationAdmissionOpen = true
   private readonly lifetime = new AbortController()
   private startupSettled: Promise<void> = Promise.resolve()
+  private readonly installationState: Readonly<Pick<
+    SakiInstallationState,
+    'phase' | 'installationId' | 'storageGenerationId' | 'createdByBuildId' | 'activateAfterValidation'
+  >>
 
   /** Access interface with no storage or trusted resolver exposure. */
   readonly access: SakiAccess = {
@@ -268,6 +294,13 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   /** @param ctx - owning Cordis context. @param config - resolved access configuration. */
   constructor(ctx: Context, private readonly config: Required<Config>) {
     super(ctx, 'sakiControlPlane')
+    this.installationState = Object.freeze({
+      phase: ctx.sakiInstallationState.phase,
+      installationId: ctx.sakiInstallationState.installationId,
+      storageGenerationId: ctx.sakiInstallationState.storageGenerationId,
+      createdByBuildId: ctx.sakiInstallationState.createdByBuildId,
+      activateAfterValidation: signal => ctx.sakiInstallationState.activateAfterValidation(signal),
+    })
     const parsed = new URL(config.origin)
     if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.origin !== config.origin) {
       throw new Error('saki control plane origin must be one exact HTTP(S) origin without a path')
@@ -293,6 +326,22 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   /** Open, resume, validate, and reconcile the single Installation domain. */
   protected async [Service.init](): Promise<void> {
     const domain = await this.ctx.storageDomain.open(sakiControlPlaneDomainSpec)
+    let storageGenerationDomain: Domain<typeof sakiStorageGenerationDomainSpec>
+    try {
+      storageGenerationDomain = await this.ctx.storageDomain.open(sakiStorageGenerationDomainSpec)
+    } catch (error) {
+      try {
+        await domain.close()
+      } catch (closeError) {
+        throw new AggregateError(
+          [error, closeError],
+          'opening Saki storage-generation state and closing its control-plane domain failed',
+        )
+      }
+      throw error instanceof Error
+        ? error
+        : new Error('opening Saki storage-generation state failed', { cause: error })
+    }
     this.ctx.effect(() => async () => {
       this.operationAdmissionOpen = false
       this.lifetime.abort(new Error('saki control plane is disposing'))
@@ -301,7 +350,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ...this.activeOperations,
         ...this.intentOperationTails.values(),
       ])
-      await domain.close()
+      await closeOpenedDomains(
+        [domain, storageGenerationDomain],
+        'closing Saki product-state domains failed',
+      )
     }, 'saki-control-plane.domainClose')
     this.controlStateTable = domain.table('control_state')
     this.installationTable = domain.table('installations')
@@ -317,6 +369,9 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     try {
       let control = this.controlStateTable.get(CONTROL_STATE_KEY)
       if (control === undefined) {
+        if (this.installationState.phase !== 'provisioning') {
+          throw new Error('saki ready storage generation is missing control state')
+        }
         this.assertEmptyUnprovisionedDomain()
         control = this.createControlState()
         await this.controlStateTable.put(CONTROL_STATE_KEY, control)
@@ -324,7 +379,12 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         throw new Error('saki control plane has unexpected provisioning owner records')
       }
 
+      this.assertControlInstallationState(control)
+
       if (control.phase === 'provisioning') {
+        if (this.installationState.phase !== 'provisioning') {
+          throw new Error('saki ready storage generation contains unfinished provisioning')
+        }
         await this.resumeProvisioning(control)
       }
       this.requireFoundation()
@@ -340,10 +400,18 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         },
       })
       const projects = this.projects.validateDurableState()
+      validateCurrentSakiState(
+        domain,
+        storageGenerationDomain,
+        this.installationState.installationId,
+        this.installationState.storageGenerationId,
+        this.installationState.createdByBuildId,
+      )
       await this.reconcileAccess(Date.now())
       await this.projects.initializeValidated(projects, this.lifetime.signal)
       this.lifetime.signal.throwIfAborted()
       await this.issueStartupChallenge()
+      await this.installationState.activateAfterValidation(this.lifetime.signal)
     } finally {
       settleStartup()
     }
@@ -498,7 +566,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     const foundation = this.requireFoundation()
     const actor: RegistrationActor = {
       installationId: foundation.installation.id,
-      installationGenerationId: foundation.installation.currentInstallationGenerationId,
+      storageGenerationId: this.installationState.storageGenerationId,
       hostId: foundation.host.id,
       principalId: foundation.principal.id,
       principalRevision: foundation.principal.revision,
@@ -609,7 +677,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           ordinal: sessionOrdinal,
           revision: 0,
           installationId: storedChallenge.installationId,
-          installationGenerationId: storedChallenge.installationGenerationId,
+          storageGenerationId: storedChallenge.storageGenerationId,
           principalId: storedChallenge.principalId,
           cookieDigest: cookieDigest(sessionId, cookie),
           createdAt: now,
@@ -659,7 +727,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     const authentication = new SakiAuthenticationContext(
       created.id,
       created.principalId,
-      created.installationGenerationId,
+      created.storageGenerationId,
       deriveRequestToken(created.id, cookie, current.requestTokenDerivation.domain),
     )
     const result: SakiAccessExchangeResult = { ok: true, access: this.accessProjection(authentication) }
@@ -721,7 +789,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     return new SakiAuthenticationContext(
       session.id,
       session.principalId,
-      session.installationGenerationId,
+      session.storageGenerationId,
       deriveRequestToken(session.id, cookie, access.requestTokenDerivation.domain),
     )
   }
@@ -757,7 +825,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     const foundation = this.requireFoundation()
     return foundation.installation.id === actor.installationId
       && foundation.installation.state === 'active'
-      && foundation.installation.currentInstallationGenerationId === actor.installationGenerationId
+      && actor.storageGenerationId === this.installationState.storageGenerationId
       && foundation.host.id === actor.hostId
       && foundation.host.state === 'enrolled'
       && foundation.principal.id === actor.principalId
@@ -774,19 +842,17 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     const host = this.requireHost(actor.hostId)
     const principal = this.requirePrincipal(actor.principalId)
     const grant = this.requireGrant(actor.grantId)
-    if (control === undefined
-      || installation.id !== control.installationId
-      || (actor.installationGenerationId !== control.initialInstallationGenerationId
-        && actor.installationGenerationId !== installation.currentInstallationGenerationId)
-      || host.installationId !== installation.id
-      || principal.kind !== 'human'
-      || actor.principalRevision > principal.revision
-      || grant.installationId !== installation.id
-      || grant.principalId !== principal.id
-      || grant.scope.installationId !== installation.id
-      || actor.grantRevision > grant.revision) {
-      throw new Error('Saki registration Intent actor reference is inconsistent')
-    }
+    /* v8 ignore next -- startup requires the singleton control row and this service exposes no deletion path. */
+    if (control === undefined) throw new Error('Saki registration Intent actor reference is inconsistent')
+    assertRegistrationActorReference(
+      actor,
+      control.installationId,
+      installation,
+      host,
+      principal,
+      grant,
+      'Saki',
+    )
   }
 
   private activeAuthentication(authentication: SakiAuthenticationContext): boolean {
@@ -796,8 +862,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     return session?.state === 'active'
       && session.expiresAt > Date.now()
       && session.principalId === authentication.principalId
-      && session.installationGenerationId === foundation.installation.currentInstallationGenerationId
-      && authentication.installationGenerationId === foundation.installation.currentInstallationGenerationId
+      && session.storageGenerationId === this.installationState.storageGenerationId
+      && authentication.storageGenerationId === this.installationState.storageGenerationId
       && foundation.installation.state === 'active'
       && foundation.host.state === 'enrolled'
       && foundation.principal.id === authentication.principalId
@@ -879,7 +945,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       revision: 0,
       purpose,
       installationId: foundation.installation.id,
-      installationGenerationId: foundation.installation.currentInstallationGenerationId,
+      storageGenerationId: this.installationState.storageGenerationId,
       hostId: foundation.host.id,
       principalId: foundation.principal.id,
       verifierDigest: bootstrapDigest(id, secret),
@@ -996,7 +1062,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       id: control.installationId,
       revision: 0,
       state: 'active',
-      currentInstallationGenerationId: control.initialInstallationGenerationId,
       currentHostId: control.initialHostId,
     }
   }
@@ -1040,7 +1105,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private expectedAccess(control: ControlStateRecord): InstallationAccessRecord {
     return {
       id: control.installationAccessId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       installationId: control.installationId,
       nextChallengeOrdinal: 0,
@@ -1053,11 +1118,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private createControlState(): ControlStateRecord {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       phase: 'provisioning',
-      installationId: this.installationId(),
-      initialInstallationGenerationId: this.installationGenerationId(),
+      installationId: this.installationState.installationId,
       initialHostId: this.hostId(),
       hostOperatorPrincipalId: this.principalId(),
       hostOperatorGrantId: this.grantId(),
@@ -1070,6 +1134,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     if (control === undefined || control.phase !== 'ready') {
       throw new Error('saki control plane provisioning is not ready')
     }
+    this.assertControlInstallationState(control)
     const installation = this.requireInstallation(control.installationId)
     const initialHost = this.requireHost(control.initialHostId)
     const host = this.requireHost(installation.currentHostId)
@@ -1103,7 +1168,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     const installation = this.requireInstallation(challenge.installationId)
     return installation.id === foundation.installation.id
       && installation.state === 'active'
-      && challenge.installationGenerationId === installation.currentInstallationGenerationId
+      && challenge.storageGenerationId === this.installationState.storageGenerationId
       && challenge.hostId === installation.currentHostId
       && host.installationId === installation.id
       && host.state === 'enrolled'
@@ -1119,134 +1184,24 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     const principal = this.requirePrincipal(session.principalId)
     return installation.id === foundation.installation.id
       && installation.state === 'active'
-      && session.installationGenerationId === installation.currentInstallationGenerationId
+      && session.storageGenerationId === this.installationState.storageGenerationId
       && principal.id === foundation.principal.id
       && principal.state === 'active'
   }
 
   private validateAccess(record: InstallationAccessRecord): void {
     const control = this.requireControlStateTable().get(CONTROL_STATE_KEY)
-    if (control === undefined || record.id !== control.installationAccessId
-      || record.installationId !== control.installationId) {
-      throw new Error('saki Installation Access belongs to another provisioning owner')
-    }
-    const challengeIds = new Set<string>()
-    const challengeOrdinals = new Set<number>()
-    const challengeDigests = new Set<string>()
-    const sessionIds = new Set<string>()
-    const sessionOrdinals = new Set<number>()
-    const sessionDigests = new Set<string>()
-
-    for (const challenge of record.challenges) {
-      const terminal = challenge.state !== 'issued'
-      if (challenge.id !== this.challengeId(record.id, challenge.ordinal)
-        || challenge.ordinal >= record.nextChallengeOrdinal
-        || challengeIds.has(challenge.id)
-        || challengeOrdinals.has(challenge.ordinal)
-        || challengeDigests.has(challenge.verifierDigest)
-        || terminal !== (challenge.terminalAt !== undefined)
-        || (terminal && challenge.revision === 0)
-        || challenge.expiresAt <= challenge.issuedAt
-        || (challenge.terminalAt !== undefined && challenge.terminalAt < challenge.issuedAt)
-        || (challenge.state === 'expired' && (challenge.terminalAt ?? -1) < challenge.expiresAt)
-        || (challenge.state === 'consumed') !== (challenge.browserSessionId !== undefined)) {
-        throw new Error('saki Installation Access contains an invalid Bootstrap Challenge')
-      }
-      if (challenge.installationId !== record.installationId) {
-        throw new Error('saki Bootstrap Challenge belongs to another Installation')
-      }
-      const installation = this.requireInstallation(challenge.installationId)
-      const host = this.requireHost(challenge.hostId)
-      this.requirePrincipal(challenge.principalId)
-      if (host.installationId !== installation.id) {
-        throw new Error('saki Bootstrap Challenge references an unrelated Host')
-      }
-      challengeIds.add(challenge.id)
-      challengeOrdinals.add(challenge.ordinal)
-      challengeDigests.add(challenge.verifierDigest)
-    }
-
-    for (const session of record.sessions) {
-      const terminal = session.state !== 'active'
-      if (session.id !== this.browserSessionId(record.id, session.ordinal)
-        || session.ordinal >= record.nextSessionOrdinal
-        || sessionIds.has(session.id)
-        || sessionOrdinals.has(session.ordinal)
-        || sessionDigests.has(session.cookieDigest)
-        || terminal !== (session.terminalAt !== undefined)
-        || (terminal && session.revision === 0)
-        || session.expiresAt <= session.createdAt
-        || (session.terminalAt !== undefined && session.terminalAt < session.createdAt)
-        || (session.state === 'expired' && (session.terminalAt ?? -1) < session.expiresAt)) {
-        throw new Error('saki Installation Access contains an invalid Browser Session')
-      }
-      if (session.installationId !== record.installationId) {
-        throw new Error('saki Browser Session belongs to another Installation')
-      }
-      this.requireInstallation(session.installationId)
-      this.requirePrincipal(session.principalId)
-      sessionIds.add(session.id)
-      sessionOrdinals.add(session.ordinal)
-      sessionDigests.add(session.cookieDigest)
-    }
-
-    const consumedSessionIds = new Set<SakiBrowserSessionId>()
-    for (const challenge of record.challenges) {
-      if (challenge.browserSessionId === undefined) continue
-      if (consumedSessionIds.has(challenge.browserSessionId)) {
-        throw new Error('saki multiple Bootstrap Challenges reference one Browser Session')
-      }
-      const session = record.sessions.find(candidate => candidate.id === challenge.browserSessionId)
-      if (session === undefined
-        || session.installationId !== challenge.installationId
-        || session.installationGenerationId !== challenge.installationGenerationId
-        || session.principalId !== challenge.principalId
-        || session.createdAt !== challenge.terminalAt) {
-        throw new Error('saki consumed Bootstrap Challenge references an inconsistent Browser Session')
-      }
-      consumedSessionIds.add(challenge.browserSessionId)
-    }
-
-    const completion = record.bootstrapCompletion
-    if (completion === undefined) {
-      if (record.sessions.length !== 0
-        || record.challenges.some(challenge =>
-          challenge.purpose !== 'initial-bootstrap' || challenge.state === 'consumed')) {
-        throw new Error('saki Installation Access contains reauthentication state before bootstrap completion')
-      }
-      return
-    }
-
-    if (!this.allocatedEntryId(record.id, 'challenge', completion.challengeId, record.nextChallengeOrdinal)
-      || !this.allocatedEntryId(record.id, 'session', completion.sessionId, record.nextSessionOrdinal)) {
-      throw new Error('saki bootstrap completion references an unallocated entry identity')
-    }
-
-    const completionHost = this.requireHost(completion.hostId)
-    this.requirePrincipal(completion.principalId)
-    if (completionHost.installationId !== record.installationId
-      || record.challenges.some(challenge =>
-        challenge.purpose === 'initial-bootstrap'
-        && (challenge.state === 'issued'
-          || (challenge.state === 'consumed' && challenge.id !== completion.challengeId)))) {
-      throw new Error('saki Installation Access contains an invalid bootstrap completion')
-    }
-    const completionChallenge = record.challenges.find(challenge => challenge.id === completion.challengeId)
-    if (completionChallenge !== undefined
-      && (completionChallenge.purpose !== 'initial-bootstrap'
-        || completionChallenge.state !== 'consumed'
-        || completionChallenge.browserSessionId !== completion.sessionId
-        || completionChallenge.hostId !== completion.hostId
-        || completionChallenge.principalId !== completion.principalId
-        || completionChallenge.terminalAt !== completion.completedAt)) {
-      throw new Error('saki bootstrap completion disagrees with its retained challenge')
-    }
-    const completionSession = record.sessions.find(session => session.id === completion.sessionId)
-    if (completionSession !== undefined
-      && (completionSession.principalId !== completion.principalId
-        || completionSession.createdAt !== completion.completedAt)) {
-      throw new Error('saki bootstrap completion disagrees with its retained Browser Session')
-    }
+    /* v8 ignore next -- startup requires the singleton control row and this service exposes no deletion path. */
+    if (control === undefined) throw new Error('saki Installation Access belongs to another provisioning owner')
+    validateInstallationAccessRecord(
+      record,
+      control.installationAccessId,
+      control.installationId,
+      id => this.requireInstallation(id),
+      id => this.requireHost(id),
+      id => this.requirePrincipal(id),
+      'saki',
+    )
   }
 
   private matchingChallengeIndex(access: InstallationAccessRecord, secret: string): number {
@@ -1269,19 +1224,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       if (equal && matched < 0) matched = index
     }
     return matched
-  }
-
-  private allocatedEntryId(
-    accessId: SakiInstallationAccessId,
-    kind: 'challenge' | 'session',
-    id: string,
-    highWater: number,
-  ): boolean {
-    const prefix = `${accessId}:${kind}:`
-    if (!id.startsWith(prefix)) return false
-    const suffix = id.slice(prefix.length)
-    const ordinal = Number(suffix)
-    return Number.isSafeInteger(ordinal) && ordinal < highWater
   }
 
   private assertEmptyUnprovisionedDomain(): void {
@@ -1317,7 +1259,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private sameControlReferences(left: ControlStateRecord, right: ControlStateRecord): boolean {
     return left.installationId === right.installationId
-      && left.initialInstallationGenerationId === right.initialInstallationGenerationId
       && left.initialHostId === right.initialHostId
       && left.hostOperatorPrincipalId === right.hostOperatorPrincipalId
       && left.hostOperatorGrantId === right.hostOperatorGrantId
@@ -1326,6 +1267,12 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private sameRecord(left: object, right: object): boolean {
     return isDeepStrictEqual(left, right)
+  }
+
+  private assertControlInstallationState(control: ControlStateRecord): void {
+    if (control.installationId !== this.installationState.installationId) {
+      throw new Error('saki control state belongs to another active Installation')
+    }
   }
 
   private notify(keys: readonly SakiProjectionKey[]): void {
@@ -1416,10 +1363,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     return `${this.config.cookieName}=; Path=/saki; HttpOnly; SameSite=Strict; Max-Age=0${secure}`
   }
 
-  private installationId = (): SakiInstallationId => `installation-${randomUUID()}` as SakiInstallationId
   private hostId = (): SakiHostId => `host-${randomUUID()}` as SakiHostId
-  private installationGenerationId = (): SakiInstallationGenerationId =>
-    `installation-generation-${randomUUID()}` as SakiInstallationGenerationId
   private principalId = (): SakiPrincipalId => `principal-${randomUUID()}` as SakiPrincipalId
   private grantId = (): SakiGrantId => `grant-${randomUUID()}` as SakiGrantId
   private accessId = (): SakiInstallationAccessId => `access-${randomUUID()}` as SakiInstallationAccessId

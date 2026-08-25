@@ -244,6 +244,7 @@ describe('SessionProjectionCache cold read', () => {
     identity: { createdAt: number; cwd?: string } = { createdAt: 0 },
   ): void {
     pool.versions.set('session_projcache', 3)
+    pool.hasGlobals.set('session_projcache', false)
     pool.media.set('session_projcache', {
       tables: new Map([['sessions', new Map([[id, { identity, rows: { 'cache-test/marks': row } }]])]]),
       global: null,

@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
@@ -14,6 +14,7 @@ import {
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
   sakiControlPlaneDomainSpec,
 } from '../src/spec.ts'
+import { sakiStorageGenerationDomainSpec } from '../src/state-version.ts'
 import type {
   InstallationAccessRecord,
 } from '../src/spec.ts'
@@ -23,10 +24,15 @@ import type {
   SakiGrantId,
   SakiHostId,
   SakiInstallationAccessId,
-  SakiInstallationGenerationId,
   SakiInstallationId,
   SakiPrincipalId,
 } from '../src/types.ts'
+import {
+  HISTORICAL_STORAGE_GENERATION_ID,
+  provideSakiInstallationState,
+  TEST_SAKI_INSTALLATION_STATE,
+  type TestSakiInstallationState,
+} from './installation-state.ts'
 
 const ORIGIN = 'http://127.0.0.1:43119'
 const CONFIG = {
@@ -37,7 +43,6 @@ const CONFIG = {
   cookieName: 'saki_session',
 } as const
 const OTHER_INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000101' as SakiInstallationId
-const OTHER_INSTALLATION_GENERATION_ID = 'installation-generation-00000000-0000-4000-8000-000000000102' as SakiInstallationGenerationId
 const OTHER_HOST_ID = 'host-00000000-0000-4000-8000-000000000103' as SakiHostId
 const OTHER_PRINCIPAL_ID = 'principal-00000000-0000-4000-8000-000000000104' as SakiPrincipalId
 const OTHER_GRANT_ID = 'grant-00000000-0000-4000-8000-000000000105' as SakiGrantId
@@ -59,11 +64,15 @@ async function database(): Promise<string> {
   return join(directory, 'control.sqlite')
 }
 
-async function storageContext(path: string): Promise<Context> {
+async function storageContext(
+  path: string,
+  state?: TestSakiInstallationState,
+): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(Storage)
   await ctx.plugin(StorageSqlite, { path, journalMode: 'delete' })
   await ctx.plugin(StorageDomain, { backend: 'sqlite' })
+  await provideSakiInstallationState(ctx, state)
   ctx.provide('sakiHostExecution', {
     inspectProjectSelection: () => Promise.resolve({ ok: false, reason: 'unavailable' }),
   } as never)
@@ -74,8 +83,11 @@ async function storageContext(path: string): Promise<Context> {
   return ctx
 }
 
-async function start(path: string): Promise<RunningHarness> {
-  const ctx = await storageContext(path)
+async function start(
+  path: string,
+  state?: TestSakiInstallationState,
+): Promise<RunningHarness> {
+  const ctx = await storageContext(path, state)
   const fiber = await ctx.plugin(SakiControlPlane, CONFIG)
   return {
     ctx,
@@ -98,13 +110,75 @@ async function edit(path: string, operation: (domain: SakiDomain) => Promise<voi
   }
 }
 
-async function expectStartFailure(path: string, message: string): Promise<void> {
-  const ctx = await storageContext(path)
+async function expectStartFailure(
+  path: string,
+  message: string,
+  state?: TestSakiInstallationState,
+): Promise<void> {
+  const ctx = await storageContext(path, state)
   try {
     await expect(ctx.plugin(SakiControlPlane, CONFIG)).rejects.toThrow(message)
   } finally {
     await ctx.fiber.dispose()
   }
+}
+
+async function secondDomainOpenFailure(
+  path: string,
+  openingFailure: unknown,
+  controlCloseFailure?: unknown,
+): Promise<unknown> {
+  const ctx = await storageContext(path)
+  const open = ctx.storageDomain.open.bind(ctx.storageDomain)
+  const restoreCloseSpies: Array<() => void> = []
+  const openSpy = vi.spyOn(ctx.storageDomain, 'open').mockImplementation(async (spec) => {
+    if (spec.name === sakiStorageGenerationDomainSpec.name) throw openingFailure
+    const domain = await open(spec)
+    if (controlCloseFailure !== undefined) {
+      const closeSpy = vi.spyOn(domain, 'close').mockRejectedValue(controlCloseFailure)
+      restoreCloseSpies.push(() => { closeSpy.mockRestore() })
+    }
+    return domain
+  })
+  let observed: unknown
+  try {
+    await ctx.plugin(SakiControlPlane, CONFIG)
+  } catch (error) {
+    observed = error
+  } finally {
+    openSpy.mockRestore()
+    for (const restore of restoreCloseSpies) restore()
+    await ctx.fiber.dispose()
+  }
+  return observed
+}
+
+async function productStateCloseFailure(path: string, failures: readonly unknown[]): Promise<unknown> {
+  const ctx = await storageContext(path)
+  const logged: unknown[] = []
+  ctx.logger.error = (error: unknown) => { logged.push(error) }
+  const open = ctx.storageDomain.open.bind(ctx.storageDomain)
+  const restoreCloseSpies: Array<() => void> = []
+  let opened = 0
+  const openSpy = vi.spyOn(ctx.storageDomain, 'open').mockImplementation(async (spec) => {
+    const domain = await open(spec)
+    const failure = failures[opened]
+    opened += 1
+    if (failure !== undefined) {
+      const closeSpy = vi.spyOn(domain, 'close').mockRejectedValue(failure)
+      restoreCloseSpies.push(() => { closeSpy.mockRestore() })
+    }
+    return domain
+  })
+  const fiber = await ctx.plugin(SakiControlPlane, CONFIG)
+  try {
+    await fiber.dispose()
+  } finally {
+    openSpy.mockRestore()
+    for (const restore of restoreCloseSpies) restore()
+    await ctx.fiber.dispose()
+  }
+  return logged.at(-1)
 }
 
 function control(domain: SakiDomain) {
@@ -165,6 +239,38 @@ afterEach(async () => {
 })
 
 describe('Saki durable control-plane invariants', () => {
+  it('preserves storage-generation open failures and aggregates a control-domain close failure', async () => {
+    const openingFailure = new Error('storage-generation open failed')
+    expect(await secondDomainOpenFailure(await database(), openingFailure)).toBe(openingFailure)
+
+    const nonErrorFailure = await secondDomainOpenFailure(await database(), 'non-Error open failure')
+    expect(nonErrorFailure).toMatchObject({
+      message: 'opening Saki storage-generation state failed',
+      cause: 'non-Error open failure',
+    })
+
+    const closeFailure = new Error('control-domain close failed')
+    const aggregate = await secondDomainOpenFailure(await database(), openingFailure, closeFailure)
+    expect(aggregate).toBeInstanceOf(AggregateError)
+    expect((aggregate as AggregateError).errors).toEqual([openingFailure, closeFailure])
+  })
+
+  it('reports one or several product-state domain close failures without dropping causes', async () => {
+    const firstFailure = new Error('control close failed')
+    expect(await productStateCloseFailure(await database(), [firstFailure])).toBe(firstFailure)
+
+    const nonErrorFailure = await productStateCloseFailure(await database(), ['non-Error close failure'])
+    expect(nonErrorFailure).toMatchObject({
+      message: 'closing Saki product-state domains failed',
+      cause: 'non-Error close failure',
+    })
+
+    const secondFailure = new Error('storage-generation close failed')
+    const aggregate = await productStateCloseFailure(await database(), [firstFailure, secondFailure])
+    expect(aggregate).toBeInstanceOf(AggregateError)
+    expect((aggregate as AggregateError).errors).toEqual([firstFailure, secondFailure])
+  })
+
   it.each([
     ['ftp://127.0.0.1:43119', 'exact HTTP(S) origin'],
     ['http://127.0.0.1:43119/path', 'exact HTTP(S) origin'],
@@ -177,6 +283,54 @@ describe('Saki durable control-plane invariants', () => {
     } finally {
       await ctx.fiber.dispose()
     }
+  })
+
+  it('never provisions an empty generation selected by a ready manifest', async () => {
+    const path = await database()
+    const provisioning = await storageContext(path, TEST_SAKI_INSTALLATION_STATE)
+    await provisioning.fiber.dispose()
+    await expectStartFailure(path, 'ready storage generation is missing control state', {
+      ...TEST_SAKI_INSTALLATION_STATE,
+      phase: 'ready',
+    })
+    const ctx = await storageContext(path)
+    const domain = await ctx.storageDomain.open(sakiControlPlaneDomainSpec)
+    try {
+      expect(domain.table('control_state').size).toBe(0)
+    } finally {
+      await domain.close()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('never resumes unfinished provisioning selected by a ready manifest', async () => {
+    const path = await initialAccessDatabase()
+    let before: unknown
+    await edit(path, async (domain) => {
+      await domain.table('control_state').update(CONTROL_STATE_KEY, current => ({
+        ...current,
+        phase: 'provisioning',
+      }))
+      before = durableState(domain)
+    })
+    await expectStartFailure(path, 'ready storage generation contains unfinished provisioning', {
+      ...TEST_SAKI_INSTALLATION_STATE,
+      phase: 'ready',
+    })
+    await edit(path, async (domain) => {
+      expect(durableState(domain)).toEqual(before)
+    })
+  })
+
+  it('rejects durable control state from another active Installation', async () => {
+    const path = await initialAccessDatabase()
+    await edit(path, async (domain) => {
+      await domain.table('control_state').update(CONTROL_STATE_KEY, current => ({
+        ...current,
+        installationId: OTHER_INSTALLATION_ID,
+      }))
+    })
+    await expectStartFailure(path, 'control state belongs to another active Installation')
   })
 
   it('requires the referenced Host Operator Principal to remain human while permitting unrelated automation', async () => {
@@ -342,7 +496,7 @@ describe('Saki durable control-plane invariants', () => {
       return record
     }],
     ['generation', (record: InstallationAccessRecord) => {
-      record.sessions[0]!.installationGenerationId = OTHER_INSTALLATION_GENERATION_ID
+      record.sessions[0]!.storageGenerationId = HISTORICAL_STORAGE_GENERATION_ID
       return record
     }],
     ['principal', (record: InstallationAccessRecord) => {
@@ -363,7 +517,6 @@ describe('Saki durable control-plane invariants', () => {
             id: OTHER_INSTALLATION_ID,
             revision: 0,
             state: 'retired',
-            currentInstallationGenerationId: owner.initialInstallationGenerationId,
             currentHostId: owner.initialHostId,
           })
         } else {
@@ -390,7 +543,6 @@ describe('Saki durable control-plane invariants', () => {
         id: otherInstallationId,
         revision: 0,
         state: 'retired',
-        currentInstallationGenerationId: owner.initialInstallationGenerationId,
         currentHostId: owner.initialHostId,
       })
     })
@@ -455,14 +607,12 @@ describe('Saki durable control-plane invariants', () => {
   it('rejects a Bootstrap Challenge whose historical Host belongs to another Installation', async () => {
     const path = await initialAccessDatabase()
     await edit(path, async (domain) => {
-      const owner = control(domain)
       const otherInstallationId = OTHER_INSTALLATION_ID
       const otherHostId = OTHER_HOST_ID
       await domain.table('installations').put(otherInstallationId, {
         id: otherInstallationId,
         revision: 0,
         state: 'retired',
-        currentInstallationGenerationId: owner.initialInstallationGenerationId,
         currentHostId: otherHostId,
       })
       await domain.table('hosts').put(otherHostId, {
@@ -487,7 +637,6 @@ describe('Saki durable control-plane invariants', () => {
         id: OTHER_INSTALLATION_ID,
         revision: 0,
         state: 'retired',
-        currentInstallationGenerationId: owner.initialInstallationGenerationId,
         currentHostId: owner.initialHostId,
       })
     })
@@ -502,8 +651,9 @@ describe('Saki durable control-plane invariants', () => {
     const path = await completedAccessDatabase()
     await mutateAccess(path, (record) => {
       const completed = record.challenges[0]!
+      const { terminalAt: _terminalAt, browserSessionId: _browserSessionId, ...issued } = completed
       record.challenges.push({
-        ...completed,
+        ...issued,
         id: `${record.id}:challenge:1` as SakiBootstrapChallengeId,
         ordinal: 1,
         revision: 0,
@@ -512,8 +662,6 @@ describe('Saki durable control-plane invariants', () => {
         state: 'issued',
         issuedAt: completed.issuedAt + 1,
         expiresAt: completed.expiresAt + 1,
-        terminalAt: undefined,
-        browserSessionId: undefined,
       })
       record.nextChallengeOrdinal = 2
       return record
@@ -526,10 +674,8 @@ describe('Saki durable control-plane invariants', () => {
       record.challenges[0]!.purpose = 'local-reauthentication'
     }],
     ['state', async (_domain: SakiDomain, record: InstallationAccessRecord) => {
-      Object.assign(record.challenges[0]!, {
-        state: 'revoked' as const,
-        browserSessionId: undefined,
-      })
+      record.challenges[0]!.state = 'revoked'
+      delete record.challenges[0]!.browserSessionId
     }],
     ['session id', async (_domain: SakiDomain, record: InstallationAccessRecord) => {
       const original = record.sessions[0]!
@@ -611,7 +757,6 @@ describe('Saki durable control-plane invariants', () => {
         id: otherInstallationId,
         revision: 0,
         state: 'retired',
-        currentInstallationGenerationId: owner.initialInstallationGenerationId,
         currentHostId: otherHostId,
       })
       await domain.table('hosts').put(otherHostId, {
@@ -690,7 +835,7 @@ describe('Saki durable control-plane invariants', () => {
               : owner.installationAccessId
       await table.update(key, current => ({ ...current, revision: current.revision + 1 }))
     })
-    await expectStartFailure(path, `provisioning ${_name} is inconsistent`)
+    await expectStartFailure(path, `provisioning ${_name} is inconsistent`, TEST_SAKI_INSTALLATION_STATE)
   })
 
   it('validates every retained provisioning child before filling an earlier missing child', async () => {
@@ -712,7 +857,7 @@ describe('Saki durable control-plane invariants', () => {
     let before: unknown
     await edit(path, async (domain) => { before = durableState(domain) })
 
-    await expectStartFailure(path, 'provisioning Host is inconsistent')
+    await expectStartFailure(path, 'provisioning Host is inconsistent', TEST_SAKI_INSTALLATION_STATE)
 
     await edit(path, async (domain) => { expect(durableState(domain)).toEqual(before) })
   })
@@ -727,7 +872,11 @@ describe('Saki durable control-plane invariants', () => {
       }))
     })
 
-    await expectStartFailure(path, 'provisioning contains Development Project product records')
+    await expectStartFailure(
+      path,
+      'provisioning contains Development Project product records',
+      TEST_SAKI_INSTALLATION_STATE,
+    )
   })
 
   it('rejects child rows outside the provisioning owner stable references', async () => {
@@ -746,7 +895,7 @@ describe('Saki durable control-plane invariants', () => {
         state: 'retired',
       })
     })
-    await expectStartFailure(path, 'child outside its stable references')
+    await expectStartFailure(path, 'child outside its stable references', TEST_SAKI_INSTALLATION_STATE)
   })
 
   it('rejects extra provisioning owners and a missing owner in a non-empty domain', async () => {
@@ -754,13 +903,21 @@ describe('Saki durable control-plane invariants', () => {
     await edit(extraOwnerPath, async (domain) => {
       await domain.table('control_state').put('other-control' as typeof CONTROL_STATE_KEY, control(domain))
     })
-    await expectStartFailure(extraOwnerPath, 'unexpected provisioning owner records')
+    await expectStartFailure(
+      extraOwnerPath,
+      'unexpected provisioning owner records',
+      TEST_SAKI_INSTALLATION_STATE,
+    )
 
     const missingOwnerPath = await initialAccessDatabase()
     await edit(missingOwnerPath, async (domain) => {
       await domain.table('control_state').delete(CONTROL_STATE_KEY)
     })
-    await expectStartFailure(missingOwnerPath, 'control state is missing from a non-empty domain')
+    await expectStartFailure(
+      missingOwnerPath,
+      'control state is missing from a non-empty domain',
+      TEST_SAKI_INSTALLATION_STATE,
+    )
   })
 
   it.each([

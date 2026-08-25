@@ -7,63 +7,92 @@
  * @module @deepseek-ai/dsh-storage-json/src/unit
  */
 
-import { readFile } from 'node:fs/promises'
-import { StorageError } from '@deepseek-ai/dsh-storage'
+import { dirname } from 'node:path'
+import {
+  cloneLosslessJsonValue,
+  isCommitOutcomeUnknownStorageError,
+  isPublishedStorageError,
+  StorageError,
+} from '@deepseek-ai/dsh-storage'
 import type { KvUnit, KvUnitDescriptor } from '@deepseek-ai/dsh-storage'
 import { writeAtomic } from './atomic.ts'
+import type { AtomicPublicationGuard } from './atomic.ts'
 import { parse, serialize } from './format.ts'
 import type { UnitState } from './format.ts'
+import { readUnitFile } from './medium.ts'
+import type { StorageRootGuard } from './medium.ts'
+
+type PublishJsonFile = (
+  path: string,
+  data: string,
+  guard?: AtomicPublicationGuard,
+) => Promise<void>
 
 /**
  * Open (load or lazily create) one unit backed by `path`.
  * @param descriptor - Static identity and shape of the unit.
  * @param path - Absolute unit file path under the backend root.
  * @param onClose - Backend callback releasing the unit's open-slot.
+ * @param publishFile - Atomic publisher; overridden only by package tests.
+ * @param rootGuard - Backend-owned persistent root identity guard.
  * @returns the opened unit.
  */
 export async function openJsonUnit(
   descriptor: KvUnitDescriptor,
   path: string,
   onClose: () => void,
+  publishFile: PublishJsonFile = writeAtomic,
+  rootGuard?: StorageRootGuard,
 ): Promise<KvUnit> {
-  let text: string | undefined
-  try {
-    text = await readFile(path, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    // Missing file = empty unit; materialization defers to the first write.
-  }
+  await rootGuard?.observeCurrent(descriptor.name)
+  const text = await readUnitFile(dirname(path), descriptor.name)
+  await rootGuard?.observeCurrent(descriptor.name)
   const state: UnitState =
     text === undefined
       ? {
-        version: descriptor.version,
         global: null,
         tables: new Map(descriptor.tables.map(table => [table, new Map<string, unknown>()])),
       }
       : parse(text, descriptor)
-  return new JsonKvUnit(descriptor, path, state, onClose)
+  return new JsonKvUnit(descriptor, path, state, onClose, publishFile, rootGuard)
 }
 
 class JsonKvUnit implements KvUnit {
   private closed = false
-  /** In-flight publishes; close() drains them before releasing the unit. */
-  private readonly inFlight = new Set<Promise<void>>()
+  /** In-flight reads and publishes; close() drains them before releasing the unit. */
+  private readonly inFlight = new Set<Promise<unknown>>()
+  /** The first write whose publication evidence requires backend recovery. */
+  private uncertainWrite?: Error
 
   constructor(
     private readonly descriptor: KvUnitDescriptor,
     private readonly path: string,
     private readonly state: UnitState,
     private readonly onClose: () => void,
+    private readonly publishFile: PublishJsonFile,
+    private readonly rootGuard?: StorageRootGuard,
   ) {}
 
-  // oxlint-disable-next-line typescript/require-await -- async keeps the closed guard a rejection, not a synchronous throw
   async loadAll(): Promise<{ tables: Record<string, Record<string, unknown>>; global: unknown }> {
     this.assertOpen()
+    return await this.track(this.loadSnapshot())
+  }
+
+  private async loadSnapshot(): Promise<{
+    tables: Record<string, Record<string, unknown>>
+    global: unknown
+  }> {
+    await this.rootGuard?.observeCurrent(this.descriptor.name)
     const tables: Record<string, Record<string, unknown>> = {}
     for (const [table, records] of this.state.tables) {
       tables[table] = Object.fromEntries(records)
     }
-    return { tables, global: this.state.global }
+    const snapshot = cloneLosslessJsonValue(
+      { tables, global: this.state.global },
+      `unit '${this.descriptor.name}' loaded snapshot`,
+    )
+    await this.rootGuard?.observeCurrent(this.descriptor.name)
+    return snapshot
   }
 
   async putRecord(table: string, key: string, value: unknown): Promise<void> {
@@ -71,12 +100,20 @@ class JsonKvUnit implements KvUnit {
     const records = this.records(table)
     const hadKey = records.has(key)
     const previous = records.get(key)
-    records.set(key, value)
+    const admitted = cloneLosslessJsonValue(
+      value,
+      `unit '${this.descriptor.name}' table '${table}' key '${key}'`,
+    )
+    records.set(key, admitted)
     // Roll back on a failed publish: memory is authoritative, so a rejected
     // write must not survive in memory (or ride along with the next publish).
     await this.publish().catch((error: unknown) => {
-      if (hadKey) records.set(key, previous)
-      else records.delete(key)
+      if (isPublishedStorageError(error) || isCommitOutcomeUnknownStorageError(error)) {
+        this.uncertainWrite ??= error
+      } else {
+        if (hadKey) records.set(key, previous)
+        else records.delete(key)
+      }
       throw error
     })
   }
@@ -88,7 +125,11 @@ class JsonKvUnit implements KvUnit {
     const previous = records.get(key)
     records.delete(key)
     await this.publish().catch((error: unknown) => {
-      records.set(key, previous)
+      if (isPublishedStorageError(error) || isCommitOutcomeUnknownStorageError(error)) {
+        this.uncertainWrite ??= error
+      } else {
+        records.set(key, previous)
+      }
       throw error
     })
   }
@@ -99,9 +140,16 @@ class JsonKvUnit implements KvUnit {
       throw new Error(`unit '${this.descriptor.name}' does not declare a global slot`)
     }
     const previous = this.state.global
-    this.state.global = value
+    this.state.global = cloneLosslessJsonValue(
+      value,
+      `unit '${this.descriptor.name}' global slot`,
+    )
     await this.publish().catch((error: unknown) => {
-      this.state.global = previous
+      if (isPublishedStorageError(error) || isCommitOutcomeUnknownStorageError(error)) {
+        this.uncertainWrite ??= error
+      } else {
+        this.state.global = previous
+      }
       throw error
     })
   }
@@ -120,6 +168,13 @@ class JsonKvUnit implements KvUnit {
     if (this.closed) {
       throw new StorageError('closed', `unit '${this.descriptor.name}' is closed`)
     }
+    if (this.uncertainWrite !== undefined) {
+      throw new StorageError(
+        'commit-outcome-unknown',
+        `unit '${this.descriptor.name}' cannot continue after an uncertain write; close it and recreate the affected backend before reopening`,
+        { cause: this.uncertainWrite },
+      )
+    }
   }
 
   private records(table: string): Map<string, unknown> {
@@ -130,12 +185,31 @@ class JsonKvUnit implements KvUnit {
     return records
   }
 
-  private publish(): Promise<void> {
-    const write = writeAtomic(this.path, serialize(this.descriptor.name, this.state))
-    this.inFlight.add(write)
-    // Swallow only on the tracking branch: the caller still awaits `write`
-    // itself, so rejections stay observed exactly once.
-    write.catch(() => {}).finally(() => this.inFlight.delete(write))
-    return write
+  private async publish(): Promise<void> {
+    const data = serialize(this.descriptor, this.state)
+    await this.track(this.publishGuarded(data))
+  }
+
+  private async publishGuarded(data: string): Promise<void> {
+    const guard = this.publicationGuard()
+    await guard?.verify()
+    await this.publishFile(this.path, data, guard)
+  }
+
+  private publicationGuard(): AtomicPublicationGuard | undefined {
+    const rootGuard = this.rootGuard
+    if (rootGuard === undefined) return undefined
+    return { verify: () => rootGuard.observeCurrent(this.descriptor.name) }
+  }
+
+  private track<T>(operation: Promise<T>): Promise<T> {
+    this.inFlight.add(operation)
+    // The caller receives the original promise. This observer only releases
+    // lifecycle tracking and handles both outcomes so it cannot reject.
+    void operation.then(
+      () => { this.inFlight.delete(operation) },
+      () => { this.inFlight.delete(operation) },
+    )
+    return operation
   }
 }

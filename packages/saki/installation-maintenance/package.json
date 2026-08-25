@@ -1,0 +1,60 @@
+{
+  "name": "@breakfastdapaidang/saki-installation-maintenance",
+  "description": "Private Saki Installation lease, generation manifest, Recovery Backup, and forward-upgrade orchestration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "bin": {
+    "saki-maintenance": "lib/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./bin": {
+      "types": "./lib/types/bin.d.ts",
+      "default": "./lib/bin.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "lib/bin.js",
+    "lib/maintenance-operations-*.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/dsh-home-paths": "workspace:^",
+    "koffi": "^3.1.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@breakfastdapaidang/saki-control-plane": "workspace:^",
+    "@deepseek-ai/dsh-brand": "workspace:^",
+    "@deepseek-ai/dsh-invariants": "workspace:^",
+    "@deepseek-ai/dsh-storage": "workspace:^",
+    "@deepseek-ai/dsh-storage-domain": "workspace:^",
+    "@deepseek-ai/dsh-storage-sqlite": "workspace:^",
+    "@deepseek-ai/cordis": "workspace:^"
+  },
+  "devDependencies": {
+    "@breakfastdapaidang/saki-control-plane": "workspace:^",
+    "@breakfastdapaidang/saki-execution": "workspace:^",
+    "@deepseek-ai/dsh-brand": "workspace:^",
+    "@deepseek-ai/dsh-invariants": "workspace:^",
+    "@deepseek-ai/dsh-storage": "workspace:^",
+    "@deepseek-ai/dsh-storage-domain": "workspace:^",
+    "@deepseek-ai/dsh-storage-sqlite": "workspace:^",
+    "@deepseek-ai/cordis": "workspace:^"
+  }
+}

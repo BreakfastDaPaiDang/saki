@@ -29,7 +29,7 @@ describe('assembled Saki application readiness snapshot', () => {
       const environment = sakiSnapshotEnvironment()
       environment.DSH_HOME = join(directory, 'home')
       environment.SAKI_ONESHOT = '1'
-      environment.SAKI_DATABASE_PATH = ':memory:'
+      environment.SAKI_DATABASE_PATH = join(directory, 'legacy.sqlite')
       environment.SAKI_PORT = '43129'
       environment.TSX_TSCONFIG_PATH = join(root, 'tsconfig.json')
       const result = spawnSync(process.execPath, [
@@ -39,8 +39,7 @@ describe('assembled Saki application readiness snapshot', () => {
       ], { cwd: directory, env: environment, encoding: 'utf8', timeout: 30_000 })
 
       expect(result.error).toBeUndefined()
-      expect(result.status).toBe(0)
-      expect(result.stderr).toBe('')
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' })
       if (refreshing) {
         await mkdir(dirname(expected), { recursive: true })
         await writeFile(expected, result.stdout)

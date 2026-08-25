@@ -89,4 +89,21 @@ abstract inspectProjectSelection( request: InspectProjectSelectionRequest, signa
 ```
 
 Source: [`packages/saki/execution/src/index.ts`](../../packages/saki/execution/src/index.ts)
+
+<a id="ctxsakiinstallationstate--sakiinstallationstate-abstract-seam"></a>
+
+### `ctx.sakiInstallationState` — `SakiInstallationState` (abstract seam)
+
+Maintenance-owned active Installation and storage-generation identity.
+
+```ts cordis-catalog
+/**
+ * Promote an already-published provisioning manifest to ready after product validation.
+ * A generation selected by a ready manifest treats this as an idempotent validation point.
+ * @param signal - control-plane startup lifetime.
+ */
+abstract activateAfterValidation(signal: AbortSignal): Promise<void>
+```
+
+Source: [`packages/saki/control-plane/src/installation-state.ts`](../../packages/saki/control-plane/src/installation-state.ts)
 <!-- END GENERATED cordis-surface -->

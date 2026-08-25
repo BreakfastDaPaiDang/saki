@@ -10,7 +10,8 @@
     - id: saki-storage-sqlite
       name: '@deepseek-ai/dsh-storage-sqlite'
       config:
-        path: !!js process.env.SAKI_DATABASE_PATH ?? dshHomePath('saki', 'control.sqlite')
+        backend: sqlite
+        path: ':memory:'
         journalMode: wal
 
     - id: storage-domain
@@ -19,6 +20,7 @@
         backend: json
         routes:
           saki_control_plane: sqlite
+          saki_storage_generation: sqlite
 
     - id: session
       name: '@deepseek-ai/dsh-session'
@@ -44,6 +46,8 @@
 
     - id: saki-webserver
       name: '@deepseek-ai/dsh-host-webserver'
+      inject:
+        - sakiControlPlane
       config:
         host: '127.0.0.1'
         port: !!js "(() => { const port = Number(process.env.SAKI_PORT ?? 43119); if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SAKI_PORT must be an integer from 1 through 65535'); return port })()"

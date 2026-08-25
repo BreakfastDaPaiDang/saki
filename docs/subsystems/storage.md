@@ -2,7 +2,7 @@
 
 English | [中文](storage.zh.md)
 
-The storage subsystem persists everything that is not a session event log (session logs have their own seam — [persistence.md](persistence.md)). It is one optional capability, not part of the agent-loop spine, split as a [capability seam](../../.agents/notes/implemented/architecture/2026-06-13-capability-seams.md): the hub and Service Definition ([dsh-storage](../../packages/storage/storage), `ctx.storage`), the Service Providers ([dsh-storage-json](../../packages/storage/storage-json), registered as `json`, and [dsh-storage-sqlite](../../packages/storage/storage-sqlite), registered as `sqlite`), and the Consumer data form ([dsh-storage-domain](../../packages/storage/storage-domain), `ctx.storageDomain`, also reachable as `ctx.storage.domain`) — the backend contract's only Consumer and the typed API everything else uses. The hub performs no IO itself: backends own media, data forms own semantics, and product packages never touch backends directly. Design record: [domain KV storage Agent Note](../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md).
+The storage subsystem persists everything that is not a session event log (session logs have their own seam — [persistence.md](persistence.md)). It is one optional capability, not part of the agent-loop spine, split as a [capability seam](../../.agents/notes/implemented/architecture/2026-06-13-capability-seams.md): the hub and Service Definition ([dsh-storage](../../packages/storage/storage), `ctx.storage`), the Service Providers ([dsh-storage-json](../../packages/storage/storage-json), whose registry name defaults to `json`, and [dsh-storage-sqlite](../../packages/storage/storage-sqlite), whose name defaults to `sqlite`), and the Consumer data form ([dsh-storage-domain](../../packages/storage/storage-domain), `ctx.storageDomain`, also reachable as `ctx.storage.domain`) — the backend contract's only Consumer and the typed API everything else uses. Provider names are configurable so one composition can mount independent source and target media of the same type. The hub performs no IO itself: backends own media, data forms own semantics, and product packages never touch backends directly. Design record: [domain KV storage Agent Note](../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md).
 
 Source: [`packages/storage/storage/src/backend.ts`](../../packages/storage/storage/src/backend.ts) · [`packages/storage/storage-domain/src/spec.ts`](../../packages/storage/storage-domain/src/spec.ts) · [`packages/storage/storage-domain/src/events.ts`](../../packages/storage/storage-domain/src/events.ts)
 
@@ -36,7 +36,9 @@ interface StorageBackend {
   readonly kv?: KvFacet
 
   /**
-   * Drain in-flight writes across all open units and release the medium.
+   * Reject new backend and live-unit work as soon as close begins, drain every
+   * admitted live-unit operation and closed-unit callback plus every lease
+   * method admitted before that callback settled, then release the medium.
    * Idempotent; concurrent and repeated calls resolve once teardown finishes.
    * @returns resolution after the medium is released.
    */
@@ -44,7 +46,9 @@ interface StorageBackend {
 }
 ```
 
-A backend owns one medium (a file-tree root, a database file) and exposes optional operation groups; `kv` is the only group today. `KvFacet.open(descriptor)` opens one named unit — `KvUnitDescriptor` carries the name, format version, table names, and whether a global singleton slot exists — and returns a `KvUnit` with `loadAll`, `putRecord`, `deleteRecord`, `setGlobal`, and `close`. Unit and table names must match `UNIT_NAME_RE` (safe as a file name and as a SQL identifier segment); record keys are arbitrary strings that never reach file paths. A unit does not serialize concurrent writes — ordering belongs to the caller — but each single call is atomic on the medium and durable once resolved. A medium stamped with a different version rejects `version-mismatch`; one that cannot be parsed as the unit rejects `malformed-medium` (no migration, pre-release stance). [`backend.ts`](../../packages/storage/storage/src/backend.ts) is the normative clause-by-clause contract, and the shared conformance suite in [`tests/contract.ts`](../../packages/storage/storage/tests/contract.ts) checks every clause against each backend. The [json backend](../../packages/storage/storage-json/README.md) republishes one whole human-readable file per unit atomically; the [sqlite backend](../../packages/storage/storage-sqlite/README.md) stores one document per row in one database for frequently updated data.
+A backend owns one medium (a file-tree root, a database file) and exposes optional operation groups; `kv` is the only group today. `KvFacet.open(descriptor)` opens one named unit — `KvUnitDescriptor` carries the name, format version, table names, and whether a global singleton slot exists — and returns a `KvUnit` with `loadAll`, `putRecord`, `deleteRecord`, `setGlobal`, and `close`. Unit and table names must match `UNIT_NAME_RE` (safe as a file name and as a SQL identifier segment); record keys are arbitrary strings that never reach file paths. `KvUnitDescriptor.version` must be a non-negative safe integer; negative zero is invalid. Values are exact JSON data: a backend rejects any value whose JSON encoding would omit or coerce data, including `undefined`, non-finite numbers, negative zero, sparse arrays, cycles, accessors, and exotic objects. Text-backed providers also reject invalid UTF-8, byte-order marks, comments, trailing commas, duplicate object members, and numeric tokens that JavaScript would round, underflow, or overflow. A unit does not serialize concurrent writes — ordering belongs to the caller — but each call is atomic on the medium and durable once resolved. Backend close synchronously ends admission for new opens, cold reservations, and methods on existing live units before it drains admitted work. `durability-uncertain` with `published: true` means the requested value is visible but durability is not confirmed; `commit-outcome-unknown` with `publicationPossible: true` means publication itself cannot be decided. Either result requires closing the live handle, discarding and recreating the affected backend (or restarting), and only then reopening from the medium. A medium stamped with a different version rejects `version-mismatch`; one that cannot be parsed as the unit rejects `malformed-medium`. Ordinary open never migrates an old medium.
+
+Backends may expose the optional `kv.closed` operation group for maintenance that must not create or open the source. `withReservedUnit(name, signal, callback)` synchronously reserves one unit name; a live handle or competing reservation rejects `unit-open` immediately. Once the scope observes callback settlement it ends admission to that lease, and escaped leases and commit tokens reject with `closed`. The name remains reserved until every lease method admitted earlier drains, including methods the callback did not await; backend close waits for the callback and the same admitted work. The lease can inspect stored identity, read through an exact descriptor, or create-only materialize a complete missing unit. Materialization returns a lease-scoped `KvClosedUnitMaterialization`: `durable` confirms commit durability and reads the target back; `uncertain` carries the backend cause and reads either the visible target or `undefined` after confirmed absence. Only definite non-publication rejects. Caller cancellation applies before publication; afterward, readback and cleanup preserve commit evidence despite a late abort. [`backend.ts`](../../packages/storage/storage/src/backend.ts) is the normative clause-by-clause contract, and the shared conformance suites in [`tests/contract.ts`](../../packages/storage/storage/tests/contract.ts) check ordinary and cold operations against each supporting backend. The [json backend](../../packages/storage/storage-json/README.md) republishes one whole human-readable file per unit atomically; the [sqlite backend](../../packages/storage/storage-sqlite/README.md) stores one document per row in one database for frequently updated data.
 
 ## Declaring a domain
 
@@ -64,7 +68,7 @@ interface DomainSpec {
 }
 ```
 
-`defineDomain(spec)` pins the spec's literal types and fails loud at the owner's module load, before any medium is touched: a domain or table name outside `UNIT_NAME_RE`, a version that is not a non-negative integer, or a global schema that accepts `null` all throw (`null` is the medium's "never written" sentinel, so a stored nullable global could not round-trip). `domainTable<K, V>(schema)` declares one table with a phantom compile-time key type (typically a [branded id](core.md#branded-ids)); `descriptorOf(spec)` projects the backend-facing unit descriptor.
+`defineDomain(spec)` pins the spec's literal types and fails loud at the owner's module load, before any medium is touched: a domain or table name outside `UNIT_NAME_RE`, a version that is not a non-negative safe integer or is negative zero, or a global schema that accepts `null` all throw (`null` is the medium's "never written" sentinel, so a stored nullable global could not round-trip). `domainTable<K, V>(schema)` declares one table with a phantom compile-time key type (typically a [branded id](core.md#branded-ids)); `descriptorOf(spec)` projects the backend-facing unit descriptor.
 
 ## The open domain
 
@@ -95,11 +99,17 @@ interface Domain<S extends DomainSpec> {
 }
 ```
 
-Reads are synchronous from authoritative in-memory state: `KvTable` exposes `get`/`entries`/`keys`/`size` (snapshot iterators that stay stable while queued writes land), and the global handle's `get()` serves the spec's `initial` until the first `set` materializes the slot on the medium. Every write — `put`, `delete`, `update`, `global.set` — queues on one per-domain chain and reaches backend durability first, then mutates memory, then emits `domain/changed`; a rejected backend write leaves memory untouched, so reads never diverge from the medium. `update(key, fn)` is an atomic read-modify-write at its chain slot (a missing key rejects `missing-key`); `delete` of an absent key resolves `false` with no write and no event. Returned records are the stored objects themselves, not copies — replace via `put`/`update`, never mutate in place.
+Reads are synchronous from authoritative in-memory state: `KvTable` exposes `get`/`entries`/`keys`/`size` (snapshot iterators that stay stable while queued writes land), and the global handle's `get()` serves the spec's `initial` until the first `set` materializes the slot on the medium. Every write — `put`, `delete`, `update`, `global.set` — queues on one per-domain chain and reaches backend durability first, then mutates memory, then emits `domain/changed`; a definite rejected backend write leaves memory untouched and the chain usable. A `durability-uncertain` or `commit-outcome-unknown` result also leaves memory untouched and emits no event, but poisons the live domain because its memory can no longer be reconciled with the medium. The initiating call preserves the backend error; every already-queued and later read or write rejects `write-outcome-uncertain`; `close()` still drains and releases the unit. Recovery then discards and recreates the affected backend (or restarts) before reopening from the medium. `update(key, fn)` is an atomic read-modify-write at its chain slot (a missing key rejects `missing-key`); `delete` of an absent key resolves `false` with no write and no event. Returned records are the stored objects themselves, not copies — replace via `put`/`update`, never mutate in place.
 
 ## The domain facility: `ctx.storageDomain`
 
-`DomainFacility` ([signatures](#ctxstoragedomain--domainfacility)) opens declared domains over routed backends. Routing is the domain plugin's configuration, never the hub's: `backend` names the required default route and `routes` overrides it per domain name. `open(spec)` runs a strict sequence, each step failing the whole call: it rejects a name already open or still closing (`already-open`), resolves the route (`backend-not-found`), requires the backend's `kv` facet (`facet-unsupported`), opens the unit (backend `version-mismatch`/`malformed-medium` pass through), and validates every stored record and global against the spec's zod schemas (`invalid-record` with the offending table and key). The caller owns the returned handle and releases it with `Domain.close()`; domains still open when the plugin unmounts are closed by the facility, and a closed domain's name frees for reopening only after teardown fully completes. `get(name)` is an untyped diagnostic lookup onto the package-private `DomainImpl` runtime behind every typed handle; `closeAll()` is the unmount path.
+`DomainFacility` ([signatures](#ctxstoragedomain--domainfacility)) opens declared domains over routed backends. Routing is the domain plugin's configuration, never the hub's: `backend` names the required default route and `routes` overrides it per domain name. `open(spec)` runs a strict sequence, each step failing the whole call: it rejects a name already open or still closing (`already-open`), resolves the route (`backend-not-found`), requires the backend's `kv` facet (`facet-unsupported`), opens the unit (backend `version-mismatch`/`malformed-medium` pass through), and validates every stored record and global against the spec's zod schemas (`invalid-record` with the offending table and key). The caller owns the returned handle and releases it with `Domain.close()`; a closed domain's name frees for reopening only after teardown fully completes. `get(name)` is an untyped diagnostic lookup onto the package-private `DomainImpl` runtime behind every typed handle. `closeAll()` is the unmount path: it waits for every remaining domain close even when one fails, preserves a sole failure or aggregates several, and plugin disposal unmounts the form after that drain regardless of the outcome.
+
+## Cold domain migration
+
+`defineDomainMigrations` is the only plan constructor. It declares an ordered, continuous chain of `N -> N+1` transformations ending at an exact current `DomainSpec`, captures frozen copies of the schema declaration containers, and gives the plan a module-private registered identity; the execution entry points reject structural forgeries. `DomainFacility.migrate(plan, options)` requires different source and target backends with `kv.closed`, reserves the domain and both unit names, and rejects an existing target before inspecting or reading the source. It selects the retained source spec by its stored version, verifies its exact table/global layout, validates every historical record, supplies a detached deeply frozen snapshot to each synchronous step, and requires every source and output to be lossless JSON data before validating it against the adjacent schema. Missing retained steps, current or newer source versions, malformed layouts, invalid rows, lossy JavaScript values, and step failures all reject without publishing a complete target.
+
+After the final step, migration create-only materializes the current descriptor and reads the actual target back through the still-held reservation. The raw visible snapshot must equal the intended validated snapshot under exact JSON semantics (object member order is irrelevant) before an independent current-schema validation; a dropped or changed but still schema-valid value is invalid. The source remains unchanged, no live domain opens, and no `domain/changed` event fires. Cancellation is observed through publication; afterward, readback and cleanup preserve commit evidence despite a late abort. An uncertain result with an exact returned target reports `migration-target-durability-uncertain` and `committed: true`; confirmed absence reports `migration-target-not-committed`; a rejected uncertain readback reports `migration-target-outcome-unknown`. A durable materialization whose readback rejects has a known commit but an unverifiable target, so it reports `migration-target-invalid` and `committed: true`; a successfully returned snapshot that is schema-invalid or divergent reports the same failure. The generic layer neither blindly retries nor deletes any uncertain target. `DomainFacility.materialize` applies the same validation, create-only publication, and evidence classification to fresh current-version state. Product maintenance remains responsible for choosing source and candidate media, validating product-wide invariants, and publishing whichever candidate becomes authoritative. Facility teardown rejects new opens and cold operations, waits for every admitted open/migration/materialization, attempts every resulting live-domain close to settlement, and always removes the mounted form.
 
 ## The change event: `domain/changed`
 
@@ -184,6 +194,27 @@ The mounted domain facility. Opens declared domains over routed backends; one fa
 async open<S extends DomainSpec>(spec: S): Promise<Domain<S>>
 
 /**
+ * Migrate one closed historical unit into a different missing target
+ * backend. The domain name is reserved against ordinary open and concurrent
+ * migration until every validation and committed readback phase settles.
+ * @param plan - Complete retained adjacent migration chain.
+ * @param options - Source/target backend names and caller cancellation.
+ * @returns backend-independent migration evidence.
+ */
+async migrate( plan: DomainMigrationPlan, options: DomainMigrationOptions, ): Promise<DomainMigrationResult>
+
+/**
+ * Validate and atomically create one missing current-version domain on a
+ * selected backend. The name is reserved against ordinary open and other
+ * cold operations until the committed target has been read back and validated.
+ * @param spec - Current domain declaration.
+ * @param snapshot - Complete detached initial contents.
+ * @param options - Target backend and caller cancellation.
+ * @returns backend-independent materialization evidence.
+ */
+async materialize( spec: DomainSpec, snapshot: KvUnitSnapshot, options: DomainMaterializationOptions, ): Promise<DomainMaterializationResult>
+
+/**
  * Look up an open domain by name, untyped. Diagnostic surface (the package
  * invariant cross-checks change events against live domain state); typed
  * consumers hold the handle returned by {@link open}.
@@ -193,10 +224,11 @@ async open<S extends DomainSpec>(spec: S): Promise<Domain<S>>
 get(name: string): DomainImpl | undefined
 
 /**
- * Close every domain still open on this facility. The unmount path for
- * consumers that never called `Domain.close()` themselves; closing is
- * idempotent, so double-closing an already-closed domain is harmless.
- * @returns resolution after every unit is released.
+ * Attempt to close every domain still open on this facility and report
+ * failures only after all closes settle. The unmount path for consumers
+ * that never called `Domain.close()` themselves; closing is idempotent, so
+ * double-closing an already-closed domain is harmless.
+ * @returns resolution after every close settles.
  */
 async closeAll(): Promise<void>
 ```

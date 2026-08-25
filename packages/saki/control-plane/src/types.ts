@@ -13,8 +13,12 @@ export type { SakiHostId } from '@breakfastdapaidang/saki-execution'
 
 /** Stable identity of one Saki Installation. */
 export type SakiInstallationId = Branded<'SakiInstallationId'>
-/** Stable identity of one Installation State Generation. */
+/** Historical v2 Installation State Generation identity retained for exact migration input. */
 export type SakiInstallationGenerationId = Branded<'SakiInstallationGenerationId'>
+/** Stable identity sealed into one physical Saki storage generation. */
+export type SakiStorageGenerationId = Branded<'SakiStorageGenerationId'>
+/** Provenance identity of the Saki build that created one artifact. */
+export type SakiBuildId = Branded<'SakiBuildId'>
 /** Stable identity of one security Principal. */
 export type SakiPrincipalId = Branded<'SakiPrincipalId'>
 /** Stable identity of one authorization Grant. */

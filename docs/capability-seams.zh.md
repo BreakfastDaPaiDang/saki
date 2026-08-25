@@ -201,6 +201,8 @@ flowchart LR
   pkg_tool_lsp["tool-lsp"]
   svc_apiProxy["ctx.apiProxy<br/>Host API dispatch"]
   pkg_saki_control_plane["saki/control-plane"]
+  svc_sakiInstallationState["ctx.sakiInstallationState<br/>Verified Saki Installation state"]
+  pkg_saki_installation_maintenance["saki/installation-maintenance"]
   svc_sakiControlPlane["ctx.sakiControlPlane<br/>Saki product control plane"]
   pkg_saki_host_api["saki/host-api"]
   pkg_saki_execution["saki/execution"]
@@ -259,8 +261,10 @@ flowchart LR
   pkg_plan_mode --> svc_planMode
   pkg_pwsh_local --> svc_shell
   pkg_saki_control_plane --> svc_sakiControlPlane
+  pkg_saki_control_plane --> svc_sakiInstallationState
   pkg_saki_execution --> svc_sakiHostExecution
   pkg_saki_execution_local --> svc_sakiHostExecution
+  pkg_saki_installation_maintenance --> svc_sakiInstallationState
   pkg_sandbox --> svc_sandbox
   pkg_sandbox_local --> svc_sandbox
   pkg_sandbox_policy --> svc_sandboxPolicy
@@ -355,6 +359,7 @@ flowchart LR
   svc_lsp --> pkg_tool_lsp
   svc_sakiControlPlane --> pkg_saki_host_api
   svc_sakiHostExecution --> pkg_saki_control_plane
+  svc_sakiInstallationState --> pkg_saki_control_plane
   svc_sandbox --> pkg_bash_sandbox
   svc_sandbox --> pkg_terminal_bash
   svc_sandboxPolicy --> pkg_bash_sandbox
@@ -495,6 +500,7 @@ flowchart LR
 | `ctx.workflowEngine` | `seam` | [`workflow`](../packages/workflow/workflow) | [`workflow-worker-thread`](../packages/workflow/workflow-worker-thread) | [`tool-workflow`](../packages/workflow/tool-workflow), [`tool-ralph`](../packages/workflow/tool-ralph) | - | 每个上下文使用一个引擎，与 bash 相同，且没有具名提供方注册表；通用工作流与固定 Ralph 消费方启动运行，其中的 agent() 调用通过 ctx.subagents 扇出。 |
 | `ctx.lsp` | `seam` | [`lsp`](../packages/lsp/lsp) | `lsp-local` | [`tool-lsp`](../packages/lsp/tool-lsp) | - | 提供方注册与选择，加上恰好四种操作的标准化查询执行；该 seam 不提供协议逃生口，后端必须转换为标准化请求和结果。 |
 | `ctx.apiProxy` | `core` | `apiproxy` | - | `connection` | - | 与传输无关的 Host 网关接口：它分派浏览器 API 调用，每条打开的 Host 流自行订阅转发事件，而不是由广播方法向其推送。 |
+| `ctx.sakiInstallationState` | `seam` | [`saki/control-plane`](../packages/saki/control-plane) | [`saki/installation-maintenance`](../packages/saki/installation-maintenance) | [`saki/control-plane`](../packages/saki/control-plane) | - | Installation maintenance 会在 Saki bundle 挂载控制面前选择并验证一个 manifest 选中的状态 generation；控制面消费该精确 identity，并且只有产品校验通过后才将全新配置提升为 `ready`。 |
 | `ctx.sakiControlPlane` | `core` | [`saki/control-plane`](../packages/saki/control-plane) | - | [`saki/host-api`](../packages/saki/host-api) | - | 拥有 Installation Access、当前本地权限、受保护的产品 Projection 与 Control Intent 准入；Host API 把其收窄接口适配到浏览器传输。 |
 | `ctx.sakiHostExecution` | `seam` | [`saki/execution`](../packages/saki/execution) | [`saki/execution-local`](../packages/saki/execution-local) | [`saki/control-plane`](../packages/saki/control-plane) | - | Local Host 解析不可信 Project 选择并返回分离的 Git 证据；控制面拥有授权、Project policy 与持久产品记录。 |
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | 拥有内存定义注册表、Host 半的 vm 沙箱和 request-run 往返流程；浏览器页面通过其 Remote 命名空间在线访问同一服务。 |

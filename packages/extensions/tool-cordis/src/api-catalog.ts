@@ -1195,6 +1195,43 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'sakiInstallationState',
+    summary: 'Maintenance-owned active Installation and storage-generation identity.',
+    description: 'Maintenance-owned active Installation and storage-generation identity.',
+    methods: [
+      {
+        signature: 'abstract readonly phase: \'provisioning\' | \'ready\'',
+        description: 'Manifest phase selected for this process.',
+        parameters: [],
+      },
+      {
+        signature: 'abstract readonly installationId: SakiInstallationId',
+        description: 'Product Installation identity fixed across storage generations.',
+        parameters: [],
+      },
+      {
+        signature: 'abstract readonly storageGenerationId: SakiStorageGenerationId',
+        description: 'Physical storage generation selected as active for this process.',
+        parameters: [],
+      },
+      {
+        signature: 'abstract readonly stateVersion: 3',
+        description: 'State-format version selected by the Installation manifest.',
+        parameters: [],
+      },
+      {
+        signature: 'abstract readonly createdByBuildId: SakiBuildId',
+        description: 'Build provenance recorded when this storage generation was created.',
+        parameters: [],
+      },
+      {
+        signature: 'abstract activateAfterValidation(signal: AbortSignal): Promise<void>',
+        description: 'Promote an already-published provisioning manifest to ready after product validation. A generation selected by a ready manifest treats this as an idempotent validation point.',
+        parameters: [{ name: 'signal', description: 'control-plane startup lifetime.' }],
+      },
+    ],
+  },
+  {
     key: 'sandbox',
     summary: 'Abstract process-sandbox service.',
     description: 'Abstract process-sandbox service. confine must return enforcing argv or fail closed at wrap or runner-execution time; silent unconfined passthrough is forbidden. Functional probes arbitrate multi-runner chains and may be skipped for a sole candidate, whose own refusal remains the fail-closed end.',
@@ -1819,6 +1856,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the opened domain handle, typed by the spec.',
       },
       {
+        signature: 'async migrate( plan: DomainMigrationPlan, options: DomainMigrationOptions, ): Promise<DomainMigrationResult>',
+        description: 'Migrate one closed historical unit into a different missing target backend. The domain name is reserved against ordinary open and concurrent migration until every validation and committed readback phase settles.',
+        parameters: [{ name: 'plan', description: 'Complete retained adjacent migration chain.' }, { name: 'options', description: 'Source/target backend names and caller cancellation.' }],
+        returns: 'backend-independent migration evidence.',
+      },
+      {
+        signature: 'async materialize( spec: DomainSpec, snapshot: KvUnitSnapshot, options: DomainMaterializationOptions, ): Promise<DomainMaterializationResult>',
+        description: 'Validate and atomically create one missing current-version domain on a selected backend. The name is reserved against ordinary open and other cold operations until the committed target has been read back and validated.',
+        parameters: [{ name: 'spec', description: 'Current domain declaration.' }, { name: 'snapshot', description: 'Complete detached initial contents.' }, { name: 'options', description: 'Target backend and caller cancellation.' }],
+        returns: 'backend-independent materialization evidence.',
+      },
+      {
         signature: 'get(name: string): DomainImpl | undefined',
         description: 'Look up an open domain by name, untyped. Diagnostic surface (the package invariant cross-checks change events against live domain state); typed consumers hold the handle returned by open.',
         parameters: [{ name: 'name', description: 'Domain name.' }],
@@ -1826,9 +1875,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async closeAll(): Promise<void>',
-        description: 'Close every domain still open on this facility. The unmount path for consumers that never called `Domain.close()` themselves; closing is idempotent, so double-closing an already-closed domain is harmless.',
+        description: 'Attempt to close every domain still open on this facility and report failures only after all closes settle. The unmount path for consumers that never called `Domain.close()` themselves; closing is idempotent, so double-closing an already-closed domain is harmless.',
         parameters: [],
-        returns: 'resolution after every unit is released.',
+        returns: 'resolution after every close settles.',
       },
     ],
   },
@@ -3366,6 +3415,34 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export class DomainImpl {\n    readonly name: string;\n    constructor(private readonly ctx: Context, spec: DomainSpec, private readonly unit: KvUnit, records: Map<string, Map<string, unknown>>, globalValue: unknown, private readonly onClosed: () => void);\n    get global(): DomainGlobal<unknown>;\n    table(name: string): KvTable<string, unknown>;\n    close(): Promise<void>;\n}',
   },
   {
+    name: 'DomainMaterializationOptions',
+    declaration: 'export interface DomainMaterializationOptions {\n    readonly targetBackend: string;\n    readonly signal: AbortSignal;\n}',
+  },
+  {
+    name: 'DomainMaterializationResult',
+    declaration: 'export interface DomainMaterializationResult {\n    readonly domain: string;\n    readonly version: number;\n}',
+  },
+  {
+    name: 'DomainMigrationOptions',
+    declaration: 'export interface DomainMigrationOptions {\n    readonly sourceBackend: string;\n    readonly targetBackend: string;\n    readonly signal: AbortSignal;\n}',
+  },
+  {
+    name: 'DomainMigrationPlan',
+    declaration: 'export interface DomainMigrationPlan<S extends DomainSpec = DomainSpec> {\n    readonly [migrationPlanIdentity]: true;\n    readonly current: S;\n    readonly steps: readonly DomainMigrationStep[];\n}',
+  },
+  {
+    name: 'DomainMigrationResult',
+    declaration: 'export interface DomainMigrationResult {\n    readonly domain: string;\n    readonly sourceVersion: number;\n    readonly targetVersion: number;\n    readonly steps: readonly {\n        readonly from: number;\n        readonly to: number;\n    }[];\n}',
+  },
+  {
+    name: 'DomainMigrationSnapshot',
+    declaration: 'export interface DomainMigrationSnapshot {\n    readonly tables: Readonly<Record<string, Readonly<Record<string, unknown>>>>;\n    readonly global: unknown;\n}',
+  },
+  {
+    name: 'DomainMigrationStep',
+    declaration: 'export interface DomainMigrationStep {\n    readonly from: DomainSpec;\n    readonly to: DomainSpec;\n    readonly migrate: (snapshot: DomainMigrationSnapshot) => KvUnitSnapshot;\n}',
+  },
+  {
     name: 'DomainSpec',
     declaration: 'export interface DomainSpec {\n    readonly name: string;\n    readonly version: number;\n    readonly global?: DomainGlobalSpec<unknown>;\n    readonly tables: Record<string, DomainTableSpec>;\n}',
   },
@@ -3690,8 +3767,24 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface KnobState {\n    preset: string | null;\n    sandbox: SandboxMode | null;\n    approval: ApprovalPolicy | null;\n}',
   },
   {
+    name: 'KvClosedUnitInspection',
+    declaration: 'export interface KvClosedUnitInspection {\n    readonly name: string;\n    readonly version: number;\n    readonly hasGlobal: boolean;\n    readonly tables: readonly string[];\n}',
+  },
+  {
+    name: 'KvClosedUnitLease',
+    declaration: 'export interface KvClosedUnitLease {\n    readonly name: string;\n    inspect(): Promise<KvClosedUnitInspection | undefined>;\n    read(descriptor: KvUnitDescriptor): Promise<KvUnitSnapshot>;\n    materializeMissing(descriptor: KvUnitDescriptor, snapshot: KvUnitSnapshot): Promise<KvClosedUnitMaterialization>;\n}',
+  },
+  {
+    name: 'KvClosedUnitMaterialization',
+    declaration: 'export type KvClosedUnitMaterialization = {\n    readonly outcome: \'durable\';\n    readBack(): Promise<KvUnitSnapshot>;\n} | {\n    readonly outcome: \'uncertain\';\n    readonly cause: Error;\n    readBack(): Promise<KvUnitSnapshot | undefined>;\n};',
+  },
+  {
+    name: 'KvClosedUnitOperations',
+    declaration: 'export interface KvClosedUnitOperations {\n    withReservedUnit<T>(name: string, signal: AbortSignal, operation: (lease: KvClosedUnitLease) => Promise<T>): Promise<T>;\n}',
+  },
+  {
     name: 'KvFacet',
-    declaration: 'export interface KvFacet {\n    open(descriptor: KvUnitDescriptor): Promise<KvUnit>;\n}',
+    declaration: 'export interface KvFacet {\n    readonly closed?: KvClosedUnitOperations;\n    open(descriptor: KvUnitDescriptor): Promise<KvUnit>;\n}',
   },
   {
     name: 'KvTable',
@@ -3699,11 +3792,15 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'KvUnit',
-    declaration: 'export interface KvUnit {\n    loadAll(): Promise<{\n        tables: Record<string, Record<string, unknown>>;\n        global: unknown;\n    }>;\n    putRecord(table: string, key: string, value: unknown): Promise<void>;\n    deleteRecord(table: string, key: string): Promise<void>;\n    setGlobal(value: unknown): Promise<void>;\n    close(): Promise<void>;\n}',
+    declaration: 'export interface KvUnit {\n    loadAll(): Promise<KvUnitSnapshot>;\n    putRecord(table: string, key: string, value: unknown): Promise<void>;\n    deleteRecord(table: string, key: string): Promise<void>;\n    setGlobal(value: unknown): Promise<void>;\n    close(): Promise<void>;\n}',
   },
   {
     name: 'KvUnitDescriptor',
     declaration: 'export interface KvUnitDescriptor {\n    readonly name: string;\n    readonly version: number;\n    readonly tables: readonly string[];\n    readonly hasGlobal: boolean;\n}',
+  },
+  {
+    name: 'KvUnitSnapshot',
+    declaration: 'export interface KvUnitSnapshot {\n    readonly tables: Record<string, Record<string, unknown>>;\n    readonly global: unknown;\n}',
   },
   {
     name: 'LlmAdapter',
@@ -4159,7 +4256,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiAuthenticationContext',
-    declaration: 'export class SakiAuthenticationContext {\n    constructor(readonly sessionId: SakiBrowserSessionId, readonly principalId: SakiPrincipalId, readonly installationGenerationId: SakiInstallationGenerationId, requestToken: string);\n    isAuthentic(): boolean;\n    matchesRequestToken(presented: string): boolean;\n    projectRequestToken(): string;\n    toJSON(): {\n        readonly kind: \'saki-authentication-context\';\n    };\n}',
+    declaration: 'export class SakiAuthenticationContext {\n    constructor(readonly sessionId: SakiBrowserSessionId, readonly principalId: SakiPrincipalId, readonly storageGenerationId: SakiStorageGenerationId, requestToken: string);\n    isAuthentic(): boolean;\n    matchesRequestToken(presented: string): boolean;\n    projectRequestToken(): string;\n    toJSON(): {\n        readonly kind: \'saki-authentication-context\';\n    };\n}',
   },
   {
     name: 'SakiBootstrapChallengePurpose',
@@ -4184,6 +4281,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SakiBrowserSessionId',
     declaration: 'export type SakiBrowserSessionId = Branded<\'SakiBrowserSessionId\'>;',
+  },
+  {
+    name: 'SakiBuildId',
+    declaration: 'export type SakiBuildId = Branded<\'SakiBuildId\'>;',
   },
   {
     name: 'SakiChangedDisposer',
@@ -4220,10 +4321,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SakiInspectProjectSelectionQuery',
     declaration: 'export interface SakiInspectProjectSelectionQuery {\n    readonly type: \'inspect-project-selection\';\n    readonly hostId: SakiHostId;\n    readonly directoryLocator: string;\n}',
-  },
-  {
-    name: 'SakiInstallationGenerationId',
-    declaration: 'export type SakiInstallationGenerationId = Branded<\'SakiInstallationGenerationId\'>;',
   },
   {
     name: 'SakiInstallationId',
@@ -4284,6 +4381,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SakiResourceBindingId',
     declaration: 'export type SakiResourceBindingId = Branded<\'SakiResourceBindingId\'>;',
+  },
+  {
+    name: 'SakiStorageGenerationId',
+    declaration: 'export type SakiStorageGenerationId = Branded<\'SakiStorageGenerationId\'>;',
   },
   {
     name: 'SakiUnauthenticatedAccessProjection',

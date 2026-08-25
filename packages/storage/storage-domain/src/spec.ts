@@ -9,7 +9,7 @@
  */
 
 import type { ZodType } from 'zod'
-import { UNIT_NAME_RE, type KvUnitDescriptor } from '@deepseek-ai/dsh-storage'
+import { isKvUnitVersion, UNIT_NAME_RE, type KvUnitDescriptor } from '@deepseek-ai/dsh-storage'
 
 /** Global singleton declaration: schema plus the value used before the first write. */
 export interface DomainGlobalSpec<G> {
@@ -68,7 +68,7 @@ export function domainTable<K extends string, V>(schema: ZodType<V>): DomainTabl
  * Identity helper that pins a spec's literal types and validates its fields.
  * Misconfiguration fails loud at the owning package's module load, before any
  * medium is touched: a domain or table name outside `UNIT_NAME_RE`, a version
- * that is not a non-negative integer, or a global schema that accepts `null`
+ * that is not a non-negative safe integer, or a global schema that accepts `null`
  * all throw. The `null` rejection guards round-tripping: backends store the
  * global as opaque JSON with `null` as the "never written" sentinel, so a
  * nullable global would be indistinguishable from an absent one on reopen
@@ -80,8 +80,8 @@ export function defineDomain<S extends DomainSpec>(spec: S): S {
   if (!UNIT_NAME_RE.test(spec.name)) {
     throw new Error(`domain name '${spec.name}' must match ${UNIT_NAME_RE}`)
   }
-  if (!Number.isInteger(spec.version) || spec.version < 0) {
-    throw new Error(`domain '${spec.name}' version must be a non-negative integer, got ${spec.version}`)
+  if (!isKvUnitVersion(spec.version)) {
+    throw new Error(`domain '${spec.name}' version must be a non-negative safe integer, got ${String(spec.version)}`)
   }
   for (const table of Object.keys(spec.tables)) {
     if (!UNIT_NAME_RE.test(table)) {

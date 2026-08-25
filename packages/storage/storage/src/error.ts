@@ -11,6 +11,11 @@ export type StorageErrorCode =
   | 'duplicate-mount'
   | 'version-mismatch'
   | 'malformed-medium'
+  | 'unit-not-found'
+  | 'unit-open'
+  | 'target-exists'
+  | 'durability-uncertain'
+  | 'commit-outcome-unknown'
   | 'closed'
 
 /**
@@ -19,6 +24,10 @@ export type StorageErrorCode =
  */
 export class StorageError extends Error {
   override readonly name = 'StorageError'
+  /** True when the requested value is already visible at its final path. */
+  declare readonly published?: true
+  /** True when a failed commit may nevertheless have published the requested value. */
+  declare readonly publicationPossible?: true
 
   /**
    * @param code - Stable discriminant for the failure class.
@@ -31,5 +40,37 @@ export class StorageError extends Error {
     options?: ErrorOptions,
   ) {
     super(message, options)
+    if (code === 'durability-uncertain') this.published = true
+    if (code === 'commit-outcome-unknown') this.publicationPossible = true
   }
+}
+
+/**
+ * Identify a storage failure whose commit may have published the requested
+ * value but did not produce enough evidence to decide either way.
+ * @param error - Candidate failure from a backend write.
+ * @returns whether publication remains possible but unconfirmed.
+ */
+export function isCommitOutcomeUnknownStorageError(
+  error: unknown,
+): error is StorageError & {
+  readonly code: 'commit-outcome-unknown'
+  readonly publicationPossible: true
+} {
+  return error instanceof StorageError
+    && error.code === 'commit-outcome-unknown'
+    && error.publicationPossible === true
+}
+
+/**
+ * Identify a storage failure that happened after namespace publication.
+ * @param error - Candidate failure from a backend write.
+ * @returns whether the requested value is already visible at its final path.
+ */
+export function isPublishedStorageError(
+  error: unknown,
+): error is StorageError & { readonly code: 'durability-uncertain'; readonly published: true } {
+  return error instanceof StorageError
+    && error.code === 'durability-uncertain'
+    && error.published === true
 }

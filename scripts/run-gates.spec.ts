@@ -420,6 +420,7 @@ describe('Node 24 lane ownership', () => {
     expect(subject.find(item => item.id === 'built-bin-smoke')?.args).toEqual(
       expect.arrayContaining([
         'packages/saki/bundle/tests/built-bin.e2e.ts',
+        'packages/saki/installation-maintenance/tests/built-bin.e2e.ts',
         'packages/subagent/subagent-codex/tests/loader-composition.e2e.ts',
         'packages/subagent/subagent-claude-code/tests/loader-composition.e2e.ts',
       ]),

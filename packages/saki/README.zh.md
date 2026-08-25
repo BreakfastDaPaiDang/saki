@@ -10,6 +10,7 @@ Saki 专属产品语义位于 `packages/saki/<pkg>`，并使用 `@breakfastdapai
 | [`execution-local/`](execution-local/README.zh.md) | 使用本地文件系统、Git、subprocess 与 Workspace index 的 Host 检查 Service Provider | 提供 `sakiHostExecution` |
 | [`control-plane/`](control-plane/README.zh.md) | Installation 置备、本地 Access 权限真源、持久 Project 登记与 Registry，以及受保护产品 Projection | `sakiControlPlane` |
 | [`host-api/`](host-api/README.zh.md) | 双侧 `/saki` Host 与浏览器传输适配器 | 浏览器侧提供 `sakiHostClient` |
+| [`installation-maintenance/`](installation-maintenance/README.zh.md) | Installation 范围 lease、manifest 所选状态 generation、已验证 Recovery Backup 与离线前向升级 | — |
 | [`bundle/`](bundle/README.zh.md) | Saki 组合根与仓库本地 Host 启动器 | 挂载控制面、传输层与 `saki-readiness` |
 
 只有当一个产品切片具有可独立验证的职责时才新增包。通用 Harness 能力继续位于现有 DSH 组中；规划中的 Saki 包不得提前创建占位目录。

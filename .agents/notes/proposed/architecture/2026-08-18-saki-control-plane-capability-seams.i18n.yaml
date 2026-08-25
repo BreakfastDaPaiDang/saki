@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-control-plane-capability-seams.md
-2026-08-18-saki-control-plane-capability-seams.md: 92aac3c542caf2fdb768e1bb3d6a91678d06a275
-2026-08-18-saki-control-plane-capability-seams.zh.md: 54cfcddd4d7fb229dd0aabc8d5583329dd4f20b5
+2026-08-18-saki-control-plane-capability-seams.md: 6ecdd9977f0171fc891e98c6c143d6b5c84210a2
+2026-08-18-saki-control-plane-capability-seams.zh.md: 1c4e8af3fc186bd3cb460c3c11579dda5389f985

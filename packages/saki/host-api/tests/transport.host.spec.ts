@@ -17,7 +17,19 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import * as Connection from '@deepseek-ai/dsh-client-connection'
 import { RpcId, type ClientRequest, type ServerResponse } from '@deepseek-ai/dsh-host-apiproxy/api'
 import SakiControlPlane from '@breakfastdapaidang/saki-control-plane'
-import type { SakiAccessExchangeResult, SakiAccessLogoutResult } from '@breakfastdapaidang/saki-control-plane'
+import {
+  createStorageGenerationSeal,
+  sakiStorageGenerationDomainSpec,
+  STORAGE_GENERATION_KEY,
+} from '@breakfastdapaidang/saki-control-plane'
+import type {
+  SakiAccessExchangeResult,
+  SakiAccessLogoutResult,
+  SakiBuildId,
+  SakiInstallationId,
+  SakiStorageGenerationId,
+} from '@breakfastdapaidang/saki-control-plane'
+import { providePreparedSakiState } from '@breakfastdapaidang/saki-installation-maintenance'
 import { takeSakiCookieHeader } from '@breakfastdapaidang/saki-control-plane/host'
 import { CONTROL_STATE_KEY, sakiControlPlaneDomainSpec } from '@breakfastdapaidang/saki-control-plane/src/spec.ts'
 import * as SakiHostApi from '../src/index.ts'
@@ -31,6 +43,10 @@ const OPAQUE_ERROR_RESULT = {
   ok: false,
   error: { code: 'internal', message: 'Saki request is unavailable', details: {} },
 } as const
+const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId
+const STORAGE_GENERATION_ID =
+  'storage-generation-00000000-0000-4000-8000-000000000002' as SakiStorageGenerationId
+const BUILD_ID = 'saki-host-api-test' as SakiBuildId
 
 interface RunningHost {
   readonly context: Context
@@ -47,7 +63,31 @@ async function start(): Promise<RunningHost> {
   await context.plugin(Storage)
   await context.plugin(StorageJson, { root: join(directory, 'storages') })
   await context.plugin(StorageSqlite, { path: join(directory, 'saki.sqlite'), journalMode: 'delete' })
-  await context.plugin(StorageDomain, { backend: 'json', routes: { saki_control_plane: 'sqlite' } })
+  await context.plugin(StorageDomain, {
+    backend: 'json',
+    routes: {
+      saki_control_plane: 'sqlite',
+      saki_storage_generation: 'sqlite',
+    },
+  })
+  const generation = await context.storageDomain.open(sakiStorageGenerationDomainSpec)
+  try {
+    await generation.table('storage_generation').put(
+      STORAGE_GENERATION_KEY,
+      createStorageGenerationSeal(INSTALLATION_ID, STORAGE_GENERATION_ID, BUILD_ID),
+    )
+  } finally {
+    await generation.close()
+  }
+  providePreparedSakiState(context, {
+    phase: 'provisioning',
+    databasePath: join(directory, 'saki.sqlite'),
+    installationId: INSTALLATION_ID,
+    storageGenerationId: STORAGE_GENERATION_ID,
+    stateVersion: 3,
+    createdByBuildId: BUILD_ID,
+    promoteToReady: () => Promise.resolve(),
+  })
   context.provide('sessionPersistence', { list: () => Promise.resolve([]) } as never)
   await context.plugin(WorkspaceRegistry)
   await context.plugin(LocalFileSystem, { cwd: directory })

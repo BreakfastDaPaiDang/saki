@@ -152,6 +152,7 @@ function storedPool(
 ): MemoryMediaPool {
   const pool = new MemoryMediaPool()
   pool.versions.set('workspace', DOMAIN_VERSION)
+  pool.hasGlobals.set('workspace', true)
   pool.media.set('workspace', {
     tables: new Map([['workspaces', new Map<string, unknown>(entries)]]),
     global: state,

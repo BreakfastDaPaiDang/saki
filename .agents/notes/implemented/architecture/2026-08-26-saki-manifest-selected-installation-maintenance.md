@@ -1,0 +1,69 @@
+# Agent Note: Manifest-selected Saki Installation maintenance
+
+Status: implemented
+
+English | [中文](2026-08-26-saki-manifest-selected-installation-maintenance.zh.md)
+
+## Problem
+
+The B03 Saki Host stores the first durable control-plane relationships in a manifest-less SQLite database whose domain version and generation vocabulary differ from the current schema. Serving that database through ordinary current-domain open would either reject it or risk changing the only known-good source before a complete product validation. Backup, upgrade, application startup, and crash recovery also need one writer decision: a candidate, backup, journal, or recent filename must never become authority by discovery.
+
+Build provenance cannot answer format compatibility. Two builds may read the same state version, while one build may create a new version that another cannot serve. Treating build-id equality as a compatibility check would reject readable backups and could admit an unreadable format if metadata were copied incorrectly.
+
+## Decision
+
+`@breakfastdapaidang/saki-installation-maintenance` owns Saki's Installation lease, state-source selection, state-generation manifests, Recovery Backups, operation recovery, serving preparation, and offline upgrade. The [generic closed-domain migration decision](2026-08-25-callback-scoped-closed-domain-migration.md) continues to own backend-independent source inspection and create-only materialization; Saki owns Installation identity, product invariants, authority publication, and cleanup.
+
+### State compatibility
+
+`SakiStateCapability` is the compatibility authority. The current capability reads product-state versions 2 and 3 and writes only version 3. Version 2 is the exact B03 `saki_control_plane@2` declaration with no storage-generation seal; version 3 requires `saki_control_plane@3` and the separate `saki_storage_generation@1` seal. `createdByBuildId` and Recovery Backup `sourceBuildId` are provenance only. Manifest and backup readers first resolve `stateVersion` through their own capability and never require build-id equality.
+
+The B03 source validator preserves the historical model instead of applying every v3 relationship globally. It requires the control singleton and its selected Installation Foundation to agree, and it enforces the durable Access aggregate and Project Registry/Intent cross-record invariants. An absent bootstrap-completion summary remains valid before bootstrap has completed. If consumed evidence shows that bootstrap completed without its summary, exactly one consistent initial challenge and Browser Session pair must permit deterministic reconstruction. A registration Intent Actor may name only the initial or current historical generation. Bootstrap Challenge and Browser Session generation ids are attribution; schema-valid terminal entries may name other historical generations. Unrelated historical Foundation rows need only satisfy exact B03 schema and the references reached from the selected owner.
+
+The deterministic v2-to-v3 step replaces the historical generation field vocabulary, retains stable Installation and entity identities, recomputes registration payload digests, and reconstructs the immutable bootstrap-completion summary only from matching consumed initial-bootstrap challenge and Browser Session evidence. The new candidate receives an independent physical storage-generation identity and required seal.
+
+### Authority and exclusion
+
+After publication, canonical bounded `installation.json` is the sole selector. Its exact `generation.json` reference and the selected generation metadata must agree on Installation id, storage-generation id, and state version. Without a manifest, source selection recognizes only the exact configured B03 database; absence of both means fresh state. It never scans generation names, journals, backup timestamps, or modification times. Unexplained unselected residue requires recovery.
+
+The B03 Host predates the Installation lease and must be stopped and kept offline manually for the transition. Beginning with B18, every serving lifetime and maintenance command takes `BEGIN EXCLUSIVE` on the separate `installation-lock.sqlite` database and keeps that transaction through its complete callback and teardown. Before SQLite opens, linked or non-directory Installation roots fail closed. POSIX acquisition synchronizes the nearest existing directory and its parent as a retry checkpoint, then creates each missing descendant separately and synchronizes that descendant and parent before continuing; a namespace-durability failure prevents lease entry. Acquisition does not wait. Process death lets SQLite and the operating system release the lease; the derived lock database carries no product authority. There is no PID ownership, stale-file deletion, or timeout-based takeover.
+
+### Backup, upgrade, and recovery
+
+A Recovery Backup is an owner-only exact copy of the selected SQLite database and its present recovery artifacts. POSIX requires a `0700` directory and `0600` files. Windows requires a protected DACL with exact Full Control entries for only the current owner and LocalSystem: the directory entries inherit to descendants, and every final file receives its own protected DACL. Verification rejects inherited or unprotected final permissions and every ambient trustee or access rule. Canonical metadata fixes the backup, Installation, storage generation, state version, source-build provenance, artifact roles, lengths, and digests. Publication uses a missing-target reservation and exact readback. Verification accepts only the caller-named backup and a state version supported by the supplied capability; a Recovery Backup is not an Installation Export or Host-transfer claim.
+
+Every state-changing maintenance flow first durably publishes a fixed pending intent, then its identity-selected canonical operation journal, and finally the fixed active selector before artifact effects. The pending record becomes a canonical cleared marker after exact readback. The journal fixes artifact identities and safe cleanup targets but never selects state. Upgrade verifies the exact v2 source and Recovery Backup, migrates into a separate create-only v3 candidate, opens the candidate through current declarations, validates the storage-generation seal and Saki product relationships, proves the source artifact set unchanged, and atomically publishes a `ready` Installation manifest. Fresh provisioning publishes a `provisioning` manifest before control-plane creation and promotes that exact generation to `ready` only after validation.
+
+Recovery runs under the Installation lease before serving and before every offline command. It first removes only target-derived durable-file temps, then reconciles the fixed pending intent, active selector, root settled selector, and fixed settled journal. Clearing an active operation uses two same-directory renames: selector to root settled selector and dynamic journal to the fixed `operations/` journal; Windows uses write-through replacement and POSIX syncs the owning parent after each rename. A crash before upgrade manifest publication retains the v2 source and removes only journal-owned backup and candidate artifacts after validating them. A crash after publication validates and reopens only the selected v3 generation. Invalid or ambiguous authority enters `recovery-required`; no fallback generation is guessed.
+
+### Operator interface
+
+The offline executable exposes `backup`, `verify <backup-id>`, and `upgrade`; the PowerShell 7 wrapper passes through arguments and exit status. All commands acquire the same no-wait lease as the Host, recover an interrupted operation first, observe cancellation, and emit one path-free JSON value with distinct success, operation-failure, and usage exit codes. A valid v2 source is never served by the current Host: startup reports `upgrade-required`, and the operator runs the offline upgrade after stopping the Host.
+
+## Verification
+
+Control-plane tests pin exact B03 schema acceptance, the narrower historical relationship rules, deterministic v2-to-v3 output, bootstrap-completion reconstruction, v3 seal validation, and build-independent state capability. A real physical SQLite-v1 B03 fixture pins the complete upgrade path and proves the source database and sidecars remain unchanged.
+
+Maintenance tests cover manifest-only selection, fresh provisioning, lease exclusion, exact Recovery Backup creation and verification, candidate validation, operation retry, every pending/active/settled publication boundary, and injected interruption after journal, backup, partial-directory creation, candidate materialization, generation-metadata publication, final candidate publication, validation, and Installation-manifest milestones. The pre-publication cases reopen only v2; the post-publication case reopens only v3. CLI and built-entry tests pin strict arguments, path-free output, exit codes, repeated startup, and lease release after signal-driven shutdown. No snapshot changes because the package adds no model-visible input or output.
+
+## Alternatives considered
+
+**Use build ids as compatibility gates.** Build ids identify the producer and help select rollback software, but they do not define the readable state set. Version capability is explicit, testable, and permits a build to read more than it writes.
+
+**Select the newest plausible generation or journal.** Directory discovery would turn cleanup residue and wall-clock ordering into authority. One exact manifest gives every process the same answer, while journals remain bounded recovery evidence.
+
+**Migrate the B03 database in place.** An in-place transaction cannot retain an exact old-build-readable source after current-schema writes or protect against product invariants discovered only after current reopen. A separate candidate keeps publication as one explicit commit.
+
+**Use a PID or lock file with stale-owner takeover.** Liveness tests and timeouts cannot prove that another writer has stopped, and deleting a stale-looking file can create split ownership. The SQLite transaction is released by process lifetime and admits no manual takeover heuristic.
+
+**Migrate during ordinary Host startup.** Online migration would mix serving handles, product writes, and authority publication. Startup may provision fresh v3 or serve selected v3, but exact B03 state requires a deliberate offline command and verified rollback artifact.
+
+**Include portable export and replacement restore in this maintenance surface.** Those operations introduce encrypted archive formats, credential and Session inclusion policy, new-Host authority, rebinding, and unresolved-operation reconciliation. They remain in the [active portability proposal](../../proposed/architecture/2026-08-18-saki-forward-migrations-and-installation-maintenance.md) instead of widening the first state-safety increment.
+
+## Consequences
+
+Saki has one deterministic writer and recovery answer across Host startup and operator commands. Upgrade consumes extra disk for the source, Recovery Backup, and candidate and requires a short offline interval. A malformed selector, selected generation, backup, source, or operation record fails closed and can require operator recovery rather than automatic discovery.
+
+Only exact B03 v2 advances to current v3. There is no reverse migration, downgrade, arbitrary historical-media repair, backup restore command, encrypted Installation Export, replacement-Host restore, retention orchestration, or maintenance Web UI in this package. The Recovery Backup preserves exact rollback evidence, but another operation must explicitly install it and an appropriate state-capable build before it can become authority.
+
+The Installation lease coordinates only processes using the same Installation root. Copying the root or starting historical copies on another Host is outside its exclusion guarantee and still requires an operational single-writer rule or future distributed coordination.

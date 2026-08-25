@@ -229,8 +229,17 @@
         "@deepseek-ai/dsh-fs-local",
         "@deepseek-ai/dsh-session-persistence-jsonl",
         "@deepseek-ai/dsh-storage-json",
-        "@deepseek-ai/dsh-storage-sqlite",
         "@deepseek-ai/dsh-subprocess-local"
+      ]
+    },
+    "packages/saki/installation-maintenance": {
+      "entry": [
+        "tests/**/*.spec.ts",
+        "tests/**/*.e2e.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "tests/**/*.ts"
       ]
     },
     "packages/typert/generator": {

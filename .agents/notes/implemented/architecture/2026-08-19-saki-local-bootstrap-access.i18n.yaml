@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-19-saki-local-bootstrap-access.md
-2026-08-19-saki-local-bootstrap-access.md: bad4f9a3a970dd949e43160f4fc09c836972a16d
-2026-08-19-saki-local-bootstrap-access.zh.md: e49a24b76a7f7e1426fc207c198454ed8c823f17
+2026-08-19-saki-local-bootstrap-access.md: 23f95d2a8e7b91d22b13c57d233ab063f7d4935b
+2026-08-19-saki-local-bootstrap-access.zh.md: d5a7224cb583f1e7d4330cb05664c38f3a7a993d

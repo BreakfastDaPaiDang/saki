@@ -169,6 +169,9 @@ const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   // The control plane's root and Host-only entries share authentication class
   // identity and the opaque cookie-header registry through one generated chunk.
   '@breakfastdapaidang/saki-control-plane': ['lib/host.js', 'lib/fixtures.js', 'lib/service-*.js'],
+  // The maintenance library and CLI share operation state through one generated
+  // chunk so both entries observe the same in-process ownership records.
+  '@breakfastdapaidang/saki-installation-maintenance': ['lib/maintenance-operations-*.js'],
   // The private Saki bundle carries its empty root beside the patch layer.
   '@breakfastdapaidang/saki-bundle': ['cordis.yml'],
 }

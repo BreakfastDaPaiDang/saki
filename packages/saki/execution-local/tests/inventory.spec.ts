@@ -759,23 +759,42 @@ describe('closed repository inventory', () => {
     const root = await mkdtemp(join(tmpdir(), 'saki-inventory-'))
     roots.push(root)
     await writeFile(join(root, 'file'), 'value')
-    await expect(captureRepositoryInventory(
-      root,
-      { run: inventoryCommands({
-        tree: `100644 blob ${'1'.repeat(40)}\tfile\0`,
-        index: `H 100644 ${'2'.repeat(40)} 0\tfile\0`,
-      }) },
-      'sha1',
-      inventoryBounds({ maxCaptureMs: 1 }),
-      new AbortController().signal,
-      undefined,
-      nodeFacts({
-        async open() {
-          await new Promise(resolve => setTimeout(resolve, 10))
-          throw new TypeError('late file provider failure')
-        },
-      }),
-    )).rejects.toMatchObject({ kind: 'unavailable' })
+    const opened = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const maxCaptureMs = 1
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const pending = captureRepositoryInventory(
+        root,
+        { run: inventoryCommands({
+          tree: `100644 blob ${'1'.repeat(40)}\tfile\0`,
+          index: `H 100644 ${'2'.repeat(40)} 0\tfile\0`,
+        }) },
+        'sha1',
+        inventoryBounds({ maxCaptureMs }),
+        new AbortController().signal,
+        undefined,
+        nodeFacts({
+          async open() {
+            opened.resolve(undefined)
+            await release.promise
+            throw new TypeError('late file provider failure')
+          },
+        }),
+      )
+      const phase = await Promise.race([
+        opened.promise.then(() => 'opened' as const),
+        pending.then(() => 'settled' as const, () => 'settled' as const),
+      ])
+      expect(phase).toBe('opened')
+      await vi.advanceTimersByTimeAsync(maxCaptureMs)
+      release.resolve(undefined)
+      await expect(pending).rejects.toMatchObject({ kind: 'unavailable' })
+    } finally {
+      release.resolve(undefined)
+      vi.useRealTimers()
+    }
   })
 
   it('keeps exact-total raw bytes complete when a following changed path is missing', async () => {

@@ -32,11 +32,14 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/dsh-invariants": "workspace:^",
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-invariants": "workspace:^"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-invariants": "workspace:^",
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-invariants": "workspace:^"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
   }
 }

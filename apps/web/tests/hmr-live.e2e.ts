@@ -1,7 +1,7 @@
 /** Published dsh web + pnpm dev:web → browser HMR, with no page reload. */
 
 import { existsSync, globSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
@@ -77,6 +77,10 @@ it('hot-reloads a real client-plugin source edit without refreshing the page', a
   const clientBundlePaths = globSync('packages/*/*/lib/client.js{,.map}', { cwd: REPO_ROOT })
     .map(path => join(REPO_ROOT, path))
   const originalClientBundles = await Promise.all(clientBundlePaths.map(async path => [path, await readFile(path)] as const))
+  // Preserve every build-record artifact that dev:web rewrites so later built consumers see one complete build.
+  const webDistPath = join(REPO_ROOT, 'apps/web/dist')
+  const originalWebDistPath = join(world, 'original-web-dist')
+  await cp(webDistPath, originalWebDistPath, { recursive: true, force: false, errorOnExist: true })
   const originalSource = await readFile(sourcePath)
   const oldText = 'Into the Unknown'
   const sourceNeedle = "'hero.headline': 'Into the Unknown'"
@@ -134,7 +138,18 @@ it('hot-reloads a real client-plugin source edit without refreshing the page', a
     }))
     if (host !== undefined) await stopTree(host).catch((error: unknown) => failures.push(error))
     await browser?.close().catch((error: unknown) => failures.push(error))
+    await rm(webDistPath, { recursive: true, force: true }).catch((error: unknown) => failures.push(error))
+    await cp(originalWebDistPath, webDistPath, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    }).catch((error: unknown) => failures.push(error))
     await subprocessFiber?.dispose().catch((error: unknown) => failures.push(error))
+    try {
+      readClientBuildRecord(REPO_ROOT)
+    } catch (error) {
+      failures.push(error)
+    }
     await rm(world, { recursive: true, force: true }).catch((error: unknown) => failures.push(error))
   }
   if (failures.length > 0) throw new AggregateError(failures, 'HMR browser test or cleanup failed')
