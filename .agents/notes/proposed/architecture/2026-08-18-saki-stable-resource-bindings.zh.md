@@ -14,9 +14,11 @@ Status: proposed
 
 绑定健康状态为 `active`、`missing`、`repair-required`、`needs-rebind` 或 `retired`。Mutation 准入会重新验证观察与 revision。带归因的 rebind 操作要求执行完全停稳，选择已有目录，推进 Project 的 DSH Workspace 引用，并在路径无法证明连续性时记录 operator 确认。历史 DSH Session 保留旧 Workspace 与 cwd；后续轮次在新位置使用后继 Session。
 
-0.1.0 版本登记、rebind 和退役 Project，但不实际创建、移动、repair、移除或 prune worktree。自动模式要求 clean tree。手动接管已有变更会记录其有界指纹与归因限制；任何歧义混合都会继续使自动 staging 和 completion 不可用。[ADR 0014](../../../../docs/adr/0014-stable-resource-bindings-over-canonical-worktrees.md)拥有该生命周期。
+0.1.0 版本登记、rebind 和退役 Project，但不实际创建、移动、repair、移除或 prune worktree。自动模式要求 clean tree。手动接管已有变更会记录其有界指纹与归因限制；任何歧义混合都会继续使自动 staging 和 completion 不可用。[ADR 0014](../../../../docs/adr/0014-stable-resource-bindings-over-canonical-worktrees.zh.md)拥有该生命周期。
 
-提议中的 [domain KV 存储与 Workspace](2026-07-24-domain-kv-storage-and-workspace.md) Agent Note 拥有 DSH Workspace 的 `fs.realpath` 唯一性与不可变记录；本提案拥有 Saki 更高层的绑定身份、Git 观察、rebind 与 lease 语义。提议中的 [Installation 维护](2026-08-18-saki-forward-migrations-and-installation-maintenance.md) Agent Note 拥有替换 Host 恢复，并把 `needs-rebind` 接入该生命周期。
+提议中的 [domain KV 存储与 Workspace](2026-07-24-domain-kv-storage-and-workspace.zh.md) Agent Note 拥有 DSH Workspace 的 `fs.realpath` 唯一性与不可变记录；本提案拥有 Saki 更高层的绑定身份、Git 观察、rebind 与 lease 语义。提议中的 [Installation 维护](2026-08-18-saki-forward-migrations-and-installation-maintenance.zh.md) Agent Note 拥有替换 Host 恢复，并把 `needs-rebind` 接入该生命周期。
+
+已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.zh.md)建立首个稳定 Project 与 Resource Binding id、重复 worktree 身份检查和启动重新验证。本 Agent Note 保持 proposed，因为重绑定、退役、repair、Execution Lease、后继 Session 与物理 worktree 生命周期尚未实现。
 
 ## 考虑过的方案
 

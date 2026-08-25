@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-18-saki-actions-cost-policy.md
 2026-08-18-saki-actions-cost-policy.md: 9021b9be80a36efdcf95924f5bece0b573e9ca98
-2026-08-18-saki-actions-cost-policy.zh.md: 5c99d3566bad48f58f45ce61281da0e48864cb89
+2026-08-18-saki-actions-cost-policy.zh.md: 4cc7c47fbbbe6449b78dccad0da72bff341311e4

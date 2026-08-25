@@ -16,7 +16,7 @@ Status: implemented
 
 ## 决策
 
-[CI](../../../../.github/workflows/ci.yml)把必需正确性检查分配给在 GitHub 标准托管容量上运行的已就绪且非草稿 PR。这些 PR 会运行合并后的 Linux、由 Wine 承载的 Windows 作业，以及 Node 兼容性与 Python 约定。完整的原生 Windows 清单是默认的 `windows-native` 手动套件，并继续位于必需聚合流程之外。标准托管的 `serial / linux` 与 `serial / macos` 定义仍是禁用的参考配方；不可用的自托管热备作业与原来的串行 Windows 热备均已移除。显式 dispatch 保留原生 Windows 与两种运行器基准测试套件，但依照 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.md)，没有任何参考作业能由 `master` 推送触发。
+[CI](../../../../.github/workflows/ci.yml)把必需正确性检查分配给在 GitHub 标准托管容量上运行的已就绪且非草稿 PR。这些 PR 会运行合并后的 Linux、由 Wine 承载的 Windows 作业，以及 Node 兼容性与 Python 约定。完整的原生 Windows 清单是默认的 `windows-native` 手动套件，并继续位于必需聚合流程之外。标准托管的 `serial / linux` 与 `serial / macos` 定义仍是禁用的参考配方；不可用的自托管热备作业与原来的串行 Windows 热备均已移除。显式 dispatch 保留原生 Windows 与两种运行器基准测试套件，但依照 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.zh.md)，没有任何参考作业能由 `master` 推送触发。
 
 每个已禁用的串行参考作业均在不设置任何分片选择器的情况下运行 `pnpm run check:ci`。`DSH_GATE_CONCURRENCY=1` 使顶层聚合每次只执行一个已经就绪的门禁；覆盖率、快照回放、built-bin 冒烟测试和发布验证的 worker 数量也设为 1。这些参考流程可在显式诊断时恢复，但不属于当前触发路径。Linux 在回放快照前安装 bubblewrap；原生 Windows 手动套件则在安装采用符号链接的工作区前启用开发人员模式，并运行 `pnpm run check:ci:windows-complete`。
 
@@ -28,7 +28,7 @@ macOS 参考流程使用 fork 进程运行常规 Vitest 项目。macOS arm64 上
 
 参考作业仅用于诊断，不参与 PR 所要求的 `all checks passed` 结果。Saki 不会在合并后自动运行参考流程。系统根据已完成且由手动 dispatch 或发布 tag 触发的托管作业时间戳评估性能，并将其报告为测量结果，而不是写成 `timeout-minutes` 值。
 
-可移植的参考流程使用 GitHub 标准的 `ubuntu-latest`、`macos-latest` 和 `windows-latest` 标签。PR 必需的 Windows 作业在 `ubuntu-latest` 上通过 Wine 运行；手动原生作业使用 `windows-latest`，并依据[双 Windows 决策](2026-08-08-native-windows-pull-request-ci.md)不参与必需聚合流程。依据[必需 CI 决策](2026-07-23-portable-required-pull-request-ci.md)，PR 必需作业使用可移植的标准容量。更高核心数的托管运行器仍仅用于手动基准测试，因为正确性路径必须无需仓库外部的运行器配置即可运行。
+可移植的参考流程使用 GitHub 标准的 `ubuntu-latest`、`macos-latest` 和 `windows-latest` 标签。PR 必需的 Windows 作业在 `ubuntu-latest` 上通过 Wine 运行；手动原生作业使用 `windows-latest`，并依据[双 Windows 决策](2026-08-08-native-windows-pull-request-ci.zh.md)不参与必需聚合流程。依据[必需 CI 决策](2026-07-23-portable-required-pull-request-ci.zh.md)，PR 必需作业使用可移植的标准容量。更高核心数的托管运行器仍仅用于手动基准测试，因为正确性路径必须无需仓库外部的运行器配置即可运行。
 
 ## 曾考虑的替代方案
 

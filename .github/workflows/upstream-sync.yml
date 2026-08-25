@@ -15,7 +15,7 @@ concurrency:
 permissions:
   actions: read
   contents: read
-  issues: write
+  issues: read
   pull-requests: read
 
 env:
@@ -231,8 +231,13 @@ jobs:
           fi
 
   route-ci:
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'automation/upstream-sync'
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'automation/upstream-sync' && github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
       RUN_URL: ${{ github.event.workflow_run.html_url }}
@@ -248,6 +253,10 @@ jobs:
             -f state=open -f base=master -f head="$owner:$SYNC_BRANCH" -f per_page=10)
           pr_number=$(jq -r '.[0].number // empty' <<<"$pulls")
           [[ -n "$pr_number" ]] || exit 0
+          pr_head_sha=$(jq -r '.[0].head.sha // empty' <<<"$pulls")
+          [[ "$pr_head_sha" == "$HEAD_SHA" ]] || exit 0
+          pr_is_draft=$(jq -r '.[0].draft // true' <<<"$pulls")
+          [[ "$pr_is_draft" == 'false' ]] || exit 0
           pr_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pull/$pr_number"
           issues=$(gh api --method GET "repos/$GITHUB_REPOSITORY/issues" \
             -f state=open -f labels=ready-for-agent -f per_page=100)

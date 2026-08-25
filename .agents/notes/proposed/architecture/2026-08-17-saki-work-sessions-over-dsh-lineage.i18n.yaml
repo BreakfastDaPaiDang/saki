@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-17-saki-work-sessions-over-dsh-lineage.md
 2026-08-17-saki-work-sessions-over-dsh-lineage.md: 02b8ee88872a1ecbf72059833e3276b467548cd2
-2026-08-17-saki-work-sessions-over-dsh-lineage.zh.md: 71037b8e569884e0d5d25955fbbf121f808033c2
+2026-08-17-saki-work-sessions-over-dsh-lineage.zh.md: d70669549046b84a28ef400cfe017b06b539c1f0

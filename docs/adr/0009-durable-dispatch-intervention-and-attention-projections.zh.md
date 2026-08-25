@@ -36,7 +36,7 @@ DSH 已经提供几种范围更窄的机制。Schedule 把提醒状态保存在 
 
 ## 影响
 
-已接受 Control Intent 可以在唤醒任何 Host 前创建持久 Execution Dispatch。Dispatch 标明目标 Execution、Host、Project、Work Session、Agent Profile version、资源需求、Actor 与委派 Grant reference，以及当前交付状态。系统可以重复尝试交付，但消费方必须提交当前 Dispatch Claim 与稳定 dispatch id，使 Host 创建或恢复同一个 Agent Run，而非另一个 Run。[ADR 0010](0010-fenced-idempotent-dispatch-admission.md)拥有 claim 过期、重试、fencing 与幂等 Host admission 规则。
+已接受 Control Intent 可以在唤醒任何 Host 前创建持久 Execution Dispatch。Dispatch 标明目标 Execution、Host、Project、Work Session、Agent Profile version、资源需求、Actor 与委派 Grant reference，以及当前交付状态。系统可以重复尝试交付，但消费方必须提交当前 Dispatch Claim 与稳定 dispatch id，使 Host 创建或恢复同一个 Agent Run，而非另一个 Run。[ADR 0010](0010-fenced-idempotent-dispatch-admission.zh.md)拥有 claim 过期、重试、fencing 与幂等 Host admission 规则。
 
 Intervention Request 是面向输入、审批、凭据授权、验收、冲突解决或对账的持久控制面记录。针对 expected revision 的第一个有效授权回答胜出，后续回答发生冲突。回答是一条具有独立 Actor 归因的新 Control Intent，不能扩展 Grant，而且只能通过可重建 Work Session event 或持久 reference 进入模型上下文。实时 DSH question 或 approval Provider 可以展示请求，但不拥有其持久性。
 

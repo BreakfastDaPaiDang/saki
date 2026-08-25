@@ -138,13 +138,13 @@ Saki 把模型访问视为执行供应，不把它当作 Work Item 属性。Agen
 
 Context Capacity、Runtime Context Limit 和 Context Policy 保持为三个独立事实。模型声明 Context Capacity；产品界面、订阅或账号可以开放更低的 Runtime Context Limit；可版本化的 Context Policy 选择更低的压缩触发点，以及压缩、裁剪、恢复和观测策略。Saki 不得从其中一项推断另一项，也不得把经过检索的逻辑历史展示成物理模型窗口。
 
-生成式媒体是持久 Project 输出，而不是临时聊天回复。Generation Job 记录其已解析 Model Route、输入、生命周期、输出产物和来源，并可以在 Provider Account Profile 限制内并发运行。[Model Supply 领域词汇](../contexts/model-supply/CONTEXT.md)定义这些术语。
+生成式媒体是持久 Project 输出，而不是临时聊天回复。Generation Job 记录其已解析 Model Route、输入、生命周期、输出产物和来源，并可以在 Provider Account Profile 限制内并发运行。[Model Supply 领域词汇](../contexts/model-supply/CONTEXT.zh.md)定义这些术语。
 
 ## Agent 协调与工作会话
 
 Project Coordinator 是由 Agent Identity 承担的角色，不是一个永久 Session。它通过可替换的 Coordination Session 委派和监督 Work Item，从持久 Project 状态读取事实，而不把每个子会话的全文都保留在模型上下文中，并且可以在 Session 重启或 Host 迁移后继续协调。
 
-Work Session 是围绕 Work Item 的协作记录，不是固有的 subagent。DSH 可以把它作为顶层 Session 或可继续 subagent 执行，其中工作的 Agent 也可以为有限的内部工作创建一次性或嵌套 subagent。Saki 独立于 DSH 父子谱系保存 Work Item 关联、Work Assignment、主要活动 Work Session 和消息来源；参见 [Agent Operations ADR 0002](../adr/agent-operations/0002-work-sessions-and-subagent-lineage.md)。
+Work Session 是围绕 Work Item 的协作记录，不是固有的 subagent。DSH 可以把它作为顶层 Session 或可继续 subagent 执行，其中工作的 Agent 也可以为有限的内部工作创建一次性或嵌套 subagent。Saki 独立于 DSH 父子谱系保存 Work Item 关联、Work Assignment、主要活动 Work Session 和消息来源；参见 [Agent Operations ADR 0002](../adr/agent-operations/0002-work-sessions-and-subagent-lineage.zh.md)。
 
 ## 可追溯的项目运行图
 
@@ -160,7 +160,7 @@ Project 运行图是解释与恢复能力，不要求所有用户都操作图界
 
 执行面位于 Saki Host 或后续远程执行目标，拥有 Host Operation、Workspace 定位、Git 工作树现实、DSH Session、终端与进程、工具和模型调用、凭据引用解析以及 Host 能力状态。它在一次已授权 Execution 内改变现实资源，并回报带来源的进度、结果和 Outcome Evidence；它不自行决定 Project 优先级、创建无限后续工作或扩大权限。
 
-两个面通过稳定的 Execution 接口连接：控制面交付带归因的 Execution Dispatch，其中包含目标 Host、Project、触发来源、Profile 版本、资源要求、限制和委派权限；执行面先准备一条幂等 Host Operation，再返回状态事件、Intervention Request、结果和证据引用。0.1.0 可以把两者放在同一进程和仓库，但不允许 Web View 或控制逻辑绕过该接口直接操作 Host 资源。只有出现第二种真实远程实现时，才增加网络传输适配器，而不在第一版提前微服务化。该决定见 [ADR 0004](../adr/0004-control-and-execution-planes.md)、[ADR 0007](../adr/0007-single-control-plane-and-enrolled-hosts.md)、[ADR 0008](../adr/0008-principals-grants-and-actor-attribution.md)、[ADR 0009](../adr/0009-durable-dispatch-intervention-and-attention-projections.md)和 [ADR 0010](../adr/0010-fenced-idempotent-dispatch-admission.md)。
+两个面通过稳定的 Execution 接口连接：控制面交付带归因的 Execution Dispatch，其中包含目标 Host、Project、触发来源、Profile 版本、资源要求、限制和委派权限；执行面先准备一条幂等 Host Operation，再返回状态事件、Intervention Request、结果和证据引用。0.1.0 可以把两者放在同一进程和仓库，但不允许 Web View 或控制逻辑绕过该接口直接操作 Host 资源。只有出现第二种真实远程实现时，才增加网络传输适配器，而不在第一版提前微服务化。该决定见 [ADR 0004](../adr/0004-control-and-execution-planes.zh.md)、[ADR 0007](../adr/0007-single-control-plane-and-enrolled-hosts.zh.md)、[ADR 0008](../adr/0008-principals-grants-and-actor-attribution.zh.md)、[ADR 0009](../adr/0009-durable-dispatch-intervention-and-attention-projections.zh.md)和 [ADR 0010](../adr/0010-fenced-idempotent-dispatch-admission.zh.md)。
 
 ## Signal 传输与协作
 
@@ -178,11 +178,11 @@ Agent 之间的交接同样产生带来源 Agent Identity、Agent Run 和因果�
 
 ### 自动化必须渐进授权
 
-Ready 只表示 Work Item 可以被领取。手动模式要求操作者触发和验收；只有 Project Automation Principal 拥有所需 Grant、Automation Policy 允许且每项必需预算都已预留时，自动模式才可以自动领取、提交、交付和 Done。Signal、policy、Agent 和子 Agent 都不能扩大权限，预算耗尽绝不意味着 Done，失败时必须停在可解释、可恢复的状态。参见 [ADR 0015](../adr/0015-reserved-automation-budgets-and-usage-ledger.md)。
+Ready 只表示 Work Item 可以被领取。手动模式要求操作者触发和验收；只有 Project Automation Principal 拥有所需 Grant、Automation Policy 允许且每项必需预算都已预留时，自动模式才可以自动领取、提交、交付和 Done。Signal、policy、Agent 和子 Agent 都不能扩大权限，预算耗尽绝不意味着 Done，失败时必须停在可解释、可恢复的状态。参见 [ADR 0015](../adr/0015-reserved-automation-budgets-and-usage-ledger.zh.md)。
 
 ### 权威来源必须明确
 
-Git、GitHub、DSH Session 和业务系统继续拥有各自的数据。Saki 只拥有 Project 关联、Execution 关联、Automation Policy、已确认同步 checkpoint 和必要缓存；每个 View 都必须显示数据来源、确认时间、乐观或陈旧状态和失败位置。GitHub 扫描原子发布，page cursor 或 webhook delivery 永远不会成为权威。参见 [ADR 0013](../adr/0013-polling-first-staged-github-synchronization.md)。
+Git、GitHub、DSH Session 和业务系统继续拥有各自的数据。Saki 只拥有 Project 关联、Execution 关联、Automation Policy、已确认同步 checkpoint 和必要缓存；每个 View 都必须显示数据来源、确认时间、乐观或陈旧状态和失败位置。GitHub 扫描原子发布，page cursor 或 webhook delivery 永远不会成为权威。参见 [ADR 0013](../adr/0013-polling-first-staged-github-synchronization.zh.md)。
 
 ### Agent 上下文必须声明来源
 
@@ -190,7 +190,7 @@ Agent 上下文可以组合 Agent Identity 的长期职责与记忆、Agent Prof
 
 ### 插件优先、单仓库优先
 
-Saki 功能优先通过 DSH bundle、Service Definition、Provider 和 Consumer 形成可替换模块，但当前阶段默认与产品代码位于同一个 Saki 仓库。只有接口、用户、维护者、发布节奏或安全生命周期独立时才拆出仓库。该决定见 [ADR 0002](../adr/0002-plugin-first-single-repository.md)。
+Saki 功能优先通过 DSH bundle、Service Definition、Provider 和 Consumer 形成可替换模块，但当前阶段默认与产品代码位于同一个 Saki 仓库。只有接口、用户、维护者、发布节奏或安全生命周期独立时才拆出仓库。该决定见 [ADR 0002](../adr/0002-plugin-first-single-repository.zh.md)。
 
 降低耦合的标准是变化能否停留在拥有它的模块中，而不是目录或仓库数量。Resource Adapter、Signal Source 和 Execution Provider 等真实变化点应通过窄接口替换；只有一种实现时不预先公开假设性插件接口。一项能力后续能不改产品语义地拆仓，是模块已经足够独立的证据，不是当前必须达成的目标。
 
@@ -198,13 +198,13 @@ Plugin composition 不是沙箱边界。以 Cordis 或 npm plugin 安装到 Host
 
 ### 凭据保护声明必须说明威胁模型
 
-产品记录、Projection、Agent 和浏览器 client 只接收凭据 reference 与安全观测，不接收原始值。每个 Host 凭据 Provider 都声明 Credential Protection Level；0.1.0 在单操作者 Windows Host 上接受 `local-user-trust`，并明确说明该等级仍然信任同用户 Agent 进程。相关决定见 [ADR 0011](../adr/0011-dpapi-local-user-trust-credentials.md)。
+产品记录、Projection、Agent 和浏览器 client 只接收凭据 reference 与安全观测，不接收原始值。每个 Host 凭据 Provider 都声明 Credential Protection Level；0.1.0 在单操作者 Windows Host 上接受 `local-user-trust`，并明确说明该等级仍然信任同用户 Agent 进程。相关决定见 [ADR 0011](../adr/0011-dpapi-local-user-trust-credentials.zh.md)。
 
 Host 迁移不会通过复制替换 Host 无法安全使用的加密凭据 blob 来制造表面可移植性。在组织成员共享由 Host 供应账号支持的 Agent 能力前，Saki 必须采用运行于独立 OS 身份下的 Credential Broker 或外部 secret manager，并验证 Agent execution 无法恢复原始值。
 
 ### 持久产品状态必须显式跨越演进
 
-Saki 自有产品记录从第一个 0.1.0 schema 开始获得向前兼容承诺。升级迁移独立 Installation State Generation，并且只在验证后发布；回滚使用已验证 Recovery Backup，不依赖反向迁移。Host 替换使用明确排除机器权限的 Installation Export，然后要求重新绑定、重新授权与对账。相关决定见 [ADR 0012](../adr/0012-forward-migrations-and-installation-maintenance.md)。
+Saki 自有产品记录从第一个 0.1.0 schema 开始获得向前兼容承诺。升级迁移独立 Installation State Generation，并且只在验证后发布；回滚使用已验证 Recovery Backup，不依赖反向迁移。Host 替换使用明确排除机器权限的 Installation Export，然后要求重新绑定、重新授权与对账。相关决定见 [ADR 0012](../adr/0012-forward-migrations-and-installation-maintenance.zh.md)。
 
 ### 集成通用能力，拥有产品语义
 
@@ -278,18 +278,18 @@ Development Agent 通常从 Workspace、`AGENTS.md`、Work Item 和仓库状态�
 
 ## 关联规格与缺口
 
-- [Saki 0.1.0 实现规格](versions/0.1.0.md)定义第一阶段首个切片的行为、范围、失败恢复和发布条件。
-- [Work Management 领域词汇](../contexts/work-management/CONTEXT.md)定义 Work Item、状态、Milestone、Release 和 Outcome Evidence。
-- [Agent Operations 领域词汇](../contexts/agent-operations/CONTEXT.md)定义 Agent Identity、Agent Profile、Project Coordinator、Work Assignment、Work Session、Execution Dispatch、Dispatch Claim、Host Operation、Intervention Request、Attention Inbox、Agent Run、Signal 和 Event Subscription。
-- [Model Supply 领域词汇](../contexts/model-supply/CONTEXT.md)定义 Provider Account Profile、Credential Protection Level、Credential Broker、Model Route、上下文限制与策略、Usage Snapshot 和 Generation Job。
-- [Agent 三分模型决定](../adr/agent-operations/0001-agent-identity-profile-run.md)记录持久主体、执行配置和单次尝试的所有权。
-- [Work Session 与 subagent 谱系决定](../adr/agent-operations/0002-work-sessions-and-subagent-lineage.md)让产品协作关系独立于 DSH 运行时父子关系。
-- [控制面与执行面决定](../adr/0004-control-and-execution-planes.md)记录两个面的责任与连接方式。
-- [持久派发、介入与待处理事项决定](../adr/0009-durable-dispatch-intervention-and-attention-projections.md)分离已接受工作、Host 交付、人工回答与待处理事项投影。
-- [带 fencing 的幂等 dispatch admission 决定](../adr/0010-fenced-idempotent-dispatch-admission.md)定义 claim 过期、重试、Host preparation、acceptance、start 与结果不明处理。
-- [DPAPI local-user-trust 凭据决定](../adr/0011-dpapi-local-user-trust-credentials.md)定义 0.1.0 的静态保护、明确同用户限制和组织共享门槛。
-- [向前迁移与 Installation 维护决定](../adr/0012-forward-migrations-and-installation-maintenance.md)定义 state generation、回滚 artifact、加密可迁移 export 与替换 Host 恢复。
-- [GitHub 同步决定](../adr/0013-polling-first-staged-github-synchronization.md)定义完整分阶段扫描、乐观 conflict、mapping repair 与 rate-limit 行为。
-- [Resource Binding 生命周期决定](../adr/0014-stable-resource-bindings-over-canonical-worktrees.md)把稳定 Project 资源身份与规范 worktree 位置、历史 Session 路径分离。
-- [自动化预算决定](../adr/0015-reserved-automation-budgets-and-usage-ledger.md)定义类型化预留、结算、未知用量与一次性例外。
-- [0.1.0 前端约定](architecture/0.1.0-frontend-contract.md)定义客户端信息与交互语义。前端工作可以预先拆成 K0 至 K7，以便明确所有权与依赖；K1 至 K7 必须保持非 Ready，并且只有 K0 的低保真 prototype 获得产品确认、该切片需要的后端 Projection 与 Intent fixture 可用后，才可以开始生产实现。Prototype 与视觉复核都不会把长期 PRD 变成固定页面布局。
+- [Saki 0.1.0 实现规格](versions/0.1.0.zh.md)定义第一阶段首个切片的行为、范围、失败恢复和发布条件。
+- [Work Management 领域词汇](../contexts/work-management/CONTEXT.zh.md)定义 Work Item、状态、Milestone、Release 和 Outcome Evidence。
+- [Agent Operations 领域词汇](../contexts/agent-operations/CONTEXT.zh.md)定义 Agent Identity、Agent Profile、Project Coordinator、Work Assignment、Work Session、Execution Dispatch、Dispatch Claim、Host Operation、Intervention Request、Attention Inbox、Agent Run、Signal 和 Event Subscription。
+- [Model Supply 领域词汇](../contexts/model-supply/CONTEXT.zh.md)定义 Provider Account Profile、Credential Protection Level、Credential Broker、Model Route、上下文限制与策略、Usage Snapshot 和 Generation Job。
+- [Agent 三分模型决定](../adr/agent-operations/0001-agent-identity-profile-run.zh.md)记录持久主体、执行配置和单次尝试的所有权。
+- [Work Session 与 subagent 谱系决定](../adr/agent-operations/0002-work-sessions-and-subagent-lineage.zh.md)让产品协作关系独立于 DSH 运行时父子关系。
+- [控制面与执行面决定](../adr/0004-control-and-execution-planes.zh.md)记录两个面的责任与连接方式。
+- [持久派发、介入与待处理事项决定](../adr/0009-durable-dispatch-intervention-and-attention-projections.zh.md)分离已接受工作、Host 交付、人工回答与待处理事项投影。
+- [带 fencing 的幂等 dispatch admission 决定](../adr/0010-fenced-idempotent-dispatch-admission.zh.md)定义 claim 过期、重试、Host preparation、acceptance、start 与结果不明处理。
+- [DPAPI local-user-trust 凭据决定](../adr/0011-dpapi-local-user-trust-credentials.zh.md)定义 0.1.0 的静态保护、明确同用户限制和组织共享门槛。
+- [向前迁移与 Installation 维护决定](../adr/0012-forward-migrations-and-installation-maintenance.zh.md)定义 state generation、回滚 artifact、加密可迁移 export 与替换 Host 恢复。
+- [GitHub 同步决定](../adr/0013-polling-first-staged-github-synchronization.zh.md)定义完整分阶段扫描、乐观 conflict、mapping repair 与 rate-limit 行为。
+- [Resource Binding 生命周期决定](../adr/0014-stable-resource-bindings-over-canonical-worktrees.zh.md)把稳定 Project 资源身份与规范 worktree 位置、历史 Session 路径分离。
+- [自动化预算决定](../adr/0015-reserved-automation-budgets-and-usage-ledger.zh.md)定义类型化预留、结算、未知用量与一次性例外。
+- [0.1.0 前端约定](architecture/0.1.0-frontend-contract.zh.md)定义客户端信息与交互语义。前端工作可以预先拆成 K0 至 K7，以便明确所有权与依赖；K1 至 K7 必须保持非 Ready，并且只有 K0 的低保真 prototype 获得产品确认、该切片需要的后端 Projection 与 Intent fixture 可用后，才可以开始生产实现。Prototype 与视觉复核都不会把长期 PRD 变成固定页面布局。

@@ -1,12 +1,6 @@
 import { defineConfig } from 'tsdown'
 
-/** Build the startup row, invariant companion, and local executable. */
-export default defineConfig({
-  entry: [
-    'lib/types/index.js',
-    'lib/types/invariant.js',
-    'lib/types/bin.js',
-  ],
+const shared = {
   outDir: 'lib',
   format: ['esm'],
   platform: 'node',
@@ -14,4 +8,11 @@ export default defineConfig({
   fixedExtension: false,
   dts: false,
   clean: false,
-})
+} as const
+
+/** Build each public entry independently so the private package needs no undeclared shared chunk. */
+export default defineConfig([
+  { ...shared, entry: ['lib/types/index.js'] },
+  { ...shared, entry: ['lib/types/invariant.js'] },
+  { ...shared, entry: ['lib/types/bin.js'] },
+])

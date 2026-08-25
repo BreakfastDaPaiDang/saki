@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-polling-first-github-synchronization.md
 2026-08-18-saki-polling-first-github-synchronization.md: 77be17b2779bf14860fae4dfadd988200bce2922
-2026-08-18-saki-polling-first-github-synchronization.zh.md: 2859861aa5be5b5719e07f413af6c99af4fd3c25
+2026-08-18-saki-polling-first-github-synchronization.zh.md: 5656d76a0e730bfa2852c9f6055b543f8c3fc49e

@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md
 2026-07-24-domain-kv-storage-and-workspace.md: bd7e52781b130dc6d72d10a3c0267216bf0b7d26
-2026-07-24-domain-kv-storage-and-workspace.zh.md: 1bd682645890f8756bd2aa0589bfe54da13ed9e9
+2026-07-24-domain-kv-storage-and-workspace.zh.md: 73dc2ad3f7417f524c64b78340ae9a44d21a9d1b

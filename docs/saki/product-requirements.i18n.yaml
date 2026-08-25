@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/product-requirements.md
 product-requirements.md: e5bfde8144752f4058856bb1c86e63c214d3d681
-product-requirements.zh.md: 8bc8326eeca1bd516026c98605adc456f006e1f9
+product-requirements.zh.md: 49acf089a8251659a68b834bbf284b67bd1fcf84

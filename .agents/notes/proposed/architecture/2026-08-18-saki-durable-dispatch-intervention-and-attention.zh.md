@@ -12,7 +12,7 @@ Saki 必须启动手动与自动工作、在重启后恢复工作，并在后续
 
 ## 提案
 
-Saki 控制面实现 [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.md)，并延续可恢复的 [Control Intent](2026-08-18-saki-recoverable-control-intents.md)生命周期。Work Assignment、Execution Dispatch、Dispatch Claim、Intervention Request 和 Attention Inbox 保持为不同概念。
+Saki 控制面实现 [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.zh.md)，并延续可恢复的 [Control Intent](2026-08-18-saki-recoverable-control-intents.zh.md)生命周期。Work Assignment、Execution Dispatch、Dispatch Claim、Intervention Request 和 Attention Inbox 保持为不同概念。
 
 Work Assignment 记录一个 Work Item 的持续责任。Assignee 是 human Principal、持久 Agent Identity 或 Project Automation Principal；在 assignment 获得独立生命周期前，该记录可以留在 Work Item control metadata 中。Assignment 既不提供 Grant，也不创建 Agent Run。0.1.0 可以把手动责任分配给 Host Operator，把自动责任分配给 Project Automation Principal，而无需引入持久 Agent Identity。
 
@@ -20,7 +20,7 @@ Work Assignment 记录一个 Work Item 的持续责任。Assignee 是 human Prin
 
 Dispatch 采用至少一次交付。本地 scheduler、恢复后的 poller 或未来网络 adapter 可以重复提交同一 dispatch。只有携带当前 revision 与 fencing value 的有界 Dispatch Claim 才允许一个执行器进入；Host 通过 dispatch id 和目标 Agent Run id 对 `StartAgentRun` 去重。确认丢失时进入 `inspectOperation` 或对账，而不会创建第二个 Run。Dispatch Claim 协调命令 admission；Execution Lease 另行保护可写 Resource Binding 的所有权。
 
-[带 fencing 的幂等 admission 提案](2026-08-18-saki-fenced-idempotent-dispatch-admission.md)拥有确切的 `pending`、`claimed`、`accepted`、cancellation、rejection 与 reconciliation 转换。它要求 Host 在产生副作用前准备一条持久 Host Operation，并要求控制面在 Host 启动 operation 前使用当前 fencing token 接受该映射。
+[带 fencing 的幂等 admission 提案](2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)拥有确切的 `pending`、`claimed`、`accepted`、cancellation、rejection 与 reconciliation 转换。它要求 Host 在产生副作用前准备一条持久 Host Operation，并要求控制面在 Host 启动 operation 前使用当前 fencing token 接受该映射。
 
 Intervention Request 是持久控制面记录，包含稳定 id、kind、Project 与 subject reference、目标 Principal 或角色、所需决定或 input schema、阻塞范围、因果 Intent、Dispatch、Work Session 或 Agent Run reference、当前 revision、生命周期状态、可选 deadline 与 escalation policy。初始 kind 覆盖输入、审批、凭据授权、验收、冲突解决和对账。通知确认与请求解决是不同事实，过期不能产生批准。
 
@@ -36,7 +36,7 @@ Attention Inbox 是 query projection，不是持久队列。它为一个 Princip
 
 **用 DSH Agent inbox event 作为持久 dispatch。** Agent inbox event 为一个 Session 关联已经接受和领取的消息。它们不选择已登记 Host、不携带 Project Grant、不预留 worktree、不授权离线响应者，也不会在 Agent dispose 后作为未领取产品工作继续存在。Saki 把这些 event 用作 Execution evidence，而不是产品命令。
 
-**用可继续 subagent 作为 Project worker。** 可继续 child 在确切 parent lineage 下提供持久对话 identity 与冷恢复。[Work Session 决策](2026-08-17-saki-work-sessions-over-dsh-lineage.md)让产品所有权独立于该 lineage；已发布 report 与 settlement 路径也承认，离线交付需要单独的寻址、授权与 replay protocol。
+**用可继续 subagent 作为 Project worker。** 可继续 child 在确切 parent lineage 下提供持久对话 identity 与冷恢复。[Work Session 决策](2026-08-17-saki-work-sessions-over-dsh-lineage.zh.md)让产品所有权独立于该 lineage；已发布 report 与 settlement 路径也承认，离线交付需要单独的寻址、授权与 replay protocol。
 
 **持久化一张 Attention Inbox 表，并把其中行视为工作。** 这会简化第一个 query，却会复制 assignment、intervention 与 recovery state，并迫使每个 View 专用的关闭或排序变化进入命令生命周期。Projection 使每项底层事实只由一个 owner 管理。
 
@@ -59,4 +59,4 @@ Attention Inbox 是 query projection，不是持久队列。它为一个 Princip
 
 ## 风险
 
-Dispatch 安全依赖每个 Host 实现都遵守[该 admission 提案](2026-08-18-saki-fenced-idempotent-dispatch-admission.md)中的 preparation、current-fence acceptance 与 start 顺序；违反协议的 adapter 仍可能重复副作用，必须隔离并进入 reconciliation。持久 Intervention Request 无法恢复任意 provider 或 tool stack frame；DSH 缺少可恢复 continuation 时，初始实现必须使用后续带归因 Session turn。Attention projection 连接多个 Project 后可能开销较高，但在测量前保存复制 inbox row 会制造更难处理的一致性问题。后续通知 adapter 也需要去重与隐私 policy，同时不能成为授权通道。
+Dispatch 安全依赖每个 Host 实现都遵守[该 admission 提案](2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)中的 preparation、current-fence acceptance 与 start 顺序；违反协议的 adapter 仍可能重复副作用，必须隔离并进入 reconciliation。持久 Intervention Request 无法恢复任意 provider 或 tool stack frame；DSH 缺少可恢复 continuation 时，初始实现必须使用后续带归因 Session turn。Attention projection 连接多个 Project 后可能开销较高，但在测量前保存复制 inbox row 会制造更难处理的一致性问题。后续通知 adapter 也需要去重与隐私 policy，同时不能成为授权通道。

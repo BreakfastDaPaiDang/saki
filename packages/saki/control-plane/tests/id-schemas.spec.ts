@@ -76,6 +76,7 @@ const GRANT = {
   principalId: IDS.principal,
   state: 'active',
   actions: ['project-index:read'],
+  scope: { kind: 'installation', installationId: IDS.installation },
 } as const
 
 const CHALLENGE = {

@@ -12,11 +12,23 @@
 
 **每个来源都要声明自身的保护模型。** `resolve()` 报告它这次实际返回值的 Credential Protection Level，`describe()` 则在不含值的安全元数据中报告同一信息、可用性和观察时间。类型化提供方接口要求这个字段；解析器从无类型输入构造提供方结果时校验它。`resolveRequired()` 对提供方定义的 Credential Protection Level 标识符做精确比较，在调用方拿到值之前拒绝缺失值或不同的 Credential Protection Level。Credential Protection Level 用于描述，不构成有序强度等级。
 
+<a id="two-key-spaces-two-questions"></a>
+
+## 两个键空间，两个问题
+
+`CredentialRef` 回答的是*这个环境变量名背后是什么*，分层覆盖进程环境、托管存储与 `.env` 文件。以上全部描述的都是这一半。
+
+`CredentialKey` 回答的是*某个插件为某个 id 持有什么凭据*。这里没有任何东西可以分层——授权 grant 没有可供读取的环境——因此记录的存在与否就是全部事实，空值规则在此不适用：一条既无 key 也无环境值的 `api-key` 记录，陈述的是其拥有者确认该路由靠 ambient 认证，这属于已配置。
+
+键的形式是 `<scope>/<id>`，其中 `scope` 是**拥有该记录的插件的注册名**。scope 取拥有者而非领域，是因为 `grant` 的 payload 以其拥有者的格式写就：否则服务同一个提供方名称的两个插件会互相读到对方的 payload，而已卸载插件留下的记录也无法与仍在使用的区分开。`/` 同时让两种文法互斥，两个键空间因此不可能相撞。id 来自别处的消费方——settings dict 键、某个库自己的 provider id——应先问 `isCredentialKeySegment` 再构造键：文法之外的 id 不可能存过记录，应读作「没有存储任何东西」，而不是在寻址上抛错。
+
+<a id="surface"></a>
+
 ## 接口
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
-import { CREDENTIAL_PROTECTION_LOCAL_USER_TRUST, credentialRef } from '@deepseek-ai/dsh-credentials'
+import { CREDENTIAL_PROTECTION_LOCAL_USER_TRUST, credentialKey, credentialRef } from '@deepseek-ai/dsh-credentials'
 
 declare const ctx: Context
 
@@ -26,15 +38,30 @@ const protectedHit = await ctx.credentials.resolveRequired(ref, CREDENTIAL_PROTE
 const info = await ctx.credentials.describe(ref)         // safe identity/source/protection/health metadata — never the value
 await ctx.credentials.set(ref, 'sk-…')                   // rejects while a read-only source shadows the ref
 await ctx.credentials.unset(ref)                         // no-op when absent; same shadowing rule
+
+const key = credentialKey('llm-pi-ai', 'openai-codex')   // <owner>/<id>, branded
+await ctx.credentials.readRecord(key)                    // CredentialRecord | undefined
+await ctx.credentials.describeRecord(key)                // { configured, kind?, writable } — never the value
+await ctx.credentials.listRecords()                      // [{ key, kind }] — never values
+await ctx.credentials.modifyRecord(key, async () => ({ kind: 'grant', payload: { token: '…' } }))
+await ctx.credentials.deleteRecord(key)                  // no-op when absent
 ```
 
-`credentials/updated (ref)` 在提供方管理的来源发生已提交变更后触发——`set`、`unset` 或在存储中观察到的外部编辑。进程环境变量的变化不可观测，永不触发。消费方不需要该事件（它们按操作重新解析）；它服务于配置界面刷新「已配置」徽标。它的声明住在 client-safe 的 `./types` 子路径出口，与其点名的 `CredentialRef` 类型同处一处（包根继续 re-export 该类型），于是 Host 编译面之外的消费方读到的正是 Host 发射的那一份签名，而不必再写一遍。
+`modifyRecord` 是唯一写路径，因为正确的写入依赖当前值：刷新 token 是「读—决定—替换」，变更函数必须看到写入取得独占那一刻的记录。独占跨进程成立，这正是防止两个进程同时轮换同一个 refresh token、丢掉先写那一个的机制。变更函数返回 `undefined` 表示保持原状，不写盘也不发通知。
+
+`listRecords` 存在，尽管引用那一半刻意不提供枚举。引用可以从 settings schema（`apiKeyEnv` 字段）被发现；记录没有这条路径，无法枚举的界面就无法显示用户已授权了什么，也找不到已卸载插件留下的孤儿。
+
+`grant` 记录的 `payload` 在语义上不透明：seam 从不解释其中字段，也不改变已准入的 JSON 内容。唯一的结构约束是它能经受 JSON 往返，提供方在写入与读出两个方向都强制这一点——存储无法逐字读回的值会被拒绝，而不是有损地存下。
+
+Host 提供方在序列化或写入进程自有缓存前使用 Node-only 的 `@deepseek-ai/dsh-credentials/record-normalization` helper。它把记录根对象、环境、payload 和原生数组快照为全新的纯数据，同时拒绝 accessor、Proxy、序列化 hook 以及会被 JSON 忽略的属性且不调用它们；序列化器、缓存与变更回调因此都不会持有调用方拥有的对象图。
+
+`credentials/reference-updated (ref)` 在提供方管理的来源发生已提交变更后触发——`set`、`unset` 或在存储中观察到的外部编辑。进程环境变量的变化不可观测，永不触发。消费方不需要该事件（它们按操作重新解析）；它服务于配置界面刷新「已配置」徽标。它的声明住在 client-safe 的 `./types` 子路径出口，与其点名的 `CredentialRef` 类型同处一处（包根继续 re-export 该类型），于是 Host 编译面之外的消费方读到的正是 Host 发射的那一份签名，而不必再写一遍。
 
 `set`/`unset` 的遮蔽规则有意采用明确报错的方式：当只读来源（本地提供方中即当前进程环境）正在提供该引用时，写入会表面成功而解析仍返回遮蔽值——seam 选择直接拒绝，并通过 `describe().writable` 让界面提前把该引用渲染为只读。
 
 ## 提供方
 
-[`dsh-credentials-local`](../credentials-local/README.md) 把继承的进程环境叠加在其受管明文 `$DSH_HOME/.credentials.yaml` 文档之上，并以启动器的项目和用户 `.env` 层作为后备。[`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.md) 则独占一个带版本号的 Windows 当前用户 DPAPI 密文文档，绝不回退到环境或明文来源。该 seam 为 keyring、辅助命令和 KMS 后端提供方预留了扩展空间；远端设置提供方永远不必携带机密。
+[`dsh-credentials-local`](../credentials-local/README.zh.md) 把继承的进程环境叠加在其受管明文 `$DSH_HOME/.credentials.yaml` 文档之上，并以启动器的项目和用户 `.env` 层作为后备。[`dsh-credentials-windows-dpapi`](../credentials-windows-dpapi/README.zh.md) 则独占一个带版本号的 Windows 当前用户 DPAPI 密文文档，绝不回退到环境或明文来源。该 seam 为 keyring、辅助命令和 KMS 后端提供方预留了扩展空间；远端设置提供方永远不必携带机密。
 
 ## 模型体验
 
@@ -46,7 +73,8 @@ await ctx.credentials.unset(ref)                         // no-op when absent; s
 
 ## 已知限制与暂缓事项
 
-- **不提供枚举**——seam 只回答被问到的引用；配置界面从 settings schema 得知引用集合，`list()` 没有当前消费方。
-- **引用限定为环境变量形状**——在有提供方需要更丰富的寻址方式前，保持单一扁平的 POSIX 标识符命名空间。
+- **引用不提供枚举**——seam 只回答被问到的引用；配置界面从 settings schema 得知引用集合，对这一半做 `list()` 没有当前消费方。记录出于上文的理由则可枚举。
+- **引用限定为环境变量形状**——单一扁平的 POSIX 标识符命名空间，因为引用同时就是它借以解析的环境变量名。记录使用更丰富的 `<owner>/<id>` 寻址。
 - **进程环境变化不可见**——不可能为其发事件；界面只能在自身导航时重新读取 `describe()`。
+- **记录的拥有者就是它的 scope，而没有任何环节核验该 scope 是否已挂载**——seam 存下被交予的内容，并报告它存了什么。识别孤儿是调用方在 `listRecords()` 与拥有该 scope 的注册表之间做的连接；seam 自身没有可供核对的注册表。
 - **保护标识符不存在顺序**——消费方明确指定自己接受的恢复模型；seam 不推断某个提供方在所有场景下都强于另一个。

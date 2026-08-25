@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-07-26-pnpm-action-setup-for-symmetric-ci-caching.md
-2026-07-26-pnpm-action-setup-for-symmetric-ci-caching.md: a4081ea8ee3b353681dc48979a7c41a235f2b25a
+2026-07-26-pnpm-action-setup-for-symmetric-ci-caching.md: 0e852975ebcfae87602fbe407cc3771cbcb51fef
 2026-07-26-pnpm-action-setup-for-symmetric-ci-caching.zh.md: 7f314cf22f84b756df6b967d55ce51c8c311c39c

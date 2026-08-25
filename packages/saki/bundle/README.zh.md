@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载 SQLite 存储、存储域、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。就绪配置项提供稳定的 `{"product":"saki","status":"ready"}` 记录。启动器只在 `boot()` 完成配置项激活审计后将其写入 stdout；报告失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。
+Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载默认 JSON 存储后端、`saki_control_plane` 专用 SQLite 路由、JSONL Session 持久化、Workspace、本地文件系统与子进程提供方、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。就绪配置项提供稳定的 `{"product":"saki","status":"ready"}` 记录。启动器只在 `boot()` 完成配置项激活审计后将其写入 stdout；报告失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。
 
 在仓库根目录运行：
 
@@ -22,7 +22,7 @@ pnpm run saki
 
 ## 模型体验
 
-无。该本地访问组合不会发起模型请求，也不贡献模型可见输入。
+无。该本地 Host 组合不会发起模型请求，也不贡献模型可见输入。
 
 #### KV Cache 影响
 
@@ -30,6 +30,6 @@ pnpm run saki
 
 ## 已知限制与延后工作
 
-- **访问是唯一的产品切片**：Host 暴露 bootstrap、登出与已认证的空 Project index；GitHub、Development Project、agent（智能体）、模型提供方与渲染后的 Web 界面通过后续切片加入。
+- **只支持首次登记生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 Development Workspace。尚未组合 Resource Binding 重绑定与退役、仓库修改、GitHub、agent（智能体）、模型提供方和渲染后的 Web 界面。
 - **可执行入口仅供仓库本地使用**——Saki 包保持私有，不属于任何 npm 发布族。
-- **仅限回环开发 Host**：固定的本地 bootstrap 流程不会授权远程浏览器，也不替代 [Saki Host 启动器](../../../docs/saki/host-launcher.md)所述的 Windows Host 包装层。
+- **仅限回环开发 Host**：固定的本地 bootstrap 流程不会授权远程浏览器，也不替代 [Saki Host 启动器](../../../docs/saki/host-launcher.zh.md)所述的 Windows Host 包装层。

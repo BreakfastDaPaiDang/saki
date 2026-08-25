@@ -10,7 +10,7 @@ DSH 可继续 subagent 提供持久子 Session、父级协调、独立 transcrip
 
 ## 提案
 
-Saki 控制面按照 [Agent Operations ADR 0002](../../../../docs/adr/agent-operations/0002-work-sessions-and-subagent-lineage.md)，独立于 DSH Session 谱系记录 Work Session 身份、Work Item 关联、指派、主要状态和参与者来源。执行适配器把每个 Work Session 与一个 DSH session id 关联，并可以使用顶层 Session 或可继续 subagent；可选的 `parentSession` 数据仍只代表执行来源和运行时权限。
+Saki 控制面按照 [Agent Operations ADR 0002](../../../../docs/adr/agent-operations/0002-work-sessions-and-subagent-lineage.zh.md)，独立于 DSH Session 谱系记录 Work Session 身份、Work Item 关联、指派、主要状态和参与者来源。执行适配器把每个 Work Session 与一个 DSH session id 关联，并可以使用顶层 Session 或可继续 subagent；可选的 `parentSession` 数据仍只代表执行来源和运行时权限。
 
 Project Coordinator 是通过可替换 Coordination Session 工作的持久 Agent Identity。它从 Work Session 接收带来源摘要和 Signal，并读取持久 Project 投影，而不在一个模型上下文中保留每个子会话的全文。人类消息、协调者消息和执行 Agent 消息即使进入同一个 Work Session，也保留不同的来源。
 

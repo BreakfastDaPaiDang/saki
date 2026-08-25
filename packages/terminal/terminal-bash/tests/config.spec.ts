@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Config } from '@deepseek-ai/dsh-terminal-bash/src/config.ts'
-import { validateConfig } from '@deepseek-ai/dsh-terminal-bash/src/config.ts'
+import { resolveConfig, validateConfig } from '@deepseek-ai/dsh-terminal-bash/src/config.ts'
 
 function config(overrides: Partial<Config> = {}): Config {
   return {
-    backendType: 'shell', shellPath: '/bin/bash', shellArgs: [], rows: 40, cols: 160,
+    backendType: 'shell', shellDialect: 'bash', shellPath: '/bin/bash', shellArgs: [], rows: 40, cols: 160,
     scrollbackLines: 100, scrollbackMaxBytes: 1024, maxReadBytes: 512,
     pollIntervalMs: 10, exactProbeAfterMs: 20, idleSilenceMs: 100, handoffGraceMs: 50, timeoutMs: 1000,
     disposeGraceMs: 100,
@@ -28,5 +28,62 @@ describe('terminal-bash config', () => {
   it('rejects a handoff grace shorter than one readiness poll', () => {
     expect(() => { validateConfig(config({ handoffGraceMs: 9, pollIntervalMs: 10 })) }).toThrow('handoffGraceMs must be at least pollIntervalMs')
     expect(() => { validateConfig(config({ handoffGraceMs: 10, pollIntervalMs: 10 })) }).not.toThrow()
+  })
+})
+
+describe('terminal-bash dialect resolution', () => {
+  it('defaults bash argv to the interactive profile-free form', () => {
+    const { shellPath, shellArgs, shellDialect } = resolveConfig({ backendType: 'shell', rows: 24, cols: 80 })
+    expect(shellDialect).toBe('bash')
+    expect(shellPath).toBe('/bin/bash')
+    expect(shellArgs).toEqual(['--noprofile', '--norc', '-i'])
+  })
+
+  it('defaults pwsh argv to the profile-free ConsoleHost form and resolves the executable', () => {
+    const resolved = resolveConfig({ backendType: 'shell', shellDialect: 'pwsh', rows: 24, cols: 80 })
+    expect(resolved.shellDialect).toBe('pwsh')
+    expect(resolved.shellPath.length).toBeGreaterThan(0)
+    expect(resolved.shellArgs).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive'])
+  })
+
+  it('lets an explicit pwsh executable win while retaining the supported arguments', () => {
+    const resolved = resolveConfig({
+      backendType: 'shell', shellDialect: 'pwsh', shellPath: '/custom/pwsh', rows: 24, cols: 80,
+    })
+    expect(resolved.shellPath).toBe('/custom/pwsh')
+    expect(resolved.shellArgs).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive'])
+    expect(() => { validateConfig(resolved) }).not.toThrow()
+  })
+
+  it('rejects pwsh arguments outside the supported ConsoleHost mode', () => {
+    const incomplete = resolveConfig({
+      backendType: 'shell', shellDialect: 'pwsh', shellArgs: ['-NoProfile'], rows: 24, cols: 80,
+    })
+    const redirected = resolveConfig({
+      backendType: 'shell', shellDialect: 'pwsh', shellArgs: ['-NoLogo', '-NoProfile', '-File'], rows: 24, cols: 80,
+    })
+    const legacyFileMode = resolveConfig({
+      backendType: 'shell', shellDialect: 'pwsh',
+      shellArgs: ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', '-'], rows: 24, cols: 80,
+    })
+    expect(() => { validateConfig(incomplete) }).toThrow('pwsh shellArgs must be omitted or exactly')
+    expect(() => { validateConfig(redirected) }).toThrow('pwsh shellArgs must be omitted or exactly')
+    expect(() => { validateConfig(legacyFileMode) }).toThrow('pwsh shellArgs must be omitted or exactly')
+  })
+
+  it('treats empty shell values as unset so Schemastery materialization cannot drop the dialect defaults', () => {
+    // Schemastery materializes an absent optional array as `[]`; the resolver
+    // must treat that shape like an unset value or a real bash spawn would
+    // start non-interactive without the controlled prompt.
+    const resolved = resolveConfig({
+      backendType: 'shell', shellDialect: 'bash', shellPath: '', shellArgs: [], rows: 24, cols: 80,
+    })
+    expect(resolved.shellPath).toBe('/bin/bash')
+    expect(resolved.shellArgs).toEqual(['--noprofile', '--norc', '-i'])
+  })
+
+  it('validates the effective shell path, not only the raw one', () => {
+    expect(() => { validateConfig(resolveConfig({ backendType: 'shell', shellDialect: 'bash', rows: 24, cols: 80 })) }).not.toThrow()
+    expect(() => { validateConfig(resolveConfig({ backendType: 'shell', shellDialect: 'pwsh', rows: 24, cols: 80 })) }).not.toThrow()
   })
 })

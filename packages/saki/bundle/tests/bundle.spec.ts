@@ -6,7 +6,7 @@ import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import { describe, expect, it } from 'vitest'
 
 describe('Saki bundle package', () => {
-  it('declares the parseable B01 Host composition through dsh.bundle', () => {
+  it('declares the complete local Project-registration composition through dsh.bundle', () => {
     const root = fileURLToPath(new URL('..', import.meta.url))
     const manifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
       name?: string
@@ -27,14 +27,31 @@ describe('Saki bundle package', () => {
     const insert = (parsed as Array<{ insert: Array<{ id: string; name: string; config?: unknown }> }>)[0]!.insert
     expect(insert.map(entry => [entry.id, entry.name])).toEqual([
       ['storage', '@deepseek-ai/dsh-storage'],
+      ['storage-json', '@deepseek-ai/dsh-storage-json'],
       ['saki-storage-sqlite', '@deepseek-ai/dsh-storage-sqlite'],
       ['storage-domain', '@deepseek-ai/dsh-storage-domain'],
+      ['session', '@deepseek-ai/dsh-session'],
+      ['session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'],
+      ['workspace', '@deepseek-ai/dsh-workspace'],
+      ['fs-local', '@deepseek-ai/dsh-fs-local'],
+      ['subprocess', '@deepseek-ai/dsh-subprocess-local'],
+      ['saki-execution-local', '@breakfastdapaidang/saki-execution-local'],
       ['saki-webserver', '@deepseek-ai/dsh-host-webserver'],
       ['saki-connection', '@deepseek-ai/dsh-client-connection'],
       ['saki-control-plane', '@breakfastdapaidang/saki-control-plane'],
       ['saki-host-api', '@breakfastdapaidang/saki-host-api'],
       ['saki-readiness', '@breakfastdapaidang/saki-bundle'],
     ])
+    expect(insert.find(entry => entry.id === 'storage-json')?.config).toEqual({
+      root: { __jsExpr: "dshHomePath('storages')" },
+    })
+    expect(insert.find(entry => entry.id === 'storage-domain')?.config).toEqual({
+      backend: 'json',
+      routes: { saki_control_plane: 'sqlite' },
+    })
+    expect(insert.find(entry => entry.id === 'session-persistence-jsonl')?.config).toEqual({
+      root: { __jsExpr: "dshHomePath('sessions')" },
+    })
     expect(insert.find(entry => entry.id === 'saki-webserver')?.config).toEqual({
       host: '127.0.0.1',
       port: {

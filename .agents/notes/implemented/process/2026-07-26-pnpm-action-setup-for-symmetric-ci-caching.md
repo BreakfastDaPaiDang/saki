@@ -23,7 +23,7 @@ Outside `landlock-run.yml`, each workflow that installed pnpm hand-provisioned i
 - **Add an automatic default-branch cache producer.** Rejected for Saki: a master-push producer spends minutes after every merge without contributing a merge verdict. Restore-only jobs must remain correct when no compatible cache exists; a future producer requires separate cost evidence.
 - **Stop at the cache-bearing workflows and leave the other `corepack enable` sites.** Rejected: provisioning and caching are separable concerns, and leaving corepack in the cache-less jobs kept the future break and two provisioning idioms for no benefit.
 - **Rely on the runner image's Yarn.** Rejected: the hosted image exposes Yarn 1.22 after Corepack is removed, while the generated-project e2e requires Yarn 2 or newer. A locked root dev dependency makes that coverage independent of runner image contents.
-- **A composite action wrapping action-setup + setup-node.** Rejected for now: the remaining per-job variation (node-version matrices, per-platform conditional caching, the restore-only pairing) is deliberate policy, not boilerplate — a wrapper would grow mirroring inputs or flatten a real asymmetry, and the two-line pair is already near the floor.
+- **A composite action wrapping action-setup + setup-node.** Rejected: the remaining per-job variation (node-version matrices, per-platform conditional caching, the restore-only pairing) is deliberate policy, not boilerplate — a wrapper would grow mirroring inputs or flatten a real asymmetry, and the two-line pair is already near the floor.
 
 ## Consequences
 

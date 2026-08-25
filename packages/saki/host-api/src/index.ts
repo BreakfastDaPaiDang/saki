@@ -11,10 +11,18 @@ import {
   sakiSessionCookieName,
   takeSakiCookieHeader,
 } from '@breakfastdapaidang/saki-control-plane/host'
-import type { SakiControlPlaneModule } from '@breakfastdapaidang/saki-control-plane'
+import type { SakiControlPlaneModule, SakiIntentInput } from '@breakfastdapaidang/saki-control-plane'
 import {
+  sakiAccessExchangeResultSchema,
+  sakiAccessLogoutResultSchema,
+  sakiAccessProjectionSchema,
   sakiBootstrapExchangeRequestSchema,
+  sakiDevelopmentWorkspaceResultSchema,
   sakiEmptyRequestSchema,
+  sakiInspectProjectSelectionResultSchema,
+  sakiIntentRequestSchema,
+  sakiIntentResultSchema,
+  sakiProjectIndexResultSchema,
   sakiQueryRequestSchema,
 } from './wire.ts'
 
@@ -35,7 +43,7 @@ export const name = 'saki-host-api'
 export const inject = ['connection', 'sakiControlPlane']
 
 /**
- * Register the five B01 Host endpoints over the shared Connection carrier.
+ * Register the Access, protected query, and Control Intent endpoints over the shared Connection carrier.
  * @param ctx - Host context carrying Connection and the Saki control plane.
  */
 export function apply(ctx: Context): void {
@@ -85,7 +93,8 @@ async function readAccess(
 ): Promise<ConnectionRpcReply> {
   if (!sakiEmptyRequestSchema.safeParse(payload).success) return reply(badRequest())
   const cookie = sessionCookie(request, sakiSessionCookieName(controlPlane))
-  return reply({ ok: true, value: await controlPlane.access.readAccess(cookie, signal) })
+  const access = sakiAccessProjectionSchema.parse(await controlPlane.access.readAccess(cookie, signal))
+  return reply({ ok: true, value: access })
 }
 
 async function exchangeBootstrap(
@@ -102,7 +111,8 @@ async function exchangeBootstrap(
     signal,
   )
   const cookieHeader = takeSakiCookieHeader(result)
-  return reply({ ok: true, value: result }, cookieHeader === undefined ? undefined : { 'set-cookie': cookieHeader })
+  const wireResult = sakiAccessExchangeResultSchema.parse(result)
+  return reply({ ok: true, value: wireResult }, cookieHeader === undefined ? undefined : { 'set-cookie': cookieHeader })
 }
 
 async function query(
@@ -120,7 +130,18 @@ async function query(
     signal,
   )
   if (!resolution.ok) return reply({ ok: true, value: { ok: false, reason: 'unavailable' } })
-  return reply({ ok: true, value: await controlPlane.query(resolution.authentication, parsed.data, signal) })
+  const result = await controlPlane.query(resolution.authentication, parsed.data, signal)
+  switch (parsed.data.type) {
+    case 'inspect-project-selection': {
+      return reply({ ok: true, value: sakiInspectProjectSelectionResultSchema.parse(result) })
+    }
+    case 'project-index': {
+      return reply({ ok: true, value: sakiProjectIndexResultSchema.parse(result) })
+    }
+    case 'development-workspace': {
+      return reply({ ok: true, value: sakiDevelopmentWorkspaceResultSchema.parse(result) })
+    }
+  }
 }
 
 async function authenticatedMutation(
@@ -130,7 +151,15 @@ async function authenticatedMutation(
   signal: AbortSignal,
   request: ConnectionRpcRequestMetadata,
 ): Promise<ConnectionRpcReply> {
-  if (!sakiEmptyRequestSchema.safeParse(payload).success) return reply(badRequest())
+  let operation: { readonly kind: 'logout' } | { readonly kind: 'submit'; readonly intent: SakiIntentInput }
+  if (kind === 'submit') {
+    const parsed = sakiIntentRequestSchema.safeParse(payload)
+    if (!parsed.success) return reply(badRequest())
+    operation = { kind, intent: parsed.data }
+  } else {
+    if (!sakiEmptyRequestSchema.safeParse(payload).success) return reply(badRequest())
+    operation = { kind }
+  }
   const requestToken = request.headers.get(SAKI_REQUEST_TOKEN_HEADER) ?? undefined
   const resolution = await resolveSakiAuthentication(
     controlPlane,
@@ -146,15 +175,17 @@ async function authenticatedMutation(
     return reply({ ok: true, value: { ok: false, reason: 'unavailable' } })
   }
   const authentication = resolution.authentication
-  if (kind === 'submit') {
+  if (operation.kind === 'submit') {
+    const result = await controlPlane.submit(authentication, operation.intent, signal)
     return reply({
       ok: true,
-      value: await controlPlane.submit(authentication, undefined, signal),
+      value: sakiIntentResultSchema.parse(result),
     })
   }
   const result = await controlPlane.access.logoutCurrentSession(authentication, requestToken, signal)
   const cookieHeader = takeSakiCookieHeader(result)
-  return reply({ ok: true, value: result }, cookieHeader === undefined ? undefined : { 'set-cookie': cookieHeader })
+  const wireResult = sakiAccessLogoutResultSchema.parse(result)
+  return reply({ ok: true, value: wireResult }, cookieHeader === undefined ? undefined : { 'set-cookie': cookieHeader })
 }
 
 function sessionCookie(request: ConnectionRpcRequestMetadata, name: string): string | undefined {

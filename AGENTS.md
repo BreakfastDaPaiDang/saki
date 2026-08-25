@@ -27,7 +27,7 @@ packages/    Product workspaces at packages/<group>/<pkg>/
   context/     request-context plugins
   subagent/    subagent capability: Service Definition + providers + delegation Consumers
   bundle/      installable dsh --profile patch-layer bundles
-  saki/        private @breakfastdapaidang/saki-* product plugins and composition
+  saki/        private Saki composition
   workflow/    workflow capability + worker-thread provider + tool Consumer
   todo/        todo_write tool
   plan/        plan mode as logged state
@@ -38,12 +38,13 @@ packages/    Product workspaces at packages/<group>/<pkg>/
   session/     durable session data: persistence, projection, titles, telemetry
   identity/    anonymous identity
   settings/    user-settings capability + file provider
-  credentials/ credential-reference capability + env/.env provider
+  credentials/ credential/authorization capabilities + env/.env provider
   acp/         automation-only Agent Client Protocol server
   interaction/ approval/interaction capabilities, permission, commands, ask-user
   boot/        shared app-bin glue
   sdk/         JSON-RPC protocol, server, and TypeScript client
   examples/    demo bundles (agent-spine + CLI/ACP/JSON-RPC bins)
+  experimental/ private prototypes excluded from official releases
   support/     dev/test infrastructure
   util/        zero-dependency utilities
 python/      Python SDK and bundled runtime (see python/README.md)
@@ -98,7 +99,7 @@ Real-API tests and demos read `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`, 
 
 ## Conventions
 
-- Product package governance: [names, locations, publication](docs/saki/package-governance.md); [vendored rescoping](docs/rescope.md); all product packages peer-depend on `@deepseek-ai/cordis` (+ dev).
+- Package governance: [names, locations, publication](docs/saki/package-governance.md); [vendored rescoping](docs/rescope.md); product packages peer-depend on `@deepseek-ai/cordis` (+ dev).
 - ESM everywhere (`"type": "module"`). Use package names across packages and `.ts` in local relative imports. Config subprocesses run built `lib/` under plain Node; source regressions use their declared launcher ([testing policy](docs/testing.md#test-subprocess-launch-modes)). The `dsh` CLI source launch runs through tsx's ESM-only hook (`node --import tsx/esm`); modules it reaches must stay ESM (no CJS-only exports) — Node's native TypeScript modes are unavailable across the engines range ([source-launch contract](.agents/notes/implemented/architecture/2026-07-29-dsh-source-launch-tsx-esm.md)). Raw/Web `cordis.yml` bare plugins must appear in their resolver manifest's `dependencies`; `verify-cordis-config` enforces it.
 - **Registrations are effects**: every contribution goes through `ctx.effect()` / `ctx.on()`; a registry's `register()` returns the disposer.
 - **Runtime invariants assert owned relationships.** Check authoritative event streams or mutable data, not service or method presence, plugin metadata or effects, or fixed pure examples. Without a plausible relationship, an explained empty companion is correct ([package invariant rules](packages/AGENTS.md)).
@@ -132,7 +133,7 @@ Real-API tests and demos read `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`, 
 
 ## Saki agent workflow
 
-Track work through [GitHub Issues](docs/agents/issue-tracker.md) and its [triage roles](docs/agents/triage-labels.md); navigate terminology through [CONTEXT-MAP.md](CONTEXT-MAP.md) and the [domain-doc rules](docs/agents/domain.md).
+Track work in [GitHub Issues](docs/agents/issue-tracker.md) under [triage roles](docs/agents/triage-labels.md); navigate terminology through [CONTEXT-MAP.md](CONTEXT-MAP.md) and [domain-doc rules](docs/agents/domain.md).
 
 ## Defensive patterns
 

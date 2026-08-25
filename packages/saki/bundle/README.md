@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-The private Saki composition root. Its [`dsh.bundle`](package.json) declaration points at [`cordis.patch.yml`](cordis.patch.yml), which mounts SQLite storage, the storage domain, a loopback Web server, Connection, the Saki control plane, the `/saki` Host API, and `saki-readiness` over an empty [`cordis.yml`](cordis.yml). The readiness row provides the stable `{"product":"saki","status":"ready"}` record. The launcher writes it only after `boot()` completes its entry-activation audit; a reporting failure disposes the application and enters the launcher failure path.
+The private Saki composition root. Its [`dsh.bundle`](package.json) declaration points at [`cordis.patch.yml`](cordis.patch.yml), which mounts a JSON default storage backend, a dedicated SQLite route for `saki_control_plane`, JSONL Session persistence, Workspace, local filesystem and subprocess providers, the Local Host execution provider, a loopback Web server, Connection, the Saki control plane, the `/saki` Host API, and `saki-readiness` over an empty [`cordis.yml`](cordis.yml). The readiness row provides the stable `{"product":"saki","status":"ready"}` record. The launcher writes it only after `boot()` completes its entry-activation audit; a reporting failure disposes the application and enters the launcher failure path.
 
 From the repository root, run:
 
@@ -22,7 +22,7 @@ Every non-oneshot start also writes one launcher-handoff JSON line containing `b
 
 ## Model Experience
 
-None, as the local access composition makes no model request and contributes no model-visible input.
+None, as the local Host composition makes no model request and contributes no model-visible input.
 
 #### KV Cache effect
 
@@ -30,6 +30,6 @@ None; the composition has no request prefix.
 
 ## Known Limitations and Deferred Work
 
-- **Access is the only product slice** — the Host exposes bootstrap, logout, and an authenticated empty Project index; GitHub, Development Projects, Agents, model providers, and rendered Web surfaces join through later slices.
+- **First-registration lifecycle only** — the Host supports local access, existing-directory inspection, initial Development Project registration, the Project index, and the Development Workspace. Resource Binding rebind and retirement, repository mutation, GitHub, Agents, model providers, and rendered Web surfaces are not composed.
 - **The executable is repository-local** — Saki packages are private and absent from every npm release family.
 - **Loopback development Host only** — the fixed local bootstrap flow does not authorize remote browsers or replace the Windows Host wrapper described in [Saki host launcher](../../../docs/saki/host-launcher.md).
