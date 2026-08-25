@@ -1,0 +1,55 @@
+/* Design tokens for the Saki 0.1.0 low-fi prototype.
+   Values echo the shipped DSH dark theme so the prototype reads as the same
+   product family; they are prototype-local, not a final visual spec. */
+:root {
+  --sp-bg: #0b0e14;
+  --sp-bg-raised: #11151d;
+  --sp-bg-overlay: #161b25;
+  --sp-bg-hover: rgba(255, 255, 255, 0.045);
+  --sp-bg-active: rgba(255, 255, 255, 0.08);
+  --sp-border: rgba(255, 255, 255, 0.08);
+  --sp-border-strong: rgba(255, 255, 255, 0.14);
+
+  --sp-text: #e6e9ef;
+  --sp-text-secondary: #9aa3b2;
+  --sp-text-faint: #7d8695;
+
+  --sp-accent: #3b5bdb;
+  --sp-accent-hover: #4c6ef5;
+  --sp-accent-soft: rgba(76, 110, 245, 0.16);
+  --sp-accent-text: #a8bcff;
+
+  --sp-ok: #3fb27f;
+  --sp-ok-soft: rgba(63, 178, 127, 0.14);
+  --sp-warn: #d9a13b;
+  --sp-warn-soft: rgba(217, 161, 59, 0.14);
+  --sp-danger: #e06c75;
+  --sp-danger-soft: rgba(224, 108, 117, 0.14);
+  --sp-info: #4aa8e0;
+  --sp-info-soft: rgba(74, 168, 224, 0.14);
+  --sp-purple: #b094f0;
+  --sp-purple-soft: rgba(157, 123, 234, 0.16);
+
+  --sp-radius-s: 6px;
+  --sp-radius-m: 10px;
+  --sp-radius-l: 14px;
+
+  --sp-space-1: 4px;
+  --sp-space-2: 8px;
+  --sp-space-3: 12px;
+  --sp-space-4: 16px;
+  --sp-space-5: 20px;
+  --sp-space-6: 24px;
+  --sp-space-8: 32px;
+
+  --sp-font:
+    'Inter', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    system-ui, -apple-system, sans-serif;
+  --sp-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+
+  --sp-shadow-overlay: 0 12px 40px rgba(0, 0, 0, 0.5);
+  --sp-focus-ring: 0 0 0 2px var(--sp-bg), 0 0 0 4px var(--sp-accent);
+
+  --sp-sidebar-width: 232px;
+  --sp-header-height: 52px;
+}
