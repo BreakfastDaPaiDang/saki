@@ -41,12 +41,16 @@ describe('LayoutController', () => {
     expect(panels.setDetails).not.toHaveBeenCalled()
   })
 
-  it('fails loud before the root entry wired its actions', () => {
+  it('fails loud before the root entry wired its actions, except requestSurface buffers', () => {
     const service = new LayoutController()
     expect(() => { service.toggleSidebar() }).toThrow(/panel actions not wired/)
     expect(() => { service.openDetails() }).toThrow(/panel actions not wired/)
     expect(() => { service.closeDetails() }).toThrow(/panel actions not wired/)
-    expect(() => { service.requestSurface('x') }).toThrow(/panel actions not wired/)
+    // A pre-mount surface request buffers and flushes at attach.
+    service.requestSurface('product:work')
+    const panels = fakePanels()
+    service.attachPanels(panels)
+    expect(panels.setSurface).toHaveBeenCalledWith('product:work')
   })
 
   it('re-attach overwrites the stale action set (entry re-register)', () => {
