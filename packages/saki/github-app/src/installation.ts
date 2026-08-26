@@ -53,11 +53,11 @@ const REQUIRED_INSTALLATION_PERMISSIONS = Object.freeze({
 
 const ORGANIZATION_PERMISSION_NAMES = new Set(['organization_projects'])
 
-/** Complete installation inspection and the REST rate facts spent to obtain it. */
+/** Complete installation inspection and its installation-token REST rate facts. */
 export interface GitHubInstallationInspection {
   /** Detached installation fact. */
   readonly fact: GitHubInstallationFact
-  /** One observation for each successful REST read in request order. */
+  /** One observation for each successful installation-token REST read in request order. */
   readonly rateObservations: readonly GitHubRestRateObservation[]
 }
 
@@ -88,7 +88,7 @@ export async function readInstallation(
  * @param profile - selected installation identity.
  * @param config - validated pagination limits.
  * @param signal - operation lifetime.
- * @returns detached safe installation facts and complete REST rate observations.
+ * @returns detached safe installation facts and installation-token REST rate observations.
  */
 export async function inspectInstallation(
   session: GitHubOperationSession,
@@ -102,10 +102,6 @@ export async function inspectInstallation(
   })
   const installation = installationSchema.parse(installationResponse.data)
   const rateObservations: GitHubRestRateObservation[] = []
-  appendGitHubRateObservation(
-    rateObservations,
-    githubRestRateObservation(installationResponse.headers, 'installation'),
-  )
   if (String(installation.id) !== profile.installationId) invalid('installation')
   if (installation.account.node_id !== profile.accountId) {
     throw new GitHubProviderError({

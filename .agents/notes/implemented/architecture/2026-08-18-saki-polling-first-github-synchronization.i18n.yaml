@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-18-saki-polling-first-github-synchronization.md
-2026-08-18-saki-polling-first-github-synchronization.md: d15660a7b5b48f6775b93f0bde5df4120ffd67c4
-2026-08-18-saki-polling-first-github-synchronization.zh.md: 3a30641f1e52064fcf9cf65e235ae9548b7a2a6a
+2026-08-18-saki-polling-first-github-synchronization.md: b087e41f86d6fb184bd68266c739dc2afe55c51e
+2026-08-18-saki-polling-first-github-synchronization.zh.md: 706998d9b3042a9106bfee99cc2a9b8d42297291

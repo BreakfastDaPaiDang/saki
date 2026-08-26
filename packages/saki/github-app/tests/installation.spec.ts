@@ -74,11 +74,12 @@ function repositoryPage(totalCount: number, ids: readonly string[]): Record<stri
 function sessionWith(
   installationData: unknown,
   pages: readonly unknown[] = [repositoryPage(1, ['R_kgDOBoundRepository'])],
+  installationHeaders: Readonly<Record<string, string>> = RATE_HEADERS,
 ): GitHubOperationSession {
   let page = 0
   return {
     app: {
-      request: vi.fn().mockResolvedValue({ data: installationData, headers: RATE_HEADERS }),
+      request: vi.fn().mockResolvedValue({ data: installationData, headers: installationHeaders }),
     },
     installation: {
       request: vi.fn(async () => ({ data: pages[page++], headers: RATE_HEADERS })),
@@ -102,6 +103,18 @@ async function failureOf(
 }
 
 describe('Product App installation inspection', () => {
+  it('does not attribute App-authenticated installation reads to the installation-token budget', async () => {
+    const inspection = await inspectInstallation(
+      sessionWith(installation(), undefined, {}),
+      PROFILE,
+      CONFIG,
+      new AbortController().signal,
+    )
+
+    expect(inspection.rateObservations).toHaveLength(1)
+    expect(inspection.rateObservations[0]).toMatchObject({ kind: 'rest', resource: 'core' })
+  })
+
   it('creates an unscoped operation session for the public installation read', async () => {
     const session = sessionWith(installation())
     const create = vi.spyOn(GitHubOperationSession, 'create').mockResolvedValue(session)
@@ -203,6 +216,16 @@ describe('Product App installation inspection', () => {
   it('rejects Repository access above the fixed installation admission limit', async () => {
     await expect(failureOf(
       sessionWith(installation(), [repositoryPage(GITHUB_INSTALLATION_REPOSITORY_LIMIT + 1, [])]),
+    )).resolves.toEqual({ code: 'invalid-external-response', operation: 'installation-repositories' })
+  })
+
+  it('rejects more Repository identities than the reported admissible total', async () => {
+    const repositoryIds = Array.from(
+      { length: GITHUB_INSTALLATION_REPOSITORY_LIMIT + 1 },
+      (_, index) => `R_${index}`,
+    )
+    await expect(failureOf(
+      sessionWith(installation(), [repositoryPage(GITHUB_INSTALLATION_REPOSITORY_LIMIT, repositoryIds)]),
     )).resolves.toEqual({ code: 'invalid-external-response', operation: 'installation-repositories' })
   })
 

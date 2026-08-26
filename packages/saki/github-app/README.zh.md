@@ -18,7 +18,7 @@
 
 一次 `project-board` scan 会执行两遍完整读取，覆盖 Project field、按 API position 升序排列的 archived 与 non-archived Project item、嵌套 item field value 和 open Repository Issue。每一遍都有自己的前后 Project 与 Repository fence、mapping 校验、分页和计数校验。每一页都经过严格解析，并且必须重复精确的请求 Project、Repository node/database-id 对或 Project item 父身份；id 与 cursor 不得重复；配置的 Status id 必须仍精确标识一个 single-select field 及每个必需 option；配置的 item、field-value、page 和 response-byte 限制会快速失败，而不是截断结果。只有两遍的语义指纹相同时，提供方才返回第二遍 candidate；数量不变的 Status 变更或任何其他语义差异都会拒绝本次 operation，且不存在部分 candidate。
 
-installation 检查的 REST rate header 和 GraphQL rate fact 会随成功 scan 返回。每次 GraphQL request 成功后，如果报告的剩余点数达到或低于 request 中由 Consumer 从每项目配置解析的 `rateLimitReserve`，background scan 就会停止；内部不会 sleep 或 retry。每个 installation 使用一个队列串行化 HTTP request，并让已排队的 interactive call 优先于 background page。`maxConcurrentScans` 另行限制跨 installation 的完整 scan。dispose 会取消已排队和活动中的工作，并等待自有 operation 结算。
+Repository access 检查的 installation-token REST rate header 和 GraphQL rate fact 会随成功 scan 返回。App-JWT installation identity 读取不消耗该 token 的预算，也可能省略 primary-rate header。每次 GraphQL request 成功后，如果报告的剩余点数达到或低于 request 中由 Consumer 从每项目配置解析的 `rateLimitReserve`，background scan 就会停止；内部不会 sleep 或 retry。每个 installation 使用一个队列串行化 HTTP request，并让已排队的 interactive call 优先于 background page。`maxConcurrentScans` 另行限制跨 installation 的完整 scan。dispose 会取消已排队和活动中的工作，并等待自有 operation 结算。
 
 ## 配置
 
