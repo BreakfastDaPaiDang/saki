@@ -245,6 +245,7 @@
       "@breakfastdapaidang/saki-*/fixtures": ["./packages/saki/*/src/fixtures.ts"],
       "@breakfastdapaidang/saki-*/wire": ["./packages/saki/*/src/wire.ts"],
       "@breakfastdapaidang/saki-*/client": ["./packages/saki/*/src/client/index.ts"],
+      "@breakfastdapaidang/saki-*/web-runtime": ["./packages/saki/*/src/web-runtime.ts"],
       "@breakfastdapaidang/saki-*": ["./packages/saki/*/src"],
       "@deepseek-ai/dsh-*": [
         "./packages/core/*/src",
