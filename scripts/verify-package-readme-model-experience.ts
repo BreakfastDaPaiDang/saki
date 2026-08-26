@@ -116,6 +116,7 @@ const SENTENCE_MODEL_EXPERIENCE: Readonly<Record<string, SentenceContract>> = {
   'packages/saki/control-plane': { kind: 'none', reason: 'The local access and Projection owner registers no model-facing input.' },
   'packages/saki/host-api': { kind: 'none', reason: 'The Host and browser adapters register no model-facing input.' },
   'packages/saki/bundle': { kind: 'none', reason: 'The local Host composition registers no model-facing input.' },
+  'packages/saki/web-ui': { kind: 'none', reason: 'Browser-side UI plugin layer; registers nothing model-facing.' },
   'packages/llm/llm': { kind: 'none', reason: 'The adapter registry forwards already-assembled requests unchanged.' },
   'packages/llm/token-meter': { kind: 'indirect', reason: 'The measurement service leaves model-visible changes to its consumers.' },
   'packages/lsp/lsp': { kind: 'indirect', reason: 'The provider registry delegates model rendering to dsh-tool-lsp.' },
