@@ -574,6 +574,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'The transport-agnostic host gateway face: it dispatches browser API calls, and each open host stream subscribes to the events it forwards rather than being pushed to through a broadcast verb.',
   },
   {
+    key: 'sakiInstallationState',
+    pkg: 'saki/control-plane',
+    title: 'Verified Saki Installation state',
+    mode: 'seam',
+    implementations: ['saki/installation-maintenance'],
+    consumers: ['saki/control-plane'],
+    note: 'Installation maintenance selects and validates one manifest-backed state generation before the Saki bundle mounts the control plane; the control plane consumes that exact identity and promotes fresh provisioning only after product validation.',
+  },
+  {
     key: 'sakiControlPlane',
     pkg: 'saki/control-plane',
     title: 'Saki product control plane',

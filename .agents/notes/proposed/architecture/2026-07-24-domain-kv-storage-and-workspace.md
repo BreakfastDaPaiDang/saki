@@ -4,6 +4,8 @@ Status: proposed
 
 English | [中文](2026-07-24-domain-kv-storage-and-workspace.zh.md)
 
+> Scope update (2026-08-25): [Callback-scoped closed-domain migration](../../implemented/architecture/2026-08-25-callback-scoped-closed-domain-migration.md) and the current [storage subsystem documentation](../../../../docs/subsystems/storage.md) now own generic migration, closed-unit materialization, exact JSON admission, and current provider behavior. Provider layouts and error lists retained below are the initial proposal, not current authority. This note remains active for its independent workspace, session-deletion, log-facet, and other future-work decisions.
+
 ## Problem
 
 The host's only persistence surface is the session event log (`packages/session/session-persistence`: append-only, one file per session). Anything that does not belong to a single session has nowhere to live, and two real needs exist today:
@@ -39,7 +41,7 @@ A pure registration hub, no IO of its own, no Config. The `Storage` service moun
 
 **Multiple backends stay mounted side by side**; which backend serves a domain is `dsh-domain`'s configuration (below), never a global either-or. Disposer semantics = remove the name from the table; closing the backend itself belongs to the backend package's effect closure, unregister first then close.
 
-A backend is one **medium owner** (a file-tree root / one db file) exposing primitives through **data-shape facets** — only `kv` this phase; the session migration adds `log` (see the migration section). A facet is an optional member: absence means the backend cannot serve that shape, and resolution fails loud. The `kv` facet's primitive surface: `open(descriptor)` (descriptor = name/version/table list/global flag, with names and table names restricted to `^[a-z][a-z0-9_]*$` doubling as file-name and SQL-identifier segments) returns a unit exposing `loadAll` / `putRecord` / `deleteRecord` (missing key is a no-op) / `setGlobal` / `close` (idempotent); values are opaque JSON to the backend. The normative text (with per-method JSDoc) is `packages/storage/storage/src/backend.ts`.
+A backend is one **medium owner** (a file-tree root / one db file) exposing primitives through **data-shape facets** — only `kv` this phase; the session migration adds `log` (see the migration section). A facet is an optional member: absence means the backend cannot serve that shape, and resolution fails loud. The `kv` facet's initial primitive surface was `open(descriptor)` plus unit reads, writes, and close. Exact JSON admission and the current lifecycle surface are specified by `packages/storage/storage/src/backend.ts` and the current storage documentation.
 
 The backend contract (asserted clause by clause by the shared conformance suite, one suite for both backends):
 
@@ -48,12 +50,12 @@ The backend contract (asserted clause by clause by the shared conformance suite,
 3. Durability: after a write primitive resolves, a process crash followed by a re-open must observe the write in `loadAll`.
 4. The backend does not promise write ordering within a unit — **the caller serializes**; the backend only guarantees each single call is atomic (JSON whole-file replace / SQLite single statement).
 5. `deleteRecord` is idempotent; `putRecord` overwrites.
-6. Any string key / any JSON value is safe (keys never reach file paths, a structural property).
+6. Any string key and every exactly representable JSON value are safe (keys never reach file paths, a structural property).
 7. `close` is idempotent; any operation after close → `StorageError('closed')`.
 
-The error vocabulary is `StorageError` with a code discriminant: `backend-not-found` / `form-not-mounted` / `duplicate-backend` / `duplicate-mount` / `version-mismatch` / `malformed-medium` / `closed` (`packages/storage/storage/src/error.ts`).
+The current discriminated `StorageError` vocabulary is normative in `packages/storage/storage/src/error.ts`; the initial list in this proposal is superseded by the current storage documentation.
 
-### `dsh-storage-json`
+### Initial `dsh-storage-json` proposal (historical baseline)
 
 Config is `root` only (required, no default, schemastery); apply registers backend `json` inside `ctx.effect()`, and the disposer unregisters the name before `backend.close()`.
 
@@ -71,7 +73,7 @@ Config is `root` only (required, no default, schemastery); apply registers backe
 - Writes: every write primitive = full serialization of the in-memory state → temp write + fsync → atomic rename publish (the Windows variant follows session-persistence-jsonl's win32 path). Memory is authoritative, disk is its projection.
 - `loadAll`: parse the whole file at open; a missing `unit` header, non-object tables, etc. → `malformed-medium`. A missing file = an empty unit, materialized on first write.
 
-### `dsh-storage-sqlite`
+### Initial `dsh-storage-sqlite` proposal (historical baseline)
 
 Config is `path` (required, `':memory:'` allowed) plus `journalMode` (enum, default `wal`); apply mirrors json, registering backend `sqlite`.
 
@@ -159,7 +161,7 @@ Rules:
 - **Records are plain data**: immutable, directly JSON-serializable POJOs; values returned by `get`/`entries` must not be mutated in place (TypeScript readonly projection, no runtime freezing). Behavior-carrying domain objects belong to consumer packages.
 - **Serialized writes**: one promise chain per domain; `put`/`delete`/`update`/`global.set` all queue on it; `update`'s fn runs on the chain, so concurrency cannot interleave. No active-record (pulling out a mutable object that auto-persists — uncontrollable persist timing, in conflict with the whole-unit atomic-rewrite model).
 - **Version fails loud by default**: a stored version differing from the spec throws unless the owning domain registers a complete opt-in forward sequence through the [Saki migration proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.md). Without that sequence there is no migration or rebuild.
-- **Change events**: after each write's durability resolves, emit `domain/changed` (`@mode emit`), one per record, no old value (matching the repository's "new snapshot + operation discriminant" convention, template `goal/changed`); the payload `DomainChanged` is a put/deleted discriminated union — domain + table + key (both `''` for global changes) + operation, with the put branch carrying the new snapshot value and the deleted branch carrying none (`packages/storage/storage-domain/src/events.ts`). This is next phase's RPC push-frame event source. The error vocabulary is `DomainError`, codes: `already-open` / `facet-unsupported` / `invalid-record` (with `{ table, key }`) / `missing-key` / `closed`.
+- **Change events**: after each write's durability resolves, emit `domain/changed` (`@mode emit`), one per record, no old value (matching the repository's "new snapshot + operation discriminant" convention, template `goal/changed`); the payload `DomainChanged` is a put/deleted discriminated union — domain + table + key (both `''` for global changes) + operation, with the put branch carrying the new snapshot value and the deleted branch carrying none (`packages/storage/storage-domain/src/events.ts`). This is next phase's RPC push-frame event source. The current `DomainError` vocabulary is normative in `packages/storage/storage-domain/src/error.ts` and the current storage documentation.
 
 ### Future work: session-side deletion (design settled, not implemented this phase)
 

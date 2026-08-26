@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inspect } from 'node:util'
@@ -26,6 +26,13 @@ import {
 } from '../src/spec.ts'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import type { InstallationAccessRecord } from '../src/spec.ts'
+import {
+  materializeCandidateStorageGenerationSeal,
+  NEXT_SAKI_INSTALLATION_STATE,
+  provideSakiInstallationState,
+  TEST_SAKI_INSTALLATION_STATE,
+  type TestSakiInstallationState,
+} from './installation-state.ts'
 
 const ORIGIN = 'http://127.0.0.1:43119'
 const COOKIE_NAME = 'saki_session'
@@ -65,18 +72,21 @@ interface PutHooks {
 async function start(
   databasePath: string,
   config: Required<Config> = CONTROL_PLANE_CONFIG,
+  state?: TestSakiInstallationState,
 ): Promise<RunningHarness> {
   const ctx = new Context()
   await ctx.plugin(Storage)
   await ctx.plugin(StorageSqlite, { path: databasePath, journalMode: 'delete' })
   await ctx.plugin(StorageDomain, { backend: 'sqlite' })
-  return startControlPlane(ctx, config)
+  return startControlPlane(ctx, config, state)
 }
 
 async function startControlPlane(
   ctx: Context,
   config: Required<Config> = CONTROL_PLANE_CONFIG,
+  state?: TestSakiInstallationState,
 ): Promise<RunningHarness> {
+  await provideSakiInstallationState(ctx, state)
   ctx.provide('sakiHostExecution', {
     inspectProjectSelection: () => Promise.resolve({ ok: false, reason: 'unavailable' }),
   } as never)
@@ -93,6 +103,24 @@ async function startControlPlane(
       await ctx.fiber.dispose()
     },
   }
+}
+
+async function copyAsCandidate(
+  sourcePath: string,
+  state: TestSakiInstallationState,
+): Promise<string> {
+  const candidatePath = await database()
+  await copyFile(sourcePath, candidatePath)
+  const ctx = new Context()
+  await ctx.plugin(Storage)
+  await ctx.plugin(StorageSqlite, { path: candidatePath, journalMode: 'delete' })
+  await ctx.plugin(StorageDomain, { backend: 'sqlite' })
+  try {
+    await materializeCandidateStorageGenerationSeal(ctx, state)
+  } finally {
+    await ctx.fiber.dispose()
+  }
+  return candidatePath
 }
 
 async function interceptedContext(databasePath: string, hooks: PutHooks): Promise<Context> {
@@ -287,7 +315,7 @@ describe('Saki Installation access', () => {
     const path = await database()
     await interruptProvisioning(path, writeOrdinal, failure)
 
-    const recovered = await start(path)
+    const recovered = await start(path, CONTROL_PLANE_CONFIG, TEST_SAKI_INSTALLATION_STATE)
     const domain = accessDomain(recovered)
     expect(controlState(recovered).phase).toBe('ready')
     expect(domain.table('control_state').size).toBe(1)
@@ -298,6 +326,40 @@ describe('Saki Installation access', () => {
     expect(domain.table('installation_access').size).toBe(1)
     expect(recovered.controlPlane.bootstrap.take()?.purpose).toBe('initial-bootstrap')
     await recovered.close()
+  })
+
+  it('materializes a fresh seal once and never rewrites or repairs it on ready selection', async () => {
+    const path = await database()
+    let sealWrites = 0
+    let ctx = await interceptedContext(path, {
+      beforePut: (table) => { sealWrites += table === 'storage_generation' ? 1 : 0 },
+    })
+    const fresh = await startControlPlane(ctx)
+    expect(ctx.sakiInstallationState.phase).toBe('provisioning')
+    expect(sealWrites).toBe(1)
+    await fresh.close()
+
+    ctx = await interceptedContext(path, {
+      beforePut: (table) => { sealWrites += table === 'storage_generation' ? 1 : 0 },
+    })
+    const restarted = await startControlPlane(ctx)
+    expect(ctx.sakiInstallationState.phase).toBe('ready')
+    expect(sealWrites).toBe(1)
+    await restarted.close()
+
+    ctx = await interceptedContext(path, {
+      beforePut: (table) => { sealWrites += table === 'storage_generation' ? 1 : 0 },
+    })
+    try {
+      await expect(startControlPlane(ctx, CONTROL_PLANE_CONFIG, {
+        ...TEST_SAKI_INSTALLATION_STATE,
+        phase: 'ready',
+        createdByBuildId: 'saki-build-other' as TestSakiInstallationState['createdByBuildId'],
+      })).rejects.toThrow('disagrees with the existing storage-generation seal')
+      expect(sealWrites).toBe(1)
+    } finally {
+      await ctx.fiber.dispose()
+    }
   })
 
   it('redacts the process-local Bootstrap handoff from diagnostics', async () => {
@@ -325,7 +387,12 @@ describe('Saki Installation access', () => {
     const path = await database()
     const first = await start(path)
     const firstIdentity = first.controlPlane.identity()
+    expect(firstIdentity.installationId).toBe(TEST_SAKI_INSTALLATION_STATE.installationId)
     expect(firstIdentity.installationId).not.toBe(firstIdentity.hostId)
+    expect(controlState(first)).toMatchObject({ schemaVersion: 2, installationId: firstIdentity.installationId })
+    expect(accessRecord(first)).toMatchObject({ schemaVersion: 2, installationId: firstIdentity.installationId })
+    expect(accessRecord(first).challenges[0]?.storageGenerationId)
+      .toBe(TEST_SAKI_INSTALLATION_STATE.storageGenerationId)
     await bootstrap(first.controlPlane)
     await first.close()
 
@@ -406,6 +473,7 @@ describe('Saki Installation access', () => {
       principalId: stored.sessions[0]!.principalId,
     })
     expect(stored.sessions[0]!.state).toBe('active')
+    expect(stored.sessions[0]!.storageGenerationId).toBe(TEST_SAKI_INSTALLATION_STATE.storageGenerationId)
     await running.close()
   })
 
@@ -432,7 +500,7 @@ describe('Saki Installation access', () => {
       ...record,
       challenges: record.challenges.map(challenge => ({
         ...challenge,
-        installationGenerationId: `${challenge.installationGenerationId}-other` as typeof challenge.installationGenerationId,
+        storageGenerationId: NEXT_SAKI_INSTALLATION_STATE.storageGenerationId,
       })),
     })],
     ['purpose', (record: InstallationAccessRecord) => ({
@@ -774,34 +842,37 @@ describe('Saki Installation access', () => {
     await second.close()
   })
 
-  it.each(['principal-retirement', 'generation-replacement'] as const)(
-    'invalidates the Browser Session after %s without reviving it',
-    async (scenario) => {
-      const running = await start(await database())
-      const { cookie } = await bootstrap(running.controlPlane)
-      const control = controlState(running)
-      if (scenario === 'principal-retirement') {
-        await accessDomain(running).table('principals').update(
-          control.hostOperatorPrincipalId,
-          current => ({ ...current, revision: current.revision + 1, state: 'retired' }),
-        )
-      } else {
-        await accessDomain(running).table('installations').update(
-          control.installationId,
-          current => ({
-            ...current,
-            revision: current.revision + 1,
-            currentInstallationGenerationId: `${current.currentInstallationGenerationId}-replacement` as typeof current.currentInstallationGenerationId,
-          }),
-        )
-      }
-      expect(await running.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)))
-        .toEqual({ kind: 'session-required', message: 'A local browser session is required.' })
-      expect(accessRecord(running)
-        .sessions.at(-1)?.state).toBe('revoked')
-      await running.close()
-    },
-  )
+  it('invalidates the Browser Session after Principal retirement without reviving it', async () => {
+    const running = await start(await database())
+    const { cookie } = await bootstrap(running.controlPlane)
+    const control = controlState(running)
+    await accessDomain(running).table('principals').update(
+      control.hostOperatorPrincipalId,
+      current => ({ ...current, revision: current.revision + 1, state: 'retired' }),
+    )
+    expect(await running.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)))
+      .toEqual({ kind: 'session-required', message: 'A local browser session is required.' })
+    expect(accessRecord(running).sessions.at(-1)?.state).toBe('revoked')
+    await running.close()
+  })
+
+  it('validates but cannot authenticate a Browser Session from an inactive storage generation', async () => {
+    const sourcePath = await database()
+    const first = await start(sourcePath)
+    const { cookie } = await bootstrap(first.controlPlane)
+    expect(accessRecord(first).sessions.at(-1)?.storageGenerationId)
+      .toBe(TEST_SAKI_INSTALLATION_STATE.storageGenerationId)
+    await first.close()
+
+    const candidatePath = await copyAsCandidate(sourcePath, NEXT_SAKI_INSTALLATION_STATE)
+    const second = await start(candidatePath, CONTROL_PLANE_CONFIG, NEXT_SAKI_INSTALLATION_STATE)
+    expect(await second.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)))
+      .toEqual({ kind: 'session-required', message: 'A local browser session is required.' })
+    expect(accessRecord(second).sessions.at(-1)?.state).toBe('revoked')
+    expect(accessRecord(second).challenges.at(-1)?.storageGenerationId)
+      .toBe(NEXT_SAKI_INSTALLATION_STATE.storageGenerationId)
+    await second.close()
+  })
 
   it('requires the exact origin and session-derived request token for logout', async () => {
     const running = await start(await database())

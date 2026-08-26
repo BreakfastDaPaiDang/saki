@@ -5,6 +5,11 @@ import {
   browserSessionRecordSchema,
   controlStateRecordSchema,
   grantRecordSchema,
+  historicalBootstrapChallengeRecordSchema,
+  historicalBrowserSessionRecordSchema,
+  historicalControlStateRecordSchema,
+  historicalInstallationAccessRecordSchema,
+  historicalInstallationRecordSchema,
   hostRecordSchema,
   installationAccessRecordSchema,
   installationRecordSchema,
@@ -22,7 +27,8 @@ const UUIDS = {
 
 const IDS = {
   installation: `installation-${UUIDS.installation}`,
-  generation: `installation-generation-${UUIDS.generation}`,
+  installationGeneration: `installation-generation-${UUIDS.generation}`,
+  storageGeneration: `storage-generation-${UUIDS.generation}`,
   host: `host-${UUIDS.host}`,
   principal: `principal-${UUIDS.principal}`,
   grant: `grant-${UUIDS.grant}`,
@@ -35,23 +41,32 @@ const CHILD_IDS = {
 } as const
 
 const CONTROL = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   revision: 0,
   phase: 'ready',
   installationId: IDS.installation,
-  initialInstallationGenerationId: IDS.generation,
   initialHostId: IDS.host,
   hostOperatorPrincipalId: IDS.principal,
   hostOperatorGrantId: IDS.grant,
   installationAccessId: IDS.access,
 } as const
 
+const HISTORICAL_CONTROL = {
+  ...CONTROL,
+  schemaVersion: 1,
+  initialInstallationGenerationId: IDS.installationGeneration,
+} as const
+
 const INSTALLATION = {
   id: IDS.installation,
   revision: 0,
   state: 'active',
-  currentInstallationGenerationId: IDS.generation,
   currentHostId: IDS.host,
+} as const
+
+const HISTORICAL_INSTALLATION = {
+  ...INSTALLATION,
+  currentInstallationGenerationId: IDS.installationGeneration,
 } as const
 
 const HOST = {
@@ -85,7 +100,7 @@ const CHALLENGE = {
   revision: 1,
   purpose: 'initial-bootstrap',
   installationId: IDS.installation,
-  installationGenerationId: IDS.generation,
+  storageGenerationId: IDS.storageGeneration,
   hostId: IDS.host,
   principalId: IDS.principal,
   verifierDigest: 'a'.repeat(64),
@@ -96,18 +111,32 @@ const CHALLENGE = {
   browserSessionId: CHILD_IDS.session,
 } as const
 
+const HISTORICAL_CHALLENGE: Record<string, unknown> = {
+  ...CHALLENGE,
+  storageGenerationId: undefined,
+  installationGenerationId: IDS.installationGeneration,
+}
+delete HISTORICAL_CHALLENGE.storageGenerationId
+
 const SESSION = {
   id: CHILD_IDS.session,
   ordinal: 0,
   revision: 0,
   installationId: IDS.installation,
-  installationGenerationId: IDS.generation,
+  storageGenerationId: IDS.storageGeneration,
   principalId: IDS.principal,
   cookieDigest: 'b'.repeat(64),
   createdAt: 1,
   expiresAt: 2,
   state: 'active',
 } as const
+
+const HISTORICAL_SESSION: Record<string, unknown> = {
+  ...SESSION,
+  storageGenerationId: undefined,
+  installationGenerationId: IDS.installationGeneration,
+}
+delete HISTORICAL_SESSION.storageGenerationId
 
 const COMPLETION = {
   challengeId: CHILD_IDS.challenge,
@@ -119,7 +148,7 @@ const COMPLETION = {
 
 const ACCESS = {
   id: IDS.access,
-  schemaVersion: 1,
+  schemaVersion: 2,
   revision: 1,
   installationId: IDS.installation,
   nextChallengeOrdinal: 1,
@@ -131,6 +160,13 @@ const ACCESS = {
   },
   challenges: [CHALLENGE],
   sessions: [SESSION],
+} as const
+
+const HISTORICAL_ACCESS = {
+  ...ACCESS,
+  schemaVersion: 1,
+  challenges: [HISTORICAL_CHALLENGE],
+  sessions: [HISTORICAL_SESSION],
 } as const
 
 describe('Saki durable identity schemas', () => {
@@ -146,11 +182,31 @@ describe('Saki durable identity schemas', () => {
     expect(installationAccessRecordSchema.parse(ACCESS)).toEqual(ACCESS)
   })
 
+  it('retains an exact historical v2 grammar distinct from current v3 records', () => {
+    expect(historicalControlStateRecordSchema.parse(HISTORICAL_CONTROL)).toEqual(HISTORICAL_CONTROL)
+    expect(historicalInstallationRecordSchema.parse(HISTORICAL_INSTALLATION)).toEqual(HISTORICAL_INSTALLATION)
+    expect(historicalBootstrapChallengeRecordSchema.parse(HISTORICAL_CHALLENGE)).toEqual(HISTORICAL_CHALLENGE)
+    expect(historicalBrowserSessionRecordSchema.parse(HISTORICAL_SESSION)).toEqual(HISTORICAL_SESSION)
+    expect(historicalInstallationAccessRecordSchema.parse(HISTORICAL_ACCESS)).toEqual(HISTORICAL_ACCESS)
+
+    expect(controlStateRecordSchema.safeParse(HISTORICAL_CONTROL).success).toBe(false)
+    expect(installationRecordSchema.safeParse(HISTORICAL_INSTALLATION).success).toBe(false)
+    expect(bootstrapChallengeRecordSchema.safeParse(HISTORICAL_CHALLENGE).success).toBe(false)
+    expect(browserSessionRecordSchema.safeParse(HISTORICAL_SESSION).success).toBe(false)
+    expect(installationAccessRecordSchema.safeParse(HISTORICAL_ACCESS).success).toBe(false)
+
+    expect(historicalControlStateRecordSchema.safeParse(CONTROL).success).toBe(false)
+    expect(historicalInstallationRecordSchema.safeParse(INSTALLATION).success).toBe(false)
+    expect(historicalBootstrapChallengeRecordSchema.safeParse(CHALLENGE).success).toBe(false)
+    expect(historicalBrowserSessionRecordSchema.safeParse(SESSION).success).toBe(false)
+    expect(historicalInstallationAccessRecordSchema.safeParse(ACCESS).success).toBe(false)
+  })
+
   it('rejects malformed UUIDs and cross-kind prefixes in provisioning records', () => {
     expect(controlStateRecordSchema.safeParse({ ...CONTROL, installationId: IDS.host }).success).toBe(false)
     expect(controlStateRecordSchema.safeParse({
       ...CONTROL,
-      initialInstallationGenerationId: `storage-generation-${UUIDS.generation}`,
+      initialInstallationGenerationId: IDS.installationGeneration,
     }).success).toBe(false)
     expect(controlStateRecordSchema.safeParse({ ...CONTROL, initialHostId: IDS.principal }).success).toBe(false)
     expect(controlStateRecordSchema.safeParse({ ...CONTROL, hostOperatorPrincipalId: IDS.grant }).success).toBe(false)
@@ -164,7 +220,7 @@ describe('Saki durable identity schemas', () => {
     expect(installationRecordSchema.safeParse({ ...INSTALLATION, id: IDS.host }).success).toBe(false)
     expect(installationRecordSchema.safeParse({
       ...INSTALLATION,
-      currentInstallationGenerationId: `storage-generation-${UUIDS.generation}`,
+      currentInstallationGenerationId: IDS.installationGeneration,
     }).success).toBe(false)
     expect(installationRecordSchema.safeParse({ ...INSTALLATION, currentHostId: IDS.principal }).success).toBe(false)
     expect(hostRecordSchema.safeParse({ ...HOST, id: IDS.principal }).success).toBe(false)
@@ -187,7 +243,7 @@ describe('Saki durable identity schemas', () => {
     expect(bootstrapChallengeRecordSchema.safeParse({ ...CHALLENGE, installationId: IDS.host }).success).toBe(false)
     expect(bootstrapChallengeRecordSchema.safeParse({
       ...CHALLENGE,
-      installationGenerationId: `storage-generation-${UUIDS.generation}`,
+      storageGenerationId: IDS.installationGeneration,
     }).success).toBe(false)
     expect(bootstrapChallengeRecordSchema.safeParse({ ...CHALLENGE, hostId: IDS.principal }).success).toBe(false)
     expect(bootstrapChallengeRecordSchema.safeParse({ ...CHALLENGE, principalId: IDS.grant }).success).toBe(false)
@@ -204,7 +260,7 @@ describe('Saki durable identity schemas', () => {
     expect(browserSessionRecordSchema.safeParse({ ...SESSION, installationId: IDS.host }).success).toBe(false)
     expect(browserSessionRecordSchema.safeParse({
       ...SESSION,
-      installationGenerationId: `storage-generation-${UUIDS.generation}`,
+      storageGenerationId: IDS.installationGeneration,
     }).success).toBe(false)
     expect(browserSessionRecordSchema.safeParse({ ...SESSION, principalId: IDS.grant }).success).toBe(false)
 

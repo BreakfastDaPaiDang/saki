@@ -2168,7 +2168,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/storage/storage-domain/src/index.ts:52`](../packages/storage/storage-domain/src/index.ts)
+来源：[`packages/storage/storage-domain/src/index.ts:76`](../packages/storage/storage-domain/src/index.ts)
 
 <a id="deepseek-aidsh-storage-json"></a>
 
@@ -2184,12 +2184,14 @@ export interface Config {
  * location explicitly.
  */
 export interface Config {
+  /** Storage registry name; defaults to `json`. */
+  backend?: string
   /** Directory holding one `<unit>.json` file per unit. */
   root: string
 }
 ```
 
-来源：[`packages/storage/storage-json/src/index.ts:27`](../packages/storage/storage-json/src/index.ts)
+来源：[`packages/storage/storage-json/src/index.ts:29`](../packages/storage/storage-json/src/index.ts)
 
 <a id="deepseek-aidsh-storage-sqlite"></a>
 
@@ -2200,36 +2202,29 @@ export interface Config {
 ```ts config-catalog
 /** Plugin configuration. */
 export interface Config {
+  /** Storage registry name; defaults to `sqlite`. */
+  backend?: string
   /**
    * Filesystem path to the SQLite database file. The special value `:memory:`
-   * opens an in-process database (tests). On filesystems with POSIX modes,
-   * missing directories and databases are created owner-only; existing path
-   * modes are preserved. Filesystem setup errors other than an existing
-   * database fail the open. The backend does not protect confidentiality or
-   * integrity when another principal can replace the database entry in its
-   * parent directory.
+   * opens an in-process database. Relative paths resolve at backend
+   * construction. Missing directories and files are created owner-only where
+   * POSIX modes apply; existing path modes are preserved.
    */
   path: string
   /**
-   * SQLite `journal_mode` pragma. `wal` (the default) suits local disks; pick
-   * a rollback-journal mode (`delete`/`truncate`/`persist`) on filesystems
-   * where WAL's shared-memory files do not work (network mounts). See
-   * {@link JournalMode}.
+   * Durable SQLite `journal_mode`. `wal` is the default for local disks;
+   * `delete`, `truncate`, and `persist` support filesystems where WAL shared
+   * memory is unsuitable. `memory` and `off` are excluded because they do not
+   * meet the backend durability guarantee.
    */
   journalMode?: JournalMode
 }
 
-/**
- * Journal modes the backend will run under. `wal` is the default; the
- * rollback-journal modes (`delete`/`truncate`/`persist`) exist for
- * filesystems where WAL's shared-memory files do not work (network mounts).
- * `memory`/`off` are excluded: dropping journal durability silently
- * contradicts the durability clause of the KV backend contract.
- */
+/** Durable SQLite journal modes supported by the writer. */
 export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 ```
 
-来源：[`packages/storage/storage-sqlite/src/index.ts:24`](../packages/storage/storage-sqlite/src/index.ts)
+来源：[`packages/storage/storage-sqlite/src/index.ts:38`](../packages/storage/storage-sqlite/src/index.ts)
 
 <a id="deepseek-aidsh-subagent-acp"></a>
 
@@ -3391,6 +3386,7 @@ export interface Config {
 由其他包作为库导入；`cordis.yml` 无法加载它们。
 
 - `@breakfastdapaidang/saki-control-plane`（[`packages/saki/control-plane/src/index.ts`](../packages/saki/control-plane/src/index.ts)）
+- `@breakfastdapaidang/saki-installation-maintenance`（[`packages/saki/installation-maintenance/src/index.ts`](../packages/saki/installation-maintenance/src/index.ts)）
 - `@deepseek-ai/dsh-acp-snapshot`（[`packages/test-support/acp-snapshot/src/index.ts`](../packages/test-support/acp-snapshot/src/index.ts)）
 - `@deepseek-ai/dsh-agent-loop-testkit`（[`packages/test-support/agent-loop-testkit/src/index.ts`](../packages/test-support/agent-loop-testkit/src/index.ts)）
 - `@deepseek-ai/dsh-anonymous-user-id`（[`packages/identity/anonymous-user-id/src/index.ts`](../packages/identity/anonymous-user-id/src/index.ts)）

@@ -12,6 +12,8 @@ Saki 0.1.0 开始持久化不可替代的控制面关系，而 DSH `storageDomai
 
 分两层实现 [ADR 0012](../../../../docs/adr/0012-forward-migrations-and-installation-maintenance.zh.md)。扩展 `packages/storage/storage-domain`，提供可选、后端无关的向前迁移机制。增加 `packages/saki/installation-maintenance` 作为 Saki 产品 Consumer，由它让控制面停稳、创建并校验 state generation、调用 domain migration、发布活动 generation、导出可迁移状态，并在替换 Host 上恢复 Installation。
 
+通用层已经由[回调作用域的关闭领域迁移决策](../../implemented/architecture/2026-08-25-callback-scoped-closed-domain-migration.zh.md)实现。Saki 专属 lease、manifest 选择、Recovery Backup、v2→v3 升级与崩溃恢复由[manifest 选择式 Installation 维护决策](../../implemented/architecture/2026-08-26-saki-manifest-selected-installation-maintenance.zh.md)实现。本提案继续保持活跃，用于加密 export、显式 Recovery Backup restore、retention 与替换 Host restore。
+
 把 Saki 权威控制面 domain 路由到专用 `storage-sqlite` backend 与数据库文件。其他 DSH domain 保留各自配置的路由和生命周期。JSON 仍用于 Saki 控制面 contract suite 和确实很小、便于人工阅读的 domain；生产 Saki 状态不会根据记录数量自动切换 backend。
 
 ### Domain migration 机制
@@ -20,27 +22,27 @@ Saki 0.1.0 开始持久化不可替代的控制面关系，而 DSH `storageDomai
 
 Migration 与[声明式派生 medium reset proposal](2026-07-28-storage-root-and-derived-medium-recovery.zh.md)是互斥 policy。派生 domain 可以丢弃并重建损坏或版本不匹配 medium；承诺兼容的权威 domain 必须迁移或拒绝。任何 domain 都不得在 migration 失败后回退为 reset。
 
-Domain 层通过通用存储 operation 检查磁盘 unit 版本，使用匹配的历史 descriptor 打开源端，加载并校验一份 detached snapshot，关闭源端，应用一个 migration step，并在继续前用下一个版本完整校验输出。Step 接收 JSON 兼容记录并返回新的 JSON 兼容记录；它不能获得 backend、Cordis context、credential resolver、clock、network client 或可变 domain handle。Migration 不发送普通 `domain/changed` event，因为没有活动 domain 观察 candidate。
+Domain 层通过通用存储 operation 预留并检查已关闭的磁盘 unit，使用匹配的历史 descriptor 读取并校验一份 detached snapshot，而且不打开或改变源端；随后应用一个 migration step，并在继续前用下一个版本完整校验输出。Step 接收 JSON 兼容记录并返回新的 JSON 兼容记录；其声明输入不包含 backend、Cordis context、credential resolver、clock、network client 或可变 domain handle。确定性与不产生外部 effect 是调用方义务，因为运行时无法检测 ambient import。Migration 不发送普通 `domain/changed` event，因为没有活动 domain 观察 candidate。
 
-最终 snapshot 写入全新目标 unit，并在发布前通过普通当前 `DomainSpec` 打开。现有运行时写入排序、持久化后 event 与记录 operation 保持不变。磁盘版本高于运行版本、步骤缺失、源数据无效、输出无效、表未知或目标 invariant failure 都会中止，而且不会改变选中的 generation。Migration API 向维护代码公开结构化版本与校验证据，不公开 backend-specific row。
+最终 snapshot 写入全新目标 unit，并在两项关闭 unit 预留仍然持有时通过当前 schema 读回。Saki 维护层随后会在发布前通过普通当前 `DomainSpec` 打开该候选并校验产品不变量。现有运行时写入排序、持久化后 event 与记录 operation 保持不变。磁盘版本高于运行版本、步骤缺失、源数据无效、输出无效、表未知或目标 invariant failure 都会中止，而且不会改变选中的 generation。Migration API 向维护代码公开结构化版本与校验证据，不公开 backend-specific row。
 
 ### Installation State Generation
 
-一个小型 Installation manifest 记录 Installation id、活动 generation id、Saki state format 版本、兼容 build identity 与完整性 reference。每个 generation 都是一份完整的专用 Saki 数据库。只有 manifest 选中的一个 generation 处于活动且可写状态；candidate 以及所有保留或已备份 generation 都保持关闭且不可变。
+一个小型 Installation manifest 记录 Installation id、活动 generation id、Saki state format 版本，以及对 generation 元数据的精确完整性 reference。Generation 元数据记录 creator-build 来源。每个 generation 都是一份完整的专用 Saki 数据库。只有 manifest 选中的一个 generation 处于活动且可写状态；candidate 以及所有保留或已备份 generation 都保持关闭且不可变。
 
 0.1.0 升级顺序如下：
 
 1. 进入维护模式，拒绝新的 mutation Intent，禁用自动化，排空 `storageDomain` 写入，并等待可以安全停稳的 Saki 自有 operation。无法停止的外部 operation 进入对账，而不能被报告为已完成。
-2. 关闭活动 Saki domain 与数据库。创建仅所有者可读的 Recovery Backup，其中记录活动 generation id、精确 state format 版本、兼容 build identity、长度和加密摘要，并在继续迁移前验证该 artifact。
+2. 关闭活动 Saki domain 与数据库。创建仅所有者可读的 Recovery Backup，其中记录活动 generation id、精确 state format 版本、源 build 来源、长度和加密摘要，并在继续迁移前验证该 artifact。
 3. 创建新的 candidate generation。调用通用 domain migration 依次通过每个连续版本，并使用当前 `DomainSpec` 打开结果数据库。
 4. 校验 Installation identity、引用完整性、唯一 admission owner、生命周期枚举、已占用 Execution Lease、非终态 Intent 与 Dispatch 的可恢复性，以及不存在 secret value。写入并 fsync candidate manifest，然后原子替换活动 manifest。
 5. 重新打开选中的 generation，执行普通启动恢复，并且只在恢复进入安全状态后接受新工作。保留的旧 generation 维持只读，直到 retention policy 允许删除。
 
-启动时，manifest 是唯一 selector。Candidate 文件、backup 时间戳或数值最大的 generation 都不会隐式获胜。Manifest 替换前崩溃时选择旧 generation，替换后崩溃时选择新 generation。如果 manifest 或选中 generation 未通过完整性检查，启动会进入维护恢复，绝不猜测另一个写入者。回滚会显式安装所记录的兼容 build 并恢复其 Recovery Backup；不支持反向迁移。
+启动时，manifest 是唯一 selector。Candidate 文件、backup 时间戳或数值最大的 generation 都不会隐式获胜。Manifest 替换前崩溃时选择旧 generation，替换后崩溃时选择新 generation。如果 manifest 或选中 generation 未通过完整性检查，启动会进入维护恢复，绝不猜测另一个写入者。回滚会显式安装声明状态 capability 能读取 backup 状态版本的 build，再恢复该 Recovery Backup；记录的源 build 只表示来源，可以帮助选择候选，但绝不是兼容性门禁。不支持反向迁移。
 
 ### Recovery Backup 与 Installation Export
 
-Recovery Backup 用于本地回滚，并保存一份精确 Saki Installation State Generation。它与兼容 Saki build 配对，不能被当作可迁移 Host transfer 声明。它只包含专用 Saki 数据库和维护元数据；Host 凭据 store 位于 generation 之外。虽然 Saki 数据库只包含 reference 而非原始凭据，仍必须使用仅所有者文件系统保护与已验证 hash。
+Recovery Backup 用于本地回滚，并保存一份精确 Saki Installation State Generation。其记录的状态版本决定 reader 兼容性，源 build 则只标识来源；该 artifact 不能被当作可迁移 Host transfer 声明。它只包含专用 Saki 数据库和维护元数据；Host 凭据 store 位于 generation 之外。虽然 Saki 数据库只包含 reference 而非原始凭据，仍必须使用仅所有者文件系统保护与已验证 hash。
 
 Installation Export 是包含认证加密 envelope、manifest 和内容 hash 的带版本可迁移 archive。实现会选择受维护 library，并记录格式、使用口令时的密钥派生参数、加密算法、archive 版本、源 build、源 state 版本、Installation id 与包含文件 inventory。Saki 不实现密码学原语。Export 首先产生一致的只读 generation snapshot，并为保留 Work Session 显式关联的每个 Session 使用现有 DSH Session export capability；它不直接复制活动 Session persistence medium。
 
@@ -77,7 +79,7 @@ Restore 绝不覆盖活动 Installation。它会解密、验证 hash 与版本�
 - 没有 migration registry 的 domain 仍拒绝所有版本不匹配；已登记连续 chain 会在 backend 支持 closed-unit materialization 时，通过 JSON 与 SQLite contract test 把每个保留源版本迁移到当前 schema；migration 与派生 medium reset 不能同时启用。
 - Migration test 会拒绝步骤缺口、向下迁移请求、较新磁盘数据、输入突变、无效源记录与目标记录、外部服务访问、未知表，以及最终校验前发布。
 - 在每个升级阶段进行 crash injection，证明恰好一个 manifest 所选 generation 可以 reopen，而且尚未发布时旧活动数据库保持逐 byte 相同。
-- Recovery Backup 验证会发现截断、digest 不匹配、build 不兼容、元数据缺失，以及把 artifact 用作可迁移 restore 的尝试。
+- Recovery Backup 验证会发现截断、digest 不匹配、不受支持的状态版本、元数据缺失，以及把 artifact 用作可迁移 restore 的尝试。
 - Installation Export 通过认证加密 round-trip Saki 记录与关联 Session export；扫描证明其中不存在明文凭据、DPAPI 密文、ambient value、可复用绝对路径权限、cache、worktree 内容与活动 process 状态。
 - 替换 restore 保留 Installation id、分配新 Host id、把 Resource Binding 标记为 `needs-rebind`、禁用 Host 绑定 Profile、对账未解决 Dispatch 与 Operation 状态，并在恢复完成前保持自动化禁用。
 - PowerShell 7 与 CLI flow 可以完成 backup、verify、upgrade、export、restore 到空目标，并在没有 Web UI 时生成机器可读失败证据。

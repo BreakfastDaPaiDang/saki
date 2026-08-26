@@ -5986,6 +5986,9 @@ importers:
       '@breakfastdapaidang/saki-host-api':
         specifier: workspace:^
         version: link:../host-api
+      '@breakfastdapaidang/saki-installation-maintenance':
+        specifier: workspace:^
+        version: link:../installation-maintenance
       '@deepseek-ai/dsh-app-boot':
         specifier: workspace:^
         version: link:../../boot/app-boot
@@ -5998,6 +6001,9 @@ importers:
       '@deepseek-ai/dsh-fs-local':
         specifier: workspace:^
         version: link:../../fs/fs-local
+      '@deepseek-ai/dsh-home-paths':
+        specifier: workspace:^
+        version: link:../../util/home-paths
       '@deepseek-ai/dsh-host-webserver':
         specifier: workspace:^
         version: link:../../host/webserver
@@ -6038,9 +6044,6 @@ importers:
       '@deepseek-ai/cordis-plugin-loader':
         specifier: workspace:^
         version: link:../../../vendor/loader
-      '@deepseek-ai/dsh-home-paths':
-        specifier: workspace:^
-        version: link:../../util/home-paths
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
@@ -6177,6 +6180,9 @@ importers:
       '@breakfastdapaidang/saki-execution-local':
         specifier: workspace:^
         version: link:../execution-local
+      '@breakfastdapaidang/saki-installation-maintenance':
+        specifier: workspace:^
+        version: link:../installation-maintenance
       '@deepseek-ai/cordis':
         specifier: workspace:^
         version: link:../../../vendor/cordis
@@ -6210,6 +6216,43 @@ importers:
       '@deepseek-ai/dsh-workspace':
         specifier: workspace:^
         version: link:../../workspace/workspace
+
+  packages/saki/installation-maintenance:
+    dependencies:
+      '@deepseek-ai/dsh-home-paths':
+        specifier: workspace:^
+        version: link:../../util/home-paths
+      koffi:
+        specifier: ^3.1.0
+        version: 3.1.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@breakfastdapaidang/saki-control-plane':
+        specifier: workspace:^
+        version: link:../control-plane
+      '@breakfastdapaidang/saki-execution':
+        specifier: workspace:^
+        version: link:../execution
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-brand':
+        specifier: workspace:^
+        version: link:../../util/brand
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-storage':
+        specifier: workspace:^
+        version: link:../../storage/storage
+      '@deepseek-ai/dsh-storage-domain':
+        specifier: workspace:^
+        version: link:../../storage/storage-domain
+      '@deepseek-ai/dsh-storage-sqlite':
+        specifier: workspace:^
+        version: link:../../storage/storage-sqlite
 
   packages/sandbox/sandbox:
     devDependencies:
@@ -7544,6 +7587,10 @@ importers:
         version: link:../../core/tools
 
   packages/storage/storage:
+    dependencies:
+      jsonc-parser:
+        specifier: ^3.3.1
+        version: 3.3.1
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
@@ -7570,6 +7617,12 @@ importers:
       '@deepseek-ai/dsh-storage':
         specifier: workspace:^
         version: link:../storage
+      '@deepseek-ai/dsh-storage-json':
+        specifier: workspace:^
+        version: link:../storage-json
+      '@deepseek-ai/dsh-storage-sqlite':
+        specifier: workspace:^
+        version: link:../storage-sqlite
 
   packages/storage/storage-json:
     dependencies:
@@ -13410,6 +13463,9 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
+  jsonc-parser@3.3.1:
+    resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
+
   jsx-ast-utils-x@0.1.0:
     resolution: {integrity: sha512-eQQBjBnsVtGacsG9uJNB8qOr3yA8rga4wAaGG1qRcBzSIvfhERLrWxMAM1hp5fcS6Abo8M4+bUBTekYR0qTPQw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
@@ -18692,6 +18748,8 @@ snapshots:
   json-stable-stringify-without-jsonify@1.0.1: {}
 
   json5@2.2.3: {}
+
+  jsonc-parser@3.3.1: {}
 
   jsx-ast-utils-x@0.1.0: {}
 

@@ -10,6 +10,7 @@ Saki-specific product semantics live under `packages/saki/<pkg>` and use the `@b
 | [`execution-local/`](execution-local/README.md) | Local filesystem, Git, subprocess, and Workspace-index Service Provider for Host inspection | provides `sakiHostExecution` |
 | [`control-plane/`](control-plane/README.md) | Installation provisioning, local Access authority, durable Project registration and Registry, and protected product Projections | `sakiControlPlane` |
 | [`host-api/`](host-api/README.md) | Dual-face `/saki` Host and browser transport adapter | `sakiHostClient` on the browser face |
+| [`installation-maintenance/`](installation-maintenance/README.md) | Installation-wide lease, manifest-selected state generations, verified Recovery Backups, and offline forward upgrades | — |
 | [`bundle/`](bundle/README.md) | Saki composition root and repository-local Host launcher | mounts the control plane, transport, and `saki-readiness` |
 
 Add a package only when a product slice has an independently testable role. Generic Harness capabilities stay in an existing DSH group; planned Saki packages are not placeholders to create in advance.

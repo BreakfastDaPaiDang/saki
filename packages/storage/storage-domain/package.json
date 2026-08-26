@@ -43,6 +43,8 @@
   "devDependencies": {
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
+    "@deepseek-ai/dsh-storage-json": "workspace:^",
+    "@deepseek-ai/dsh-storage-sqlite": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^"
   }
 }

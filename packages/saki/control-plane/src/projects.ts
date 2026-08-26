@@ -45,10 +45,26 @@ import type {
 type RegistryTable = KvTable<typeof DEVELOPMENT_PROJECT_REGISTRY_KEY, DevelopmentProjectRegistryRecord>
 type IntentTable = KvTable<SakiControlIntentId, RegistrationIntentRecord>
 type TerminalIntentPhase = 'confirmed' | 'conflict' | 'failure' | 'reconciliation-required'
+type ReadonlyTable<K extends string, V> = Pick<KvTable<K, V>, 'entries'>
+type RegistrationActorInvariant = Pick<RegistrationActor,
+| 'installationId'
+| 'hostId'
+| 'principalId'
+| 'principalRevision'
+| 'grantId'
+| 'grantRevision'>
+type RegistrationIntentInvariant =
+  Omit<RegistrationIntentRecord, 'schemaVersion' | 'payload'> & {
+    readonly payload: Omit<RegistrationIntentRecord['payload'], 'actor'> & {
+      readonly actor: RegistrationActorInvariant
+    }
+  }
 
-interface ValidatedDevelopmentProjectsState {
+interface ValidatedDevelopmentProjectsState<
+  I extends RegistrationIntentInvariant = RegistrationIntentRecord,
+> {
   readonly registry: DevelopmentProjectRegistryRecord | undefined
-  readonly intents: readonly RegistrationIntentRecord[]
+  readonly intents: readonly I[]
 }
 
 interface CommittedRegistration {
@@ -81,6 +97,50 @@ export interface DevelopmentProjectsOptions {
   readonly validateActorReference: (actor: RegistrationActor) => void
 }
 
+/**
+ * Parse and cross-check one complete durable Project Registry and Intent collection without effects.
+ * @param registryTable - Read-only Project Registry table.
+ * @param intentTable - Read-only registration Intent table.
+ * @param parseIntent - Version-specific parser for one already-opened Intent record.
+ * @param validateActorReference - Version-specific Actor reference validator.
+ * @returns detached validated state ordered for deterministic recovery.
+ */
+export function validateDevelopmentProjectsDurableState<
+  RK extends string,
+  I extends RegistrationIntentInvariant,
+>(
+  registryTable: ReadonlyTable<RK, DevelopmentProjectRegistryRecord>,
+  intentTable: ReadonlyTable<SakiControlIntentId, I>,
+  parseIntent: (value: I) => I,
+  validateActorReference: (actor: I['payload']['actor']) => void,
+): ValidatedDevelopmentProjectsState<I> {
+  const registryEntries = [...registryTable.entries()]
+  const intentEntries = [...intentTable.entries()]
+  const registryEntry = registryEntries.at(0)
+  if (registryEntries.length > 1
+    || (registryEntry !== undefined && !isRegistryKey(registryEntry[0]))) {
+    throw new Error('Saki Development Project Registry has an invalid singleton key')
+  }
+  const intents = intentEntries.map(([key, value]) => {
+    const parsed = parseIntent(value)
+    if (parsed.id !== key) throw new Error('Saki registration Intent id disagrees with its table key')
+    validateActorReference(parsed.payload.actor)
+    return parsed
+  })
+  const registry = registryEntry === undefined
+    ? undefined
+    : validateRegistry(registryEntry[1])
+  if (registry === undefined && intents.length > 0) {
+    throw new Error('Saki registration Intents exist without the Project Registry')
+  }
+  if (registry !== undefined) validateCrossRecords(registry, intents)
+  return {
+    registry,
+    intents: intents.toSorted((left, right) =>
+      left.createdAt - right.createdAt || String(left.id).localeCompare(String(right.id))),
+  }
+}
+
 /** Durable Development Project aggregate and recoverable registration state machine. */
 export class DevelopmentProjects {
   constructor(private readonly options: DevelopmentProjectsOptions) {}
@@ -90,31 +150,12 @@ export class DevelopmentProjects {
    * @returns immutable startup input for {@link initializeValidated}.
    */
   validateDurableState(): ValidatedDevelopmentProjectsState {
-    const registryEntries = [...this.options.registryTable.entries()]
-    const intentEntries = [...this.options.intentTable.entries()]
-    const registryEntry = registryEntries.at(0)
-    if (registryEntries.length > 1
-      || (registryEntry !== undefined && !isRegistryKey(registryEntry[0]))) {
-      throw new Error('Saki Development Project Registry has an invalid singleton key')
-    }
-    const intents = intentEntries.map(([key, value]) => {
-      const parsed = registrationIntentRecordSchema.parse(value)
-      if (parsed.id !== key) throw new Error('Saki registration Intent id disagrees with its table key')
-      this.options.validateActorReference(parsed.payload.actor)
-      return parsed
-    })
-    const registry = registryEntry === undefined
-      ? undefined
-      : validateRegistry(registryEntry[1])
-    if (registry === undefined && intents.length > 0) {
-      throw new Error('Saki registration Intents exist without the Project Registry')
-    }
-    if (registry !== undefined) validateCrossRecords(registry, intents)
-    return {
-      registry,
-      intents: intents.toSorted((left, right) =>
-        left.createdAt - right.createdAt || String(left.id).localeCompare(String(right.id))),
-    }
+    return validateDevelopmentProjectsDurableState(
+      this.options.registryTable,
+      this.options.intentTable,
+      value => registrationIntentRecordSchema.parse(value),
+      (actor) => { this.options.validateActorReference(actor) },
+    )
   }
 
   /**
@@ -179,7 +220,7 @@ export class DevelopmentProjects {
     const now = Date.now()
     const record = registrationIntentRecordSchema.parse({
       id: intent.intentId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       receiptId: receiptId(intent.intentId),
       payloadDigest: canonicalDigest('saki/register-development-project/v1', payload),
@@ -540,12 +581,13 @@ export class DevelopmentProjects {
         if (current === undefined || current.revision !== binding.revision) {
           throw new Error('Resource Binding changed during serialized startup revalidation')
         }
+        const { currentInspection: _previousInspection, ...currentWithoutInspection } = current
         const observedAt = Math.max(current.observedAt, Date.now())
         const nextBinding = resourceBindingRecordSchema.parse({
-          ...current,
+          ...currentWithoutInspection,
           revision: current.revision + 1,
           health,
-          currentInspection,
+          ...(currentInspection === undefined ? {} : { currentInspection }),
           observedAt,
         })
         const resourceBindings = [...registry.resourceBindings]
@@ -673,12 +715,9 @@ function validateRegistry(value: DevelopmentProjectRegistryRecord): DevelopmentP
 
 function validateCrossRecords(
   registry: DevelopmentProjectRegistryRecord,
-  intentValues: readonly RegistrationIntentRecord[],
+  intentValues: readonly RegistrationIntentInvariant[],
 ): void {
-  const intents = new Map(intentValues.map((value) => {
-    const parsed = registrationIntentRecordSchema.parse(value)
-    return [parsed.id, parsed] as const
-  }))
+  const intents = new Map(intentValues.map(value => [value.id, value] as const))
   for (const mapping of registry.intentMappings) {
     const intent = intents.get(mapping.intentId)
     if (intent === undefined) throw new Error(`registration mapping '${mapping.intentId}' has no Intent`)

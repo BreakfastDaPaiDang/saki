@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import Storage, { storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
-import { apply, DomainFacility, defineDomain, domainTable } from '../src/index.ts'
+import type { StorageBackend } from '@deepseek-ai/dsh-storage'
+import { apply, descriptorOf, DomainFacility, defineDomain, domainTable } from '../src/index.ts'
 import type { Config } from '../src/index.ts'
 import type { DomainChanged } from '../src/events.ts'
 import { MemoryMediaPool, MemoryStorageBackend } from './helpers/memory-backend.ts'
@@ -43,7 +44,10 @@ async function harness(options?: { pool?: MemoryMediaPool; config?: Partial<Conf
 describe('defineDomain', () => {
   it('rejects invalid names and versions loudly', () => {
     expect(() => defineDomain({ name: 'Bad-Name', version: 1, tables: {} })).toThrow(/must match/)
-    expect(() => defineDomain({ name: 'ok', version: 1.5, tables: {} })).toThrow(/non-negative integer/)
+    for (const version of [-0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => defineDomain({ name: 'ok', version, tables: {} }))
+        .toThrow(/non-negative safe integer/)
+    }
     expect(() => defineDomain({
       name: 'ok', version: 1, tables: { 'Bad Table': domainTable<string, Item>(itemSchema) },
     })).toThrow(/table name/)
@@ -131,7 +135,11 @@ describe('DomainFacility.open', () => {
   it('rejects a stored global that fails its schema with the global marker', async () => {
     const pool = new MemoryMediaPool()
     pool.versions.set('demo', 1)
-    pool.media.set('demo', { tables: new Map(), global: { theme: 42 } })
+    pool.hasGlobals.set('demo', true)
+    pool.media.set('demo', {
+      tables: new Map<string, Map<string, unknown>>([['items', new Map<string, unknown>()]]),
+      global: { theme: 42 },
+    })
     const { facility } = await harness({ pool })
     await expect(facility.open(spec)).rejects.toMatchObject({
       code: 'invalid-record',
@@ -277,6 +285,65 @@ describe('durability failure', () => {
     expect(domain.global.get()).toEqual({ theme: 'plain' })
     expect(pool.media.get('demo')!.global).toBeNull()
   })
+
+  it('poisons the domain without emitting after any published write reports uncertain durability', async () => {
+    for (const operation of ['put', 'update', 'delete', 'global'] as const) {
+      const pool = new MemoryMediaPool()
+      const { facility, changes } = await harness({ pool })
+      const domain = await facility.open(spec)
+      const table = domain.table('items')
+      await table.put('a', { label: 'old', count: 1 })
+      const seen = changes.length
+      pool.publishedFailureNextWrites = 1
+
+      const write = operation === 'put'
+        ? table.put('b', { label: 'put', count: 2 })
+        : operation === 'update'
+          ? table.update('a', current => ({ ...current, count: 3 }))
+          : operation === 'delete'
+            ? table.delete('a')
+            : domain.global.set({ theme: 'uncertain' })
+      await expect(write).rejects.toMatchObject({
+        name: 'StorageError', code: 'durability-uncertain', published: true,
+      })
+
+      expect(changes).toHaveLength(seen)
+      expect(() => table.get('a')).toThrow(expect.objectContaining({ code: 'write-outcome-uncertain' }))
+      expect(() => domain.global.get()).toThrow(expect.objectContaining({ code: 'write-outcome-uncertain' }))
+      await expect(table.put('later', { label: 'later', count: 4 }))
+        .rejects.toMatchObject({ code: 'write-outcome-uncertain' })
+
+      const medium = pool.media.get('demo')!
+      if (operation === 'put') expect(medium.tables.get('items')!.get('b')).toEqual({ label: 'put', count: 2 })
+      if (operation === 'update') expect(medium.tables.get('items')!.get('a')).toEqual({ label: 'old', count: 3 })
+      if (operation === 'delete') expect(medium.tables.get('items')!.has('a')).toBe(false)
+      if (operation === 'global') expect(medium.global).toEqual({ theme: 'uncertain' })
+      await expect(domain.close()).resolves.toBeUndefined()
+    }
+  })
+
+  it('poisons queued work after a backend reports an unknown commit outcome', async () => {
+    const pool = new MemoryMediaPool()
+    const { facility, changes } = await harness({ pool })
+    const domain = await facility.open(spec)
+    const table = domain.table('items')
+    const seen = changes.length
+    pool.unknownOutcomeNextWrites = 1
+
+    const ambiguous = table.put('first', { label: 'first', count: 1 })
+    const queued = table.put('queued', { label: 'queued', count: 2 })
+
+    await expect(ambiguous).rejects.toMatchObject({
+      name: 'StorageError', code: 'commit-outcome-unknown', publicationPossible: true,
+    })
+    await expect(queued).rejects.toMatchObject({ code: 'write-outcome-uncertain' })
+    expect(changes).toHaveLength(seen)
+    expect(pool.media.get('demo')!.tables.get('items')!.get('first'))
+      .toEqual({ label: 'first', count: 1 })
+    expect(pool.media.get('demo')!.tables.get('items')!.has('queued')).toBe(false)
+    expect(() => table.entries()).toThrow(expect.objectContaining({ code: 'write-outcome-uncertain' }))
+    await expect(domain.close()).resolves.toBeUndefined()
+  })
 })
 
 describe('global singleton', () => {
@@ -302,6 +369,49 @@ describe('global singleton', () => {
 })
 
 describe('close and lifecycle', () => {
+  it.each(['backend open', 'snapshot load'] as const)(
+    'waits for an admitted %s before closing the resulting domain',
+    async (stage) => {
+      const { facility, backend } = await harness()
+      const entered = Promise.withResolvers<undefined>()
+      const release = Promise.withResolvers<undefined>()
+      const originalOpen = backend.kv.open.bind(backend.kv)
+      vi.spyOn(backend.kv, 'open').mockImplementation(async (descriptor) => {
+        if (stage === 'backend open') {
+          entered.resolve(undefined)
+          await release.promise
+        }
+        const unit = await originalOpen(descriptor)
+        if (stage === 'snapshot load') {
+          const originalLoad = unit.loadAll.bind(unit)
+          unit.loadAll = async () => {
+            entered.resolve(undefined)
+            await release.promise
+            return await originalLoad()
+          }
+        }
+        return unit
+      })
+
+      const opening = facility.open(bareSpec)
+      await entered.promise
+      let closeSettled = false
+      const closing = facility.closeAll().then(() => { closeSettled = true })
+      await Promise.resolve()
+      expect(closeSettled).toBe(false)
+
+      release.resolve(undefined)
+      const domain = await opening
+      await closing
+      expect(facility.get('bare')).toBeUndefined()
+      await expect(domain.table('rows').put('late', { label: 'late', count: 1 }))
+        .rejects.toMatchObject({ code: 'closed' })
+
+      const reopened = await backend.kv.open(descriptorOf(bareSpec))
+      await reopened.close()
+    },
+  )
+
   it('close drains queued writes, then rejects reads and writes, and frees the name', async () => {
     const pool = new MemoryMediaPool()
     const { facility } = await harness({ pool })
@@ -338,6 +448,94 @@ describe('close and lifecycle', () => {
     expect(() => ctx.storage.form('domain')).toThrow(/not mounted/)
   })
 
+  it('waits for every domain close before reporting one close failure', async () => {
+    const ctx = new Context()
+    await ctx.plugin(Storage)
+    const delayed = Promise.withResolvers<undefined>()
+    const failure = new Error('first close failed')
+    let delayedClosed = false
+    ctx.storage.backend.register('closing', closeControlledBackend(async (name) => {
+      if (name === spec.name) throw failure
+      await delayed.promise
+      delayedClosed = true
+    }))
+    const facility = new DomainFacility(ctx, { backend: 'closing' })
+    await facility.open(spec)
+    await facility.open(bareSpec)
+
+    let settled = false
+    const closing = facility.closeAll()
+    void closing.then(
+      () => { settled = true },
+      () => { settled = true },
+    )
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(delayedClosed).toBe(false)
+
+    delayed.resolve(undefined)
+    await expect(closing).rejects.toBe(failure)
+    expect(delayedClosed).toBe(true)
+  })
+
+  it('aggregates domain close failures after every close settles', async () => {
+    const ctx = new Context()
+    await ctx.plugin(Storage)
+    const first = new Error('first close failed')
+    const second = new Error('second close failed')
+    ctx.storage.backend.register('closing', closeControlledBackend(async (name) => {
+      throw name === spec.name ? first : second
+    }))
+    const facility = new DomainFacility(ctx, { backend: 'closing' })
+    await facility.open(spec)
+    await facility.open(bareSpec)
+
+    const failure: unknown = await facility.closeAll().catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(AggregateError)
+    if (!(failure instanceof AggregateError)) throw failure
+    expect(failure.errors).toEqual([first, second])
+  })
+
+  it('unmounts the domain form when an owned domain close rejects', async () => {
+    const ctx = new Context()
+    await ctx.plugin(Storage)
+    const failure = new Error('unit close failed')
+    const backend = closeControlledBackend(async () => { throw failure })
+    ctx.storage.backend.register('closing', backend)
+    ctx.provide(storageBackendServiceKey('closing'), backend)
+    const DomainPlugin = await import('../src/index.ts')
+    const fiber = await ctx.plugin(DomainPlugin, { backend: 'closing' })
+    await ctx.storageDomain.open(bareSpec)
+
+    await expect(fiber.dispose()).resolves.toBeUndefined()
+    expect(() => ctx.storage.form('domain')).toThrow(/not mounted/)
+  })
+
+  it('still completes disposal when unmount reports a failure', async () => {
+    const ctx = new Context()
+    const disposalErrors: unknown[] = []
+    ctx.logger.error = ((error: unknown) => { disposalErrors.push(error) }) as typeof ctx.logger.error
+    await ctx.plugin(Storage)
+    const backend = new MemoryStorageBackend()
+    ctx.storage.backend.register('memory', backend)
+    ctx.provide(storageBackendServiceKey('memory'), backend)
+    const mount = ctx.storage.mount.bind(ctx.storage)
+    const failure = new Error('unmount failed after removal')
+    vi.spyOn(ctx.storage, 'mount').mockImplementation((name, form) => {
+      const unmount = mount(name, form)
+      return () => {
+        unmount()
+        throw failure
+      }
+    })
+    const DomainPlugin = await import('../src/index.ts')
+    const fiber = await ctx.plugin(DomainPlugin, { backend: 'memory' })
+
+    await expect(fiber.dispose()).resolves.toBeUndefined()
+    expect(disposalErrors).toContain(failure)
+    expect(() => ctx.storage.form('domain')).toThrow(/not mounted/)
+  })
+
   it('contains a throwing domain/changed listener without rejecting the committed write', async () => {
     const pool = new MemoryMediaPool()
     const { ctx, facility, changes } = await harness({ pool })
@@ -356,3 +554,21 @@ describe('close and lifecycle', () => {
     await expect(table.delete('a')).resolves.toBe(true)
   })
 })
+
+function closeControlledBackend(closeUnit: (name: string) => Promise<void>): StorageBackend {
+  return {
+    kv: {
+      open: async descriptor => ({
+        loadAll: async () => ({
+          tables: Object.fromEntries(descriptor.tables.map(table => [table, {}])),
+          global: null,
+        }),
+        putRecord: async () => {},
+        deleteRecord: async () => {},
+        setGlobal: async () => {},
+        close: () => closeUnit(descriptor.name),
+      }),
+    },
+    close: async () => {},
+  }
+}

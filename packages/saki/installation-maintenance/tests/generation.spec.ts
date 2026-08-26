@@ -1,0 +1,123 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
+import Storage from '@deepseek-ai/dsh-storage'
+import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
+import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
+import {
+  sakiControlPlaneV2DomainSpec,
+  type SakiBuildId,
+  type SakiInstallationId,
+  type SakiStorageGenerationId,
+} from '@breakfastdapaidang/saki-control-plane'
+import {
+  materializeFreshSakiGeneration,
+  migrateSakiV2Generation,
+  readClosedProvisioningSakiState,
+} from '../src/index.ts'
+
+const roots: string[] = []
+
+afterEach(async () => {
+  vi.restoreAllMocks()
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
+})
+
+async function root(): Promise<string> {
+  const value = await mkdtemp(join(tmpdir(), 'saki-generation-'))
+  roots.push(value)
+  return value
+}
+
+const identity = {
+  installationId: 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId,
+  storageGenerationId: 'storage-generation-00000000-0000-4000-8000-000000000002' as SakiStorageGenerationId,
+  createdByBuildId: 'saki-build-generation-test' as SakiBuildId,
+}
+
+describe('closed Saki generation creation', () => {
+  it('materializes a fresh current candidate with an exact seal', async () => {
+    const databasePath = join(await root(), 'state.sqlite')
+    const signal = new AbortController().signal
+
+    await materializeFreshSakiGeneration(databasePath, identity, signal)
+
+    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 3 }, signal))
+      .resolves.toMatchObject({ stateVersion: 3 })
+  })
+
+  it('migrates a different closed v2 database and materializes the current seal', async () => {
+    const directory = await root()
+    const sourcePath = join(directory, 'source.sqlite')
+    const targetPath = join(directory, 'target.sqlite')
+    const signal = new AbortController().signal
+    const context = new Context()
+    await context.plugin(Storage)
+    const source = new SqliteStorageBackend({ path: sourcePath, journalMode: 'delete' })
+    context.storage.backend.register('source', source)
+    const facility = new DomainFacility(context, { backend: 'source' })
+    await facility.materialize(sakiControlPlaneV2DomainSpec, {
+      tables: Object.fromEntries(Object.keys(sakiControlPlaneV2DomainSpec.tables).map(table => [table, {}])),
+      global: null,
+    }, { targetBackend: 'source', signal })
+    await source.close()
+    await context.fiber.dispose()
+
+    await migrateSakiV2Generation(sourcePath, targetPath, identity, signal)
+
+    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 3 }, signal))
+      .resolves.toMatchObject({ stateVersion: 3 })
+  })
+
+  it('propagates a failed fresh materialization after closing its resources', async () => {
+    const failure = new Error('materialization failed')
+    vi.spyOn(DomainFacility.prototype, 'materialize').mockRejectedValueOnce(failure)
+
+    await expect(materializeFreshSakiGeneration(
+      join(await root(), 'state.sqlite'),
+      identity,
+      AbortSignal.timeout(2_000),
+    )).rejects.toBe(failure)
+  })
+
+  it('propagates a lone cleanup failure after a successful materialization', async () => {
+    const failure = new Error('facility cleanup failed')
+    vi.spyOn(DomainFacility.prototype, 'closeAll').mockRejectedValueOnce(failure)
+
+    await expect(materializeFreshSakiGeneration(
+      join(await root(), 'state.sqlite'),
+      identity,
+      AbortSignal.timeout(2_000),
+    )).rejects.toBe(failure)
+  })
+
+  it('retains both an operation failure and a cleanup failure', async () => {
+    const operationFailure = new Error('materialization failed')
+    const cleanupFailure = new Error('facility cleanup failed')
+    vi.spyOn(DomainFacility.prototype, 'materialize').mockRejectedValueOnce(operationFailure)
+    vi.spyOn(DomainFacility.prototype, 'closeAll').mockRejectedValueOnce(cleanupFailure)
+
+    const result = materializeFreshSakiGeneration(
+      join(await root(), 'state.sqlite'),
+      identity,
+      AbortSignal.timeout(2_000),
+    )
+    await expect(result).rejects.toBeInstanceOf(AggregateError)
+    await expect(result).rejects.toMatchObject({ errors: [operationFailure, cleanupFailure] })
+  })
+
+  it('propagates a failed migration after closing both database backends', async () => {
+    const directory = await root()
+    const failure = new Error('migration failed')
+    vi.spyOn(DomainFacility.prototype, 'migrate').mockRejectedValueOnce(failure)
+
+    await expect(migrateSakiV2Generation(
+      join(directory, 'source.sqlite'),
+      join(directory, 'target.sqlite'),
+      identity,
+      AbortSignal.timeout(2_000),
+    )).rejects.toBe(failure)
+  })
+})

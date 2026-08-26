@@ -24,7 +24,9 @@ describe('Saki bundle package', () => {
       readFileSync(resolve(root, manifest.dsh!.bundle!.patch!), 'utf8'),
       { schema: entryListSchema },
     )
-    const insert = (parsed as Array<{ insert: Array<{ id: string; name: string; config?: unknown }> }>)[0]!.insert
+    const insert = (parsed as Array<{
+      insert: Array<{ id: string; name: string; config?: unknown; inject?: string[] }>
+    }>)[0]!.insert
     expect(insert.map(entry => [entry.id, entry.name])).toEqual([
       ['storage', '@deepseek-ai/dsh-storage'],
       ['storage-json', '@deepseek-ai/dsh-storage-json'],
@@ -47,7 +49,15 @@ describe('Saki bundle package', () => {
     })
     expect(insert.find(entry => entry.id === 'storage-domain')?.config).toEqual({
       backend: 'json',
-      routes: { saki_control_plane: 'sqlite' },
+      routes: {
+        saki_control_plane: 'sqlite',
+        saki_storage_generation: 'sqlite',
+      },
+    })
+    expect(insert.find(entry => entry.id === 'saki-storage-sqlite')?.config).toEqual({
+      backend: 'sqlite',
+      path: ':memory:',
+      journalMode: 'wal',
     })
     expect(insert.find(entry => entry.id === 'session-persistence-jsonl')?.config).toEqual({
       root: { __jsExpr: "dshHomePath('sessions')" },
@@ -58,6 +68,7 @@ describe('Saki bundle package', () => {
         __jsExpr: "(() => { const port = Number(process.env.SAKI_PORT ?? 43119); if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SAKI_PORT must be an integer from 1 through 65535'); return port })()",
       },
     })
+    expect(insert.find(entry => entry.id === 'saki-webserver')?.inject).toEqual(['sakiControlPlane'])
     expect(insert.find(entry => entry.id === 'saki-control-plane')?.config).toMatchObject({
       origin: { __jsExpr: "'http://127.0.0.1:' + String(Number(process.env.SAKI_PORT ?? 43119))" },
     })

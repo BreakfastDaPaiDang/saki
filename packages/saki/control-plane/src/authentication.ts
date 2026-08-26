@@ -2,8 +2,8 @@
 
 import type {
   SakiBrowserSessionId,
-  SakiInstallationGenerationId,
   SakiPrincipalId,
+  SakiStorageGenerationId,
 } from './types.ts'
 import { constantTimeTextEqual } from './secrets.ts'
 
@@ -17,13 +17,13 @@ export class SakiAuthenticationContext {
   /**
    * @param sessionId - authenticated Browser Session identity.
    * @param principalId - authenticated Principal identity.
-   * @param installationGenerationId - Installation Generation bound to the session.
+   * @param storageGenerationId - physical storage generation bound to the session.
    * @param requestToken - token freshly derived from the presented raw cookie.
    */
   constructor(
     readonly sessionId: SakiBrowserSessionId,
     readonly principalId: SakiPrincipalId,
-    readonly installationGenerationId: SakiInstallationGenerationId,
+    readonly storageGenerationId: SakiStorageGenerationId,
     requestToken: string,
   ) {
     requestTokens.set(this, requestToken)

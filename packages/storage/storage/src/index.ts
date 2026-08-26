@@ -10,10 +10,31 @@ import { StorageError } from './error.ts'
 import { BackendRegistry } from './registry.ts'
 
 export { BackendRegistry } from './registry.ts'
-export { StorageError } from './error.ts'
+export {
+  isCommitOutcomeUnknownStorageError,
+  isPublishedStorageError,
+  StorageError,
+} from './error.ts'
 export type { StorageErrorCode } from './error.ts'
-export { UNIT_NAME_RE } from './backend.ts'
-export type { StorageBackend, KvFacet, KvUnit, KvUnitDescriptor } from './backend.ts'
+export {
+  assertLosslessJsonValue,
+  cloneLosslessJsonValue,
+  isPlainJsonObject,
+  parseLosslessJsonValue,
+  stringifyLosslessJsonValue,
+} from './json.ts'
+export { ClosedUnitReservations, isKvUnitVersion, UNIT_NAME_RE } from './backend.ts'
+export type {
+  StorageBackend,
+  KvFacet,
+  KvClosedUnitLease,
+  KvClosedUnitMaterialization,
+  KvClosedUnitInspection,
+  KvClosedUnitOperations,
+  KvUnit,
+  KvUnitDescriptor,
+  KvUnitSnapshot,
+} from './backend.ts'
 
 /**
  * Derive the Cordis lifecycle service that one named backend plugin provides.

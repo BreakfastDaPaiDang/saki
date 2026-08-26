@@ -12,41 +12,30 @@ import {
   projectInspectionWorkspaceIndependentMaterial,
   projectSelectionInspectionSchema,
 } from '@breakfastdapaidang/saki-execution'
+import {
+  sakiBootstrapChallengeIdSchema as bootstrapChallengeId,
+  sakiBrowserSessionIdSchema as browserSessionId,
+  sakiControlIntentIdSchema as controlIntentId,
+  sakiDevelopmentProjectIdSchema as developmentProjectId,
+  sakiGrantIdSchema as grantId,
+  sakiHostIdSchema as hostId,
+  sakiInstallationAccessIdSchema as installationAccessId,
+  sakiInstallationGenerationIdSchema as installationGenerationId,
+  sakiInstallationIdSchema as installationId,
+  sakiIntentReceiptIdSchema as intentReceiptId,
+  sakiPrincipalIdSchema as principalId,
+  sakiResourceBindingIdSchema as resourceBindingId,
+  sakiStorageGenerationIdSchema as storageGenerationId,
+} from './ids.ts'
 import type {
-  SakiBootstrapChallengeId,
-  SakiBrowserSessionId,
   SakiGrantId,
   SakiHostId,
   SakiInstallationAccessId,
-  SakiInstallationGenerationId,
   SakiInstallationId,
   SakiPrincipalId,
   SakiControlIntentId,
-  SakiDevelopmentProjectId,
-  SakiIntentReceiptId,
-  SakiResourceBindingId,
 } from './types.ts'
 
-const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-const CHILD_ORDINAL_PATTERN = '(?:0|[1-9][0-9]*)'
-const brandedId = <T extends string>(prefix: string) => z.string()
-  .regex(new RegExp(`^${prefix}-${UUID_PATTERN}$`))
-  .transform(value => value as T)
-const accessChildId = <T extends string>(kind: 'challenge' | 'session') => z.string()
-  .regex(new RegExp(`^access-${UUID_PATTERN}:${kind}:${CHILD_ORDINAL_PATTERN}$`))
-  .transform(value => value as T)
-const installationId = brandedId<SakiInstallationId>('installation')
-const installationGenerationId = brandedId<SakiInstallationGenerationId>('installation-generation')
-const hostId = brandedId<SakiHostId>('host')
-const principalId = brandedId<SakiPrincipalId>('principal')
-const grantId = brandedId<SakiGrantId>('grant')
-const installationAccessId = brandedId<SakiInstallationAccessId>('access')
-const bootstrapChallengeId = accessChildId<SakiBootstrapChallengeId>('challenge')
-const browserSessionId = accessChildId<SakiBrowserSessionId>('session')
-const developmentProjectId = brandedId<SakiDevelopmentProjectId>('project')
-const resourceBindingId = brandedId<SakiResourceBindingId>('binding')
-const controlIntentId = brandedId<SakiControlIntentId>('intent')
-const intentReceiptId = brandedId<SakiIntentReceiptId>('receipt')
 const revision = z.number().int().nonnegative()
 const ordinal = z.number().int().nonnegative()
 const timestamp = z.number().int().nonnegative()
@@ -59,8 +48,8 @@ export const CONTROL_STATE_KEY = 'control-state' as const
 /** Stable key of the singleton Development Project Registry aggregate. */
 export const DEVELOPMENT_PROJECT_REGISTRY_KEY = 'development-project-registry' as const
 
-/** Provisioning owner that records child identities before any child write. */
-export const controlStateRecordSchema = z.object({
+/** Historical v2 provisioning owner with Foundation-owned generation identity. */
+export const historicalControlStateRecordSchema = z.object({
   schemaVersion: z.literal(1),
   revision,
   phase: z.enum(['provisioning', 'ready']),
@@ -72,17 +61,27 @@ export const controlStateRecordSchema = z.object({
   installationAccessId,
 }).strict()
 
+/** Provisioning owner that records child identities before any child write. */
+export const controlStateRecordSchema = historicalControlStateRecordSchema.omit({
+  initialInstallationGenerationId: true,
+}).extend({ schemaVersion: z.literal(2) })
+
 /** Parsed durable control-state record. */
 export type ControlStateRecord = z.infer<typeof controlStateRecordSchema>
 
-/** Independently revisioned Saki Installation entity. */
-export const installationRecordSchema = z.object({
+/** Historical v2 Installation entity with the current generation reference. */
+export const historicalInstallationRecordSchema = z.object({
   id: installationId,
   revision,
   state: z.enum(['active', 'retired']),
   currentInstallationGenerationId: installationGenerationId,
   currentHostId: hostId,
 }).strict()
+
+/** Independently revisioned Saki Installation entity. */
+export const installationRecordSchema = historicalInstallationRecordSchema.omit({
+  currentInstallationGenerationId: true,
+})
 
 /** Parsed durable Installation entity. */
 export type InstallationRecord = z.infer<typeof installationRecordSchema>
@@ -132,8 +131,8 @@ export const grantRecordSchema = z.object({
 /** Parsed durable Grant entity. */
 export type GrantRecord = z.infer<typeof grantRecordSchema>
 
-/** One digest-only Bootstrap Challenge entry. */
-export const bootstrapChallengeRecordSchema = z.object({
+/** Historical v2 Bootstrap Challenge tied to an Installation State Generation. */
+export const historicalBootstrapChallengeRecordSchema = z.object({
   id: bootstrapChallengeId,
   ordinal,
   revision,
@@ -150,11 +149,16 @@ export const bootstrapChallengeRecordSchema = z.object({
   browserSessionId: browserSessionId.optional(),
 }).strict()
 
+/** One digest-only Bootstrap Challenge entry. */
+export const bootstrapChallengeRecordSchema = historicalBootstrapChallengeRecordSchema
+  .omit({ installationGenerationId: true })
+  .extend({ storageGenerationId })
+
 /** Parsed durable Bootstrap Challenge entry. */
 export type BootstrapChallengeRecord = z.infer<typeof bootstrapChallengeRecordSchema>
 
-/** One digest-only Browser Session entry. */
-export const browserSessionRecordSchema = z.object({
+/** Historical v2 Browser Session tied to an Installation State Generation. */
+export const historicalBrowserSessionRecordSchema = z.object({
   id: browserSessionId,
   ordinal,
   revision,
@@ -167,6 +171,11 @@ export const browserSessionRecordSchema = z.object({
   state: z.enum(['active', 'expired', 'revoked']),
   terminalAt: timestamp.optional(),
 }).strict()
+
+/** One digest-only Browser Session entry. */
+export const browserSessionRecordSchema = historicalBrowserSessionRecordSchema
+  .omit({ installationGenerationId: true })
+  .extend({ storageGenerationId })
 
 /** Parsed durable Browser Session entry. */
 export type BrowserSessionRecord = z.infer<typeof browserSessionRecordSchema>
@@ -183,8 +192,8 @@ export const bootstrapCompletionRecordSchema = z.object({
 /** Parsed durable initial-bootstrap completion summary. */
 export type BootstrapCompletionRecord = z.infer<typeof bootstrapCompletionRecordSchema>
 
-/** Single versioned Installation Access aggregate owner record. */
-export const installationAccessRecordSchema = z.object({
+/** Historical v2 Installation Access aggregate. */
+export const historicalInstallationAccessRecordSchema = z.object({
   id: installationAccessId,
   schemaVersion: z.literal(1),
   revision,
@@ -196,9 +205,16 @@ export const installationAccessRecordSchema = z.object({
     version: z.literal(1),
     domain: z.literal('saki/browser-request-token'),
   }).strict(),
+  challenges: z.array(historicalBootstrapChallengeRecordSchema),
+  sessions: z.array(historicalBrowserSessionRecordSchema),
+}).strict()
+
+/** Single versioned Installation Access aggregate owner record. */
+export const installationAccessRecordSchema = historicalInstallationAccessRecordSchema.extend({
+  schemaVersion: z.literal(2),
   challenges: z.array(bootstrapChallengeRecordSchema),
   sessions: z.array(browserSessionRecordSchema),
-}).strict()
+})
 
 /** Parsed durable Installation Access aggregate. */
 export type InstallationAccessRecord = z.infer<typeof installationAccessRecordSchema>
@@ -314,8 +330,8 @@ export const registerDevelopmentProjectIntentSchema = z.object({
   confirmedBaseline: inheritedChangeBaselineSchema,
 }).strict()
 
-/** Server-derived authority evidence retained in the immutable Intent digest. */
-export const registrationActorSchema = z.object({
+/** Historical v2 registration authority evidence tied to an Installation State Generation. */
+export const historicalRegistrationActorSchema = z.object({
   installationId,
   installationGenerationId,
   hostId,
@@ -325,20 +341,19 @@ export const registrationActorSchema = z.object({
   grantRevision: revision,
 }).strict()
 
+/** Server-derived authority evidence retained in the immutable Intent digest. */
+export const registrationActorSchema = historicalRegistrationActorSchema
+  .omit({ installationGenerationId: true })
+  .extend({ storageGenerationId })
+
 /** Parsed server-derived registration authority evidence. */
 export type RegistrationActor = z.infer<typeof registrationActorSchema>
 
-/** Persisted recoverable registration Intent. */
-export const registrationIntentRecordSchema = z.object({
+const registrationIntentRecordSharedShape = {
   id: controlIntentId,
-  schemaVersion: z.literal(1),
   revision,
   receiptId: intentReceiptId,
   payloadDigest: digest,
-  payload: z.object({
-    intent: registerDevelopmentProjectIntentSchema,
-    actor: registrationActorSchema,
-  }).strict(),
   inspection: projectSelectionInspectionSchema,
   workspaceInspection: projectSelectionInspectionSchema.optional(),
   phase: z.enum([
@@ -360,7 +375,34 @@ export const registrationIntentRecordSchema = z.object({
   ]).optional(),
   createdAt: timestamp,
   updatedAt: timestamp,
-}).strict().superRefine((value, context) => {
+} as const
+
+const historicalRegistrationIntentRecordBaseSchema = z.object({
+  ...registrationIntentRecordSharedShape,
+  schemaVersion: z.literal(1),
+  payload: z.object({
+    intent: registerDevelopmentProjectIntentSchema,
+    actor: historicalRegistrationActorSchema,
+  }).strict(),
+}).strict()
+
+const registrationIntentRecordBaseSchema = z.object({
+  ...registrationIntentRecordSharedShape,
+  schemaVersion: z.literal(2),
+  payload: z.object({
+    intent: registerDevelopmentProjectIntentSchema,
+    actor: registrationActorSchema,
+  }).strict(),
+}).strict()
+
+type RegistrationIntentRecordForValidation =
+  | z.infer<typeof historicalRegistrationIntentRecordBaseSchema>
+  | z.infer<typeof registrationIntentRecordBaseSchema>
+
+function refineRegistrationIntent(
+  value: RegistrationIntentRecordForValidation,
+  context: z.RefinementCtx,
+): void {
   const terminal = value.phase === 'conflict'
     || value.phase === 'failure'
     || value.phase === 'reconciliation-required'
@@ -468,7 +510,14 @@ export const registrationIntentRecordSchema = z.object({
     && value.terminalReason !== 'observation') {
     context.addIssue({ code: 'custom', message: 'reconciliation phase has an invalid terminal reason' })
   }
-})
+}
+
+/** Historical v2 recoverable registration Intent. */
+export const historicalRegistrationIntentRecordSchema = historicalRegistrationIntentRecordBaseSchema
+  .superRefine(refineRegistrationIntent)
+
+/** Persisted recoverable registration Intent. */
+export const registrationIntentRecordSchema = registrationIntentRecordBaseSchema.superRefine(refineRegistrationIntent)
 
 /** Parsed durable registration Intent. */
 export type RegistrationIntentRecord = z.infer<typeof registrationIntentRecordSchema>
@@ -476,7 +525,7 @@ export type RegistrationIntentRecord = z.infer<typeof registrationIntentRecordSc
 /** Exact Saki control-plane domain declaration. */
 export const sakiControlPlaneDomainSpec = defineDomain({
   name: 'saki_control_plane',
-  version: 2,
+  version: 3,
   tables: {
     control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
     installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),

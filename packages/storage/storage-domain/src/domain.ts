@@ -5,11 +5,19 @@
  * FIRST, then mutates memory, then emits `domain/changed` — a rejected
  * backend write leaves memory untouched (no divergence between reads and the
  * medium), and events carry values that equal the in-memory state at
- * emission, in write order.
+ * emission, in write order. A backend result with uncertain publication or
+ * durability poisons the domain without changing memory or emitting: the
+ * initiating call preserves the backend error, while queued and later reads
+ * and writes fail until the caller closes the handle, recreates the affected
+ * backend (or restarts), and reopens the domain.
  * @module @deepseek-ai/dsh-storage-domain/src/domain
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import {
+  isCommitOutcomeUnknownStorageError,
+  isPublishedStorageError,
+} from '@deepseek-ai/dsh-storage'
 import type { KvUnit } from '@deepseek-ai/dsh-storage'
 import { DomainError } from './error.ts'
 import type { DomainSpec, DomainGlobalSpec, TableKeyOf, TableValueOf } from './spec.ts'
@@ -124,6 +132,8 @@ interface TableHost {
   readonly unit: KvUnit
   /** Queue one job on the domain's single write chain. */
   enqueue<T>(job: () => Promise<T>): Promise<T>
+  /** Apply a write only after the backend confirms its outcome and durability. */
+  finishWrite<T>(write: () => Promise<void>, apply: () => T): Promise<T>
   /** Throw `closed` once the domain has fully closed (reads stay valid while draining). */
   assertReadable(): void
   /** Emit `domain/changed` for one durably landed write. */
@@ -152,6 +162,8 @@ export class DomainImpl {
   /** Set when close finishes (chain drained, unit closed): reads reject from here on. */
   private closed = false
   private disposal?: Promise<void>
+  /** The first write whose outcome requires backend-recreation recovery. */
+  private uncertainWrite?: Error
 
   /**
    * @param ctx - Context that carries `domain/changed` emissions.
@@ -178,6 +190,7 @@ export class DomainImpl {
       domainName: spec.name,
       unit,
       enqueue: job => this.enqueue(job),
+      finishWrite: (write, adopt) => this.finishWrite(write, adopt),
       assertReadable: () => { this.assertReadable() },
       emitChanged: (change) => { this.emitChanged(change) },
     }
@@ -191,11 +204,13 @@ export class DomainImpl {
           this.assertReadable()
           return this.globalValue
         },
-        set: value => this.enqueue(async () => {
-          await this.unit.setGlobal(value)
-          this.globalValue = value
-          this.emitChanged({ domain: this.name, table: '', key: '', operation: 'put', value })
-        }),
+        set: value => this.enqueue(() => this.finishWrite(
+          () => this.unit.setGlobal(value),
+          () => {
+            this.globalValue = value
+            this.emitChanged({ domain: this.name, table: '', key: '', operation: 'put', value })
+          },
+        )),
       }
     }
   }
@@ -264,14 +279,40 @@ export class DomainImpl {
     if (this.disposing) {
       return Promise.reject(new DomainError('closed', `domain '${this.name}' is closed`))
     }
-    const result = this.chain.then(job)
+    const result = this.chain.then(async () => {
+      this.assertWriteOutcomeKnown()
+      return await job()
+    })
     this.chain = result.then(noop, noop)
     return result
+  }
+
+  private async finishWrite<T>(write: () => Promise<void>, adopt: () => T): Promise<T> {
+    try {
+      await write()
+    } catch (error) {
+      if (isPublishedStorageError(error) || isCommitOutcomeUnknownStorageError(error)) {
+        this.uncertainWrite ??= error
+      }
+      throw error
+    }
+    return adopt()
   }
 
   private assertReadable(): void {
     if (this.closed) {
       throw new DomainError('closed', `domain '${this.name}' is closed`)
+    }
+    this.assertWriteOutcomeKnown()
+  }
+
+  private assertWriteOutcomeKnown(): void {
+    if (this.uncertainWrite !== undefined) {
+      throw new DomainError(
+        'write-outcome-uncertain',
+        `domain '${this.name}' cannot serve data after a write outcome became uncertain; close it, recreate the affected backend, and reopen`,
+        { cause: this.uncertainWrite },
+      )
     }
   }
 }
@@ -305,11 +346,13 @@ class KvTableImpl<K extends string, V> implements KvTable<K, V> {
   }
 
   put(key: K, value: V): Promise<void> {
-    return this.host.enqueue(async () => {
-      await this.host.unit.putRecord(this.tableName, key, value)
-      this.records.set(key, value)
-      this.emitPut(key, value)
-    })
+    return this.host.enqueue(() => this.host.finishWrite(
+      () => this.host.unit.putRecord(this.tableName, key, value),
+      () => {
+        this.records.set(key, value)
+        this.emitPut(key, value)
+      },
+    ))
   }
 
   delete(key: K): Promise<boolean> {
@@ -317,15 +360,19 @@ class KvTableImpl<K extends string, V> implements KvTable<K, V> {
       // Existence is decided at this job's chain slot, not at call time: an
       // earlier queued put of the same key makes this delete observe it.
       if (!this.records.has(key)) return false
-      await this.host.unit.deleteRecord(this.tableName, key)
-      this.records.delete(key)
-      this.host.emitChanged({
-        domain: this.host.domainName,
-        table: this.tableName,
-        key,
-        operation: 'deleted',
-      })
-      return true
+      return await this.host.finishWrite(
+        () => this.host.unit.deleteRecord(this.tableName, key),
+        () => {
+          this.records.delete(key)
+          this.host.emitChanged({
+            domain: this.host.domainName,
+            table: this.tableName,
+            key,
+            operation: 'deleted',
+          })
+          return true
+        },
+      )
     })
   }
 
@@ -338,10 +385,14 @@ class KvTableImpl<K extends string, V> implements KvTable<K, V> {
         )
       }
       const next = fn(this.records.get(key) as V)
-      await this.host.unit.putRecord(this.tableName, key, next)
-      this.records.set(key, next)
-      this.emitPut(key, next)
-      return next
+      return await this.host.finishWrite(
+        () => this.host.unit.putRecord(this.tableName, key, next),
+        () => {
+          this.records.set(key, next)
+          this.emitPut(key, next)
+          return next
+        },
+      )
     })
   }
 

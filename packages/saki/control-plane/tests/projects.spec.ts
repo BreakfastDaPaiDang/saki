@@ -35,7 +35,6 @@ import SakiControlPlane, {
   type SakiAuthenticationContext,
   type SakiControlIntentId,
   type SakiControlPlaneModule,
-  type SakiInstallationGenerationId,
 } from '../src/index.ts'
 import { SAKI_PROJECT_PROJECTION_FIXTURES } from '../src/fixtures.ts'
 import { resolveSakiAuthentication, takeSakiCookieHeader } from '../src/host.ts'
@@ -50,6 +49,12 @@ import type {
   RegistrationIntentRecord,
   ResourceBindingRecord,
 } from '../src/spec.ts'
+import {
+  HISTORICAL_STORAGE_GENERATION_ID,
+  provideSakiInstallationState,
+  TEST_SAKI_INSTALLATION_STATE,
+  type TestSakiInstallationState,
+} from './installation-state.ts'
 
 const run = promisify(execFile)
 const roots: string[] = []
@@ -100,12 +105,23 @@ async function repository(parent: string, name: string): Promise<string> {
   return root
 }
 
-async function context(durable: DurablePaths, baselineMaxFileBytes = 1024 * 1024): Promise<Context> {
+async function context(
+  durable: DurablePaths,
+  baselineMaxFileBytes = 1024 * 1024,
+  state?: TestSakiInstallationState,
+): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(Storage)
   await ctx.plugin(StorageJson, { root: durable.json })
   await ctx.plugin(StorageSqlite, { path: durable.sqlite, journalMode: 'delete' })
-  await ctx.plugin(StorageDomain, { backend: 'json', routes: { saki_control_plane: 'sqlite' } })
+  await ctx.plugin(StorageDomain, {
+    backend: 'json',
+    routes: {
+      saki_control_plane: 'sqlite',
+      saki_storage_generation: 'sqlite',
+    },
+  })
+  await provideSakiInstallationState(ctx, state)
   ctx.provide('sessionPersistence', {
     list: () => Promise.resolve([]),
     load: () => Promise.reject(new Error('no sessions')),
@@ -155,8 +171,12 @@ async function seedWorkspace(durable: DurablePaths, id: string, path: string): P
   }
 }
 
-async function start(durable: DurablePaths, baselineMaxFileBytes = 1024 * 1024): Promise<Harness> {
-  const ctx = await context(durable, baselineMaxFileBytes)
+async function start(
+  durable: DurablePaths,
+  baselineMaxFileBytes = 1024 * 1024,
+  state?: TestSakiInstallationState,
+): Promise<Harness> {
+  const ctx = await context(durable, baselineMaxFileBytes, state)
   return await mountControlPlane(ctx)
 }
 
@@ -210,19 +230,6 @@ async function editSaki(durable: DurablePaths, operation: (domain: SakiDomain) =
     await domain.close()
     await ctx.fiber.dispose()
   }
-}
-
-function durableState(domain: SakiDomain): unknown {
-  return structuredClone({
-    control: [...domain.table('control_state').entries()],
-    installations: [...domain.table('installations').entries()],
-    hosts: [...domain.table('hosts').entries()],
-    principals: [...domain.table('principals').entries()],
-    grants: [...domain.table('grants').entries()],
-    access: [...domain.table('installation_access').entries()],
-    registry: [...domain.table('development_project_registry').entries()],
-    intents: [...domain.table('registration_intents').entries()],
-  })
 }
 
 async function inspected(harness: Harness, directoryLocator: string) {
@@ -365,30 +372,42 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       projection: { projects: [{ id: first.ok ? first.receipt.projectId : 'missing' }] },
     })
     const workspaceMedium = JSON.parse(await readFile(join(durable.json, 'workspace.json'), 'utf8')) as {
-      unit: { name: string; version: number }
+      unit: { name: string; version: number; formatVersion: number; hasGlobal: boolean }
       global: { archivedSessionIds: unknown }
     }
-    expect(workspaceMedium.unit).toEqual({ name: 'workspace', version: 2 })
+    expect(workspaceMedium.unit).toEqual({ name: 'workspace', version: 2, formatVersion: 1, hasGlobal: true })
     expect(workspaceMedium.global).toHaveProperty('archivedSessionIds')
     const database = new DatabaseSync(durable.sqlite)
     try {
       expect(database.prepare('SELECT name, version FROM units ORDER BY name').all()).toEqual([
-        { name: 'saki_control_plane', version: 2 },
+        { name: 'saki_control_plane', version: 3 },
+        { name: 'saki_storage_generation', version: 1 },
       ])
       const tables = database.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
       ).all().map(row => (row as { name: string }).name)
-      expect(tables).toEqual([
-        'u_saki_control_plane_control_state',
-        'u_saki_control_plane_development_project_registry',
-        'u_saki_control_plane_grants',
-        'u_saki_control_plane_hosts',
-        'u_saki_control_plane_installation_access',
-        'u_saki_control_plane_installations',
-        'u_saki_control_plane_principals',
-        'u_saki_control_plane_registration_intents',
+      expect(tables.filter(name => !name.startsWith('u2_'))).toEqual([
         'unit_globals',
+        'unit_tables',
         'units',
+      ])
+      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(9)
+      expect(database.prepare(
+        'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
+      ).all('saki_control_plane')).toEqual([
+        { table_name: 'control_state' },
+        { table_name: 'development_project_registry' },
+        { table_name: 'grants' },
+        { table_name: 'hosts' },
+        { table_name: 'installation_access' },
+        { table_name: 'installations' },
+        { table_name: 'principals' },
+        { table_name: 'registration_intents' },
+      ])
+      expect(database.prepare(
+        'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
+      ).all('saki_storage_generation')).toEqual([
+        { table_name: 'storage_generation' },
       ])
     } finally {
       database.close()
@@ -1231,14 +1250,21 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     await harness.close()
 
     const restarted = await context(durable)
+    const currentInspection = fixtureInspection(
+      inspection.projection.hostId,
+      canonicalRepo,
+      '7',
+      restarted.workspaceRegistry.list().find(workspace => workspace.path === canonicalRepo)?.id,
+    )
+    const { fingerprint, ...currentProjection } = currentInspection.projection
+    void fingerprint
+    const refreshedInspection = signedInspection({
+      ...currentProjection,
+      displayLocation: 'repository-revalidated',
+    }, currentInspection.trusted)
     const inspect = vi.spyOn(restarted.sakiHostExecution, 'inspectProjectSelection')
       .mockImplementation(async (input) => {
-        if (input.directoryLocator === canonicalRepo) return { ok: true, inspection: fixtureInspection(
-          inspection.projection.hostId,
-          canonicalRepo,
-          '7',
-          restarted.workspaceRegistry.list().find(workspace => workspace.path === canonicalRepo)?.id,
-        ) }
+        if (input.directoryLocator === canonicalRepo) return { ok: true, inspection: refreshedInspection }
         if (input.directoryLocator === alias) return { ok: true, inspection: unrelatedInspection }
         return { ok: false, reason: 'unavailable' }
       })
@@ -1251,7 +1277,10 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         resourceBindings: [{
           health: 'active',
           registrationInspection: { trusted: { canonicalWorktreePath: canonicalRepo } },
-          currentInspection: { trusted: { canonicalWorktreePath: canonicalRepo } },
+          currentInspection: {
+            projection: { displayLocation: 'repository-revalidated' },
+            trusted: { canonicalWorktreePath: canonicalRepo },
+          },
         }],
       })
     } finally {
@@ -1607,50 +1636,37 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     await harness.close()
   })
 
-  it('validates every Intent and known Actor generation before recovering the first nonterminal Intent', async () => {
+  it('retains historical storage-generation attribution without granting it current authority', async () => {
     const durable = await paths()
-    const firstRepo = await repository(durable.root, 'first-recovery')
-    const secondRepo = await repository(durable.root, 'later-corrupt')
-    const firstId = 'intent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as SakiControlIntentId
-    const secondId = 'intent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' as SakiControlIntentId
-    const harness = await start(durable)
-    const firstSelection = await inspected(harness, firstRepo)
-    expect((await harness.control.submit(
-      harness.authentication,
-      intent(firstId, 'First recovery', firstRepo, 0, firstSelection),
+    const repo = await repository(durable.root, 'historical-attribution')
+    const initialHarness = await start(durable)
+    const request = intent(
+      'intent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'Historical attribution',
+      repo,
+      0,
+      await inspected(initialHarness, repo),
+    )
+    const intents = liveSakiDomain(initialHarness.ctx).table('registration_intents')
+    const put = intents.put.bind(intents)
+    vi.spyOn(intents, 'put').mockImplementationOnce(async (key, value) => {
+      await put(key, value)
+      throw new Error('simulated response loss after prepared Intent')
+    })
+    await expect(initialHarness.control.submit(
+      initialHarness.authentication,
+      request,
       new AbortController().signal,
-    )).ok).toBe(true)
-    const secondSelection = await inspected(harness, secondRepo)
-    expect((await harness.control.submit(
-      harness.authentication,
-      intent(secondId, 'Later corrupt', secondRepo, 1, secondSelection),
-      new AbortController().signal,
-    )).ok).toBe(true)
-    await harness.close()
+    )).rejects.toThrow('simulated response loss')
+    expect(intents.get(request.intentId)?.payload.actor.storageGenerationId)
+      .toBe(TEST_SAKI_INSTALLATION_STATE.storageGenerationId)
+    await initialHarness.close()
 
     await editSaki(durable, async (domain) => {
-      await domain.table('registration_intents').update(firstId, (current) => {
-        const {
-          projectId: _projectId,
-          resourceBindingId: _resourceBindingId,
-          registryRevision: _registryRevision,
-          ...withoutCommit
-        } = current
-        return registrationIntentRecordSchema.parse({
-          ...withoutCommit,
-          revision: current.revision + 1,
-          phase: 'workspace-observed',
-          updatedAt: current.updatedAt + 1,
-        })
-      })
-      await domain.table('registration_intents').update(secondId, (current) => {
+      await domain.table('registration_intents').update(request.intentId, (current) => {
         const payload = {
           ...current.payload,
-          actor: {
-            ...current.payload.actor,
-            installationGenerationId:
-              'installation-generation-abababab-abab-4bab-8bab-abababababab' as SakiInstallationGenerationId,
-          },
+          actor: { ...current.payload.actor, storageGenerationId: HISTORICAL_STORAGE_GENERATION_ID },
         }
         return registrationIntentRecordSchema.parse({
           ...current,
@@ -1661,23 +1677,23 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         })
       })
     })
-    let before: unknown
-    await editSaki(durable, async (domain) => { before = durableState(domain) })
 
-    const failed = await context(durable)
-    const inspect = vi.spyOn(failed.sakiHostExecution, 'inspectProjectSelection')
-    const list = vi.spyOn(failed.workspaceRegistry, 'list')
-    const create = vi.spyOn(failed.workspaceRegistry, 'create')
+    const recovered = await context(durable)
+    const inspect = vi.spyOn(recovered.sakiHostExecution, 'inspectProjectSelection')
+    const create = vi.spyOn(recovered.workspaceRegistry, 'create')
+    const fiber = await recovered.plugin(SakiControlPlane, CONTROL_CONFIG)
     try {
-      await expect(failed.plugin(SakiControlPlane, CONTROL_CONFIG))
-        .rejects.toThrow('registration Intent actor reference is inconsistent')
+      expect(liveSakiDomain(recovered).table('registration_intents').get(request.intentId)).toMatchObject({
+        phase: 'failure',
+        terminalReason: 'authority',
+        payload: { actor: { storageGenerationId: HISTORICAL_STORAGE_GENERATION_ID } },
+      })
       expect(inspect).not.toHaveBeenCalled()
-      expect(list).not.toHaveBeenCalled()
       expect(create).not.toHaveBeenCalled()
     } finally {
-      await failed.fiber.dispose()
+      await fiber.dispose()
+      await recovered.fiber.dispose()
     }
-    await editSaki(durable, async (domain) => { expect(durableState(domain)).toEqual(before) })
   })
 
   it('rejects each inconsistent Resource Binding relation at the durable schema', async () => {
@@ -2838,14 +2854,14 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     })
   })
 
-  it('rechecks the Installation generation after initial inspection before preparing an Intent', async () => {
+  it('rechecks the current Grant after initial inspection before preparing an Intent', async () => {
     const durable = await paths()
-    const repo = await repository(durable.root, 'generation-barrier')
+    const repo = await repository(durable.root, 'grant-barrier')
     const harness = await start(durable)
     const selection = await inspected(harness, repo)
     const request = intent(
       'intent-14141414-1414-4414-8414-141414141414',
-      'Generation barrier',
+      'Grant barrier',
       repo,
       0,
       selection,
@@ -2867,13 +2883,12 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     )
     await started.promise
     const domain = liveSakiDomain(harness.ctx)
-    const installation = [...domain.table('installations').entries()][0]
-    if (installation === undefined) throw new Error('Installation fixture is absent')
-    await domain.table('installations').update(installation[0], current => ({
+    const control = domain.table('control_state').get('control-state')
+    if (control === undefined) throw new Error('control-state fixture is absent')
+    await domain.table('grants').update(control.hostOperatorGrantId, current => ({
       ...current,
       revision: current.revision + 1,
-      currentInstallationGenerationId:
-        'installation-generation-14141414-1414-4414-8414-141414141414' as SakiInstallationGenerationId,
+      state: 'revoked',
     }))
     release.resolve(undefined)
 

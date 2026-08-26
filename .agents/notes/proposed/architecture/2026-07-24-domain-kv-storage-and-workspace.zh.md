@@ -4,6 +4,8 @@ Status: proposed
 
 [English](2026-07-24-domain-kv-storage-and-workspace.md) | 中文
 
+> 范围更新（2026-08-25）：[callback-scoped closed-domain migration](../../implemented/architecture/2026-08-25-callback-scoped-closed-domain-migration.zh.md)与当前[存储子系统文档](../../../../docs/subsystems/storage.zh.md)现已接管通用迁移、closed-unit 物化、精确 JSON 准入及当前 provider 行为。下文保留的 provider 布局和错误清单只是初始提案，并非当前权威。本 Note 仍为 workspace、session 删除、log facet 及其他独立未来工作保持 active。
+
 ## 问题
 
 host 侧唯一的持久化面是 session 事件日志（`packages/session/session-persistence`：仅追加、一 session 一文件）。凡是"不属于某个 session"的信息就没有落盘处，眼下有两个真实需求：
@@ -39,7 +41,7 @@ host 侧唯一的持久化面是 session 事件日志（`packages/session/sessio
 
 **多后端同时挂载**；域→后端的选择是 `dsh-domain` 的配置（见下），不是全局二选一。disposer 语义 = 从表中摘名；后端自身的 close 由后端包的 effect 闭包负责，顺序先摘名后 close。
 
-一个后端是一个**介质 owner**（一棵文件树 root / 一个 db 文件），通过**数据形状 facet** 暴露原语——本期只有 `kv`；session 迁移期加 `log`（见迁移节）。facet 是可选成员，缺席即该后端不支持该形状，解析时 fail loud。`kv` facet 的原语面：`open(descriptor)`（descriptor = 名字/版本/表名清单/有无 global，名字与表名限 `^[a-z][a-z0-9_]*$` 兼作文件名与 SQL 表名段）返回 unit，unit 提供 `loadAll` / `putRecord` / `deleteRecord`（缺 key 为 no-op）/ `setGlobal` / `close`（幂等）；值对后端是不透明 JSON。规范正文（含逐方法 JSDoc）在 `packages/storage/storage/src/backend.ts`。
+一个后端是一个**介质 owner**（一棵文件树 root / 一个 db 文件），通过**数据形状 facet** 暴露原语——本期只有 `kv`；session 迁移期加 `log`（见迁移节）。facet 是可选成员，缺席即该后端不支持该形状，解析时 fail loud。`kv` facet 的初始原语面是 `open(descriptor)` 加 unit 的读、写和 close。精确 JSON 准入及当前生命周期面由 `packages/storage/storage/src/backend.ts` 和当前存储文档规定。
 
 后端约定（共享约定测试逐条断言，两后端同套件）：
 
@@ -48,12 +50,12 @@ host 侧唯一的持久化面是 session 事件日志（`packages/session/sessio
 3. 持久性：写原语 resolve 后进程崩溃再 open，`loadAll` 必须反映该写入。
 4. 后端不承诺 unit 内写并发序——**调用方负责串行**；后端只保证单次调用原子（JSON 整文件替换 / SQLite 单语句）。
 5. `deleteRecord` 幂等；`putRecord` 覆写。
-6. 任意字符串 key / 任意 JSON 值安全（key 不进文件路径，结构性质）。
+6. 任意字符串 key / 每个可精确表示的 JSON 值安全（key 不进文件路径，结构性质）。
 7. `close` 幂等；close 后任何操作 → `StorageError('closed')`。
 
-错误词汇是带 code 判别的 `StorageError`，码表：`backend-not-found` / `form-not-mounted` / `duplicate-backend` / `duplicate-mount` / `version-mismatch` / `malformed-medium` / `closed`（`packages/storage/storage/src/error.ts`）。
+当前带 code 判别的 `StorageError` 词汇以 `packages/storage/storage/src/error.ts` 为规范；本提案的初始清单已由当前存储文档取代。
 
-### `dsh-storage-json`
+### 初始 `dsh-storage-json` 提案（历史基线）
 
 Config 仅 `root`（必填无默认，schemastery）；apply 在 `ctx.effect()` 里注册后端 `json`，disposer 先摘名再 `backend.close()`。
 
@@ -71,7 +73,7 @@ Config 仅 `root`（必填无默认，schemastery）；apply 在 `ctx.effect()` 
 - 写入：任何一次写原语 = 内存态全量序列化 → temp 写 + fsync → rename 原子发布（Windows 变体照抄 session-persistence-jsonl 的 win32 路径）。内存态是权威，盘是投影。
 - `loadAll`：open 时整文件 parse；缺 `unit` 头、tables 非对象等 → `malformed-medium`。文件不存在 = 空单元，首写才落盘。
 
-### `dsh-storage-sqlite`
+### 初始 `dsh-storage-sqlite` 提案（历史基线）
 
 Config 为 `path`（必填，`':memory:'` 允许）+ `journalMode`（枚举，默认 `wal`）；apply 同 json，注册后端 `sqlite`。
 
@@ -159,7 +161,7 @@ export interface KvTable<K extends string, V> {
 - **记录是纯数据**：可直接 JSON 序列化的不可变 POJO；`get`/`entries` 返回值不得原地改（TypeScript readonly 投影，不做运行时冻结）。带行为的领域对象属于消费方包。
 - **写串行**：域内一条 promise 链，`put`/`delete`/`update`/`global.set` 全排队；`update` 的 fn 在链上执行，并发不交错。不做 active-record（取出可变对象自动落盘——落盘时机不可控，与整域原子覆写冲突）。
 - **版本默认 fail loud**：磁盘版本与 spec 不同时直接报错，除非 owning domain 通过 [Saki migration proposal](2026-08-18-saki-forward-migrations-and-installation-maintenance.zh.md)登记完整可选向前序列。没有该序列时不迁移也不重建。
-- **变更事件**：每次写落盘 resolve 后 emit `domain/changed`（`@mode emit`），逐条发、不带旧值（对齐仓库"新快照 + 操作判别"惯例，范本 `goal/changed`）；payload `DomainChanged` 是 put/deleted 判别联合——域名 + 表名 + key（global 变更两者为 `''`）+ operation，put 支带新快照 value、deleted 支无 value（`packages/storage/storage-domain/src/events.ts`）。此为下期 RPC 推帧的事件源。错误词汇 `DomainError`，码表：`already-open` / `facet-unsupported` / `invalid-record`（带 `{ table, key }`）/ `missing-key` / `closed`。
+- **变更事件**：每次写落盘 resolve 后 emit `domain/changed`（`@mode emit`），逐条发、不带旧值（对齐仓库"新快照 + 操作判别"惯例，范本 `goal/changed`）；payload `DomainChanged` 是 put/deleted 判别联合——域名 + 表名 + key（global 变更两者为 `''`）+ operation，put 支带新快照 value、deleted 支无 value（`packages/storage/storage-domain/src/events.ts`）。此为下期 RPC 推帧的事件源。当前 `DomainError` 词汇以 `packages/storage/storage-domain/src/error.ts` 和当前存储文档为规范。
 
 ### Future work：session 侧删除（设计定案，本期不实施）
 

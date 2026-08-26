@@ -62,6 +62,7 @@
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
     "@breakfastdapaidang/saki-execution": "workspace:^",
     "@breakfastdapaidang/saki-execution-local": "workspace:^",
+    "@breakfastdapaidang/saki-installation-maintenance": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
     "@deepseek-ai/dsh-fs-local": "workspace:^",

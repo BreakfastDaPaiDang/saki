@@ -85,4 +85,17 @@ describe('workspace publication constraints', () => {
       'lib/types/**/*.d.ts',
     ])
   })
+
+  it('publishes the Saki maintenance shared operation chunk', () => {
+    expect(expectedProductPackageFiles({
+      name: '@breakfastdapaidang/saki-installation-maintenance',
+      bin: { 'saki-maintenance': 'lib/bin.js' },
+    })).toEqual([
+      'lib/index.js',
+      'lib/invariant.js',
+      'lib/bin.js',
+      'lib/maintenance-operations-*.js',
+      'lib/types/**/*.d.ts',
+    ])
+  })
 })

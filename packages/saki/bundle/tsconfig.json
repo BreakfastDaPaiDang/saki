@@ -21,10 +21,16 @@
       "path": "../../boot/cmdline"
     },
     {
+      "path": "../../util/home-paths"
+    },
+    {
       "path": "../../runtime-diagnostics/invariants"
     },
     {
       "path": "../control-plane"
+    },
+    {
+      "path": "../installation-maintenance"
     },
     {
       "path": "../host-api/tsconfig.host.json"
