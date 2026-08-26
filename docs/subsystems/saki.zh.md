@@ -59,7 +59,7 @@ query<K extends keyof SakiQueryMap>( authentication: SakiAuthenticationContext, 
  * @returns a confirmed receipt or typed `denied`, `unavailable`, `conflict`,
  * `failure`, or `reconciliation-required` result with only phase-valid receipt fields.
  */
-submit( authentication: SakiAuthenticationContext, intent: SakiIntentInput, signal: AbortSignal, ): Promise<SakiIntentReceipt>
+submit<I extends SakiIntent>( authentication: SakiAuthenticationContext, intent: I, signal: AbortSignal, ): Promise<SakiIntentReceipt<I['type']>>
 
 /**
  * Subscribe to contained post-commit Projection invalidations.
@@ -70,6 +70,32 @@ onChanged(listener: (keys: readonly SakiProjectionKey[]) => void): SakiChangedDi
 ```
 
 Source: [`packages/saki/control-plane/src/service.ts`](../../packages/saki/control-plane/src/service.ts)
+
+<a id="ctxsakigithub--sakigithub-abstract-seam"></a>
+
+### `ctx.sakiGitHub` — `SakiGitHub` (abstract seam)
+
+GitHub capability. Providers own authentication, pagination, response admission, and rate observations. Consumers receive only complete detached facts or a GitHubProviderError.
+
+```ts cordis-catalog
+/**
+ * Perform one typed provider-neutral GitHub read.
+ * @param request - declaration-map read request.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns one detached validated GitHub fact.
+ */
+abstract read<K extends keyof GitHubReadMap>( request: GitHubReadMap[K]['request'], signal: AbortSignal, ): Promise<GitHubReadMap[K]['result']>
+
+/**
+ * Perform one complete scan; pagination cursors and partial results never cross this interface.
+ * @param request - declaration-map scan request including caller priority.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns one detached complete validated scan candidate.
+ */
+abstract scan<K extends keyof GitHubScanMap>( request: GitHubScanMap[K]['request'], signal: AbortSignal, ): Promise<GitHubScanMap[K]['result']>
+```
+
+Source: [`packages/saki/github/src/index.ts`](../../packages/saki/github/src/index.ts)
 
 <a id="ctxsakihostexecution--sakihostexecution-abstract-seam"></a>
 

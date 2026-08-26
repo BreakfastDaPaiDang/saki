@@ -2,6 +2,7 @@
 
 import { lstat, mkdir } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
+import { sakiStateCapability } from '@breakfastdapaidang/saki-control-plane'
 import {
   generationManifestReference,
   generationManifestSchema,
@@ -113,7 +114,7 @@ export async function publishSakiGenerationCandidate(
   const generationBytes = renderGenerationManifest(
     identity.installationId,
     identity.storageGenerationId,
-    3,
+    sakiStateCapability.writable.version,
     identity.createdByBuildId,
   )
   requireDurable(
@@ -131,7 +132,7 @@ export async function publishSakiGenerationCandidate(
   const generation: GenerationManifest = generationManifestSchema.parse({
     formatVersion: 1,
     ...identity,
-    stateVersion: 3,
+    stateVersion: sakiStateCapability.writable.version,
     databaseLeaf: 'state.sqlite',
   })
   const reference = generationManifestReference(identity.storageGenerationId, generationBytes)

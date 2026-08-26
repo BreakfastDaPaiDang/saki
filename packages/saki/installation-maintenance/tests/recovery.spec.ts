@@ -55,8 +55,9 @@ import {
   createSakiRecoveryBackupId,
   durableFileTemporaryPath,
   generationManifestReference,
+  LEGACY_B03_BUILD_ID,
   materializeFreshSakiGeneration,
-  migrateSakiV2Generation,
+  migrateSakiGeneration,
   publishSakiGenerationCandidate,
   operationJournalReference,
   PENDING_OPERATION_LEAF,
@@ -82,11 +83,17 @@ const CANDIDATE_ID =
 const OTHER_GENERATION_ID =
   'storage-generation-00000000-0000-4000-8000-000000000099' as SakiStorageGenerationId
 const BUILD_ID = 'saki-build-recovery-test' as SakiBuildId
-const OLD_BUILD_ID = 'saki-build-b03-test' as SakiBuildId
+const OLD_BUILD_ID = LEGACY_B03_BUILD_ID
 const HISTORICAL_GENERATION_ID =
   'installation-generation-00000000-0000-4000-8000-000000000009'
 const OLD_STORAGE_GENERATION_ID =
   'storage-generation-00000000-0000-4000-8000-000000000009' as SakiStorageGenerationId
+const V2_UPGRADE_SOURCE = {
+  sourceStateVersion: 2,
+  sourceStorageGenerationId: OLD_STORAGE_GENERATION_ID,
+  sourceBuildId: OLD_BUILD_ID,
+} as const
+const V3_UPGRADE_SOURCE = { ...V2_UPGRADE_SOURCE, sourceStateVersion: 3 } as const
 const HOST_ID = 'host-00000000-0000-4000-8000-000000000003'
 const PRINCIPAL_ID = 'principal-00000000-0000-4000-8000-000000000004'
 const GRANT_ID = 'grant-00000000-0000-4000-8000-000000000005'
@@ -226,6 +233,7 @@ async function createJournalBackup(
     readonly installationId?: SakiInstallationId
     readonly storageGenerationId?: SakiStorageGenerationId
     readonly stateVersion?: 2 | 3
+    readonly sourceBuildId?: SakiBuildId
   } = {},
 ): Promise<string> {
   const source = await captureSqliteArtifactSet(sourcePath, signal)
@@ -240,7 +248,7 @@ async function createJournalBackup(
         installationId: metadata.installationId ?? INSTALLATION_ID,
         storageGenerationId: metadata.storageGenerationId ?? OLD_STORAGE_GENERATION_ID,
         stateVersion: metadata.stateVersion ?? 2,
-        sourceBuildId: OLD_BUILD_ID,
+        sourceBuildId: metadata.sourceBuildId ?? OLD_BUILD_ID,
       },
       sakiStateCapability,
       signal,
@@ -308,6 +316,7 @@ async function prepareInterruptedUpgrade(
   root: string,
   publishAuthority: boolean,
   signal: AbortSignal,
+  sourceIdentity: typeof V2_UPGRADE_SOURCE | typeof V3_UPGRADE_SOURCE = V2_UPGRADE_SOURCE,
 ): Promise<{
   readonly legacyPath: string
   readonly candidatePath: string
@@ -319,6 +328,7 @@ async function prepareInterruptedUpgrade(
     kind: 'upgrade',
     operationId: createSakiMaintenanceOperationId(),
     installationId: INSTALLATION_ID,
+    ...sourceIdentity,
     backupId: createSakiRecoveryBackupId(),
     candidateStorageGenerationId: CANDIDATE_ID,
   })
@@ -336,7 +346,7 @@ async function prepareInterruptedUpgrade(
     },
     signal,
     async (databasePath) => {
-      await migrateSakiV2Generation(
+      await migrateSakiGeneration(
         legacyPath,
         databasePath,
         {
@@ -787,6 +797,7 @@ describe('active Saki operation recovery', () => {
       kind: 'upgrade',
       operationId: createSakiMaintenanceOperationId(),
       installationId: INSTALLATION_ID,
+      ...V2_UPGRADE_SOURCE,
       backupId: createSakiRecoveryBackupId(),
       candidateStorageGenerationId: CANDIDATE_ID,
     })
@@ -800,6 +811,40 @@ describe('active Saki operation recovery', () => {
     expect(await exists(join(root, ...journal.candidate.finalLeaf.split('/')))).toBe(false)
   })
 
+  it.each([
+    ['state version', { ...V2_UPGRADE_SOURCE, sourceStateVersion: 3 as const }],
+    ['storage generation', {
+      ...V2_UPGRADE_SOURCE,
+      sourceStorageGenerationId: OTHER_GENERATION_ID,
+    }],
+    ['build provenance', { ...V2_UPGRADE_SOURCE, sourceBuildId: BUILD_ID }],
+  ])('retains a pre-commit manifest-less upgrade whose journal has the wrong source %s', async (
+    _subject,
+    sourceIdentity,
+  ) => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(5_000)
+    const legacyPath = join(root, 'legacy.sqlite')
+    await materializeHistorical(legacyPath, signal)
+    const journal = createOperationJournal({
+      kind: 'upgrade',
+      operationId: createSakiMaintenanceOperationId(),
+      installationId: INSTALLATION_ID,
+      ...sourceIdentity,
+      backupId: createSakiRecoveryBackupId(),
+      candidateStorageGenerationId: CANDIDATE_ID,
+    })
+    if (journal.kind !== 'upgrade') throw new Error('test journal changed kind')
+    await publishActiveOperation(root, journal, signal)
+
+    await expect(recoverActiveSakiOperation(root, legacyPath, signal))
+      .rejects.toMatchObject({ code: 'recovery-required' })
+
+    await expect(readActiveOperation(root, signal)).resolves.toMatchObject({
+      journal: { operationId: journal.operationId },
+    })
+  })
+
   it('propagates an unexpected error while checking for the journal backup', async () => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(5_000)
@@ -809,6 +854,7 @@ describe('active Saki operation recovery', () => {
       kind: 'upgrade',
       operationId: createSakiMaintenanceOperationId(),
       installationId: INSTALLATION_ID,
+      ...V2_UPGRADE_SOURCE,
       backupId: createSakiRecoveryBackupId(),
       candidateStorageGenerationId: CANDIDATE_ID,
     })
@@ -856,6 +902,7 @@ describe('active Saki operation recovery', () => {
       kind: 'upgrade',
       operationId: createSakiMaintenanceOperationId(),
       installationId: INSTALLATION_ID,
+      ...V2_UPGRADE_SOURCE,
       backupId: createSakiRecoveryBackupId(),
       candidateStorageGenerationId: CANDIDATE_ID,
     })
@@ -868,10 +915,37 @@ describe('active Saki operation recovery', () => {
     await expect(readFile(selected.databasePath)).resolves.not.toHaveLength(0)
   })
 
+  it('retains a pre-commit manifest-selected upgrade whose journal has the wrong source build', async () => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(5_000)
+    await publishHistoricalGeneration(root, signal)
+    const journal = createOperationJournal({
+      kind: 'upgrade',
+      operationId: createSakiMaintenanceOperationId(),
+      installationId: INSTALLATION_ID,
+      ...V2_UPGRADE_SOURCE,
+      sourceBuildId: BUILD_ID,
+      backupId: createSakiRecoveryBackupId(),
+      candidateStorageGenerationId: CANDIDATE_ID,
+    })
+    if (journal.kind !== 'upgrade') throw new Error('test journal changed kind')
+    await publishActiveOperation(root, journal, signal)
+
+    await expect(recoverActiveSakiOperation(
+      root,
+      join(root, 'unused-legacy.sqlite'),
+      signal,
+    )).rejects.toMatchObject({ code: 'recovery-required' })
+
+    await expect(readActiveOperation(root, signal)).resolves.toMatchObject({
+      journal: { operationId: journal.operationId },
+    })
+  })
+
   it.each([
     ['provisioning', 'provisioning', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
     ['another Installation', 'ready', OTHER_INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
-    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 3],
+    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 4],
     ['the candidate generation', 'ready', INSTALLATION_ID, CANDIDATE_ID, 2],
   ] as const)(
     'retains an upgrade when published authority selects %s',
@@ -882,6 +956,7 @@ describe('active Saki operation recovery', () => {
         kind: 'upgrade',
         operationId: createSakiMaintenanceOperationId(),
         installationId: INSTALLATION_ID,
+        ...V2_UPGRADE_SOURCE,
         backupId: createSakiRecoveryBackupId(),
         candidateStorageGenerationId: CANDIDATE_ID,
       })
@@ -916,6 +991,7 @@ describe('active Saki operation recovery', () => {
       kind: 'upgrade',
       operationId: createSakiMaintenanceOperationId(),
       installationId: INSTALLATION_ID,
+      ...V2_UPGRADE_SOURCE,
       backupId: createSakiRecoveryBackupId(),
       candidateStorageGenerationId: CANDIDATE_ID,
     })
@@ -951,6 +1027,7 @@ describe('active Saki operation recovery', () => {
         kind: 'upgrade',
         operationId: createSakiMaintenanceOperationId(),
         installationId: INSTALLATION_ID,
+        ...V2_UPGRADE_SOURCE,
         backupId: createSakiRecoveryBackupId(),
         candidateStorageGenerationId: CANDIDATE_ID,
       })
@@ -980,6 +1057,7 @@ describe('active Saki operation recovery', () => {
       kind: 'upgrade',
       operationId: createSakiMaintenanceOperationId(),
       installationId: INSTALLATION_ID,
+      ...V2_UPGRADE_SOURCE,
       backupId: createSakiRecoveryBackupId(),
       candidateStorageGenerationId: CANDIDATE_ID,
     })
@@ -1006,6 +1084,40 @@ describe('active Saki operation recovery', () => {
       .rejects.toMatchObject({ code: 'recovery-required' })
 
     expect(await exists(prepared.candidatePath)).toBe(true)
+    await expect(readActiveOperation(root, signal)).resolves.toBeDefined()
+  })
+
+  it.each([
+    ['state version', { stateVersion: 3 as const }],
+    ['storage generation', { storageGenerationId: OTHER_GENERATION_ID }],
+    ['source build', { sourceBuildId: BUILD_ID }],
+  ])('retains a committed v2 upgrade whose Recovery Backup has the wrong %s', async (_subject, metadata) => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(10_000)
+    const prepared = await prepareInterruptedUpgrade(root, true, signal)
+    const active = await readActiveOperation(root, signal)
+    if (active?.journal.kind !== 'upgrade') throw new Error('test upgrade journal is missing')
+    await rm(prepared.backupPath, { recursive: true })
+    await createJournalBackup(root, active.journal, prepared.legacyPath, signal, metadata)
+
+    await expect(recoverActiveSakiOperation(root, prepared.legacyPath, signal))
+      .rejects.toMatchObject({ code: 'recovery-required' })
+
+    expect(await exists(prepared.candidatePath)).toBe(true)
+    expect(await exists(prepared.backupPath)).toBe(true)
+    await expect(readActiveOperation(root, signal)).resolves.toBeDefined()
+  })
+
+  it('retains a committed upgrade whose v3 journal has a v2 Recovery Backup', async () => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(10_000)
+    const prepared = await prepareInterruptedUpgrade(root, true, signal, V3_UPGRADE_SOURCE)
+
+    await expect(recoverActiveSakiOperation(root, prepared.legacyPath, signal))
+      .rejects.toMatchObject({ code: 'recovery-required' })
+
+    expect(await exists(prepared.candidatePath)).toBe(true)
+    expect(await exists(prepared.backupPath)).toBe(true)
     await expect(readActiveOperation(root, signal)).resolves.toBeDefined()
   })
 

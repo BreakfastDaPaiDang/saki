@@ -84,7 +84,7 @@ async function start(): Promise<RunningHost> {
     databasePath: join(directory, 'saki.sqlite'),
     installationId: INSTALLATION_ID,
     storageGenerationId: STORAGE_GENERATION_ID,
-    stateVersion: 3,
+    stateVersion: 4,
     createdByBuildId: BUILD_ID,
     promoteToReady: () => Promise.resolve(),
   })
@@ -240,6 +240,93 @@ describe('Saki /saki Host transport', () => {
       value: { ok: true, projection: { type: 'development-workspace', registryRevision: 1 } },
     })
 
+    const configuration = {
+      appId: '123456',
+      githubInstallationId: '12345678',
+      accountNodeId: 'O_saki_account',
+      repositoryNodeId: 'R_saki_repository',
+      repositoryDatabaseId: '87654321',
+      projectNodeId: 'PVT_saki_project',
+      credentialRef: 'SAKI_GITHUB_APP_PRIVATE_KEY',
+      statusFieldNodeId: 'PVTSSF_saki_status',
+      statusOptionNodeIds: {
+        inbox: 'option-inbox',
+        backlog: 'option-backlog',
+        ready: 'option-ready',
+        inProgress: 'option-in-progress',
+        inReview: 'option-in-review',
+        done: 'option-done',
+        canceled: 'option-canceled',
+      },
+      activePollIntervalMs: 30_000,
+      backgroundPollIntervalMs: 300_000,
+      rateLimitReserve: 500,
+    } as const
+    const configured = await rpc(host, 'control/submit', {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-22222222-2222-4222-8222-222222222222',
+      projectId,
+      expectedSynchronizationRevision: 0,
+      patch: configuration,
+    }, {
+      cookie,
+      'x-saki-request-token': access.requestToken,
+    })
+    expect(configured.message.result).toMatchObject({
+      ok: true,
+      value: { ok: true, receipt: { state: 'saved', projectId, synchronizationRevision: 1 } },
+    })
+    const settings = await rpc(host, 'control/query', { type: 'project-settings', projectId }, { cookie })
+    expect(settings.message.result).toMatchObject({
+      ok: true,
+      value: {
+        ok: true,
+        projection: {
+          type: 'project-settings',
+          projectId,
+          synchronization: {
+            revision: 1,
+            state: 'saved',
+            pending: { revision: 1, state: 'saved', configuration },
+          },
+        },
+      },
+    })
+    expect(JSON.stringify(settings.message)).not.toContain('BEGIN PRIVATE KEY')
+    const cachedBoard = await rpc(host, 'control/query', {
+      type: 'board', projectId, refresh: 'cached',
+    }, { cookie })
+    expect(cachedBoard.message.result).toMatchObject({
+      ok: true,
+      value: {
+        ok: true,
+        projection: {
+          type: 'board',
+          projectId,
+          state: 'awaiting-first-checkpoint',
+          synchronizationRevision: 1,
+          mapping: { state: 'revalidation-required', configurationRevision: 1 },
+          freshness: { state: 'unavailable' },
+          scan: { state: 'scheduled', priority: 'background', reason: 'configuration' },
+        },
+      },
+    })
+    const interactiveBoard = await rpc(host, 'control/query', {
+      type: 'board', projectId, refresh: 'interactive',
+    }, { cookie })
+    expect(interactiveBoard.message.result).toMatchObject({
+      ok: true,
+      value: {
+        ok: true,
+        projection: {
+          type: 'board',
+          projectId,
+          state: 'awaiting-first-checkpoint',
+          scan: { state: 'scheduled', priority: 'interactive', reason: 'interactive' },
+        },
+      },
+    })
+
     const logout = await rpc(host, 'access/logout', {}, {
       cookie,
       'x-saki-request-token': access.requestToken,
@@ -363,6 +450,14 @@ describe('Saki /saki Host transport', () => {
     const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
     const token = (exchange.message.result as { value: { access: { requestToken: string } } }).value.access.requestToken
     const query = vi.spyOn(host.context.sakiControlPlane, 'query')
+    query.mockResolvedValueOnce({ ok: false, reason: 'not-found' } as never)
+    const missingBoard = await rpc(host, 'control/query', {
+      type: 'board',
+      projectId: 'project-22222222-2222-4222-8222-222222222222',
+      refresh: 'cached',
+    }, { cookie })
+    expect(missingBoard.message.result).toEqual({ ok: true, value: { ok: false, reason: 'not-found' } })
+
     query.mockResolvedValueOnce({
       ok: true,
       projection: {
@@ -387,7 +482,32 @@ describe('Saki /saki Host transport', () => {
     expect(authority.message.result).toEqual(OPAQUE_ERROR_RESULT)
     expect(JSON.stringify(authority.message)).not.toContain(authoritySentinel)
 
-    vi.spyOn(host.context.sakiControlPlane, 'submit').mockResolvedValueOnce({
+    query.mockResolvedValueOnce({
+      ok: true,
+      projection: {
+        type: 'board',
+        projectId: 'project-22222222-2222-4222-8222-222222222222',
+        state: 'unconfigured',
+        synchronizationRevision: 0,
+        mapping: { state: 'unconfigured' },
+        freshness: { state: 'unavailable' },
+        scan: { state: 'idle' },
+        effectiveMutationAvailability: {
+          available: false,
+          reasons: ['synchronization-unconfigured'],
+        },
+        rawProviderResponse: authoritySentinel,
+      },
+    } as never)
+    const hostileBoard = await rpc(host, 'control/query', {
+      type: 'board',
+      projectId: 'project-22222222-2222-4222-8222-222222222222',
+      refresh: 'interactive',
+    }, { cookie })
+    expect(hostileBoard.message.result).toEqual(OPAQUE_ERROR_RESULT)
+    expect(JSON.stringify(hostileBoard.message)).not.toContain(authoritySentinel)
+
+    const submit = vi.spyOn(host.context.sakiControlPlane, 'submit').mockResolvedValueOnce({
       ok: true,
       receipt: {
         id: 'receipt-11111111-1111-4111-8111-111111111111',
@@ -415,12 +535,34 @@ describe('Saki /saki Host transport', () => {
     }, { cookie, 'x-saki-request-token': token })
     expect(hostileSubmit.message.result).toEqual(OPAQUE_ERROR_RESULT)
     expect(JSON.stringify(hostileSubmit.message)).not.toContain(authoritySentinel)
+
+    submit.mockResolvedValueOnce({
+      ok: true,
+      receipt: {
+        id: 'receipt-44444444-4444-4444-8444-444444444444',
+        intentId: 'intent-44444444-4444-4444-8444-444444444444',
+        state: 'confirmed',
+        projectId: 'project-22222222-2222-4222-8222-222222222222',
+        resourceBindingId: 'binding-33333333-3333-4333-8333-333333333333',
+        registryRevision: 1,
+      },
+    } as never)
+    const uncorrelatedConfiguration = await rpc(host, 'control/submit', {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-44444444-4444-4444-8444-444444444444',
+      projectId: 'project-22222222-2222-4222-8222-222222222222',
+      expectedSynchronizationRevision: 0,
+      patch: { activePollIntervalMs: 30_000 },
+    }, { cookie, 'x-saki-request-token': token })
+    expect(uncorrelatedConfiguration.message.result).toEqual(OPAQUE_ERROR_RESULT)
     expect([
       hostileAccess.response.headers.get('cache-control'),
       uncorrelated.response.headers.get('cache-control'),
       authority.response.headers.get('cache-control'),
+      hostileBoard.response.headers.get('cache-control'),
       hostileSubmit.response.headers.get('cache-control'),
-    ]).toEqual(['no-store', 'no-store', 'no-store', 'no-store'])
+      uncorrelatedConfiguration.response.headers.get('cache-control'),
+    ]).toEqual(['no-store', 'no-store', 'no-store', 'no-store', 'no-store', 'no-store'])
     await host.close()
   })
 

@@ -203,6 +203,9 @@ flowchart LR
   pkg_saki_installation_maintenance["saki/installation-maintenance"]
   svc_sakiControlPlane["ctx.sakiControlPlane<br/>Saki product control plane"]
   pkg_saki_host_api["saki/host-api"]
+  pkg_saki_github["saki/github"]
+  svc_sakiGitHub["ctx.sakiGitHub<br/>Saki GitHub facts"]
+  pkg_saki_github_app["saki/github-app"]
   pkg_saki_execution["saki/execution"]
   svc_sakiHostExecution["ctx.sakiHostExecution<br/>Saki Host Execution"]
   pkg_saki_execution_local["saki/execution-local"]
@@ -262,6 +265,8 @@ flowchart LR
   pkg_saki_control_plane --> svc_sakiInstallationState
   pkg_saki_execution --> svc_sakiHostExecution
   pkg_saki_execution_local --> svc_sakiHostExecution
+  pkg_saki_github --> svc_sakiGitHub
+  pkg_saki_github_app --> svc_sakiGitHub
   pkg_saki_installation_maintenance --> svc_sakiInstallationState
   pkg_sandbox --> svc_sandbox
   pkg_sandbox_local --> svc_sandbox
@@ -356,6 +361,7 @@ flowchart LR
   svc_llm --> pkg_compaction_basic
   svc_lsp --> pkg_tool_lsp
   svc_sakiControlPlane --> pkg_saki_host_api
+  svc_sakiGitHub --> pkg_saki_control_plane
   svc_sakiHostExecution --> pkg_saki_control_plane
   svc_sakiInstallationState --> pkg_saki_control_plane
   svc_sandbox --> pkg_bash_sandbox
@@ -500,6 +506,7 @@ flowchart LR
 | `ctx.apiProxy` | `core` | `apiproxy` | - | `connection` | - | The transport-agnostic host gateway face: it dispatches browser API calls, and each open host stream subscribes to the events it forwards rather than being pushed to through a broadcast verb. |
 | `ctx.sakiInstallationState` | `seam` | [`saki/control-plane`](../packages/saki/control-plane) | [`saki/installation-maintenance`](../packages/saki/installation-maintenance) | [`saki/control-plane`](../packages/saki/control-plane) | - | Installation maintenance selects and validates one manifest-backed state generation before the Saki bundle mounts the control plane; the control plane consumes that exact identity and promotes fresh provisioning only after product validation. |
 | `ctx.sakiControlPlane` | `core` | [`saki/control-plane`](../packages/saki/control-plane) | - | [`saki/host-api`](../packages/saki/host-api) | - | Owns Installation Access, current local authority, protected product Projections, and Control Intent admission; the Host API adapts its narrow interfaces to the browser transport. |
+| `ctx.sakiGitHub` | `seam` | [`saki/github`](../packages/saki/github) | [`saki/github-app`](../packages/saki/github-app) | [`saki/control-plane`](../packages/saki/control-plane) | - | The Service Definition exposes provider-neutral detached reads and complete scans; the GitHub App Provider owns authentication, pagination, and response admission, while the control plane owns durable synchronization, Status mapping, and product Projections. |
 | `ctx.sakiHostExecution` | `seam` | [`saki/execution`](../packages/saki/execution) | [`saki/execution-local`](../packages/saki/execution-local) | [`saki/control-plane`](../packages/saki/control-plane) | - | The Local Host resolves untrusted project selections and returns detached Git evidence; the control plane owns authorization, Project policy, and durable product records. |
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Owns the in-memory definition registry, the vm sandbox for host halves, and the request-run round trip; browser pages reach the same service over the wire through its remote namespace. |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Registers host inspect providers, mirrors the client provider manifest, and routes client queries through the dynamic Cordis transport. |

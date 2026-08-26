@@ -43,11 +43,15 @@
   "dependencies": {
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
     "@breakfastdapaidang/saki-execution-local": "workspace:^",
+    "@breakfastdapaidang/saki-github": "workspace:^",
+    "@breakfastdapaidang/saki-github-app": "workspace:^",
     "@breakfastdapaidang/saki-host-api": "workspace:^",
     "@breakfastdapaidang/saki-installation-maintenance": "workspace:^",
     "@deepseek-ai/dsh-app-boot": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
     "@deepseek-ai/dsh-cmdline": "workspace:^",
+    "@deepseek-ai/dsh-credentials": "workspace:^",
+    "@deepseek-ai/dsh-credentials-windows-dpapi": "workspace:^",
     "@deepseek-ai/dsh-fs-local": "workspace:^",
     "@deepseek-ai/dsh-host-webserver": "workspace:^",
     "@deepseek-ai/dsh-home-paths": "workspace:^",
@@ -58,6 +62,7 @@
     "@deepseek-ai/dsh-storage-json": "workspace:^",
     "@deepseek-ai/dsh-storage-sqlite": "workspace:^",
     "@deepseek-ai/dsh-subprocess-local": "workspace:^",
+    "@deepseek-ai/dsh-timeout": "workspace:^",
     "@deepseek-ai/dsh-workspace": "workspace:^"
   },
   "peerDependencies": {

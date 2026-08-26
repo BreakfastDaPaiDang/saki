@@ -591,6 +591,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Owns Installation Access, current local authority, protected product Projections, and Control Intent admission; the Host API adapts its narrow interfaces to the browser transport.',
   },
   {
+    key: 'sakiGitHub',
+    pkg: 'saki/github',
+    title: 'Saki GitHub facts',
+    mode: 'seam',
+    implementations: ['saki/github-app'],
+    consumers: ['saki/control-plane'],
+    note: 'The Service Definition exposes provider-neutral detached reads and complete scans; the GitHub App Provider owns authentication, pagination, and response admission, while the control plane owns durable synchronization, Status mapping, and product Projections.',
+  },
+  {
     key: 'sakiHostExecution',
     pkg: 'saki/execution',
     title: 'Saki Host Execution',

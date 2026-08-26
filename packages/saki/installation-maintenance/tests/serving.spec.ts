@@ -56,7 +56,7 @@ vi.mock('../src/manifest.ts', async (importOriginal) => {
 import {
   generationManifestReference,
   materializeFreshSakiGeneration,
-  migrateSakiV2Generation,
+  migrateSakiGeneration,
   readInstallationManifest,
   renderGenerationManifest,
   renderInstallationManifest,
@@ -212,7 +212,7 @@ describe('Saki serving Installation scope', () => {
     })
 
     await expect(readInstallationManifest(installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 3 },
+      value: { phase: 'ready', stateVersion: 4 },
     })
   })
 
@@ -224,10 +224,10 @@ describe('Saki serving Installation scope', () => {
     const signal = AbortSignal.timeout(10_000)
     const published = await publishSelectedGeneration(
       installationRoot,
-      3,
+      4,
       'ready',
       async (databasePath, activeSignal) => {
-        await migrateSakiV2Generation(sourcePath, databasePath, {
+        await migrateSakiGeneration(sourcePath, databasePath, {
           installationId: B03_INSTALLATION_ID,
           storageGenerationId: GENERATION_ID,
           createdByBuildId: BUILD_ID,
@@ -409,7 +409,7 @@ describe('Saki serving Installation scope', () => {
       const signal = AbortSignal.timeout(5_000)
       const published = await publishSelectedGeneration(
         installationRoot,
-        3,
+        4,
         'provisioning',
         async (databasePath, activeSignal) => {
           await materializeFreshSakiGeneration(databasePath, {
@@ -472,7 +472,7 @@ describe('Saki serving Installation scope', () => {
     const signal = AbortSignal.timeout(5_000)
     await publishSelectedGeneration(
       installationRoot,
-      4,
+      5,
       'ready',
       async (databasePath) => {
         await writeFile(databasePath, 'unsupported')

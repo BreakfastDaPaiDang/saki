@@ -42,6 +42,7 @@ const CONTROL_PLANE_CONFIG = {
   challengeTtlMs: 60_000,
   sessionTtlMs: 3_600_000,
   terminalRetentionMs: 86_400_000,
+  githubScanAttemptTtlMs: 300_000,
   cookieName: COOKIE_NAME,
 } as const
 

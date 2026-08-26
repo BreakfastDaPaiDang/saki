@@ -1,0 +1,23 @@
+{
+  "name": "Saki Product",
+  "url": "https://github.com/BreakfastDaPaiDang/saki",
+  "description": "Least-privilege GitHub identity for Saki project synchronization",
+  "public": false,
+  "request_oauth_on_install": false,
+  "setup_on_update": false,
+  "hook_attributes": {
+    "url": "https://example.invalid/saki/github/events",
+    "active": false
+  },
+  "default_events": [],
+  "default_permissions": {
+    "actions": "read",
+    "checks": "read",
+    "contents": "read",
+    "issues": "write",
+    "metadata": "read",
+    "organization_projects": "write",
+    "pull_requests": "write",
+    "statuses": "read"
+  }
+}

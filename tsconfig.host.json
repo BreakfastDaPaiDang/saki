@@ -255,6 +255,8 @@
     { "path": "./packages/bundle/base" },
     { "path": "./packages/bundle/headless" },
     { "path": "./packages/bundle/web-app" },
+    { "path": "./packages/saki/github" },
+    { "path": "./packages/saki/github-app" },
     { "path": "./packages/saki/execution" },
     { "path": "./packages/saki/execution-local" },
     { "path": "./packages/saki/control-plane" },

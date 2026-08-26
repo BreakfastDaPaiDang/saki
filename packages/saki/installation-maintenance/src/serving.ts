@@ -30,7 +30,11 @@ import {
 } from './journal.ts'
 import type { SakiOperationJournal } from './journal.ts'
 import { materializeFreshSakiGeneration } from './generation.ts'
-import { readClosedCurrentSakiState, readClosedProvisioningSakiState } from './closed-state.ts'
+import {
+  readClosedCurrentSakiState,
+  readClosedProvisioningSakiState,
+  readClosedSakiV3State,
+} from './closed-state.ts'
 import { publishMissingFile, replaceFileDurably } from './durable-files.ts'
 import type { DurableFileResult } from './durable-files.ts'
 import { selectSakiInstallationSource } from './layout.ts'
@@ -80,13 +84,13 @@ function newStorageGenerationId(): SakiStorageGenerationId {
 function preparedExpectation(generation: GenerationManifest): {
   readonly installationId: SakiInstallationId
   readonly storageGenerationId: SakiStorageGenerationId
-  readonly stateVersion: 3
+  readonly stateVersion: 4
   readonly createdByBuildId: SakiBuildId
 } {
   return {
     installationId: generation.installationId,
     storageGenerationId: generation.storageGenerationId,
-    stateVersion: 3,
+    stateVersion: sakiStateCapability.writable.version,
     createdByBuildId: generation.createdByBuildId,
   }
 }
@@ -136,7 +140,22 @@ async function prepareSelectedGeneration(
       'Saki state version 2 is valid but requires the offline upgrade command before serving',
     )
   }
-  if (readable?.version !== 3) {
+  if (readable?.version === 3) {
+    await readClosedSakiV3State(
+      selected.databasePath,
+      {
+        installationId: selected.installation.installationId,
+        storageGenerationId: selected.installation.storageGenerationId,
+        createdByBuildId: selected.generation.createdByBuildId,
+      },
+      signal,
+    )
+    throw new SakiMaintenanceError(
+      'upgrade-required',
+      'Saki state version 3 is valid but requires the offline upgrade command before serving',
+    )
+  }
+  if (readable?.version !== sakiStateCapability.writable.version) {
     throw new SakiMaintenanceError(
       'state-unsupported',
       `Saki state version ${String(selected.installation.stateVersion)} is not readable by this build`,
@@ -206,7 +225,11 @@ async function createFreshPreparedState(
     throw new SakiMaintenanceError('recovery-required', 'fresh Saki manifest failed exact readback')
   }
   const published = await readSelectedGeneration(root, selectedManifest.value, signal)
-  await readClosedProvisioningSakiState(published.databasePath, { ...identity, stateVersion: 3 }, signal)
+  await readClosedProvisioningSakiState(
+    published.databasePath,
+    { ...identity, stateVersion: sakiStateCapability.writable.version },
+    signal,
+  )
   await clearActiveOperation(root, active)
   return await prepareSelectedGeneration(root, published, signal)
 }

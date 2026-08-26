@@ -2,6 +2,7 @@
 
 import { z } from 'zod'
 import {
+  canonicalDigest,
   inheritedChangeBaselineSchema,
   isGitObjectId,
   isSafeDisplayLocation,
@@ -12,18 +13,51 @@ import {
   projectInspectionFingerprintSchema,
   projectSelectionProjectionSchema,
 } from '@breakfastdapaidang/saki-execution'
+import {
+  SAKI_BOARD_WORK_ITEM_LIMIT,
+  SAKI_GITHUB_CAPACITY_OBSERVED_LIMIT,
+  SAKI_GITHUB_MAPPING_ISSUE_LIMIT,
+} from '@breakfastdapaidang/saki-control-plane/constants'
 import type {
   AccessProjection,
+  ConfigureGitHubSynchronizationIntent,
+  GitHubAccountId,
+  GitHubAppId,
+  GitHubInstallationId,
+  GitHubProjectFieldId,
+  GitHubProjectId,
+  GitHubProjectOptionId,
+  GitHubRepositoryDatabaseId,
+  GitHubRepositoryId,
+  GitHubSynchronizationConfiguration,
+  GitHubSynchronizationConfigurationField,
+  GitHubSynchronizationConfigurationPatch,
   RegisterDevelopmentProjectIntent,
   SakiControlIntentId,
+  SakiBoardProjection,
+  SakiBoardRemoteFingerprint,
+  SakiBoardStatus,
+  SakiBoardWorkItemId,
+  SakiBoardWorkItemProjection,
   SakiDevelopmentProjectId,
   SakiDevelopmentProjectSummary,
   SakiDevelopmentWorkspaceProjection,
   SakiHostId,
   SakiIntentReceipt,
+  SakiIntentInput,
   SakiIntentReceiptId,
+  SakiIntentReceiptMap,
+  SakiGitHubMappingHealthProjection,
+  SakiGitHubMappingIssue,
+  SakiGitHubRateLimitProjection,
+  SakiGitHubScanAttemptId,
+  SakiGitHubScanFailure,
+  SakiGitHubScanStateProjection,
+  SakiGitHubSyncCheckpointProjection,
+  SakiGitHubSynchronizationFailureProjection,
   SakiPrincipalId,
   SakiProjectIndexProjection,
+  SakiProjectSettingsProjection,
   SakiProjectSelectionInspectionProjection,
   SakiQuery,
   SakiQueryResult,
@@ -40,12 +74,49 @@ const projectId = brandedId<SakiDevelopmentProjectId>('project')
 const bindingId = brandedId<SakiResourceBindingId>('binding')
 const intentId = brandedId<SakiControlIntentId>('intent')
 const receiptId = brandedId<SakiIntentReceiptId>('receipt')
-const revision = z.number().int().nonnegative()
+const safeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+const positiveInteger = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
+const revision = safeInteger
+const positiveRevision = positiveInteger
 const projectTitle = z.string().min(1).max(200).refine(value => value.trim().length > 0)
 const directoryLocator = z.string().min(1).max(32_768)
 const gitHead = z.string().refine(value => isGitObjectId(value))
 const gitBranch = z.string().min(1).max(MAX_GIT_REF_CHARS).refine(isSafeGitBranchName)
 const displayLocation = z.string().min(1).max(MAX_DISPLAY_LOCATION_CHARS).refine(isSafeDisplayLocation)
+const githubPositiveDecimalId = <T extends string>() => z.string().regex(/^[1-9][0-9]*$/u).max(40)
+  .transform(value => value as T)
+const githubAppId = githubPositiveDecimalId<GitHubAppId>()
+const githubNodeId = <T extends string>() => z.string().min(1).max(1_024)
+  .regex(/^[^\u0000-\u001f\u007f]+$/u)
+  .transform(value => value as T)
+const credentialRef = z.string().min(1).max(200)
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/u)
+  .transform(value => value as GitHubSynchronizationConfiguration['credentialRef'])
+const MIN_POLL_INTERVAL_MS = 1_000
+const MAX_POLL_INTERVAL_MS = 86_400_000
+const pollInterval = z.number().int().min(MIN_POLL_INTERVAL_MS).max(MAX_POLL_INTERVAL_MS)
+const rateLimitReserve = z.number().int().nonnegative().max(5_000)
+const safeName = z.string().min(1).max(255).regex(/^[^\u0000-\u001f\u007f]+$/u)
+const safeText = z.string().min(1).max(4_096).regex(/^[^\u0000\u007f]*$/u)
+const safeRequestId = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u)
+const safeUrl = z.url().max(2_048).refine((value) => {
+  const parsed = new URL(value)
+  return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === '' && parsed.hash === ''
+}, 'URL must be credential-free HTTPS without a fragment')
+const digest = z.string().regex(/^[0-9a-f]{64}$/u)
+const boardWorkItemId = z.string().regex(/^work-item-[0-9a-f]{64}$/u)
+  .transform(value => value as SakiBoardWorkItemId)
+const scanAttemptId = z.string().regex(new RegExp(`^scan-attempt-${UUID_PATTERN}$`))
+  .transform(value => value as SakiGitHubScanAttemptId)
+const boardRemoteFingerprint = z.string().regex(/^remote-fingerprint-[0-9a-f]{64}$/u)
+  .transform(value => value as SakiBoardRemoteFingerprint)
+
+function boundedArray<T extends z.ZodType>(element: T, minimum: number, maximum: number) {
+  return z.custom<unknown[]>(value => Array.isArray(value)
+    && value.length >= minimum
+    && value.length <= maximum)
+    .pipe(z.array(element))
+}
 
 /** Strict body schema for endpoints with no operation fields. */
 export const sakiEmptyRequestSchema = z.object({}).strict()
@@ -68,10 +139,19 @@ export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
     projectId,
     expectedRegistryRevision: revision,
   }).strict(),
+  z.object({
+    type: z.literal('project-settings'),
+    projectId,
+  }).strict(),
+  z.object({
+    type: z.literal('board'),
+    projectId,
+    refresh: z.enum(['cached', 'interactive']),
+  }).strict(),
 ]) satisfies z.ZodType<SakiQuery>
 
-/** Strict first Control Intent request. */
-export const sakiIntentRequestSchema = z.object({
+/** Strict Development Project registration Intent. */
+export const sakiRegisterDevelopmentProjectIntentSchema = z.object({
   type: z.literal('register-development-project'),
   intentId,
   projectTitle,
@@ -81,6 +161,82 @@ export const sakiIntentRequestSchema = z.object({
   confirmedFingerprint: projectInspectionFingerprintSchema,
   confirmedBaseline: inheritedChangeBaselineSchema,
 }).strict() satisfies z.ZodType<RegisterDevelopmentProjectIntent>
+
+const githubStatusOptionMappingSchema = z.object({
+  inbox: githubNodeId<GitHubProjectOptionId>(),
+  backlog: githubNodeId<GitHubProjectOptionId>(),
+  ready: githubNodeId<GitHubProjectOptionId>(),
+  inProgress: githubNodeId<GitHubProjectOptionId>(),
+  inReview: githubNodeId<GitHubProjectOptionId>(),
+  done: githubNodeId<GitHubProjectOptionId>(),
+  canceled: githubNodeId<GitHubProjectOptionId>(),
+}).strict().superRefine((value, context) => {
+  if (new Set(Object.values(value)).size !== Object.keys(value).length) {
+    context.addIssue({ code: 'custom', message: 'GitHub Status option ids must be distinct' })
+  }
+})
+
+const githubSynchronizationConfigurationShape = {
+  appId: githubAppId,
+  githubInstallationId: githubPositiveDecimalId<GitHubInstallationId>(),
+  accountNodeId: githubNodeId<GitHubAccountId>(),
+  repositoryNodeId: githubNodeId<GitHubRepositoryId>(),
+  repositoryDatabaseId: githubPositiveDecimalId<GitHubRepositoryDatabaseId>(),
+  projectNodeId: githubNodeId<GitHubProjectId>(),
+  credentialRef,
+  statusFieldNodeId: githubNodeId<GitHubProjectFieldId>(),
+  statusOptionNodeIds: githubStatusOptionMappingSchema,
+  activePollIntervalMs: pollInterval,
+  backgroundPollIntervalMs: pollInterval,
+  rateLimitReserve,
+} as const
+
+const githubSynchronizationConfigurationSchema = z.object(
+  githubSynchronizationConfigurationShape,
+).strict() satisfies z.ZodType<GitHubSynchronizationConfiguration>
+
+const githubSynchronizationConfigurationField = z.enum([
+  'appId',
+  'githubInstallationId',
+  'accountNodeId',
+  'repositoryNodeId',
+  'repositoryDatabaseId',
+  'projectNodeId',
+  'credentialRef',
+  'statusFieldNodeId',
+  'statusOptionNodeIds',
+  'activePollIntervalMs',
+  'backgroundPollIntervalMs',
+  'rateLimitReserve',
+])
+const GITHUB_SYNCHRONIZATION_CONFIGURATION_FIELDS = githubSynchronizationConfigurationField.options
+
+const githubSynchronizationConfigurationPatchSchema = z.object(
+  Object.fromEntries(Object.entries(githubSynchronizationConfigurationShape).map(([key, schema]) => [
+    key,
+    schema.optional(),
+  ])) as { [K in keyof typeof githubSynchronizationConfigurationShape]:
+    z.ZodOptional<(typeof githubSynchronizationConfigurationShape)[K]> },
+).strict()
+  .transform((value): GitHubSynchronizationConfigurationPatch => Object.fromEntries(
+    Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined),
+  ) as GitHubSynchronizationConfigurationPatch)
+  .refine(value => Object.keys(value).length > 0, 'configuration patch must change at least one field')
+
+/** Strict field-scoped GitHub synchronization configuration Intent. */
+export const sakiConfigureGitHubSynchronizationIntentSchema = z.object({
+  type: z.literal('configure-github-synchronization'),
+  intentId,
+  projectId,
+  expectedSynchronizationRevision: revision,
+  patch: githubSynchronizationConfigurationPatchSchema,
+}).strict() satisfies z.ZodType<ConfigureGitHubSynchronizationIntent>
+
+/** Closed Control Intent request union. */
+export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
+  sakiRegisterDevelopmentProjectIntentSchema,
+  sakiConfigureGitHubSynchronizationIntentSchema,
+]) satisfies z.ZodType<SakiIntentInput>
 
 /** Authenticated member of the Access Projection schema. */
 export const sakiAuthenticatedAccessProjectionSchema = z.object({
@@ -209,6 +365,877 @@ export const sakiDevelopmentWorkspaceProjectionSchema = z.object({
   return { ...projection, ...(currentSelection === undefined ? {} : { currentSelection }) }
 }) satisfies z.ZodType<SakiDevelopmentWorkspaceProjection>
 
+const sakiBoardStatusSchema = z.enum([
+  'inbox',
+  'backlog',
+  'ready',
+  'in-progress',
+  'in-review',
+  'done',
+  'canceled',
+]) satisfies z.ZodType<SakiBoardStatus>
+
+const githubMappingIssueSchema = z.discriminatedUnion('reason', [
+  z.object({
+    reason: z.literal('status-field-missing'),
+    statusFieldId: githubNodeId<GitHubProjectFieldId>(),
+  }).strict(),
+  z.object({
+    reason: z.literal('status-option-missing'),
+    status: sakiBoardStatusSchema,
+    statusOptionId: githubNodeId<GitHubProjectOptionId>(),
+  }).strict(),
+  z.object({
+    reason: z.literal('work-item-status-missing'),
+    issueId: githubNodeId<SakiBoardWorkItemProjection['source']['issueId']>(),
+  }).strict(),
+  z.object({
+    reason: z.literal('work-item-status-unknown'),
+    issueId: githubNodeId<SakiBoardWorkItemProjection['source']['issueId']>(),
+    statusOptionId: githubNodeId<GitHubProjectOptionId>(),
+  }).strict(),
+]) satisfies z.ZodType<SakiGitHubMappingIssue>
+
+const githubMappingIssueListSchema = boundedArray(
+  githubMappingIssueSchema,
+  1,
+  SAKI_GITHUB_MAPPING_ISSUE_LIMIT,
+)
+  .superRefine((issues, context) => {
+    const itemIssueIds = new Set<string>()
+    const optionIds = new Set<string>()
+    const optionStatuses = new Set<SakiBoardStatus>()
+    let fieldIssueCount = 0
+    let itemIssueCount = 0
+    let optionIssueCount = 0
+    for (const issue of issues) {
+      switch (issue.reason) {
+        case 'status-field-missing':
+          fieldIssueCount += 1
+          break
+        case 'status-option-missing':
+          optionIssueCount += 1
+          if (optionIds.has(issue.statusOptionId) || optionStatuses.has(issue.status)) {
+            context.addIssue({ code: 'custom', message: 'GitHub mapping evidence repeats a Status option identity' })
+          }
+          optionIds.add(issue.statusOptionId)
+          optionStatuses.add(issue.status)
+          break
+        case 'work-item-status-missing':
+        case 'work-item-status-unknown':
+          itemIssueCount += 1
+          if (itemIssueIds.has(issue.issueId)) {
+            context.addIssue({ code: 'custom', message: 'GitHub mapping evidence repeats a Work Item identity' })
+          }
+          itemIssueIds.add(issue.issueId)
+          break
+      }
+    }
+    if (fieldIssueCount > 0 && issues.length !== 1) {
+      context.addIssue({ code: 'custom', message: 'a missing Status field must be the only mapping issue' })
+    }
+    if (optionIssueCount > STATUS_OPTION_FIELDS.length) {
+      context.addIssue({ code: 'custom', message: 'GitHub mapping evidence exceeds the configured Status options' })
+    }
+    if (itemIssueCount > SAKI_BOARD_WORK_ITEM_LIMIT) {
+      context.addIssue({ code: 'custom', message: 'GitHub mapping evidence exceeds the Board Work Item limit' })
+    }
+  })
+
+const standardGitHubProviderFailureSchema = z.discriminatedUnion('code', [
+  z.object({ code: z.literal('cancelled') }).strict(),
+  z.object({ code: z.literal('auth-unavailable'), credentialRef: credentialRef.optional() }).strict(),
+  z.object({
+    code: z.literal('permission-mismatch'),
+    permission: safeName,
+    required: z.enum(['none', 'read', 'write', 'admin']),
+    observed: z.enum(['none', 'read', 'write', 'admin']).optional(),
+    requestId: safeRequestId.optional(),
+  }).strict(),
+  z.object({ code: z.literal('not-found'), resource: safeName, requestId: safeRequestId.optional() }).strict(),
+  z.object({
+    code: z.literal('invalid-external-response'),
+    operation: safeName,
+    requestId: safeRequestId.optional(),
+  }).strict(),
+  z.object({
+    code: z.literal('primary-rate-limit'),
+    resetAt: safeInteger.optional(),
+    requestId: safeRequestId.optional(),
+  }).strict(),
+  z.object({
+    code: z.literal('secondary-rate-limit'),
+    retryAfterMs: safeInteger.optional(),
+    requestId: safeRequestId.optional(),
+  }).strict(),
+  z.object({
+    code: z.literal('transient-transport'),
+    retryAfterMs: safeInteger.optional(),
+    requestId: safeRequestId.optional(),
+  }).strict(),
+  z.object({
+    code: z.literal('permanent-rejection'),
+    status: z.number().int().min(100).max(599).optional(),
+    requestId: safeRequestId.optional(),
+  }).strict(),
+])
+
+const githubMappingMismatchFailureSchema = z.discriminatedUnion('reason', [
+  z.object({
+    code: z.literal('mapping-mismatch'),
+    reason: z.literal('field-missing-or-not-single-select'),
+    statusFieldId: githubNodeId<GitHubProjectFieldId>(),
+  }).strict(),
+  z.object({
+    code: z.literal('mapping-mismatch'),
+    reason: z.literal('required-options-missing'),
+    statusFieldId: githubNodeId<GitHubProjectFieldId>(),
+    missingRequiredStatusOptionIds: z.array(githubNodeId<GitHubProjectOptionId>()).min(1).max(100)
+      .refine(ids => new Set(ids).size === ids.length),
+  }).strict(),
+])
+const githubProviderFailureSchema = z.union([
+  standardGitHubProviderFailureSchema,
+  githubMappingMismatchFailureSchema,
+])
+
+const githubScanFailureSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('provider'), failure: githubProviderFailureSchema }).strict(),
+  z.object({
+    kind: z.literal('mapping'),
+    issues: githubMappingIssueListSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('candidate'),
+    reason: z.enum(['target-mismatch', 'invalid-candidate']),
+  }).strict(),
+  z.object({
+    kind: z.literal('capacity'),
+    resource: z.literal('board-work-items'),
+    limit: z.literal(SAKI_BOARD_WORK_ITEM_LIMIT),
+    observed: z.number().int()
+      .min(SAKI_BOARD_WORK_ITEM_LIMIT + 1)
+      .max(SAKI_GITHUB_CAPACITY_OBSERVED_LIMIT),
+  }).strict(),
+  z.object({ kind: z.literal('attempt'), reason: z.literal('expired') }).strict(),
+]) satisfies z.ZodType<SakiGitHubScanFailure>
+
+const githubSynchronizationFailureProjectionSchema = z.object({
+  attemptId: scanAttemptId,
+  configurationRevision: positiveRevision,
+  failedAt: safeInteger,
+  failure: githubScanFailureSchema,
+}).strict() satisfies z.ZodType<SakiGitHubSynchronizationFailureProjection>
+
+const githubUnconfiguredMappingSchema = z.object({ state: z.literal('unconfigured') }).strict()
+const githubRevalidationMappingSchema = z.object({
+  state: z.literal('revalidation-required'),
+  configurationRevision: positiveRevision,
+}).strict()
+const githubRepairMappingSchema = z.object({
+  state: z.literal('repair-required'),
+  configurationRevision: positiveRevision,
+  issues: githubMappingIssueListSchema,
+}).strict()
+const githubValidMappingSchema = z.object({
+  state: z.literal('valid'),
+  configurationRevision: positiveRevision,
+  validatedAt: safeInteger,
+}).strict()
+const githubConfiguredMappingBeforeCheckpointSchema = z.discriminatedUnion('state', [
+  githubRevalidationMappingSchema,
+  githubRepairMappingSchema,
+])
+const githubMappingHealthSchema = z.discriminatedUnion('state', [
+  githubUnconfiguredMappingSchema,
+  githubRevalidationMappingSchema,
+  githubRepairMappingSchema,
+  githubValidMappingSchema,
+]) satisfies z.ZodType<SakiGitHubMappingHealthProjection>
+
+const githubRateLimitSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('unobserved') }).strict(),
+  z.object({
+    state: z.literal('available'),
+    observedAt: safeInteger,
+    minimumRemaining: safeInteger,
+    resetAt: safeInteger,
+  }).strict(),
+  z.object({
+    state: z.literal('limited'),
+    observedAt: safeInteger,
+    resetAt: safeInteger.optional(),
+  }).strict(),
+]) satisfies z.ZodType<SakiGitHubRateLimitProjection>
+
+const githubSyncCheckpointSchema = z.object({
+  generation: positiveRevision,
+  configurationRevision: positiveRevision,
+  attemptId: scanAttemptId,
+  installationId: githubPositiveDecimalId<GitHubInstallationId>(),
+  repositoryId: githubNodeId<GitHubRepositoryId>(),
+  projectId: githubNodeId<GitHubProjectId>(),
+  statusFieldId: githubNodeId<GitHubProjectFieldId>(),
+  sourceFingerprint: z.object({ version: z.literal(1), digest }).strict(),
+  observedAt: safeInteger,
+  confirmedAt: safeInteger,
+  rateLimit: githubRateLimitSchema,
+}).strict().superRefine((checkpoint, context) => {
+  if (checkpoint.observedAt > checkpoint.confirmedAt) {
+    context.addIssue({ code: 'custom', message: 'checkpoint confirmation predates its observation' })
+  }
+}) satisfies z.ZodType<SakiGitHubSyncCheckpointProjection>
+
+const boardUnavailableFreshnessSchema = z.object({ state: z.literal('unavailable') }).strict()
+const boardAvailableFreshnessSchema = z.object({
+  state: z.enum(['fresh', 'stale']),
+  confirmedAt: safeInteger,
+  staleAt: safeInteger,
+  ageMs: safeInteger,
+}).strict()
+const boardFreshnessSchema = z.discriminatedUnion('state', [
+  boardUnavailableFreshnessSchema,
+  z.object({
+    state: z.literal('fresh'),
+    confirmedAt: safeInteger,
+    staleAt: safeInteger,
+    ageMs: safeInteger,
+  }).strict(),
+  z.object({
+    state: z.literal('stale'),
+    confirmedAt: safeInteger,
+    staleAt: safeInteger,
+    ageMs: safeInteger,
+  }).strict(),
+])
+
+const githubIdleScanSchema = z.object({ state: z.literal('idle') }).strict()
+const githubScanStateSchema = z.discriminatedUnion('state', [
+  githubIdleScanSchema,
+  z.object({
+    state: z.literal('scheduled'),
+    priority: z.enum(['interactive', 'background']),
+    reason: z.enum(['startup', 'configuration', 'poll', 'interactive', 'retry']),
+    attemptAt: safeInteger,
+  }).strict(),
+  z.object({
+    state: z.literal('in-flight'),
+    attemptId: scanAttemptId,
+    priority: z.enum(['interactive', 'background']),
+    configurationRevision: positiveRevision,
+    startedAt: safeInteger,
+    expiresAt: safeInteger,
+  }).strict().refine(scan => scan.expiresAt > scan.startedAt, 'scan attempt expiry must follow its start'),
+]) satisfies z.ZodType<SakiGitHubScanStateProjection>
+
+const boardMutationUnavailableReason = z.enum([
+  'synchronization-unconfigured',
+  'configuration-not-activated',
+  'mapping-revalidation-required',
+  'mapping-repair-required',
+  'checkpoint-unavailable',
+  'no-concrete-mutation',
+])
+const boardMutationAvailabilitySchema = z.object({
+  available: z.literal(false),
+  reasons: z.array(boardMutationUnavailableReason).min(1).max(6)
+    .refine(reasons => new Set(reasons).size === reasons.length),
+}).strict()
+
+type MappingState = SakiGitHubMappingHealthProjection['state']
+type MutationReason = z.infer<typeof boardMutationUnavailableReason>
+
+function expectedMutationUnavailableReasons(
+  configuration: 'unconfigured' | 'not-activated' | 'activated',
+  mapping: MappingState,
+  hasCheckpoint: boolean,
+): readonly MutationReason[] {
+  const reasons: MutationReason[] = []
+  if (configuration === 'unconfigured') reasons.push('synchronization-unconfigured')
+  if (configuration === 'not-activated') reasons.push('configuration-not-activated')
+  if (mapping === 'revalidation-required') reasons.push('mapping-revalidation-required')
+  if (mapping === 'repair-required') reasons.push('mapping-repair-required')
+  if (!hasCheckpoint) reasons.push('checkpoint-unavailable')
+  reasons.push('no-concrete-mutation')
+  return reasons
+}
+
+function validateMutationUnavailableReasons(
+  actual: readonly MutationReason[],
+  expected: readonly MutationReason[],
+  context: z.RefinementCtx,
+): void {
+  const actualSet = new Set(actual)
+  if (actualSet.size !== expected.length || expected.some(reason => !actualSet.has(reason))) {
+    context.addIssue({
+      code: 'custom',
+      message: 'effective mutation reasons disagree with synchronization evidence',
+      path: ['effectiveMutationAvailability', 'reasons'],
+    })
+  }
+}
+
+function mappingFailureRequiresRepair(failure: SakiGitHubSynchronizationFailureProjection | undefined): boolean {
+  return failure?.failure.kind === 'mapping'
+    || (failure?.failure.kind === 'provider' && failure.failure.failure.code === 'mapping-mismatch')
+}
+
+const STATUS_OPTION_FIELDS = [
+  ['inbox', 'inbox'],
+  ['backlog', 'backlog'],
+  ['ready', 'ready'],
+  ['inProgress', 'in-progress'],
+  ['inReview', 'in-review'],
+  ['done', 'done'],
+  ['canceled', 'canceled'],
+] as const
+
+function sameMappingIssues(
+  left: readonly SakiGitHubMappingIssue[],
+  right: readonly SakiGitHubMappingIssue[],
+): boolean {
+  if (left.length !== right.length) return false
+  return left.every((issue, index) => {
+    const other = right[index]
+    if (other === undefined || issue.reason !== other.reason) return false
+    switch (issue.reason) {
+      case 'status-field-missing':
+        return other.reason === issue.reason && issue.statusFieldId === other.statusFieldId
+      case 'status-option-missing':
+        return other.reason === issue.reason
+          && issue.status === other.status
+          && issue.statusOptionId === other.statusOptionId
+      case 'work-item-status-missing':
+        return other.reason === issue.reason && issue.issueId === other.issueId
+      case 'work-item-status-unknown':
+        return other.reason === issue.reason
+          && issue.issueId === other.issueId
+          && issue.statusOptionId === other.statusOptionId
+    }
+  })
+}
+
+function validateMappingRepairEvidence(
+  mapping: Exclude<SakiGitHubMappingHealthProjection, { readonly state: 'unconfigured' }>,
+  failure: SakiGitHubSynchronizationFailureProjection | undefined,
+  configuration: GitHubSynchronizationConfiguration | undefined,
+  context: z.RefinementCtx,
+): void {
+  if (mapping.state !== 'repair-required' || failure === undefined) return
+  if (failure.failure.kind === 'mapping') {
+    if (!sameMappingIssues(mapping.issues, failure.failure.issues)) {
+      context.addIssue({ code: 'custom', message: 'mapping repair issues disagree with the current failure' })
+    }
+    if (configuration !== undefined) {
+      const configuredOptionByStatus = new Map(STATUS_OPTION_FIELDS.map(([field, status]) => [
+        status,
+        configuration.statusOptionNodeIds[field],
+      ] as const))
+      const configuredOptionIds = new Set(configuredOptionByStatus.values())
+      for (const issue of mapping.issues) {
+        if (issue.reason === 'status-field-missing'
+          && issue.statusFieldId !== configuration.statusFieldNodeId) {
+          context.addIssue({ code: 'custom', message: 'mapping repair names another configured Status field' })
+        }
+        if (issue.reason === 'status-option-missing'
+          && issue.statusOptionId !== configuredOptionByStatus.get(issue.status)) {
+          context.addIssue({ code: 'custom', message: 'mapping repair names another configured Status option' })
+        }
+        if (issue.reason === 'work-item-status-unknown'
+          && configuredOptionIds.has(issue.statusOptionId)) {
+          context.addIssue({ code: 'custom', message: 'mapping repair treats a configured Status option as unknown' })
+        }
+      }
+    }
+    return
+  }
+  if (failure.failure.kind !== 'provider' || failure.failure.failure.code !== 'mapping-mismatch') return
+  const mismatch = failure.failure.failure
+  if (configuration !== undefined && mismatch.statusFieldId !== configuration.statusFieldNodeId) {
+    context.addIssue({ code: 'custom', message: 'Provider mapping failure targets another Status field' })
+    return
+  }
+  if (mismatch.reason === 'field-missing-or-not-single-select') {
+    const expected = [{ reason: 'status-field-missing' as const, statusFieldId: mismatch.statusFieldId }]
+    if (!sameMappingIssues(mapping.issues, expected)) {
+      context.addIssue({ code: 'custom', message: 'mapping repair field disagrees with the Provider failure' })
+    }
+    return
+  }
+  if (configuration === undefined) {
+    const uniqueStatuses = new Set<string>()
+    const matches = mapping.issues.length === mismatch.missingRequiredStatusOptionIds.length
+      && mapping.issues.every((issue, index) => {
+        if (issue.reason !== 'status-option-missing'
+          || issue.statusOptionId !== mismatch.missingRequiredStatusOptionIds[index]
+          || uniqueStatuses.has(issue.status)) return false
+        uniqueStatuses.add(issue.status)
+        return true
+      })
+    if (!matches) {
+      context.addIssue({ code: 'custom', message: 'mapping repair options disagree with the Provider failure' })
+    }
+    return
+  }
+  const statusByOptionId = new Map(STATUS_OPTION_FIELDS.map(([field, status]) => [
+    configuration.statusOptionNodeIds[field],
+    status,
+  ] as const))
+  const expected = mismatch.missingRequiredStatusOptionIds.flatMap((statusOptionId) => {
+    const status = statusByOptionId.get(statusOptionId)
+    return status === undefined ? [] : [{ reason: 'status-option-missing' as const, status, statusOptionId }]
+  })
+  if (!sameMappingIssues(mapping.issues, expected)) {
+    context.addIssue({ code: 'custom', message: 'mapping repair options disagree with the current configuration' })
+  }
+}
+
+function validateCurrentConfigurationEvidence(
+  currentRevision: number,
+  synchronizationRevision: number,
+  mapping: Exclude<SakiGitHubMappingHealthProjection, { readonly state: 'unconfigured' }>,
+  failure: SakiGitHubSynchronizationFailureProjection | undefined,
+  scan: SakiGitHubScanStateProjection,
+  context: z.RefinementCtx,
+  configuration?: GitHubSynchronizationConfiguration,
+): void {
+  if (currentRevision !== synchronizationRevision) {
+    context.addIssue({ code: 'custom', message: 'current configuration and synchronization revisions disagree' })
+  }
+  if (mapping.configurationRevision !== currentRevision) {
+    context.addIssue({ code: 'custom', message: 'mapping does not describe the current configuration' })
+  }
+  if (failure !== undefined && failure.configurationRevision !== currentRevision) {
+    context.addIssue({ code: 'custom', message: 'failure does not describe the current configuration' })
+  }
+  if (scan.state === 'in-flight' && scan.configurationRevision !== currentRevision) {
+    context.addIssue({ code: 'custom', message: 'scan does not target the current configuration' })
+  }
+  if ((mapping.state === 'repair-required') !== mappingFailureRequiresRepair(failure)) {
+    context.addIssue({ code: 'custom', message: 'mapping repair state disagrees with the current failure' })
+  }
+  validateMappingRepairEvidence(mapping, failure, configuration, context)
+}
+
+function validateFreshness(
+  freshness: z.infer<typeof boardAvailableFreshnessSchema>,
+  context: z.RefinementCtx,
+  activePollIntervalMs?: number,
+): void {
+  const minimumStaleAt = safeTimestampAdd(
+    freshness.confirmedAt,
+    activePollIntervalMs ?? MIN_POLL_INTERVAL_MS,
+  )
+  const maximumStaleAt = safeTimestampAdd(
+    freshness.confirmedAt,
+    activePollIntervalMs ?? MAX_POLL_INTERVAL_MS,
+  )
+  if (freshness.staleAt < minimumStaleAt || freshness.staleAt > maximumStaleAt) {
+    context.addIssue({ code: 'custom', message: 'Board staleness disagrees with its active polling interval' })
+    return
+  }
+  if (freshness.ageMs > Number.MAX_SAFE_INTEGER - freshness.confirmedAt) {
+    context.addIssue({ code: 'custom', message: 'Board age exceeds the safe timestamp range' })
+    return
+  }
+  const staleAfterMs = freshness.staleAt - freshness.confirmedAt
+  if (staleAfterMs === 0) return
+  if ((freshness.state === 'fresh' && freshness.ageMs >= staleAfterMs)
+    || (freshness.state === 'stale' && freshness.ageMs < staleAfterMs)) {
+    context.addIssue({ code: 'custom', message: 'Board freshness state disagrees with its age' })
+  }
+}
+
+function safeTimestampAdd(timestamp: number, duration: number): number {
+  return Math.min(Number.MAX_SAFE_INTEGER, timestamp + duration)
+}
+
+function expectedConfigurationChangedFields(
+  pending: GitHubSynchronizationConfiguration,
+  active: GitHubSynchronizationConfiguration | undefined,
+): readonly GitHubSynchronizationConfigurationField[] {
+  return GITHUB_SYNCHRONIZATION_CONFIGURATION_FIELDS.filter(field => active === undefined
+    || canonicalDigest('saki/github-synchronization-field/v1', pending[field])
+      !== canonicalDigest('saki/github-synchronization-field/v1', active[field]))
+}
+
+const boardWorkItemWireSchema = z.object({
+  id: boardWorkItemId,
+  title: safeText,
+  issueNumber: positiveInteger,
+  url: safeUrl,
+  issueState: z.enum(['open', 'closed']),
+  status: sakiBoardStatusSchema,
+  order: safeInteger,
+  archived: z.boolean(),
+  notInProject: z.boolean(),
+  updatedAt: safeInteger,
+  source: z.object({
+    kind: z.literal('github-issue'),
+    repositoryId: githubNodeId<GitHubRepositoryId>(),
+    issueId: githubNodeId<SakiBoardWorkItemProjection['source']['issueId']>(),
+    projectItemId: githubNodeId<NonNullable<SakiBoardWorkItemProjection['source']['projectItemId']>>().optional(),
+    apiOrder: safeInteger.optional(),
+  }).strict(),
+  remoteFingerprint: boardRemoteFingerprint,
+}).strict().superRefine((item, context) => {
+  const expectedId = `work-item-${canonicalDigest('saki/board-work-item/v1', {
+    repositoryId: item.source.repositoryId,
+    issueId: item.source.issueId,
+  })}`
+  if (item.id !== expectedId) {
+    context.addIssue({ code: 'custom', message: 'Work Item id disagrees with its GitHub Issue identity' })
+  }
+  if (item.notInProject) {
+    if (item.source.projectItemId !== undefined || item.source.apiOrder !== undefined) {
+      context.addIssue({ code: 'custom', message: 'non-Project item contains Project membership' })
+    }
+    if (item.status !== 'inbox' || item.archived) {
+      context.addIssue({ code: 'custom', message: 'non-Project item must be active Inbox work' })
+    }
+    if (item.issueState !== 'open') {
+      context.addIssue({ code: 'custom', message: 'non-Project Inbox item must be an open Issue' })
+    }
+  } else if (item.source.projectItemId === undefined || item.source.apiOrder === undefined) {
+    context.addIssue({ code: 'custom', message: 'Project item is missing complete Project membership' })
+  } else if (item.order !== item.source.apiOrder) {
+    context.addIssue({ code: 'custom', message: 'Project item order disagrees with its GitHub API position' })
+  }
+  if (item.archived && item.status !== 'canceled') {
+    context.addIssue({ code: 'custom', message: 'archived Project item must be canceled' })
+  }
+}) satisfies z.ZodType<SakiBoardWorkItemProjection>
+
+const confirmedBoardSchema = z.object({
+  generation: positiveRevision,
+  configurationRevision: positiveRevision,
+  repository: z.object({
+    id: githubNodeId<GitHubRepositoryId>(),
+    nameWithOwner: z.string().regex(/^[^/\u0000-\u001f\u007f]+\/[^/\u0000-\u001f\u007f]+$/u).max(201),
+    url: safeUrl,
+  }).strict(),
+  project: z.object({
+    id: githubNodeId<GitHubProjectId>(),
+    title: safeText,
+    url: safeUrl,
+  }).strict(),
+  items: boundedArray(boardWorkItemWireSchema, 0, SAKI_BOARD_WORK_ITEM_LIMIT),
+}).strict().superRefine((board, context) => {
+  if (new Set(board.items.map(item => item.id)).size !== board.items.length) {
+    context.addIssue({ code: 'custom', message: 'confirmed Board repeats Work Item ids' })
+  }
+  if (new Set(board.items.map(item => item.source.issueId)).size !== board.items.length) {
+    context.addIssue({ code: 'custom', message: 'confirmed Board repeats GitHub Issue identities' })
+  }
+  if (new Set(board.items.map(item => item.issueNumber)).size !== board.items.length) {
+    context.addIssue({ code: 'custom', message: 'confirmed Board repeats GitHub Issue numbers' })
+  }
+  const joinedProjectItemIds = board.items.flatMap(item => item.source.projectItemId === undefined
+    ? []
+    : [item.source.projectItemId])
+  if (new Set(joinedProjectItemIds).size !== joinedProjectItemIds.length) {
+    context.addIssue({ code: 'custom', message: 'confirmed Board repeats GitHub Project item identities' })
+  }
+  if (board.items.some(item => item.source.repositoryId !== board.repository.id)) {
+    context.addIssue({ code: 'custom', message: 'confirmed Board contains another Repository' })
+  }
+  let previousOrder = -1
+  let reachedUnjoinedItems = false
+  for (const item of board.items) {
+    if (item.order <= previousOrder) {
+      context.addIssue({ code: 'custom', message: 'confirmed Board Work Item order is not strictly increasing' })
+      break
+    }
+    if (item.notInProject) reachedUnjoinedItems = true
+    else if (reachedUnjoinedItems) {
+      context.addIssue({ code: 'custom', message: 'joined Project item follows an unjoined Inbox item' })
+      break
+    }
+    previousOrder = item.order
+  }
+})
+
+const boardProjectionSharedShape = {
+  type: z.literal('board'),
+  projectId,
+  synchronizationRevision: revision,
+  effectiveMutationAvailability: boardMutationAvailabilitySchema,
+} as const
+
+const unconfiguredBoardProjectionSchema = z.object({
+  ...boardProjectionSharedShape,
+  state: z.literal('unconfigured'),
+  synchronizationRevision: z.literal(0),
+  mapping: z.object({ state: z.literal('unconfigured') }).strict(),
+  freshness: boardUnavailableFreshnessSchema,
+  scan: githubIdleScanSchema,
+}).strict().superRefine((projection, context) => {
+  validateMutationUnavailableReasons(
+    projection.effectiveMutationAvailability.reasons,
+    expectedMutationUnavailableReasons('unconfigured', 'unconfigured', false),
+    context,
+  )
+})
+const awaitingBoardProjectionSchema = z.object({
+  ...boardProjectionSharedShape,
+  state: z.literal('awaiting-first-checkpoint'),
+  synchronizationRevision: positiveRevision,
+  failure: githubSynchronizationFailureProjectionSchema.optional(),
+  mapping: githubConfiguredMappingBeforeCheckpointSchema,
+  freshness: boardUnavailableFreshnessSchema,
+  scan: githubScanStateSchema,
+}).strict().superRefine((projection, context) => {
+  const currentRevision = projection.mapping.configurationRevision
+  validateCurrentConfigurationEvidence(
+    currentRevision,
+    projection.synchronizationRevision,
+    projection.mapping,
+    projection.failure,
+    projection.scan,
+    context,
+  )
+  validateMutationUnavailableReasons(
+    projection.effectiveMutationAvailability.reasons,
+    expectedMutationUnavailableReasons('not-activated', projection.mapping.state, false),
+    context,
+  )
+})
+const confirmedBoardProjectionSchema = z.object({
+  ...boardProjectionSharedShape,
+  state: z.literal('confirmed'),
+  synchronizationRevision: positiveRevision,
+  confirmed: confirmedBoardSchema,
+  checkpoint: githubSyncCheckpointSchema,
+  failure: githubSynchronizationFailureProjectionSchema.optional(),
+  mapping: githubMappingHealthSchema,
+  freshness: boardAvailableFreshnessSchema,
+  scan: githubScanStateSchema,
+}).strict().superRefine((projection, context) => {
+  if (projection.confirmed.generation !== projection.checkpoint.generation
+    || projection.confirmed.configurationRevision !== projection.checkpoint.configurationRevision) {
+    context.addIssue({ code: 'custom', message: 'confirmed Board and checkpoint revisions disagree' })
+  }
+  if (projection.synchronizationRevision < projection.checkpoint.configurationRevision) {
+    context.addIssue({ code: 'custom', message: 'Board synchronization revision precedes its checkpoint' })
+  }
+  if (projection.confirmed.repository.id !== projection.checkpoint.repositoryId
+    || projection.confirmed.project.id !== projection.checkpoint.projectId) {
+    context.addIssue({ code: 'custom', message: 'confirmed Board and checkpoint targets disagree' })
+  }
+  if (projection.mapping.state === 'unconfigured') {
+    context.addIssue({ code: 'custom', message: 'confirmed Board has no configured mapping' })
+    return
+  }
+  const currentRevision = projection.mapping.configurationRevision
+  validateCurrentConfigurationEvidence(
+    currentRevision,
+    projection.synchronizationRevision,
+    projection.mapping,
+    projection.failure,
+    projection.scan,
+    context,
+  )
+  if (currentRevision < projection.checkpoint.configurationRevision) {
+    context.addIssue({ code: 'custom', message: 'current mapping revision precedes the confirmed checkpoint' })
+  }
+  if (currentRevision === projection.checkpoint.configurationRevision
+    && projection.failure?.failure.kind === 'provider'
+    && projection.failure.failure.failure.code === 'mapping-mismatch'
+    && projection.failure.failure.failure.statusFieldId !== projection.checkpoint.statusFieldId) {
+    context.addIssue({ code: 'custom', message: 'current mapping failure targets another checkpoint Status field' })
+  }
+  if (currentRevision === projection.checkpoint.configurationRevision
+    && projection.mapping.state === 'repair-required'
+    && projection.mapping.issues.some(issue => issue.reason === 'status-field-missing'
+      && issue.statusFieldId !== projection.checkpoint.statusFieldId)) {
+    context.addIssue({ code: 'custom', message: 'current mapping repair targets another checkpoint Status field' })
+  }
+  if (projection.mapping.state === 'valid') {
+    if (currentRevision !== projection.checkpoint.configurationRevision) {
+      context.addIssue({ code: 'custom', message: 'valid mapping and checkpoint revisions disagree' })
+    }
+    if (projection.mapping.validatedAt !== projection.checkpoint.confirmedAt) {
+      context.addIssue({ code: 'custom', message: 'mapping validation and checkpoint confirmation disagree' })
+    }
+  } else if (projection.mapping.state === 'revalidation-required'
+    && currentRevision === projection.checkpoint.configurationRevision) {
+    context.addIssue({ code: 'custom', message: 'mapping revalidation has no newer configuration' })
+  }
+  if (projection.freshness.confirmedAt !== projection.checkpoint.confirmedAt) {
+    context.addIssue({ code: 'custom', message: 'Board freshness and checkpoint confirmation disagree' })
+  }
+  validateFreshness(projection.freshness, context)
+  validateMutationUnavailableReasons(
+    projection.effectiveMutationAvailability.reasons,
+    expectedMutationUnavailableReasons(
+      currentRevision === projection.checkpoint.configurationRevision ? 'activated' : 'not-activated',
+      projection.mapping.state,
+      true,
+    ),
+    context,
+  )
+})
+
+/** Complete Board Projection schema with atomic checkpoint and mapping evidence. */
+export const sakiBoardProjectionSchema: z.ZodType<SakiBoardProjection> = z.discriminatedUnion('state', [
+  unconfiguredBoardProjectionSchema,
+  awaitingBoardProjectionSchema,
+  confirmedBoardProjectionSchema,
+])
+
+const githubSynchronizationActiveSchema = z.object({
+  revision: positiveRevision,
+  configuration: githubSynchronizationConfigurationSchema,
+  activatedAt: z.number().int().nonnegative(),
+}).strict()
+const githubSynchronizationPendingSchema = z.object({
+  revision: positiveRevision,
+  changedFields: z.array(githubSynchronizationConfigurationField).min(1)
+    .refine(fields => new Set(fields).size === fields.length),
+  state: z.enum(['saved', 'activating', 'activation-failed']),
+  configuration: githubSynchronizationConfigurationSchema,
+  savedAt: z.number().int().nonnegative(),
+}).strict()
+
+/** Project Settings Projection schema with safe GitHub references and activation state. */
+export const sakiProjectSettingsProjectionSchema = z.object({
+  type: z.literal('project-settings'),
+  projectId,
+  synchronization: z.object({
+    revision,
+    state: z.enum(['unconfigured', 'saved', 'activating', 'activated', 'activation-failed']),
+    active: githubSynchronizationActiveSchema.optional(),
+    pending: githubSynchronizationPendingSchema.optional(),
+    checkpoint: githubSyncCheckpointSchema.optional(),
+    mapping: githubMappingHealthSchema,
+    failure: githubSynchronizationFailureProjectionSchema.optional(),
+    freshness: boardFreshnessSchema,
+    scan: githubScanStateSchema,
+    effectiveMutationAvailability: boardMutationAvailabilitySchema,
+  }).strict().superRefine((synchronization, context) => {
+    const { active, checkpoint, failure, freshness, mapping, pending, scan, state } = synchronization
+    if (state === 'unconfigured' && (synchronization.revision !== 0
+      || active !== undefined
+      || pending !== undefined
+      || checkpoint !== undefined
+      || failure !== undefined
+      || mapping.state !== 'unconfigured'
+      || freshness.state !== 'unavailable'
+      || scan.state !== 'idle')) {
+      context.addIssue({ code: 'custom', message: 'unconfigured synchronization contains configuration state' })
+      return
+    }
+    if (state === 'unconfigured') {
+      validateMutationUnavailableReasons(
+        synchronization.effectiveMutationAvailability.reasons,
+        expectedMutationUnavailableReasons('unconfigured', 'unconfigured', false),
+        context,
+      )
+      return
+    }
+    if (synchronization.revision === 0) {
+      context.addIssue({ code: 'custom', message: 'configured synchronization must have a positive revision' })
+    }
+    if (state === 'activated' && (active === undefined || pending !== undefined)) {
+      context.addIssue({ code: 'custom', message: 'activated synchronization has inconsistent configuration state' })
+      return
+    }
+    if (state !== 'activated' && (pending === undefined || pending.state !== state)) {
+      context.addIssue({ code: 'custom', message: 'pending synchronization state is inconsistent' })
+    }
+    if ((active?.revision ?? 0) > synchronization.revision
+      || (pending?.revision ?? 0) > synchronization.revision
+      || (active !== undefined && pending !== undefined && pending.revision <= active.revision)) {
+      context.addIssue({ code: 'custom', message: 'configuration revision sequence is inconsistent' })
+    }
+    const currentRevision = pending?.revision ?? active?.revision
+    if (currentRevision === undefined || mapping.state === 'unconfigured') {
+      context.addIssue({ code: 'custom', message: 'configured synchronization has no current configuration mapping' })
+      return
+    }
+    validateCurrentConfigurationEvidence(
+      currentRevision,
+      synchronization.revision,
+      mapping,
+      failure,
+      scan,
+      context,
+      pending?.configuration ?? active?.configuration,
+    )
+    if (pending !== undefined) {
+      const expectedChangedFields = expectedConfigurationChangedFields(pending.configuration, active?.configuration)
+      if (pending.changedFields.length !== expectedChangedFields.length
+        || pending.changedFields.some((field, index) => field !== expectedChangedFields[index])) {
+        context.addIssue({ code: 'custom', message: 'pending changed fields disagree with its configurations' })
+      }
+    }
+    if (state === 'activating' && scan.state !== 'in-flight') {
+      context.addIssue({ code: 'custom', message: 'activating configuration has no matching in-flight scan' })
+    }
+    if (pending !== undefined && scan.state === 'in-flight' && pending.state !== 'activating') {
+      context.addIssue({ code: 'custom', message: 'pending scan does not have activating configuration state' })
+    }
+    if (state === 'activation-failed' && failure === undefined) {
+      context.addIssue({ code: 'custom', message: 'failed activation has no current failure' })
+    }
+    if (state === 'saved' && (failure !== undefined || scan.state === 'in-flight')) {
+      context.addIssue({ code: 'custom', message: 'saved configuration contains activation attempt evidence' })
+    }
+    validateMutationUnavailableReasons(
+      synchronization.effectiveMutationAvailability.reasons,
+      expectedMutationUnavailableReasons(
+        state === 'activated' ? 'activated' : 'not-activated',
+        mapping.state,
+        checkpoint !== undefined,
+      ),
+      context,
+    )
+    if (checkpoint === undefined) {
+      if (active !== undefined) {
+        context.addIssue({ code: 'custom', message: 'active synchronization is missing its checkpoint' })
+      }
+      if (mapping.state === 'valid' || freshness.state !== 'unavailable') {
+        context.addIssue({ code: 'custom', message: 'synchronization evidence requires a checkpoint' })
+      }
+      return
+    }
+    if (active === undefined
+      || checkpoint.configurationRevision !== active.revision
+      || checkpoint.installationId !== active.configuration.githubInstallationId
+      || checkpoint.repositoryId !== active.configuration.repositoryNodeId
+      || checkpoint.projectId !== active.configuration.projectNodeId
+      || checkpoint.statusFieldId !== active.configuration.statusFieldNodeId) {
+      context.addIssue({ code: 'custom', message: 'checkpoint and active synchronization disagree' })
+    }
+    if (freshness.state === 'unavailable') {
+      context.addIssue({ code: 'custom', message: 'synchronization freshness and checkpoint disagree' })
+      return
+    }
+    if (freshness.confirmedAt !== checkpoint.confirmedAt) {
+      context.addIssue({ code: 'custom', message: 'synchronization freshness and checkpoint disagree' })
+    }
+    validateFreshness(freshness, context, active?.configuration.activePollIntervalMs)
+    if (mapping.state === 'valid') {
+      if (mapping.configurationRevision !== checkpoint.configurationRevision) {
+        context.addIssue({ code: 'custom', message: 'valid mapping and checkpoint revisions disagree' })
+      }
+      if (mapping.validatedAt !== checkpoint.confirmedAt) {
+        context.addIssue({ code: 'custom', message: 'mapping validation and checkpoint confirmation disagree' })
+      }
+    }
+  }),
+}).strict().transform((value): SakiProjectSettingsProjection => {
+  const { active, pending, ...synchronization } = value.synchronization
+  return {
+    ...value,
+    synchronization: {
+      ...synchronization,
+      ...(active === undefined ? {} : { active }),
+      ...(pending === undefined ? {} : { pending }),
+    },
+  }
+}) satisfies z.ZodType<SakiProjectSettingsProjection>
+
 const inspectQueryFailureSchema = z.object({
   ok: z.literal(false),
   reason: z.enum(['denied', 'unavailable']),
@@ -220,6 +1247,14 @@ const projectIndexFailureSchema = z.object({
 const developmentWorkspaceFailureSchema = z.object({
   ok: z.literal(false),
   reason: z.enum(['denied', 'unavailable', 'stale', 'not-found']),
+}).strict()
+const projectSettingsFailureSchema = z.object({
+  ok: z.literal(false),
+  reason: z.enum(['denied', 'unavailable', 'not-found']),
+}).strict()
+const boardFailureSchema = z.object({
+  ok: z.literal(false),
+  reason: z.enum(['denied', 'unavailable', 'not-found']),
 }).strict()
 
 /** Exact result schema for an inspection query. */
@@ -240,11 +1275,25 @@ export const sakiDevelopmentWorkspaceResultSchema = z.discriminatedUnion('ok', [
   developmentWorkspaceFailureSchema,
 ]) satisfies z.ZodType<SakiQueryResult<'development-workspace'>>
 
+/** Exact result schema for a Project Settings query. */
+export const sakiProjectSettingsResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: sakiProjectSettingsProjectionSchema }).strict(),
+  projectSettingsFailureSchema,
+]) satisfies z.ZodType<SakiQueryResult<'project-settings'>>
+
+/** Exact result schema for a Board query. */
+export const sakiBoardResultSchema: z.ZodType<SakiQueryResult<'board'>> = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: sakiBoardProjectionSchema }).strict(),
+  boardFailureSchema,
+])
+
 /** Union schema retained for callers that intentionally handle every query kind. */
 export const sakiQueryResultSchema = z.union([
   sakiInspectProjectSelectionResultSchema,
   sakiProjectIndexResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
+  sakiProjectSettingsResultSchema,
+  sakiBoardResultSchema,
 ])
 
 const receiptIdentity = { id: receiptId, intentId } as const
@@ -275,8 +1324,8 @@ const reconciliationReceiptSchema = z.object({
   reason: z.enum(['workspace', 'observation']),
 }).strict().refine(receipt => receipt.id === receipt.intentId.replace(/^intent-/u, 'receipt-'))
 
-/** Registration submission business-result schema. */
-export const sakiIntentResultSchema = z.union([
+/** Development Project registration business-result schema. */
+export const sakiRegisterDevelopmentProjectResultSchema = z.union([
   z.object({ ok: z.literal(true), receipt: confirmedReceiptSchema }).strict(),
   z.object({ ok: z.literal(false), reason: z.literal('denied') }).strict(),
   z.object({ ok: z.literal(false), reason: z.literal('unavailable') }).strict(),
@@ -299,6 +1348,56 @@ export const sakiIntentResultSchema = z.union([
   }).strict(),
 ]) satisfies z.ZodType<SakiIntentReceipt>
 
+const savedGitHubSynchronizationReceiptSchema = z.object({
+  ...receiptIdentity,
+  state: z.literal('saved'),
+  projectId,
+  synchronizationRevision: z.number().int().positive(),
+  candidateRevision: z.number().int().positive(),
+}).strict().superRefine((receipt, context) => {
+  if (receipt.id !== receipt.intentId.replace(/^intent-/u, 'receipt-')) {
+    context.addIssue({ code: 'custom', message: 'receipt id disagrees with Intent id' })
+  }
+  if (receipt.candidateRevision !== receipt.synchronizationRevision) {
+    context.addIssue({ code: 'custom', message: 'saved configuration revisions disagree' })
+  }
+})
+const githubSynchronizationConflictReceiptSchema = z.object({
+  ...receiptIdentity,
+  state: z.literal('conflict'),
+  reason: z.enum([
+    'expected-revision',
+    'project-not-found',
+    'configuration-incomplete',
+    'configuration-unchanged',
+  ]),
+}).strict().refine(receipt => receipt.id === receipt.intentId.replace(/^intent-/u, 'receipt-'))
+
+/** GitHub synchronization configuration business-result schema. */
+export const sakiConfigureGitHubSynchronizationResultSchema = z.union([
+  z.object({ ok: z.literal(true), receipt: savedGitHubSynchronizationReceiptSchema }).strict(),
+  z.object({ ok: z.literal(false), reason: z.literal('denied') }).strict(),
+  z.object({ ok: z.literal(false), reason: z.literal('unavailable') }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('unavailable'),
+    receipt: preparedReceiptSchema,
+  }).strict(),
+  z.object({ ok: z.literal(false), reason: z.literal('conflict') }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('conflict'),
+    receipt: githubSynchronizationConflictReceiptSchema,
+  }).strict(),
+  z.object({ ok: z.literal(false), reason: z.literal('failure'), receipt: failureReceiptSchema }).strict(),
+]) satisfies z.ZodType<SakiIntentReceipt<'configure-github-synchronization'>>
+
+/** Union schema retained for callers that intentionally handle every Control Intent result. */
+export const sakiIntentResultSchema = z.union([
+  sakiRegisterDevelopmentProjectResultSchema,
+  sakiConfigureGitHubSynchronizationResultSchema,
+]) satisfies z.ZodType<SakiIntentReceipt<keyof SakiIntentReceiptMap>>
+
 /** Browser Access Projection inferred from the strict wire schema. */
 export type SakiWireAccessProjection = z.infer<typeof sakiAccessProjectionSchema>
 /** Browser bootstrap exchange result inferred from the strict wire schema. */
@@ -311,12 +1410,30 @@ export type SakiWireProjectIndexResult = z.infer<typeof sakiProjectIndexResultSc
 export type SakiWireInspectProjectSelectionResult = z.infer<typeof sakiInspectProjectSelectionResultSchema>
 /** Browser Development-Workspace result inferred from its exact wire schema. */
 export type SakiWireDevelopmentWorkspaceResult = z.infer<typeof sakiDevelopmentWorkspaceResultSchema>
+/** Browser Project Settings result inferred from its exact wire schema. */
+export type SakiWireProjectSettingsResult = z.infer<typeof sakiProjectSettingsResultSchema>
+/** Browser Board result inferred from its exact wire schema. */
+export type SakiWireBoardResult = z.infer<typeof sakiBoardResultSchema>
+/** Explicit browser Board refresh policy. */
+export type SakiWireBoardRefresh = Extract<SakiQuery, { readonly type: 'board' }>['refresh']
 /** Browser result union for code that handles every protected query kind. */
 export type SakiWireQueryResult = z.infer<typeof sakiQueryResultSchema>
 /** Browser Control Intent inferred from the strict wire schema. */
 export type SakiWireIntent = z.infer<typeof sakiIntentRequestSchema>
 /** Browser registration result inferred from the strict wire schema. */
 export type SakiWireIntentResult = z.infer<typeof sakiIntentResultSchema>
+/** Browser registration Intent inferred from its strict wire schema. */
+export type SakiWireRegisterDevelopmentProjectIntent = z.infer<typeof sakiRegisterDevelopmentProjectIntentSchema>
+/** Browser registration result inferred from its exact wire schema. */
+export type SakiWireRegisterDevelopmentProjectResult = z.infer<typeof sakiRegisterDevelopmentProjectResultSchema>
+/** Browser GitHub synchronization configuration Intent inferred from its strict wire schema. */
+export type SakiWireConfigureGitHubSynchronizationIntent = z.infer<
+  typeof sakiConfigureGitHubSynchronizationIntentSchema
+>
+/** Browser GitHub synchronization configuration result inferred from its exact wire schema. */
+export type SakiWireConfigureGitHubSynchronizationResult = z.infer<
+  typeof sakiConfigureGitHubSynchronizationResultSchema
+>
 /** Branded Host id accepted by the browser client. */
 export type SakiWireHostId = SakiHostId
 /** Branded Project id accepted by the browser client. */

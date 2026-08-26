@@ -8,6 +8,7 @@ import {
   sakiIntentResultSchema,
   sakiProjectIndexResultSchema,
   sakiQueryRequestSchema,
+  sakiRegisterDevelopmentProjectIntentSchema,
 } from '../src/wire.ts'
 
 const DIGEST = '1'.repeat(64)
@@ -70,7 +71,10 @@ describe('Saki Host wire schemas', () => {
       confirmedBaseline: completeBaseline,
     }
     expect(sakiIntentRequestSchema.parse(request)).toEqual(request)
-    expect(sakiIntentRequestSchema.parse({ ...request, projectTitle: '  Project title  ' }).projectTitle)
+    expect(sakiRegisterDevelopmentProjectIntentSchema.parse({
+      ...request,
+      projectTitle: '  Project title  ',
+    }).projectTitle)
       .toBe('  Project title  ')
     expect(sakiIntentRequestSchema.safeParse({ ...request, projectTitle: '' }).success).toBe(false)
     expect(sakiIntentRequestSchema.safeParse({ ...request, projectTitle: 'x'.repeat(201) }).success).toBe(false)

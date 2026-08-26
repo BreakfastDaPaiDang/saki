@@ -8,8 +8,11 @@ import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   createStorageGenerationSeal,
   sakiControlPlaneV2DomainSpec,
+  sakiControlPlaneV3DomainSpec,
   sakiStorageGenerationDomainSpec,
+  sakiStorageGenerationV1DomainSpec,
   STORAGE_GENERATION_KEY,
+  storageGenerationV1SealRecordSchema,
   type SakiBuildId,
   type SakiGrantId,
   type SakiHostId,
@@ -27,6 +30,7 @@ import {
   readClosedCurrentSakiState,
   readClosedProvisioningSakiState,
   readClosedSakiV2State,
+  readClosedSakiV3State,
 } from '../src/closed-state.ts'
 
 const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId
@@ -138,6 +142,8 @@ function currentControlSnapshot(): KvUnitSnapshot {
         },
       },
       registration_intents: {},
+      github_project_sync: {},
+      github_sync_configuration_intents: {},
     },
   }
 }
@@ -152,6 +158,31 @@ function sealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot 
           STORAGE_GENERATION_ID,
           createdByBuildId,
         ),
+      },
+    },
+  }
+}
+
+function v3ControlSnapshot(): KvUnitSnapshot {
+  const current = currentControlSnapshot()
+  const tables = { ...current.tables }
+  delete tables['github_project_sync']
+  delete tables['github_sync_configuration_intents']
+  return { global: null, tables }
+}
+
+function v1SealSnapshot(): KvUnitSnapshot {
+  return {
+    global: null,
+    tables: {
+      storage_generation: {
+        [STORAGE_GENERATION_KEY]: storageGenerationV1SealRecordSchema.parse({
+          schemaVersion: 1,
+          installationId: INSTALLATION_ID,
+          storageGenerationId: STORAGE_GENERATION_ID,
+          stateVersion: 3,
+          createdByBuildId: BUILD_ID,
+        }),
       },
     },
   }
@@ -222,7 +253,7 @@ describe('closed Saki state reads', () => {
     const state = await readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 3,
+      stateVersion: 4,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))
 
@@ -243,7 +274,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 3,
+      stateVersion: 4,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -260,7 +291,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 3,
+      stateVersion: 4,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     await expect(readFile(path)).resolves.toEqual(before)
@@ -278,7 +309,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 3,
+      stateVersion: 4,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -329,6 +360,24 @@ describe('closed Saki state reads', () => {
     await materialize(path, [{ spec: sakiStorageGenerationDomainSpec, snapshot: sealSnapshot() }])
     await expect(readClosedSakiV2State(path, AbortSignal.timeout(2_000)))
       .rejects.toMatchObject({ code: 'recovery-required' })
+  })
+
+  it('validates exact historical v3 control and storage-generation domains', async () => {
+    const path = await databasePath()
+    await materialize(path, [
+      { spec: sakiControlPlaneV3DomainSpec, snapshot: v3ControlSnapshot() },
+      { spec: sakiStorageGenerationV1DomainSpec, snapshot: v1SealSnapshot() },
+    ])
+
+    const historical = await readClosedSakiV3State(path, {
+      installationId: INSTALLATION_ID,
+      storageGenerationId: STORAGE_GENERATION_ID,
+      createdByBuildId: BUILD_ID,
+    }, AbortSignal.timeout(2_000))
+
+    expect(historical.stateVersion).toBe(3)
+    expect(historical.controlPlane.table('installations').get(INSTALLATION_ID)?.currentHostId).toBe(HOST_ID)
+    expect(historical.storageGeneration.table('storage_generation').size).toBe(1)
   })
 
   it('preserves a state-read failure together with backend-close failure', async () => {

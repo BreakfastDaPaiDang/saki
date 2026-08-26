@@ -9,21 +9,30 @@ import { sakiStorageGenerationIdSchema } from './ids.ts'
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
+  controlStateRecordSchema,
   developmentProjectRegistryRecordSchema,
-  grantRecordSchema,
+  HOST_OPERATOR_ACTIONS,
+  historicalGrantRecordSchema,
   historicalControlStateRecordSchema,
   historicalInstallationAccessRecordSchema,
   historicalInstallationRecordSchema,
   historicalRegistrationIntentRecordSchema,
   hostRecordSchema,
+  installationAccessRecordSchema,
+  installationRecordSchema,
   principalRecordSchema,
+  registrationIntentRecordSchema,
   sakiControlPlaneDomainSpec,
 } from './spec.ts'
 import type {
+  ControlStateRecord,
   DevelopmentProjectRegistryRecord,
   GrantRecord,
   HostRecord,
+  InstallationAccessRecord,
+  InstallationRecord,
   PrincipalRecord,
+  RegistrationIntentRecord,
 } from './spec.ts'
 import type {
   SakiControlIntentId,
@@ -40,6 +49,7 @@ type HistoricalControlStateRecord = z.infer<typeof historicalControlStateRecordS
 type HistoricalInstallationRecord = z.infer<typeof historicalInstallationRecordSchema>
 type HistoricalInstallationAccessRecord = z.infer<typeof historicalInstallationAccessRecordSchema>
 type HistoricalRegistrationIntentRecord = z.infer<typeof historicalRegistrationIntentRecordSchema>
+type HistoricalGrantRecord = z.infer<typeof historicalGrantRecordSchema>
 
 /** Exact B03 control-plane schema accepted as the sole v2 migration source. */
 export const sakiControlPlaneV2DomainSpec = defineDomain({
@@ -52,7 +62,7 @@ export const sakiControlPlaneV2DomainSpec = defineDomain({
     installations: domainTable<SakiInstallationId, HistoricalInstallationRecord>(historicalInstallationRecordSchema),
     hosts: domainTable<SakiHostId, HostRecord>(hostRecordSchema),
     principals: domainTable<SakiPrincipalId, PrincipalRecord>(principalRecordSchema),
-    grants: domainTable<SakiGrantId, GrantRecord>(grantRecordSchema),
+    grants: domainTable<SakiGrantId, HistoricalGrantRecord>(historicalGrantRecordSchema),
     installation_access: domainTable<SakiInstallationAccessId, HistoricalInstallationAccessRecord>(
       historicalInstallationAccessRecordSchema,
     ),
@@ -62,6 +72,31 @@ export const sakiControlPlaneV2DomainSpec = defineDomain({
     >(developmentProjectRegistryRecordSchema),
     registration_intents: domainTable<SakiControlIntentId, HistoricalRegistrationIntentRecord>(
       historicalRegistrationIntentRecordSchema,
+    ),
+  },
+})
+
+/** Exact post-B18 v3 control-plane schema retained as the adjacent B05 migration source. */
+export const sakiControlPlaneV3DomainSpec = defineDomain({
+  name: 'saki_control_plane',
+  version: 3,
+  tables: {
+    control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(
+      controlStateRecordSchema,
+    ),
+    installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
+    hosts: domainTable<SakiHostId, HostRecord>(hostRecordSchema),
+    principals: domainTable<SakiPrincipalId, PrincipalRecord>(principalRecordSchema),
+    grants: domainTable<SakiGrantId, HistoricalGrantRecord>(historicalGrantRecordSchema),
+    installation_access: domainTable<SakiInstallationAccessId, InstallationAccessRecord>(
+      installationAccessRecordSchema,
+    ),
+    development_project_registry: domainTable<
+      typeof DEVELOPMENT_PROJECT_REGISTRY_KEY,
+      DevelopmentProjectRegistryRecord
+    >(developmentProjectRegistryRecordSchema),
+    registration_intents: domainTable<SakiControlIntentId, RegistrationIntentRecord>(
+      registrationIntentRecordSchema,
     ),
   },
 })
@@ -140,38 +175,73 @@ function migrateRegistrationIntent(value: HistoricalRegistrationIntentRecord): R
   }
 }
 
-/** Pure retained migration chain from exact B03 v2 media to current v3 records. */
+function migrateGrantsToV4(snapshot: DomainMigrationSnapshot): Record<string, GrantRecord> {
+  const control = sourceTable<ControlStateRecord>(snapshot, 'control_state')[CONTROL_STATE_KEY]
+  return Object.fromEntries(Object.entries(sourceTable<HistoricalGrantRecord>(snapshot, 'grants')).map(([key, value]) => {
+    if (key !== control?.hostOperatorGrantId) return [key, value]
+    return [key, {
+      ...value,
+      revision: value.revision + 1,
+      actions: [...HOST_OPERATOR_ACTIONS],
+    }]
+  }))
+}
+
+/** Pure retained migration chain from exact B03 v2 media through frozen v3 to current v4 records. */
 export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
   current: sakiControlPlaneDomainSpec,
-  steps: [{
-    from: sakiControlPlaneV2DomainSpec,
-    to: sakiControlPlaneDomainSpec,
-    migrate: snapshot => ({
-      global: snapshot.global,
-      tables: {
-        control_state: mapTable(
-          sourceTable<HistoricalControlStateRecord>(snapshot, 'control_state'),
-          migrateControlState,
-        ),
-        installations: mapTable(
-          sourceTable<HistoricalInstallationRecord>(snapshot, 'installations'),
-          migrateInstallation,
-        ),
-        hosts: { ...sourceTable<HostRecord>(snapshot, 'hosts') },
-        principals: { ...sourceTable<PrincipalRecord>(snapshot, 'principals') },
-        grants: { ...sourceTable<GrantRecord>(snapshot, 'grants') },
-        installation_access: mapTable(
-          sourceTable<HistoricalInstallationAccessRecord>(snapshot, 'installation_access'),
-          migrateInstallationAccess,
-        ),
-        development_project_registry: {
-          ...sourceTable<DevelopmentProjectRegistryRecord>(snapshot, 'development_project_registry'),
+  steps: [
+    {
+      from: sakiControlPlaneV2DomainSpec,
+      to: sakiControlPlaneV3DomainSpec,
+      migrate: snapshot => ({
+        global: snapshot.global,
+        tables: {
+          control_state: mapTable(
+            sourceTable<HistoricalControlStateRecord>(snapshot, 'control_state'),
+            migrateControlState,
+          ),
+          installations: mapTable(
+            sourceTable<HistoricalInstallationRecord>(snapshot, 'installations'),
+            migrateInstallation,
+          ),
+          hosts: { ...sourceTable<HostRecord>(snapshot, 'hosts') },
+          principals: { ...sourceTable<PrincipalRecord>(snapshot, 'principals') },
+          grants: { ...sourceTable<HistoricalGrantRecord>(snapshot, 'grants') },
+          installation_access: mapTable(
+            sourceTable<HistoricalInstallationAccessRecord>(snapshot, 'installation_access'),
+            migrateInstallationAccess,
+          ),
+          development_project_registry: {
+            ...sourceTable<DevelopmentProjectRegistryRecord>(snapshot, 'development_project_registry'),
+          },
+          registration_intents: mapTable(
+            sourceTable<HistoricalRegistrationIntentRecord>(snapshot, 'registration_intents'),
+            migrateRegistrationIntent,
+          ),
         },
-        registration_intents: mapTable(
-          sourceTable<HistoricalRegistrationIntentRecord>(snapshot, 'registration_intents'),
-          migrateRegistrationIntent,
-        ),
-      },
-    }),
-  }],
+      }),
+    },
+    {
+      from: sakiControlPlaneV3DomainSpec,
+      to: sakiControlPlaneDomainSpec,
+      migrate: snapshot => ({
+        global: snapshot.global,
+        tables: {
+          control_state: { ...sourceTable<ControlStateRecord>(snapshot, 'control_state') },
+          installations: { ...sourceTable<InstallationRecord>(snapshot, 'installations') },
+          hosts: { ...sourceTable<HostRecord>(snapshot, 'hosts') },
+          principals: { ...sourceTable<PrincipalRecord>(snapshot, 'principals') },
+          grants: migrateGrantsToV4(snapshot),
+          installation_access: { ...sourceTable<InstallationAccessRecord>(snapshot, 'installation_access') },
+          development_project_registry: {
+            ...sourceTable<DevelopmentProjectRegistryRecord>(snapshot, 'development_project_registry'),
+          },
+          registration_intents: { ...sourceTable<RegistrationIntentRecord>(snapshot, 'registration_intents') },
+          github_project_sync: {},
+          github_sync_configuration_intents: {},
+        },
+      }),
+    },
+  ],
 })

@@ -321,6 +321,8 @@ function currentDomains(fixture: CurrentFixture) {
     installation_access: readonlyTable(fixture.access),
     development_project_registry: readonlyTable(fixture.registries),
     registration_intents: readonlyTable(fixture.intents),
+    github_project_sync: readonlyTable(new Map()),
+    github_sync_configuration_intents: readonlyTable(new Map()),
   }
   const controlPlane = {
     name: sakiControlPlaneDomainSpec.name,

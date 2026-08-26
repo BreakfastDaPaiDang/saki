@@ -86,6 +86,7 @@ vi.mock('../src/recovery-backup.ts', async (importOriginal) => {
 
 import {
   createSakiMaintenanceOperations,
+  LEGACY_B03_BUILD_ID,
   generationManifestReference,
   readInstallationManifest,
   readSelectedGeneration,
@@ -111,8 +112,8 @@ async function fixture(): Promise<{ readonly options: SakiMaintenanceOptions; re
     options: {
       installationRoot,
       legacyDatabasePath: legacy,
-      currentBuildId: 'saki-build-0.1.0-b18-failure-test' as SakiBuildId,
-      legacyBuildId: 'saki-build-0.1.0-b03-failure-test' as SakiBuildId,
+      currentBuildId: 'saki-build-0.1.0-b05-failure-test' as SakiBuildId,
+      legacyBuildId: LEGACY_B03_BUILD_ID,
     },
   }
 }

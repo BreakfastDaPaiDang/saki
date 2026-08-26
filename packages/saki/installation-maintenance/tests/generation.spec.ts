@@ -8,13 +8,17 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   sakiControlPlaneV2DomainSpec,
+  sakiControlPlaneV3DomainSpec,
+  sakiStorageGenerationV1DomainSpec,
+  STORAGE_GENERATION_KEY,
+  storageGenerationV1SealRecordSchema,
   type SakiBuildId,
   type SakiInstallationId,
   type SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
   materializeFreshSakiGeneration,
-  migrateSakiV2Generation,
+  migrateSakiGeneration,
   readClosedProvisioningSakiState,
 } from '../src/index.ts'
 
@@ -44,8 +48,8 @@ describe('closed Saki generation creation', () => {
 
     await materializeFreshSakiGeneration(databasePath, identity, signal)
 
-    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 3 }, signal))
-      .resolves.toMatchObject({ stateVersion: 3 })
+    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 4 }, signal))
+      .resolves.toMatchObject({ stateVersion: 4 })
   })
 
   it('migrates a different closed v2 database and materializes the current seal', async () => {
@@ -65,10 +69,49 @@ describe('closed Saki generation creation', () => {
     await source.close()
     await context.fiber.dispose()
 
-    await migrateSakiV2Generation(sourcePath, targetPath, identity, signal)
+    await migrateSakiGeneration(sourcePath, targetPath, identity, signal)
 
-    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 3 }, signal))
-      .resolves.toMatchObject({ stateVersion: 3 })
+    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 4 }, signal))
+      .resolves.toMatchObject({ stateVersion: 4 })
+  })
+
+  it('migrates an exact adjacent v3 generation into current v4 state', async () => {
+    const directory = await root()
+    const sourcePath = join(directory, 'source-v3.sqlite')
+    const targetPath = join(directory, 'target-v4.sqlite')
+    const signal = new AbortController().signal
+    const context = new Context()
+    await context.plugin(Storage)
+    const source = new SqliteStorageBackend({ path: sourcePath, journalMode: 'delete' })
+    context.storage.backend.register('source', source)
+    const facility = new DomainFacility(context, { backend: 'source' })
+    await facility.materialize(sakiControlPlaneV3DomainSpec, {
+      tables: Object.fromEntries(Object.keys(sakiControlPlaneV3DomainSpec.tables).map(table => [table, {}])),
+      global: null,
+    }, { targetBackend: 'source', signal })
+    await facility.materialize(sakiStorageGenerationV1DomainSpec, {
+      tables: {
+        storage_generation: {
+          [STORAGE_GENERATION_KEY]: storageGenerationV1SealRecordSchema.parse({
+            schemaVersion: 1,
+            installationId: identity.installationId,
+            storageGenerationId: identity.storageGenerationId,
+            stateVersion: 3,
+            createdByBuildId: identity.createdByBuildId,
+          }),
+        },
+      },
+      global: null,
+    }, { targetBackend: 'source', signal })
+    await source.close()
+    await context.fiber.dispose()
+
+    await migrateSakiGeneration(sourcePath, targetPath, identity, signal)
+
+    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 4 }, signal)
+    expect(current.stateVersion).toBe(4)
+    expect(current.controlPlane.table('github_project_sync').size).toBe(0)
+    expect(current.controlPlane.table('github_sync_configuration_intents').size).toBe(0)
   })
 
   it('propagates a failed fresh materialization after closing its resources', async () => {
@@ -113,7 +156,7 @@ describe('closed Saki generation creation', () => {
     const failure = new Error('migration failed')
     vi.spyOn(DomainFacility.prototype, 'migrate').mockRejectedValueOnce(failure)
 
-    await expect(migrateSakiV2Generation(
+    await expect(migrateSakiGeneration(
       join(directory, 'source.sqlite'),
       join(directory, 'target.sqlite'),
       identity,

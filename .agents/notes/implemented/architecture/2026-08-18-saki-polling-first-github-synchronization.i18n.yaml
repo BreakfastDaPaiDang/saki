@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-18-saki-polling-first-github-synchronization.md
+2026-08-18-saki-polling-first-github-synchronization.md: d15660a7b5b48f6775b93f0bde5df4120ffd67c4
+2026-08-18-saki-polling-first-github-synchronization.zh.md: 3a30641f1e52064fcf9cf65e235ae9548b7a2a6a

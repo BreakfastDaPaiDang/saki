@@ -2,7 +2,8 @@
 
 import type { Domain, KvTable, TableValueOf } from '@deepseek-ai/dsh-storage-domain'
 import { recoverBootstrapCompletion } from './bootstrap-completion.ts'
-import { sakiControlPlaneV2DomainSpec } from './migration.ts'
+import { validateGitHubSynchronizationDurableState } from './github-sync.ts'
+import { sakiControlPlaneV2DomainSpec, sakiControlPlaneV3DomainSpec } from './migration.ts'
 import { validateDevelopmentProjectsDurableState } from './projects.ts'
 import {
   CONTROL_STATE_KEY,
@@ -19,8 +20,10 @@ import type {
 } from './spec.ts'
 import {
   sakiStorageGenerationDomainSpec,
+  sakiStorageGenerationV1DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationSealRecordSchema,
+  storageGenerationV1SealRecordSchema,
 } from './state-version.ts'
 import type {
   SakiBrowserSessionId,
@@ -36,6 +39,8 @@ import type {
 
 type ControlPlaneDomain = Domain<typeof sakiControlPlaneDomainSpec>
 type StorageGenerationDomain = Domain<typeof sakiStorageGenerationDomainSpec>
+type V3ControlPlaneDomain = Domain<typeof sakiControlPlaneV3DomainSpec>
+type V1StorageGenerationDomain = Domain<typeof sakiStorageGenerationV1DomainSpec>
 type HistoricalControlPlaneDomain = Domain<typeof sakiControlPlaneV2DomainSpec>
 type HistoricalControlState = TableValueOf<typeof sakiControlPlaneV2DomainSpec, 'control_state'>
 type HistoricalInstallation = TableValueOf<typeof sakiControlPlaneV2DomainSpec, 'installations'>
@@ -72,8 +77,8 @@ interface HistoricalFoundationSnapshot {
  * The operation performs synchronous reads only: it never writes, invokes Host or Workspace
  * capabilities, or changes the active Installation. The caller must exclusively own both
  * domains with no concurrent writers because cross-table reads are not internally serialized.
- * @param controlPlane - opened `saki_control_plane@3` candidate domain.
- * @param storageGeneration - opened `saki_storage_generation@1` candidate domain.
+ * @param controlPlane - opened `saki_control_plane@4` candidate domain.
+ * @param storageGeneration - opened `saki_storage_generation@2` candidate domain.
  * @param expectedInstallationId - Installation identity selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation identity selected by maintenance metadata.
  * @param expectedCreatedByBuildId - generation.json provenance that the seal must repeat.
@@ -92,8 +97,18 @@ export function validateCurrentSakiState(
     expectedStorageGenerationId,
     expectedCreatedByBuildId,
   )
-  const foundation = validateFoundation(controlPlane, expectedInstallationId)
-  validateAccess(controlPlane, foundation)
+  const foundation = validateFoundationRecords(
+    [...controlPlane.table('control_state').entries()],
+    identifiedRecords(controlPlane.table('installations'), 'Installation'),
+    identifiedRecords(controlPlane.table('hosts'), 'Host'),
+    identifiedRecords(controlPlane.table('principals'), 'Principal'),
+    identifiedRecords(controlPlane.table('grants'), 'Grant'),
+    expectedInstallationId,
+  )
+  validateAccessRecords(
+    identifiedRecords(controlPlane.table('installation_access'), 'Installation Access'),
+    foundation,
+  )
   validateProjects(controlPlane, foundation)
 }
 
@@ -117,6 +132,48 @@ export function validateSakiV2SourceState(
   validateHistoricalProjects(controlPlane, foundation)
 }
 
+/**
+ * Validate exact v3 product relationships and its historical storage-generation seal.
+ * @param controlPlane - opened exact `saki_control_plane@3` source domain.
+ * @param storageGeneration - opened exact `saki_storage_generation@1` source domain.
+ * @param expectedInstallationId - Installation selected by maintenance metadata.
+ * @param expectedStorageGenerationId - physical generation selected by maintenance metadata.
+ * @param expectedCreatedByBuildId - generation provenance repeated by the seal.
+ * @returns nothing after all retained v3 product invariants pass.
+ */
+export function validateSakiV3SourceState(
+  controlPlane: V3ControlPlaneDomain,
+  storageGeneration: V1StorageGenerationDomain,
+  expectedInstallationId: SakiInstallationId,
+  expectedStorageGenerationId: SakiStorageGenerationId,
+  expectedCreatedByBuildId: SakiBuildId,
+): void {
+  validateStorageGenerationV1Seal(
+    storageGeneration,
+    expectedInstallationId,
+    expectedStorageGenerationId,
+    expectedCreatedByBuildId,
+  )
+  const foundation = validateFoundationRecords(
+    [...controlPlane.table('control_state').entries()],
+    identifiedRecords(controlPlane.table('installations'), 'Installation'),
+    identifiedRecords(controlPlane.table('hosts'), 'Host'),
+    identifiedRecords(controlPlane.table('principals'), 'Principal'),
+    identifiedRecords(controlPlane.table('grants'), 'Grant'),
+    expectedInstallationId,
+  )
+  validateAccessRecords(
+    identifiedRecords(controlPlane.table('installation_access'), 'Installation Access'),
+    foundation,
+  )
+  validateDevelopmentProjectsDurableState(
+    controlPlane.table('development_project_registry'),
+    controlPlane.table('registration_intents'),
+    value => value,
+    (actor) => { validateRegistrationActorReference(actor, foundation) },
+  )
+}
+
 function validateStorageGenerationSeal(
   domain: StorageGenerationDomain,
   expectedInstallationId: SakiInstallationId,
@@ -136,6 +193,24 @@ function validateStorageGenerationSeal(
   }
   if (seal.createdByBuildId !== expectedCreatedByBuildId) {
     throw new Error('Saki storage generation seal disagrees with generation build provenance')
+  }
+}
+
+function validateStorageGenerationV1Seal(
+  domain: V1StorageGenerationDomain,
+  expectedInstallationId: SakiInstallationId,
+  expectedStorageGenerationId: SakiStorageGenerationId,
+  expectedCreatedByBuildId: SakiBuildId,
+): void {
+  const entries = [...domain.table('storage_generation').entries()]
+  if (entries.length !== 1 || entries[0]?.[0] !== STORAGE_GENERATION_KEY) {
+    throw new Error('historical Saki storage generation seal is not the required singleton')
+  }
+  const seal = storageGenerationV1SealRecordSchema.parse(entries[0][1])
+  if (seal.installationId !== expectedInstallationId
+    || seal.storageGenerationId !== expectedStorageGenerationId
+    || seal.createdByBuildId !== expectedCreatedByBuildId) {
+    throw new Error('historical Saki storage generation seal disagrees with selected generation metadata')
   }
 }
 
@@ -274,11 +349,14 @@ function requiredHistoricalRecord<K extends string, V extends { readonly id: str
   return record
 }
 
-function validateFoundation(
-  domain: ControlPlaneDomain,
+function validateFoundationRecords(
+  controlEntries: readonly (readonly [typeof CONTROL_STATE_KEY, ControlStateRecord])[],
+  installations: ReadonlyMap<SakiInstallationId, InstallationRecord>,
+  hosts: ReadonlyMap<SakiHostId, HostRecord>,
+  principals: ReadonlyMap<SakiPrincipalId, PrincipalRecord>,
+  grants: ReadonlyMap<SakiGrantId, GrantRecord>,
   expectedInstallationId: SakiInstallationId,
 ): FoundationSnapshot {
-  const controlEntries = [...domain.table('control_state').entries()]
   if (controlEntries.length !== 1 || controlEntries[0]?.[0] !== CONTROL_STATE_KEY) {
     throw new Error('Saki control state is not the required singleton')
   }
@@ -287,11 +365,6 @@ function validateFoundation(
   if (control.installationId !== expectedInstallationId) {
     throw new Error('Saki control state belongs to another Installation')
   }
-
-  const installations = identifiedRecords(domain.table('installations'), 'Installation')
-  const hosts = identifiedRecords(domain.table('hosts'), 'Host')
-  const principals = identifiedRecords(domain.table('principals'), 'Principal')
-  const grants = identifiedRecords(domain.table('grants'), 'Grant')
 
   const installation = requiredRecord(installations, control.installationId, 'Installation')
   const initialHost = requiredRecord(hosts, control.initialHostId, 'Host')
@@ -310,8 +383,10 @@ function validateFoundation(
   return { control, installations, hosts, principals, grants }
 }
 
-function validateAccess(domain: ControlPlaneDomain, foundation: FoundationSnapshot): void {
-  const accessRecords = identifiedRecords(domain.table('installation_access'), 'Installation Access')
+function validateAccessRecords(
+  accessRecords: ReadonlyMap<SakiInstallationAccessId, InstallationAccessRecord>,
+  foundation: FoundationSnapshot,
+): void {
   if (accessRecords.size !== 1) throw new Error('Saki Installation Access is not the required singleton')
   const record = accessRecords.get(foundation.control.installationAccessId)
   if (record === undefined) {
@@ -514,10 +589,17 @@ function validateBootstrapCompletion<
 }
 
 function validateProjects(domain: ControlPlaneDomain, foundation: FoundationSnapshot): void {
-  validateDevelopmentProjectsDurableState(
+  const state = validateDevelopmentProjectsDurableState(
     domain.table('development_project_registry'),
     domain.table('registration_intents'),
     value => value,
+    (actor) => { validateRegistrationActorReference(actor, foundation) },
+  )
+  validateGitHubSynchronizationDurableState(
+    domain.table('github_project_sync'),
+    domain.table('github_sync_configuration_intents'),
+    foundation.control.installationId,
+    projectId => state.registry?.projects.some(project => project.id === projectId) ?? false,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
 }

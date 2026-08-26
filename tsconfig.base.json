@@ -238,6 +238,7 @@
       "@deepseek-ai/dsh-sdk-jsonrpc-server": ["./packages/sdk/server/src"],
       "@deepseek-ai/dsh-experimental-agent-team": ["./packages/experimental/agent-team/src"],
       "@deepseek-ai/dsh-experimental-tool-agent-team": ["./packages/experimental/tool-agent-team/src"],
+      "@breakfastdapaidang/saki-*/constants": ["./packages/saki/*/src/constants.ts"],
       "@breakfastdapaidang/saki-*/invariant": ["./packages/saki/*/src/invariant.ts"],
       "@breakfastdapaidang/saki-*/bin": ["./packages/saki/*/src/bin.ts"],
       "@breakfastdapaidang/saki-*/host": ["./packages/saki/*/src/host.ts"],

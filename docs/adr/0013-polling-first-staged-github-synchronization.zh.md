@@ -20,11 +20,13 @@ GitHub mutation 不暴露通用的 compare-and-set revision。Saki 可以在 mut
 
 ### 检查点与发布
 
-每个绑定存储一条 GitHub Sync Checkpoint，其中包含 Installation、GitHub Project、Repository、映射 revision、本地扫描 generation、最近一次成功完整扫描时间、已确认远端指纹，以及当前 rate-limit 或失败观察。页面 cursor 只存在于一次进行中的扫描内，并在完成或失败时丢弃。
+每个绑定存储一条 GitHub Sync Checkpoint，其中包含 Installation、GitHub Project、Repository、映射 revision、本地扫描 generation、最近一次成功完整扫描时间、已确认远端指纹，以及该次成功扫描的 rate-limit 证据。当前同步失败与重试计划保存在检查点之外，使失败 attempt 无法重写已确认依据。页面 cursor 只存在于一次进行中的扫描内，并在完成或失败时丢弃。
 
-一次 Board 扫描会验证持久 node-id 映射，按 API 顺序读取所有已配置 Project item 页面及其 Status 值，读取关联 Repository 中用于确定 Inbox 成员关系的开放 Issue，并构造候选快照。只有所有页面与不变量均成功后，控制面才原子发布候选快照并推进检查点。部分响应、映射失败、权限失败、取消或 rate limit 都不会改变已确认快照、扫描 generation 与时间或远端指纹；它只更新检查点当前的 rate-limit 或失败观察，不会推进已确认扫描。
+一次 Board 扫描会验证持久 node-id 映射，按 API 顺序读取所有已配置 Project item 页面及其 Status 值，读取关联 Repository 中用于确定 Inbox 成员关系的开放 Issue，并构造候选快照。GitHub 没有把 Project 级 `updatedAt` 记录为每次 item 或 field-value 变化都会推进的 revision，因此 Product App 会执行两遍连续的完整扫描，只在版本化语义指纹一致时接纳候选结果；每一遍还必须具有稳定的前后对象 revision 与计数。只有所有页面与不变量均成功后，控制面才原子发布候选快照并推进检查点。0.1.0 在一个完整 Board 中最多持久化并交付 10,000 个 Work Item；更大的稳定候选结果会记录带固定上限与观察数量的类型化容量失败，而不会发布截断的 Board。部分响应、两遍稳定性不匹配、容量失败、映射失败、权限失败、取消或 rate limit 都不会改变已确认快照、扫描 generation 与时间、远端指纹或检查点；它会另行记录当前失败与重试依据，而不会推进已确认扫描。
 
-活动 Board 默认每 30 秒轮询一次，后台 Project 默认每五分钟轮询一次。启动、手动刷新、本地 mutation、重连和未来 webhook 会请求立即扫描。两个间隔与后台 rate-limit 保留量都是经过验证的 Cordis 插件配置，而不是固定协议常量。
+Field-scoped 同步配置 Intent 使用当前 synchronization revision，并把发生变化的配置保存为 pending。若 patch 解析后与当前 pending 或 active 配置相同，系统会返回 `configuration-unchanged`，且不分配新 revision。Saved 与 activating 配置保持非权威状态，并使受影响 mutation 继续不可用；只有完整扫描校验 mapping 后，系统才会把配置与其首个 confirmed checkpoint 一并原子激活。
+
+活动 Board 默认每 30 秒轮询一次，后台 Project 默认每五分钟轮询一次。启动、手动刷新、本地 mutation、重连和未来 webhook 会请求立即扫描。两个间隔与后台 rate-limit 保留量都是经过验证的逐 Project 同步配置，而不是固定协议常量。
 
 ### 定向交付观察
 
@@ -66,6 +68,6 @@ mutation 前，GitHub 适配器执行定向读取。若已确认远端状态已�
 
 Board 新鲜度受配置的轮询间隔约束，而非实时交付。UI 始终区分最近一次已确认快照、乐观 overlay、扫描时效与当前同步失败。若 Project 所需映射无效，或其已确认状态对策略而言过于陈旧，自动模式不能领取或完成工作。
 
-GitHub Service Definition 暴露完整扫描、定向读取、mutation、确认和 rate-limit 事实；Saki 控制面拥有 Board 映射、分阶段发布、Milestone Delivery、release finalization、冲突规则与检查点持久化。测试覆盖多页扫描、移除、不完整页面、映射重建、乐观移动期间的远端编辑、mutation 回复丢失、secondary limit、进程重启、只唤醒而不直接应用状态的 webhook、annotated-tag peeling、upstream 祖先关系、外部 Milestone 关闭，以及 Release Evidence 原子内嵌。
+GitHub Service Definition 暴露完整扫描、定向读取、mutation、确认和 rate-limit 事实；Saki 控制面拥有 Board 映射、分阶段发布、Milestone Delivery、release finalization、冲突规则与检查点持久化。测试覆盖多页扫描、两遍完整扫描之间的稳定性不匹配、移除、不完整页面、映射重建、乐观移动期间的远端编辑、mutation 回复丢失、secondary limit、进程重启、只唤醒而不直接应用状态的 webhook、annotated-tag peeling、upstream 祖先关系、外部 Milestone 关闭，以及 Release Evidence 原子内嵌。
 
 该协议的外部参考资料是 GitHub 的 [GraphQL 分页](https://docs.github.com/en/graphql/guides/using-pagination-in-the-graphql-api)、[GraphQL rate limit](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api)、[REST API 最佳实践](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)和[失败 webhook 交付行为](https://docs.github.com/en/webhooks/using-webhooks/handling-failed-webhook-deliveries)。

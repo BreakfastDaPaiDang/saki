@@ -98,4 +98,25 @@ describe('workspace publication constraints', () => {
       'lib/types/**/*.d.ts',
     ])
   })
+
+  it('publishes the Saki control-plane browser-safe constants entry and shared chunks', () => {
+    expect(expectedProductPackageFiles({ name: '@breakfastdapaidang/saki-control-plane' })).toEqual([
+      'lib/index.js',
+      'lib/invariant.js',
+      'lib/host.js',
+      'lib/fixtures.js',
+      'lib/constants.js',
+      'lib/service-*.js',
+      'lib/types/**/*.d.ts',
+    ])
+  })
+
+  it('publishes the Saki GitHub browser-safe constants entry', () => {
+    expect(expectedProductPackageFiles({ name: '@breakfastdapaidang/saki-github' })).toEqual([
+      'lib/index.js',
+      'lib/invariant.js',
+      'lib/constants.js',
+      'lib/types/**/*.d.ts',
+    ])
+  })
 })

@@ -6,22 +6,30 @@ import {
   sakiAccessExchangeResultSchema,
   sakiAccessLogoutResultSchema,
   sakiAccessProjectionSchema,
+  sakiBoardResultSchema,
+  sakiConfigureGitHubSynchronizationResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiInspectProjectSelectionResultSchema,
-  sakiIntentResultSchema,
+  sakiRegisterDevelopmentProjectResultSchema,
   sakiProjectIndexResultSchema,
+  sakiProjectSettingsResultSchema,
 } from '../wire.ts'
 import type {
   SakiWireAccessExchangeResult,
   SakiWireAccessLogoutResult,
   SakiWireAccessProjection,
+  SakiWireBoardRefresh,
+  SakiWireBoardResult,
+  SakiWireConfigureGitHubSynchronizationIntent,
+  SakiWireConfigureGitHubSynchronizationResult,
   SakiWireDevelopmentWorkspaceResult,
   SakiWireHostId,
   SakiWireInspectProjectSelectionResult,
-  SakiWireIntent,
-  SakiWireIntentResult,
   SakiWireProjectId,
   SakiWireProjectIndexResult,
+  SakiWireProjectSettingsResult,
+  SakiWireRegisterDevelopmentProjectIntent,
+  SakiWireRegisterDevelopmentProjectResult,
 } from '../wire.ts'
 
 const CHANNEL = '/saki'
@@ -67,6 +75,28 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireDevelopmentWorkspaceResult>
   /**
+   * Read one Project's GitHub synchronization settings.
+   * @param projectId - stable Project id.
+   * @param signal - optional cancellation.
+   * @returns current safe configuration and activation state, or `denied`, `unavailable`, or `not-found`.
+   */
+  queryProjectSettings(
+    projectId: SakiWireProjectId,
+    signal?: AbortSignal,
+  ): Promise<SakiWireProjectSettingsResult>
+  /**
+   * Read one Project's complete Board Projection.
+   * @param projectId - stable Project id.
+   * @param refresh - `cached` reads durable state only; `interactive` also schedules a durable high-priority scan.
+   * @param signal - optional cancellation.
+   * @returns current complete Board and synchronization evidence, or `denied`, `unavailable`, or `not-found`.
+   */
+  queryBoard(
+    projectId: SakiWireProjectId,
+    refresh: SakiWireBoardRefresh,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBoardResult>
+  /**
    * Submit a confirmed Project-registration Intent.
    * @param intent - complete confirmed registration Intent.
    * @param requestToken - current session-derived request token.
@@ -74,12 +104,28 @@ export interface SakiHostClient {
    * @returns a confirmed receipt or typed `denied`, `unavailable`, `conflict`,
    * `failure`, or `reconciliation-required` result with only phase-valid receipt fields.
    */
-  registerDevelopmentProject(intent: SakiWireIntent, requestToken: string, signal?: AbortSignal): Promise<SakiWireIntentResult>
+  registerDevelopmentProject(
+    intent: SakiWireRegisterDevelopmentProjectIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireRegisterDevelopmentProjectResult>
+  /**
+   * Save one field-scoped GitHub synchronization configuration candidate.
+   * @param intent - expected-revision configuration patch.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns a saved receipt or typed `denied`, `unavailable`, `conflict`, or `failure` result.
+   */
+  configureGitHubSynchronization(
+    intent: SakiWireConfigureGitHubSynchronizationIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireConfigureGitHubSynchronizationResult>
 }
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** Typed browser client for Saki Access and Projections. */
+    /** Typed browser client for Saki Access, Projections, and Control Intents. */
     sakiHostClient: SakiHostClient
   }
 }
@@ -151,12 +197,51 @@ export class SakiHostClientService extends Service implements SakiHostClient {
   }
 
   /** @inheritdoc */
+  async queryProjectSettings(
+    projectId: SakiWireProjectId,
+    signal?: AbortSignal,
+  ): Promise<SakiWireProjectSettingsResult> {
+    return sakiProjectSettingsResultSchema.parse(await this.call(
+      'control/query',
+      { type: 'project-settings', projectId },
+      signal,
+    ))
+  }
+
+  /** @inheritdoc */
+  async queryBoard(
+    projectId: SakiWireProjectId,
+    refresh: SakiWireBoardRefresh,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBoardResult> {
+    return sakiBoardResultSchema.parse(await this.call(
+      'control/query',
+      { type: 'board', projectId, refresh },
+      signal,
+    ))
+  }
+
+  /** @inheritdoc */
   async registerDevelopmentProject(
-    intent: SakiWireIntent,
+    intent: SakiWireRegisterDevelopmentProjectIntent,
     requestToken: string,
     signal?: AbortSignal,
-  ): Promise<SakiWireIntentResult> {
-    return sakiIntentResultSchema.parse(await this.call(
+  ): Promise<SakiWireRegisterDevelopmentProjectResult> {
+    return sakiRegisterDevelopmentProjectResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  /** @inheritdoc */
+  async configureGitHubSynchronization(
+    intent: SakiWireConfigureGitHubSynchronizationIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireConfigureGitHubSynchronizationResult> {
+    return sakiConfigureGitHubSynchronizationResultSchema.parse(await this.call(
       'control/submit',
       intent,
       signal,
