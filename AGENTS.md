@@ -135,21 +135,23 @@ Real-API tests and demos read `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`, 
 
 Track work in [GitHub Issues](docs/agents/issue-tracker.md) under [triage roles](docs/agents/triage-labels.md); navigate terminology through [CONTEXT-MAP.md](CONTEXT-MAP.md) and [domain-doc rules](docs/agents/domain.md).
 
+**Delegated standalone merges.** Without another confirmation, an entrusted agent may squash-merge a Ready, mergeable standalone PR only after re-fetching its exact head and confirming required checks pass with no unresolved thread or outstanding change request. Verify `MERGED` and no open PR uses its branch as a base, then delete the remote branch; otherwise stop and report. Stacks and upstream sync retain [their merge modes](.agents/notes/implemented/process/2026-08-27-delegated-standalone-pr-landing.md).
+
 ## Defensive patterns
 
 Read [docs/defensive-patterns.md](docs/defensive-patterns.md) before lifecycle, concurrency, subprocess, or teardown work.
 
 ## Type safety and documentation
 
-Everything compiles under `strict: true` with `noImplicitAny`; every remaining `any` explains why narrowing is infeasible. Every module and export has concise JSDoc for its non-obvious contract; function-like exports include `@param`/`@returns`, as enforced by `verify-export-jsdoc`. Heritage-declared members, plugin-protocol slots, and constructors keep their docs at the declaring Service Definition, protocol, or class.
+Code compiles under `strict: true` with `noImplicitAny`; every `any` explains why narrowing is infeasible. Modules and exports have concise JSDoc for non-obvious contracts; function-like exports include enforced `@param`/`@returns`. Heritage-declared members, plugin-protocol slots, and constructors keep docs at their declaring Service Definition, protocol, or class.
 
-Comments and docs state complete contracts and context, not reasoning transcripts. Use direct, concrete terms. Do not use metaphors. Before writing `contract`, `boundary`, or `shape`, ask whether a more exact term names the subject: write `response fields`, `JSON validation`, or `ESM exports` instead of `response shape`, `validation boundary`, or `module shape`. Keep `contract` for preconditions, postconditions, invariants, compatibility promises, and other obligations that callers, callees, implementers, providers, producers, or consumers rely on. Keep a literal process, wire, security, transaction, or lifecycle boundary. Do not narrate control flow or tests, preserve review history, or restate code. Keep behavior, failure, timing, ownership, and safe-use facts; link the rationale. Use [dsh-prose-standard](.agents/skills/dsh-prose-standard/SKILL.md) for decisions. Wire mechanically checkable invariants into an executed top-level gate and prove each changed acceptance path rejects an invalid case. Use narrow, justified exceptions instead of disabling a rule globally.
+Comments and docs preserve behavior, failure, timing, ownership, safe-use facts, and non-obvious context without reasoning transcripts, control-flow or test narration, review history, code restatement, or metaphors. Name exact fields, validations, exports, and actors; reserve `contract` for relied-on obligations and `boundary` for literal process, wire, security, transaction, or lifecycle boundaries. Link rationale and use [dsh-prose-standard](.agents/skills/dsh-prose-standard/SKILL.md) for decisions. Wire mechanically checkable invariants into an executed top-level gate and prove each changed acceptance path rejects an invalid case. Use narrow, justified exceptions instead of disabling a rule globally.
 
-Docs accompany every code change: update affected README and JSDoc contracts together. Routine bilingual work follows [docs/AGENTS.md](docs/AGENTS.md); only explicit user invocation may run `dsh-translate-docs`. Current-state prose, one physical line per paragraph, one home per fact, and word budgets live there.
+Docs accompany code changes: update affected README and JSDoc together. Follow [docs/AGENTS.md](docs/AGENTS.md) for bilingual work, current-state prose, one-line paragraphs, single homes, and budgets; only explicit user invocation may run `dsh-translate-docs`.
 
 ## Editing these instructions
 
-`CLAUDE.md` symlinks `AGENTS.md` at root, `packages/`, and `examples/`; edit the real file. Keep each rule self-contained while linking high-level docs. Condense when clarity survives; raise a `verify-doc-budgets` ceiling when the required content genuinely needs more space.
+`CLAUDE.md` symlinks root, `packages/`, and `examples/` instructions; edit the real files. Keep rules self-contained and link high-level docs. Condense when clear; raise a `verify-doc-budgets` ceiling only when needed.
 
 ## Vendoring policy
 
