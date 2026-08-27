@@ -20,7 +20,7 @@ import css from './AppFrame.module.css'
 /** Full composed props: runtime share + child-slot render share + store share. */
 export type AppFrameProps =
   & PropsRuntime<'root'>
-  & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay'>
+  & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay' | 'main.surface'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
 
 /** Center column grid item (session-body building block). */
@@ -89,6 +89,7 @@ export function AppFrame({
   useSessions,
   actions,
   renderSlot,
+  renderSlotChain,
 }: AppFrameProps) {
   const panels = useStore(s => s)
   const detailsSession = useSessions((s) => {
@@ -186,8 +187,16 @@ export function AppFrame({
             paint — no loading gate: a bare status line reads worse than
             the shell's own pending rendering. The conversation
             is session-maybe; the strict details entry naturally renders
-            empty while no session is current. */}
-        <CenterColumn>{renderSlot('conversation', {})}</CenterColumn>
+            empty while no session is current. The center column is the
+            `main.surface` chain: a feature plugin's elected entry takes over
+            the surface, while the conversation fallback stays mounted
+            (overlay) so its in-progress state survives the switch. */}
+        <CenterColumn>
+          {renderSlotChain('main.surface', { surfaceKey: panels.surfaceKey }, {
+            fallback: renderSlot('conversation', {}),
+            overlay: true,
+          })}
+        </CenterColumn>
         <DetailsColumn>{renderSlot('details', {})}</DetailsColumn>
       </>
       <div className={css.overlayLayer} data-shell-overlay>

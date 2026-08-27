@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载默认 JSON 存储后端、由启动器替换为 manifest 所选 `saki_control_plane` generation 的惰性 SQLite 路由、JSONL Session 持久化、Workspace、本地文件系统与子进程提供方、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。在 Windows 上，它还挂载当前用户 DPAPI 凭据 Provider 与只读 Saki Product GitHub App Provider；不支持的平台会禁用这两个配置项，而不会把更弱的凭据来源报告成 `local-user-trust`。就绪配置项提供稳定的 `{"product":"saki","status":"ready"}` 记录。启动器只在 `boot()` 完成配置项激活审计后将其写入 stdout；报告失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。
+Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁挂载默认 JSON 存储后端、由启动器替换为 manifest 所选 `saki_control_plane` generation 的惰性 SQLite 路由、JSONL Session 持久化、Workspace、本地文件系统与子进程提供方、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API、带壳层花名册与 Saki [`web-ui`](../web-ui/README.zh.md) 插件的 DSH 客户端模块系统、为构建产物 web 前端 dist 提供服务的 fallback 座服务器，以及 `saki-readiness`；以上组合建立在空的 [`cordis.yml`](cordis.yml) 上。在 Windows 上，它还挂载当前用户 DPAPI 凭据 Provider 与只读 Saki Product GitHub App Provider；不支持的平台会禁用这两个配置项，而不会把更弱的凭据来源报告成 `local-user-trust`。就绪配置项提供稳定的 `{"product":"saki","status":"ready"}` 记录。启动器只在 `boot()` 完成配置项激活审计后将其写入 stdout；报告失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。
 
 在仓库根目录运行：
 
@@ -33,6 +33,7 @@ pnpm run saki
 ## 已知限制与延后工作
 
 - **只读 GitHub 基础**：操作者安装并配置 Product App 后，Windows 组合可以检查该 App 并发布已确认的 Board 读取结果；GitHub Issue、Project item、Repository 与 Workflow 修改仍不存在。
-- **只支持早期 Project 生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 Development Workspace。尚未组合 Resource Binding 重绑定与退役、agent（智能体）、模型提供方和渲染后的 Web 界面。
+- **只支持早期 Project 生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 Development Workspace。尚未组合 Resource Binding 重绑定与退役、仓库修改、agent（智能体）与模型提供方。
+- **无 agent 栈的浏览器界面**：组合的壳层会渲染 Saki 页面与 Conversation 回退，但缺少 `/api` agent 服务：会话创建不可用，控制台会出现 `/api` 重连噪音。组合 agent 栈属于后续切片。
 - **可执行入口仅供仓库本地使用**——Saki 包保持私有，不属于任何 npm 发布族。
 - **仅限回环开发 Host**：固定的本地 bootstrap 流程不会授权远程浏览器，也不替代 [Saki Host 启动器](../../../docs/saki/host-launcher.zh.md)所述的 Windows Host 包装层。

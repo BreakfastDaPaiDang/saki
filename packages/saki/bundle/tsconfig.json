@@ -34,6 +34,9 @@
     },
     {
       "path": "../host-api/tsconfig.host.json"
+    },
+    {
+      "path": "../../host/frontend-static"
     }
   ]
 }

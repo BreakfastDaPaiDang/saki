@@ -276,6 +276,18 @@
   max-width: 0;
 }
 
+/* Primary navigation entries under New Session: each occupant owns its row
+   geometry; the rail form is the occupant's own collapsed rendering. */
+.primaryActions {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.primaryActions:empty {
+  display: none;
+}
+
 /* Region seat: always mounted so the foot never moves. Its trailing margin
    cancels the wide shell inset so the nested scrollbar can sit at the sidebar
    edge; the browser restores that inset inside its own rows. */

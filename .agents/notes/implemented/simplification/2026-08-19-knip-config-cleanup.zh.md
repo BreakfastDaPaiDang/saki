@@ -12,7 +12,7 @@ Status: implemented
 
 删除了 15 个 `workspaces` 条目：2 个指向工作树与 `HEAD` 中都不存在的包的失效键，以及 13 个 `entry`/`project` 与 `packages/*/*` 通配默认逐字节相同的条目。
 
-- 失效键：`packages/util/home`（在 `4a09d9b34d`，harness home 解析器的合并改动中删除）和 `packages/client/web-ui`（无对应目录、无 git 历史，是孤儿键）。knip 6.16 不会标记失效的 workspace 键——这项稳定性检查在 knip 6.18 才引入——所以这些是本应在包消失时一并删除、却残留的惰性配置。
+- 失效键：`packages/util/home`（在 `4a09d9b34d`，harness home 解析器的合并改动中删除）和 `packages/client/` 下的 `web-ui` 键（无对应目录、无 git 历史，是孤儿键）。knip 6.16 不会标记失效的 workspace 键——这项稳定性检查在 knip 6.18 才引入——所以这些是本应在包消失时一并删除、却残留的惰性配置。
 - 通配重复条目：`packages/host/webserver`、`packages/client/runtime`、`packages/core/tools`、`packages/context/tmux-context`、`packages/util/timeout`、`packages/util/output-retention`、`packages/goal/goal-round-driver`、`packages/goal/tool-goal`、`packages/util/home-paths`、`packages/fs/tool-fs-search`、`packages/client/ui-settings`、`packages/client/modules`、`packages/client/hmr`。每个都恰好声明了 `entry: ["tests/**/*.spec.ts"]` 和 `project: ["src/**/*.ts", "tests/**/*.ts"]`，与 `packages/*/*` 通配相等，且这些包仍然存在，因此通配现在以完全相同的方式覆盖它们。
 
 本改动只做删除：`knip.json` 从 790 行降到 655 行，行为不变。`pnpm run knip` 在改动前后都干净通过（零问题、退出码 0），因为 knip 为每个已匹配的键选取一条 workspace 配置（`getConfigKeyForWorkspace` 按特定优先、不做数组合并），所以被删条目要么丢掉了无法解析的目标，要么回退到一个完全相同的通配配置。

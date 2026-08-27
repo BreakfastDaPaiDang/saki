@@ -135,6 +135,9 @@ export const inject = ['connection']
 
 /** Browser Saki client backed by same-origin Connection calls. */
 export class SakiHostClientService extends Service implements SakiHostClient {
+  /** Required Client Connection carrier (static so the Loader honors it). */
+  static readonly inject = inject
+
   private readonly connection: ConnectionHandle
 
   /** @param ctx - Client context carrying Connection. */

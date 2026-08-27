@@ -1,0 +1,131 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+
+.dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--dsw-alias-bg-layer-1, #161b25);
+  border: 1px solid var(--dsw-alias-border-l, rgba(255, 255, 255, 0.12));
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--dsw-alias-border-l, rgba(255, 255, 255, 0.1));
+}
+
+.dialogTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.close {
+  color: var(--dsw-alias-label-tertiary);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.close:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--dsw-alias-border-l, rgba(255, 255, 255, 0.12));
+  background: var(--dsw-alias-bg-base, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+}
+
+.evidence {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-border-l, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.factRow {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.factRow dt {
+  width: 108px;
+  flex-shrink: 0;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.factRow dd {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  word-break: break-all;
+}
+
+.mono {
+  font-family: var(--dsw-font-mono);
+  font-size: 12px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primary {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: none;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-inverted, #fff);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-state-error-primary);
+}
