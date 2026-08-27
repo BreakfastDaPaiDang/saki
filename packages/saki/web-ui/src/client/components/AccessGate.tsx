@@ -72,7 +72,7 @@ export function AccessGate(props: AccessGateProps) {
           <input
             className={css.input}
             value={secret}
-            onChange={event => setSecret(event.target.value)}
+            onChange={(event) => { setSecret(event.target.value) }}
             placeholder={t('access.bootstrap.placeholder')}
             aria-label={t('access.bootstrap.placeholder')}
             autoComplete="off"

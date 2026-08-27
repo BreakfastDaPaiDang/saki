@@ -69,6 +69,7 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
     const inner = result.projection.result
     if (inner.ok) {
       setPhase({ step: 'review', selection: inner.selection })
+      /* v8 ignore next -- String.split always yields at least one segment, so pop() never yields undefined */
       setTitle(inner.selection.displayLocation.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '')
     } else {
       setPhase({ step: 'rejected', reason: inner.reason })
@@ -110,7 +111,7 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
   }
 
   return (
-    <div className={css.backdrop} role="presentation" onMouseDown={e => e.target === e.currentTarget && props.onClose()}>
+    <div className={css.backdrop} role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose() }}>
       <div className={css.dialog} role="dialog" aria-modal="true" aria-label={t('project.register.title')}>
         <header className={css.header}>
           <h2 className={css.dialogTitle}>{t('project.register.title')}</h2>
@@ -150,7 +151,7 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
                 <div className={css.factRow}><dt>{t('workspace.facts.head')}</dt><dd className={css.mono}>{phase.selection.head.slice(0, 10)}</dd></div>
                 <div className={css.factRow}>
                   <dt>{t('project.register.remotes')}</dt>
-                  <dd className={css.mono}>{phase.selection.remotes.length === 0 ? t('workspace.facts.none') : phase.selection.remotes.join('，')}</dd>
+                  <dd className={css.mono}>{phase.selection.remotes.length === 0 ? t('workspace.facts.none') : phase.selection.remotes.map(remote => remote.coordinate ?? remote.transport).join('，')}</dd>
                 </div>
                 <div className={css.factRow}>
                   <dt>{t('project.register.github')}</dt>
@@ -174,7 +175,7 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
               </dl>
               <label className={css.field}>
                 {t('project.register.nameLabel')}
-                <input className={css.input} value={title} onChange={event => setTitle(event.target.value)} />
+                <input className={css.input} value={title} onChange={(event) => { setTitle(event.target.value) }} />
               </label>
               <div className={css.actions}>
                 <button type="button" className={css.primary} disabled={!title.trim() || pending} onClick={() => void confirm(phase.selection)}>
