@@ -36,6 +36,7 @@
     "lib/bin.js",
     "cordis.patch.yml",
     "cordis.yml",
+    "lib/types/**/*.js",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",
