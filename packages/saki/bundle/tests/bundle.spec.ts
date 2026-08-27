@@ -59,6 +59,7 @@ describe('Saki bundle package', () => {
       backend: 'json',
       routes: {
         saki_control_plane: 'sqlite',
+        saki_host_execution: 'sqlite',
         saki_storage_generation: 'sqlite',
       },
     })

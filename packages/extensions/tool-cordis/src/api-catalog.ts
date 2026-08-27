@@ -1211,6 +1211,48 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'request', description: 'selected Host and untrusted directory locator.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
         returns: 'detached safe evidence plus the trusted Host observation, or a bounded rejection.',
       },
+      {
+        signature: 'abstract inspectProject( request: InspectProjectRequest, signal: AbortSignal, ): Promise<InspectProjectResult>',
+        description: 'Revalidate the Host resource named by one Resource Binding and return complete bounded Git status without changing the repository.',
+        parameters: [{ name: 'request', description: 'revisioned binding and registration-time attribution evidence.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
+        returns: 'browser-safe structured status or one bounded safe failure.',
+      },
+      {
+        signature: 'abstract readDiff( binding: ActiveHostProjectBinding, request: ReadProjectDiffRequest, signal: AbortSignal, ): Promise<ReadProjectDiffResult>',
+        description: 'Read one bounded page of a stable file-scoped Diff without accepting a caller-controlled path or Git command.',
+        parameters: [{ name: 'binding', description: 'active Resource Binding evidence from the authorized control plane.' }, { name: 'request', description: 'expected status, opaque change id, layer, and optional continuation.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
+        returns: 'one internally consistent Diff page or a bounded safe failure.',
+      },
+      {
+        signature: 'abstract prepareOperation<K extends HostOperationKind>( request: HostOperationRequest<K>, admissionSource: HostOperationAdmissionSource, signal: AbortSignal, ): Promise<HostOperationReceipt<K>>',
+        description: 'Durably create or replay one inert Host Operation before any external effect and bind an ephemeral current-admission callback to its receipt.',
+        parameters: [{ name: 'request', description: 'complete immutable operation request and trusted Git preconditions.' }, { name: 'admissionSource', description: 'same-process callback used only at the effect boundary.' }, { name: 'signal', description: 'caller lifetime for preparation; aborting it is not durable cancellation.' }],
+        returns: 'the durable preparation plus a Provider-owned nominal acceptance, or a bounded rejection.',
+      },
+      {
+        signature: 'abstract startOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, acceptance: HostOperationAcceptance, signal: AbortSignal, ): Promise<HostOperationStartResult<K>>',
+        description: 'Start or resume one prepared operation after checking its Provider-owned acceptance and current Binding write admission.',
+        parameters: [{ name: 'operation', description: 'stable reference returned by preparation.' }, { name: 'acceptance', description: 'non-serializable Provider-owned acceptance from the matching receipt.' }, { name: 'signal', description: 'caller lifetime for this start attempt; aborting it is not durable cancellation.' }],
+        returns: 'the current durable snapshot and whether current admission allowed execution.',
+      },
+      {
+        signature: 'abstract inspectOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, signal: AbortSignal, ): Promise<HostOperationSnapshot<K>>',
+        description: 'Inspect and recover one durable Host Operation without starting a new external effect.',
+        parameters: [{ name: 'operation', description: 'stable Provider-routed reference.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
+        returns: 'the current durable snapshot after evidence-driven lifecycle advancement.',
+      },
+      {
+        signature: 'abstract cancelOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, reason: HostOperationCancellationReason, signal: AbortSignal, ): Promise<HostOperationSnapshot<K>>',
+        description: 'Request durable cancellation without treating caller cancellation as an operation outcome.',
+        parameters: [{ name: 'operation', description: 'stable Provider-routed reference.' }, { name: 'reason', description: 'closed durable product reason.' }, { name: 'signal', description: 'caller lifetime for the cancellation request.' }],
+        returns: 'the current durable operation snapshot after cancellation handling.',
+      },
+      {
+        signature: 'abstract onChanged(listener: (change: HostOperationChange) => void): HostOperationChangedDisposer',
+        description: 'Subscribe to post-commit Host Operation revision changes.',
+        parameters: [{ name: 'listener', description: 'contained wake-up listener; snapshots remain authoritative.' }],
+        returns: 'disposer for this subscription.',
+      },
     ],
   },
   {
@@ -1234,7 +1276,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'abstract readonly stateVersion: 4',
+        signature: 'abstract readonly stateVersion: 5',
         description: 'State-format version selected by the Installation manifest.',
         parameters: [],
       },
@@ -2974,6 +3016,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type AccessProjection = SakiUnauthenticatedAccessProjection | SakiAuthenticatedAccessProjection;',
   },
   {
+    name: 'ActiveHostProjectBinding',
+    declaration: 'export interface ActiveHostProjectBinding {\n    readonly id: SakiResourceBindingId;\n    readonly revision: number;\n    readonly health: \'active\';\n    readonly hostId: SakiHostId;\n    readonly workspaceId: WorkspaceId;\n    readonly expectedInspection: ProjectSelectionInspection;\n    readonly inheritedChangeBaseline: InheritedChangeBaseline;\n}',
+  },
+  {
     name: 'AdapterRegistrationHandle',
     declaration: 'export interface AdapterRegistrationHandle {\n    (): void;\n    replace(providers: string[]): void;\n}',
   },
@@ -3016,6 +3062,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ApiKeyRecord',
     declaration: 'export interface ApiKeyRecord {\n    readonly kind: \'api-key\';\n    readonly key?: string;\n    readonly env?: Readonly<Record<string, string>>;\n}',
+  },
+  {
+    name: 'AppliedProjectGitChange',
+    declaration: 'export interface AppliedProjectGitChange extends SelectedProjectGitChange {\n    readonly path: string;\n}',
   },
   {
     name: 'ApprovalOutcome',
@@ -3222,6 +3272,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CommandResult = {\n    readonly kind: \'success\';\n    readonly text?: string;\n    readonly sourceEventSeq?: number;\n} | {\n    readonly kind: \'error\';\n    readonly text: string;\n};',
   },
   {
+    name: 'CommitHostOperationRequest',
+    declaration: 'export interface CommitHostOperationRequest {\n    readonly type: \'commit\';\n    readonly source: HostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly message: string;\n}',
+  },
+  {
+    name: 'CommitHostOperationResult',
+    declaration: 'export interface CommitHostOperationResult {\n    readonly type: \'commit\';\n    readonly commitId: string;\n    readonly treeId: string;\n    readonly parent: ProjectGitCommitParent;\n    readonly target: ProjectGitCommitTarget;\n    readonly author: ProjectGitCommitSignature;\n    readonly committer: ProjectGitCommitSignature;\n}',
+  },
+  {
     name: 'CompactionAgentContext',
     declaration: 'export interface CompactionAgentContext {\n    session: Session;\n    options: {\n        provider?: string;\n        model?: string;\n    };\n}',
   },
@@ -3324,6 +3382,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CreateAgentOptions',
     declaration: 'export interface CreateAgentOptions {\n    readonly sessionId: SessionId;\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly seedLength?: number;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n    };\n    readonly seed?: readonly SessionEvent[];\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
+  },
+  {
+    name: 'CreateCommitIntent',
+    declaration: 'export interface CreateCommitIntent {\n    readonly type: \'create-commit\';\n    readonly intentId: SakiControlIntentId;\n    readonly expected: GitMutationExpectation;\n    readonly message: string;\n}',
   },
   {
     name: 'CreateGoalRequest',
@@ -3818,6 +3880,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type GitHubTagTarget = {\n    readonly kind: \'tag\';\n    readonly id: GitHubTagObjectId;\n} | {\n    readonly kind: \'commit\';\n    readonly id: GitHubCommitId;\n};',
   },
   {
+    name: 'GitMutationExpectation',
+    declaration: 'export interface GitMutationExpectation {\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n    readonly expectedProjectRevision: number;\n    readonly expectedBinding: {\n        readonly id: SakiResourceBindingId;\n        readonly revision: number;\n    };\n    readonly expectedStatus: ProjectGitStatusFingerprint;\n    readonly expectedHead: ProjectGitHead;\n    readonly expectedIndex: Extract<ProjectGitIndexEvidence, {\n        readonly kind: \'tree\';\n    }>;\n    readonly expectedWorktree: ProjectGitWorktreeFingerprint;\n}',
+  },
+  {
     name: 'GoalActivation',
     declaration: 'export type GoalActivation = \'armed\' | \'disarmed\';',
   },
@@ -3844,6 +3910,94 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GoalView',
     declaration: 'export interface GoalView extends GoalSnapshot {\n    readonly roundsStarted: number;\n    readonly createdAt: number;\n    readonly updatedAt: number;\n    readonly activation: GoalActivation;\n}',
+  },
+  {
+    name: 'HostGitMutationPrecondition',
+    declaration: 'export interface HostGitMutationPrecondition {\n    readonly binding: ActiveHostProjectBinding;\n    readonly status: ProjectGitStatusFingerprint;\n    readonly head: ProjectGitHead;\n    readonly index: Extract<ProjectGitIndexEvidence, {\n        readonly kind: \'tree\';\n    }>;\n    readonly worktree: ProjectGitWorktreeFingerprint;\n    readonly preEffectBaseline: CompleteInheritedChangeBaseline;\n}',
+  },
+  {
+    name: 'HostOperationAcceptance',
+    declaration: 'export abstract class HostOperationAcceptance {\n    #establishNominalIdentity(): undefined;\n}',
+  },
+  {
+    name: 'HostOperationAdmissionDecision',
+    declaration: 'export type HostOperationAdmissionDecision = {\n    readonly kind: \'accepted\';\n    readonly admissionRevision: number;\n} | {\n    readonly kind: \'denied\';\n    readonly reason: \'not-current\' | \'source-canceled\' | \'authority-revoked\';\n} | {\n    readonly kind: \'unavailable\';\n};',
+  },
+  {
+    name: 'HostOperationAdmissionEvidence',
+    declaration: 'export type HostOperationAdmissionEvidence = {\n    readonly kind: \'not-accepted\';\n} | {\n    readonly kind: \'accepted\';\n    readonly revision: number;\n    readonly acceptedAt: number;\n};',
+  },
+  {
+    name: 'HostOperationAdmissionExpectation',
+    declaration: 'export interface HostOperationAdmissionExpectation<K extends HostOperationKind = HostOperationKind> {\n    readonly bindingId: SakiResourceBindingId;\n    readonly bindingRevision: number;\n    readonly preparation: HostOperationPreparation<K>;\n    readonly source: HostOperationSource;\n}',
+  },
+  {
+    name: 'HostOperationAdmissionSource',
+    declaration: 'export type HostOperationAdmissionSource = (expectation: HostOperationAdmissionExpectation, signal: AbortSignal) => Promise<HostOperationAdmissionDecision>;',
+  },
+  {
+    name: 'HostOperationCancellationReason',
+    declaration: 'export type HostOperationCancellationReason = \'source-canceled\' | \'authority-revoked\';',
+  },
+  {
+    name: 'HostOperationChange',
+    declaration: 'export interface HostOperationChange {\n    readonly operation: HostOperationReference;\n    readonly revision: number;\n}',
+  },
+  {
+    name: 'HostOperationChangedDisposer',
+    declaration: 'export type HostOperationChangedDisposer = () => void;',
+  },
+  {
+    name: 'HostOperationFailure',
+    declaration: 'export interface HostOperationFailure {\n    readonly reason: \'binding-stale\' | \'observation-stale\' | \'invalid-selection\' | \'unsupported-state\';\n}',
+  },
+  {
+    name: 'HostOperationId',
+    declaration: 'export type HostOperationId = Branded<\'HostOperationId\'>;',
+  },
+  {
+    name: 'HostOperationKind',
+    declaration: 'export type HostOperationKind = keyof HostOperationRequestMap;',
+  },
+  {
+    name: 'HostOperationPreparation',
+    declaration: 'export interface HostOperationPreparation<K extends HostOperationKind = HostOperationKind> {\n    readonly operation: HostOperationReference<K>;\n    readonly preparationRevision: number;\n    readonly requestFingerprint: HostOperationRequestFingerprint;\n}',
+  },
+  {
+    name: 'HostOperationReceipt',
+    declaration: 'export type HostOperationReceipt<K extends HostOperationKind = HostOperationKind> = {\n    readonly ok: true;\n    readonly preparation: HostOperationPreparation<K>;\n    readonly snapshot: HostOperationSnapshot<K>;\n    readonly acceptance: HostOperationAcceptance;\n} | {\n    readonly ok: false;\n    readonly reason: \'source-conflict\' | \'unavailable\';\n};',
+  },
+  {
+    name: 'HostOperationReference',
+    declaration: 'export interface HostOperationReference<K extends HostOperationKind = HostOperationKind> {\n    readonly id: HostOperationId;\n    readonly hostId: SakiHostId;\n    readonly type: K;\n}',
+  },
+  {
+    name: 'HostOperationRequest',
+    declaration: 'export type HostOperationRequest<K extends HostOperationKind = HostOperationKind> = K extends HostOperationKind ? HostOperationRequestMap[K][\'request\'] : never;',
+  },
+  {
+    name: 'HostOperationRequestFingerprint',
+    declaration: 'export interface HostOperationRequestFingerprint {\n    readonly version: 1;\n    readonly digest: string;\n}',
+  },
+  {
+    name: 'HostOperationRequestMap',
+    declaration: 'export interface HostOperationRequestMap {\n    readonly \'stage-files\': {\n        readonly request: StageFilesHostOperationRequest;\n        readonly result: StageFilesHostOperationResult;\n    };\n    readonly \'unstage-files\': {\n        readonly request: UnstageFilesHostOperationRequest;\n        readonly result: UnstageFilesHostOperationResult;\n    };\n    readonly commit: {\n        readonly request: CommitHostOperationRequest;\n        readonly result: CommitHostOperationResult;\n    };\n}',
+  },
+  {
+    name: 'HostOperationResult',
+    declaration: 'export type HostOperationResult<K extends HostOperationKind = HostOperationKind> = K extends HostOperationKind ? HostOperationRequestMap[K][\'result\'] : never;',
+  },
+  {
+    name: 'HostOperationSnapshot',
+    declaration: 'export type HostOperationSnapshot<K extends HostOperationKind = HostOperationKind> = K extends HostOperationKind ? HostOperationSnapshotBase<K> & ({\n    readonly state: \'prepared\';\n    readonly admission: {\n        readonly kind: \'not-accepted\';\n    };\n} | {\n    readonly state: \'accepted\';\n    readonly admission: Extract<HostOperationAdmissionEvidence, {\n        readonly kind: \'accepted\';\n    }>;\n} | {\n    readonly state: \'planning\';\n    readonly admission: Extract<HostOperationAdmissionEvidence, {\n        readonly kind: \'accepted\';\n    }>;\n    readonly plannedAt: number;\n} | {\n    readonly state: \'publishing\';\n    readonly admission: Extract<HostOperationAdmissionEvidence, {\n        readonly kind: \'accepted\';\n    }>;\n    readonly plannedAt: number;\n    readonly effectPlannedAt: number;\n    readonly publishingAt: number;\n} | {\n    readonly state: \'succeeded\';\n    readonly admission: Extract<HostOperationAdmissionEvidence, {\n        readonly kind: \'accepted\';\n    }>;\n    readonly completedAt: number;\n    readonly result: HostOperationResult<K>;\n} | {\n    readonly state: \'failed\';\n    readonly admission: HostOperationAdmissionEvidence;\n    readonly completedAt: number;\n    readonly failure: HostOperationFailure;\n    readonly effect: \'none\';\n} | {\n    readonly state: \'canceled\';\n    readonly admission: HostOperationAdmissionEvidence;\n    readonly completedAt: number;\n    readonly reason: HostOperationCancellationReason;\n    readonly effect: \'none\';\n} | {\n    readonly state: \'rec /* …truncated — full shape in source */',
+  },
+  {
+    name: 'HostOperationSource',
+    declaration: 'export type HostOperationSource = {\n    readonly kind: \'control-intent\';\n    readonly intentId: SakiControlIntentId;\n    readonly intentRevision: number;\n    readonly payloadDigest: string;\n};',
+  },
+  {
+    name: 'HostOperationStartResult',
+    declaration: 'export type HostOperationStartResult<K extends HostOperationKind = HostOperationKind> = {\n    readonly ok: true;\n    readonly snapshot: HostOperationSnapshot<K>;\n} | {\n    readonly ok: false;\n    readonly reason: \'acceptance-mismatch\' | \'not-current\' | \'source-canceled\' | \'authority-revoked\' | \'busy\' | \'unavailable\';\n    readonly snapshot: HostOperationSnapshot<K>;\n};',
   },
   {
     name: 'ImageAttachmentLimits',
@@ -3920,6 +4074,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'InheritedGitObjectSlot',
     declaration: 'export type InheritedGitObjectSlot = InheritedGitObjectEvidence | {\n    readonly kind: \'missing\';\n};',
+  },
+  {
+    name: 'InspectProjectFailureReason',
+    declaration: 'export type InspectProjectFailureReason = \'binding-stale\' | \'missing\' | \'malformed\' | \'limit\' | \'invalid-path\' | \'ambiguous\' | \'unavailable\';',
+  },
+  {
+    name: 'InspectProjectRequest',
+    declaration: 'export interface InspectProjectRequest {\n    readonly binding: ActiveHostProjectBinding;\n}',
+  },
+  {
+    name: 'InspectProjectResult',
+    declaration: 'export type InspectProjectResult = {\n    readonly ok: true;\n    readonly observation: ProjectGitStatusObservation;\n    readonly preEffectBaseline: InheritedChangeBaseline;\n} | {\n    readonly ok: false;\n    readonly reason: InspectProjectFailureReason;\n};',
   },
   {
     name: 'InspectProjectSelectionRequest',
@@ -4310,8 +4476,116 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type PreToolDecision = {\n    kind: \'allow\';\n} | {\n    kind: \'deny\';\n    reason: string;\n} | {\n    kind: \'ask\';\n    reason?: string;\n};',
   },
   {
+    name: 'ProjectGitBranch',
+    declaration: 'export type ProjectGitBranch = {\n    readonly kind: \'attached\';\n    readonly ref: string;\n    readonly name: string;\n} | {\n    readonly kind: \'detached\';\n};',
+  },
+  {
+    name: 'ProjectGitChange',
+    declaration: 'export type ProjectGitChange = ProjectGitOrdinaryChange | ProjectGitUntrackedChange | ProjectGitUnmergedChange;',
+  },
+  {
+    name: 'ProjectGitChangeFingerprint',
+    declaration: 'export interface ProjectGitChangeFingerprint {\n    readonly version: 1;\n    readonly digest: string;\n}',
+  },
+  {
+    name: 'ProjectGitChangeId',
+    declaration: 'export type ProjectGitChangeId = Branded<\'ProjectGitChangeId\'>;',
+  },
+  {
+    name: 'ProjectGitCommitParent',
+    declaration: 'export type ProjectGitCommitParent = {\n    readonly kind: \'none\';\n} | {\n    readonly kind: \'commit\';\n    readonly objectId: string;\n};',
+  },
+  {
+    name: 'ProjectGitCommitSignature',
+    declaration: 'export interface ProjectGitCommitSignature {\n    readonly name: string;\n    readonly email: string;\n    readonly timestamp: number;\n    readonly timezone: string;\n    readonly source: \'git-config\';\n}',
+  },
+  {
+    name: 'ProjectGitCommitTarget',
+    declaration: 'export type ProjectGitCommitTarget = {\n    readonly kind: \'symbolic-ref\';\n    readonly ref: string;\n} | {\n    readonly kind: \'detached-head\';\n};',
+  },
+  {
+    name: 'ProjectGitDiffCursor',
+    declaration: 'export type ProjectGitDiffCursor = Branded<\'ProjectGitDiffCursor\'>;',
+  },
+  {
+    name: 'ProjectGitDiffFailureReason',
+    declaration: 'export type ProjectGitDiffFailureReason = \'binding-stale\' | \'observation-stale\' | \'change-missing\' | \'change-ambiguous\' | \'layer-missing\' | \'invalid-cursor\' | \'cursor-stale\' | \'total-bytes\' | \'total-lines\' | \'line-bytes\' | \'time\' | \'untracked\' | \'conflict\' | \'binary\' | \'command-length\' | \'invalid-utf8\' | \'malformed\' | \'ambiguous\' | \'unavailable\';',
+  },
+  {
+    name: 'ProjectGitDiffLayer',
+    declaration: 'export type ProjectGitDiffLayer = \'staged\' | \'unstaged\' | \'conflict\';',
+  },
+  {
+    name: 'ProjectGitDiffPage',
+    declaration: 'export interface ProjectGitDiffPage {\n    readonly pageVersion: 1;\n    readonly observation: ProjectGitStatusFingerprint;\n    readonly changeId: ProjectGitChangeId;\n    readonly layer: ProjectGitDiffLayer;\n    readonly patchFingerprint: ProjectGitPatchFingerprint;\n    readonly range: {\n        readonly startLine: number;\n        readonly endLineExclusive: number;\n        readonly totalLines: number;\n    };\n    readonly lines: readonly string[];\n    readonly pageUtf8Bytes: number;\n    readonly totalUtf8Bytes: number;\n    readonly omittedBeforeLines: number;\n    readonly omittedAfterLines: number;\n    readonly truncated: boolean;\n    readonly nextCursor?: ProjectGitDiffCursor;\n}',
+  },
+  {
+    name: 'ProjectGitFileMode',
+    declaration: 'export type ProjectGitFileMode = \'000000\' | \'100644\' | \'100755\' | \'120000\' | \'160000\';',
+  },
+  {
+    name: 'ProjectGitHead',
+    declaration: 'export type ProjectGitHead = {\n    readonly kind: \'commit\';\n    readonly objectId: string;\n    readonly symbolicRef?: string;\n} | {\n    readonly kind: \'unborn\';\n    readonly symbolicRef: string;\n};',
+  },
+  {
+    name: 'ProjectGitIndexEvidence',
+    declaration: 'export type ProjectGitIndexEvidence = {\n    readonly kind: \'tree\';\n    readonly treeId: string;\n} | {\n    readonly kind: \'unmerged\';\n    readonly stagesDigest: {\n        readonly version: 1;\n        readonly digest: string;\n    };\n};',
+  },
+  {
+    name: 'ProjectGitMutationAvailability',
+    declaration: 'export type ProjectGitMutationAvailability = {\n    readonly available: true;\n    readonly blockers: readonly [\n    ];\n} | {\n    readonly available: false;\n    readonly blockers: readonly ProjectGitMutationBlocker[];\n};',
+  },
+  {
+    name: 'ProjectGitMutationBlocker',
+    declaration: 'export type ProjectGitMutationBlocker = \'baseline-unavailable\' | \'conversion-ambiguous\' | \'current-unavailable\' | \'index-flags\' | \'unmerged\' | \'locked\';',
+  },
+  {
+    name: 'ProjectGitObjectSlot',
+    declaration: 'export interface ProjectGitObjectSlot {\n    readonly mode: ProjectGitFileMode;\n    readonly objectId: string;\n}',
+  },
+  {
+    name: 'ProjectGitOrdinaryChange',
+    declaration: 'export interface ProjectGitOrdinaryChange extends ProjectGitChangeBase {\n    readonly kind: \'ordinary\';\n    readonly indexStatus: \'unchanged\' | \'modified\' | \'type-changed\' | \'added\' | \'deleted\';\n    readonly worktreeStatus: \'unchanged\' | \'modified\' | \'type-changed\' | \'added\' | \'deleted\';\n    readonly submodule: ProjectGitSubmoduleStatus;\n    readonly head: ProjectGitObjectSlot;\n    readonly index: ProjectGitObjectSlot;\n    readonly worktreeMode: ProjectGitFileMode;\n    readonly worktreeEvidence: ProjectGitWorktreeEvidence;\n}',
+  },
+  {
+    name: 'ProjectGitPatchFingerprint',
+    declaration: 'export interface ProjectGitPatchFingerprint {\n    readonly version: 1;\n    readonly digest: string;\n}',
+  },
+  {
+    name: 'ProjectGitStatusFingerprint',
+    declaration: 'export interface ProjectGitStatusFingerprint {\n    readonly version: 1;\n    readonly digest: string;\n}',
+  },
+  {
+    name: 'ProjectGitStatusObservation',
+    declaration: 'export interface ProjectGitStatusObservation {\n    readonly observationVersion: 1;\n    readonly observedAt: number;\n    readonly bindingId: SakiResourceBindingId;\n    readonly bindingRevision: number;\n    readonly bindingHealth: \'active\';\n    readonly locked: boolean;\n    readonly objectFormat: \'sha1\' | \'sha256\';\n    readonly head: ProjectGitHead;\n    readonly branch: ProjectGitBranch;\n    readonly upstream?: ProjectGitUpstream;\n    readonly index: ProjectGitIndexEvidence;\n    readonly worktree: ProjectGitWorktreeFingerprint;\n    readonly changes: readonly ProjectGitChange[];\n    readonly structuredMutation: ProjectGitMutationAvailability;\n    readonly fingerprint: ProjectGitStatusFingerprint;\n}',
+  },
+  {
+    name: 'ProjectGitSubmoduleStatus',
+    declaration: 'export type ProjectGitSubmoduleStatus = {\n    readonly kind: \'not-submodule\';\n} | {\n    readonly kind: \'submodule\';\n    readonly commit: \'changed\' | \'unchanged\' | \'unknown\';\n};',
+  },
+  {
+    name: 'ProjectGitUnmergedChange',
+    declaration: 'export interface ProjectGitUnmergedChange extends ProjectGitChangeBase {\n    readonly kind: \'unmerged\';\n    readonly indexStatus: \'unmerged\';\n    readonly worktreeStatus: \'present\' | \'absent\';\n    readonly conflict: \'both-deleted\' | \'added-by-us\' | \'deleted-by-them\' | \'added-by-them\' | \'deleted-by-us\' | \'both-added\' | \'both-modified\';\n    readonly submodule: ProjectGitSubmoduleStatus;\n    readonly stages: {\n        readonly base: ProjectGitObjectSlot;\n        readonly ours: ProjectGitObjectSlot;\n        readonly theirs: ProjectGitObjectSlot;\n    };\n    readonly worktreeMode: ProjectGitFileMode;\n    readonly worktreeEvidence: ProjectGitWorktreeEvidence;\n}',
+  },
+  {
+    name: 'ProjectGitUntrackedChange',
+    declaration: 'export interface ProjectGitUntrackedChange extends ProjectGitChangeBase {\n    readonly kind: \'untracked\';\n    readonly indexStatus: \'absent\';\n    readonly worktreeStatus: \'untracked\';\n    readonly submodule: {\n        readonly kind: \'not-submodule\';\n    };\n    readonly worktreeMode: \'100644\' | \'100755\' | \'120000\' | \'unknown\';\n    readonly worktreeEvidence: ProjectGitWorktreeEvidence;\n}',
+  },
+  {
+    name: 'ProjectGitUpstream',
+    declaration: 'export interface ProjectGitUpstream {\n    readonly ref: string;\n    readonly name: string;\n    readonly divergence?: {\n        readonly ahead: number;\n        readonly behind: number;\n    };\n}',
+  },
+  {
+    name: 'ProjectGitWorktreeEvidence',
+    declaration: 'export type ProjectGitWorktreeEvidence = InheritedCurrentWorktreeEvidence | {\n    readonly kind: \'unavailable\';\n    readonly reason: InheritedChangeBaselineUnavailableReason;\n};',
+  },
+  {
+    name: 'ProjectGitWorktreeFingerprint',
+    declaration: 'export interface ProjectGitWorktreeFingerprint {\n    readonly version: 1;\n    readonly digest: string;\n}',
+  },
+  {
     name: 'ProjectInspectionFingerprint',
-    declaration: 'export interface ProjectInspectionFingerprint {\n    readonly version: 1;\n    readonly digest: string;\n}',
+    declaration: 'export interface ProjectInspectionFingerprint {\n    readonly version: 2;\n    readonly digest: string;\n}',
   },
   {
     name: 'ProjectionChangeListener',
@@ -4339,7 +4613,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ProjectSelectionProjection',
-    declaration: 'export interface ProjectSelectionProjection {\n    readonly observationVersion: 1;\n    readonly hostId: SakiHostId;\n    readonly displayLocation: string;\n    readonly objectFormat: \'sha1\' | \'sha256\';\n    readonly head: string;\n    readonly branch?: string;\n    readonly detached: boolean;\n    readonly upstream?: string;\n    readonly locked: boolean;\n    readonly inheritedChangeEntryCount: number;\n    readonly conversionAmbiguous: boolean;\n    readonly remotes: readonly SafeGitRemoteObservation[];\n    readonly githubRepositoryCandidates?: readonly string[];\n    readonly workspaceId?: WorkspaceId;\n    readonly automaticMutationEligible: boolean;\n    readonly blockingReasons: readonly (\'dirty\' | \'baseline-unavailable\' | \'conversion-ambiguous\' | \'locked\')[];\n    readonly fingerprint: ProjectInspectionFingerprint;\n    readonly baseline: InheritedChangeBaseline;\n}',
+    declaration: 'export interface ProjectSelectionProjection {\n    readonly observationVersion: 2;\n    readonly hostId: SakiHostId;\n    readonly displayLocation: string;\n    readonly objectFormat: \'sha1\' | \'sha256\';\n    readonly head: ProjectGitHead;\n    readonly upstream?: string;\n    readonly locked: boolean;\n    readonly inheritedChangeEntryCount: number;\n    readonly conversionAmbiguous: boolean;\n    readonly remotes: readonly SafeGitRemoteObservation[];\n    readonly githubRepositoryCandidates?: readonly string[];\n    readonly workspaceId?: WorkspaceId;\n    readonly automaticMutationEligible: boolean;\n    readonly blockingReasons: readonly (\'dirty\' | \'baseline-unavailable\' | \'conversion-ambiguous\' | \'locked\')[];\n    readonly fingerprint: ProjectInspectionFingerprint;\n    readonly baseline: InheritedChangeBaseline;\n}',
   },
   {
     name: 'ProjectSelectionRejectionReason',
@@ -4372,6 +4646,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ReadFileLine',
     declaration: 'export interface ReadFileLine {\n    number: number;\n    text: string;\n}',
+  },
+  {
+    name: 'ReadProjectDiffRequest',
+    declaration: 'export interface ReadProjectDiffRequest {\n    readonly expectedStatus: ProjectGitStatusFingerprint;\n    readonly changeId: ProjectGitChangeId;\n    readonly layer: ProjectGitDiffLayer;\n    readonly cursor?: ProjectGitDiffCursor;\n}',
+  },
+  {
+    name: 'ReadProjectDiffResult',
+    declaration: 'export type ReadProjectDiffResult = {\n    readonly ok: true;\n    readonly page: ProjectGitDiffPage;\n} | {\n    readonly ok: false;\n    readonly reason: ProjectGitDiffFailureReason;\n};',
   },
   {
     name: 'ReadResultView',
@@ -4522,28 +4804,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SakiBoardMutationUnavailableReason = \'synchronization-unconfigured\' | \'configuration-not-activated\' | \'mapping-revalidation-required\' | \'mapping-repair-required\' | \'checkpoint-unavailable\' | \'no-concrete-mutation\';',
   },
   {
-    name: 'SakiBoardProjection',
-    declaration: 'export interface SakiBoardProjection {\n    readonly type: \'board\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly state: \'unconfigured\' | \'awaiting-first-checkpoint\' | \'confirmed\';\n    readonly synchronizationRevision: number;\n    readonly confirmed?: SakiConfirmedBoardProjection | undefined;\n    readonly checkpoint?: SakiGitHubSyncCheckpointProjection | undefined;\n    readonly mapping: SakiGitHubMappingHealthProjection;\n    readonly failure?: SakiGitHubSynchronizationFailureProjection | undefined;\n    readonly freshness: SakiBoardFreshnessProjection;\n    readonly scan: SakiGitHubScanStateProjection;\n    readonly effectiveMutationAvailability: SakiBoardMutationAvailabilityProjection;\n}',
-  },
-  {
     name: 'SakiBoardQuery',
     declaration: 'export interface SakiBoardQuery {\n    readonly type: \'board\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly refresh: \'cached\' | \'interactive\';\n}',
   },
   {
-    name: 'SakiBoardRemoteFingerprint',
-    declaration: 'export type SakiBoardRemoteFingerprint = Branded<\'SakiBoardRemoteFingerprint\'>;',
-  },
-  {
     name: 'SakiBoardStatus',
     declaration: 'export type SakiBoardStatus = \'inbox\' | \'backlog\' | \'ready\' | \'in-progress\' | \'in-review\' | \'done\' | \'canceled\';',
-  },
-  {
-    name: 'SakiBoardWorkItemId',
-    declaration: 'export type SakiBoardWorkItemId = Branded<\'SakiBoardWorkItemId\'>;',
-  },
-  {
-    name: 'SakiBoardWorkItemProjection',
-    declaration: 'export interface SakiBoardWorkItemProjection {\n    readonly id: SakiBoardWorkItemId;\n    readonly title: string;\n    readonly issueNumber: number;\n    readonly url: string;\n    readonly issueState: \'open\' | \'closed\';\n    readonly status: SakiBoardStatus;\n    readonly order: number;\n    readonly archived: boolean;\n    readonly notInProject: boolean;\n    readonly updatedAt: number;\n    readonly source: {\n        readonly kind: \'github-issue\';\n        readonly repositoryId: GitHubRepositoryId;\n        readonly issueId: GitHubIssueId;\n        readonly projectItemId?: GitHubProjectItemId | undefined;\n        readonly apiOrder?: number | undefined;\n    };\n    readonly remoteFingerprint: SakiBoardRemoteFingerprint;\n}',
   },
   {
     name: 'SakiBootstrapChallengePurpose',
@@ -4578,12 +4844,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SakiChangedDisposer = () => void;',
   },
   {
-    name: 'SakiConfirmedBoardProjection',
-    declaration: 'export interface SakiConfirmedBoardProjection {\n    readonly generation: number;\n    readonly configurationRevision: number;\n    readonly repository: {\n        readonly id: GitHubRepositoryId;\n        readonly nameWithOwner: string;\n        readonly url: string;\n    };\n    readonly project: {\n        readonly id: GitHubProjectId;\n        readonly title: string;\n        readonly url: string;\n    };\n    readonly items: readonly SakiBoardWorkItemProjection[];\n}',
-  },
-  {
     name: 'SakiControlIntentId',
     declaration: 'export type SakiControlIntentId = Branded<\'SakiControlIntentId\'>;',
+  },
+  {
+    name: 'SakiCurrentGitOperationProjection',
+    declaration: 'export type SakiCurrentGitOperationProjection = SakiCurrentGitOperationProjectionFor<\'stage-files\'> | SakiCurrentGitOperationProjectionFor<\'unstage-files\'> | SakiCurrentGitOperationProjectionFor<\'create-commit\'>;',
   },
   {
     name: 'SakiDevelopmentProjectId',
@@ -4591,7 +4857,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiDevelopmentProjectSummary',
-    declaration: 'export interface SakiDevelopmentProjectSummary {\n    readonly id: SakiDevelopmentProjectId;\n    readonly revision: number;\n    readonly projectTitle: string;\n    readonly binding: {\n        readonly id: SakiResourceBindingId;\n        readonly revision: number;\n        readonly health: \'active\' | \'missing\' | \'repair-required\';\n        readonly hostId: SakiHostId;\n        readonly displayLocation: string;\n        readonly head: string;\n        readonly branch?: string;\n        readonly detached: boolean;\n        readonly inheritedChangeEntryCount: number;\n        readonly baseline: \'complete\' | \'unavailable\';\n        readonly automaticMutationEligible: boolean;\n        readonly configurationGaps: readonly (\'baseline-unavailable\' | \'conversion-ambiguous\' | \'binding-missing\' | \'binding-repair-required\')[];\n    };\n}',
+    declaration: 'export interface SakiDevelopmentProjectSummary {\n    readonly id: SakiDevelopmentProjectId;\n    readonly revision: number;\n    readonly projectTitle: string;\n    readonly binding: {\n        readonly id: SakiResourceBindingId;\n        readonly revision: number;\n        readonly health: \'active\' | \'missing\' | \'repair-required\';\n        readonly hostId: SakiHostId;\n        readonly displayLocation: string;\n        readonly objectFormat: \'sha1\' | \'sha256\';\n        readonly head: ProjectGitHead;\n        readonly inheritedChangeEntryCount: number;\n        readonly baseline: \'complete\' | \'unavailable\';\n        readonly automaticMutationEligible: boolean;\n        readonly configurationGaps: readonly (\'baseline-unavailable\' | \'conversion-ambiguous\' | \'binding-missing\' | \'binding-repair-required\')[];\n    };\n}',
   },
   {
     name: 'SakiDevelopmentWorkspaceProjection',
@@ -4638,6 +4904,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SakiGitHubSynchronizationReceipt = (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'prepared\';\n}) | (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'saved\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly synchronizationRevision: number;\n    readonly candidateRevision: number;\n}) | (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'conflict\';\n    readonly reason: \'expected-revision\' | \'project-not-found\' | \'configuration-incomplete\' | \'configuration-unchanged\';\n}) | (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'failure\';\n    readonly reason: \'authority\';\n});',
   },
   {
+    name: 'SakiGitOperationAvailabilityProjection',
+    declaration: 'export type SakiGitOperationAvailabilityProjection = {\n    readonly available: true;\n    readonly reasons: readonly [\n    ];\n} | {\n    readonly available: false;\n    readonly reasons: readonly SakiGitOperationUnavailableReason[];\n};',
+  },
+  {
+    name: 'SakiGitOperationsProjection',
+    declaration: 'export interface SakiGitOperationsProjection {\n    readonly stageFiles: SakiGitOperationAvailabilityProjection;\n    readonly unstageFiles: SakiGitOperationAvailabilityProjection;\n    readonly createCommit: SakiGitOperationAvailabilityProjection;\n    readonly current?: SakiCurrentGitOperationProjection;\n}',
+  },
+  {
+    name: 'SakiGitOperationUnavailableReason',
+    declaration: 'export type SakiGitOperationUnavailableReason = ProjectGitMutationBlocker | \'detached-head\' | \'no-staged-changes\' | \'status-unavailable\' | \'action-denied\' | \'write-admission-busy\' | \'write-admission-unavailable\';',
+  },
+  {
     name: 'SakiHostChoiceProjection',
     declaration: 'export interface SakiHostChoiceProjection {\n    readonly id: SakiHostId;\n    readonly revision: number;\n    readonly state: \'enrolled\';\n}',
   },
@@ -4663,7 +4941,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiIntentMap',
-    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n}',
+    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n}',
   },
   {
     name: 'SakiIntentReceipt',
@@ -4678,6 +4956,26 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SakiPrincipalId = Branded<\'SakiPrincipalId\'>;',
   },
   {
+    name: 'SakiProjectChangesObservationResult',
+    declaration: 'export type SakiProjectChangesObservationResult = {\n    readonly ok: true;\n    readonly observation: ProjectGitStatusObservation;\n} | Extract<InspectProjectResult, {\n    readonly ok: false;\n}>;',
+  },
+  {
+    name: 'SakiProjectChangesProjection',
+    declaration: 'export interface SakiProjectChangesProjection {\n    readonly type: \'project-changes\';\n    readonly registryRevision: number;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly projectRevision: number;\n    readonly result: SakiProjectChangesObservationResult;\n    readonly gitOperations: SakiGitOperationsProjection;\n}',
+  },
+  {
+    name: 'SakiProjectChangesQuery',
+    declaration: 'export interface SakiProjectChangesQuery {\n    readonly type: \'project-changes\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n}',
+  },
+  {
+    name: 'SakiProjectDiffProjection',
+    declaration: 'export interface SakiProjectDiffProjection {\n    readonly type: \'project-diff\';\n    readonly registryRevision: number;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly projectRevision: number;\n    readonly result: ReadProjectDiffResult;\n}',
+  },
+  {
+    name: 'SakiProjectDiffQuery',
+    declaration: 'export interface SakiProjectDiffQuery {\n    readonly type: \'project-diff\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n    readonly request: ReadProjectDiffRequest;\n}',
+  },
+  {
     name: 'SakiProjectIndexProjection',
     declaration: 'export interface SakiProjectIndexProjection {\n    readonly type: \'project-index\';\n    readonly revision: number;\n    readonly hosts: readonly SakiHostChoiceProjection[];\n    readonly projects: readonly SakiDevelopmentProjectSummary[];\n}',
   },
@@ -4687,7 +4985,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiProjectionKey',
-    declaration: 'export type SakiProjectionKey = \'access\' | \'project-index\' | \'development-workspace\' | \'project-settings\' | \'board\';',
+    declaration: 'export type SakiProjectionKey = \'access\' | \'project-index\' | \'development-workspace\' | \'project-changes\' | \'project-settings\' | \'board\';',
   },
   {
     name: 'SakiProjectSelectionInspectionProjection',
@@ -4703,7 +5001,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiQueryMap',
-    declaration: 'export interface SakiQueryMap {\n    readonly \'inspect-project-selection\': {\n        readonly request: SakiInspectProjectSelectionQuery;\n        readonly projection: SakiProjectSelectionInspectionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly projection: SakiProjectIndexProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'development-workspace\': {\n        readonly request: SakiDevelopmentWorkspaceQuery;\n        readonly projection: SakiDevelopmentWorkspaceProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'stale\' | \'not-found\';\n    };\n    readonly \'project-settings\': {\n        readonly request: SakiProjectSettingsQuery;\n        readonly projection: SakiProjectSettingsProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'not-found\';\n    };\n    readonly board: {\n        readonly request: SakiBoardQuery;\n        readonly projection: SakiBoardProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'not-found\';\n    };\n}',
+    declaration: 'export interface SakiQueryMap {\n    readonly \'inspect-project-selection\': {\n        readonly request: SakiInspectProjectSelectionQuery;\n        readonly projection: SakiProjectSelectionInspectionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly projection: SakiProjectIndexProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'development-workspace\': {\n        readonly request: SakiDevelopmentWorkspaceQuery;\n        readonly projection: SakiDevelopmentWorkspaceProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'stale\' | \'not-found\';\n    };\n    readonly \'project-changes\': {\n        readonly request: SakiProjectChangesQuery;\n        readonly projection: SakiProjectChangesProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'stale\' | \'not-found\' | \'binding-unavailable\';\n    };\n    readonly \'project-diff\': {\n        readonly request: SakiProjectDiffQuery;\n        readonly projection: SakiProjectDiffProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'stale\' | \'not-found\' | \'binding-unavailable\';\n    };\n    readonly \'project-settings\': {\n        readonly request: SakiProjectSettingsQuery;\n        readonly projection: SakiProjectSettingsProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'not-found\';\n    };\n    readonly board: {\n        readonly request: SakiBoardQuery;\n        readonl /* …truncated — full shape in source */',
   },
   {
     name: 'SakiQueryResult',
@@ -4788,6 +5086,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SearchResultView',
     declaration: 'export type SearchResultView = SearchMatchesResultView | SearchPathsResultView;',
+  },
+  {
+    name: 'SelectedProjectGitChange',
+    declaration: 'export interface SelectedProjectGitChange {\n    readonly id: ProjectGitChangeId;\n    readonly fingerprint: ProjectGitChangeFingerprint;\n}',
   },
   {
     name: 'SendTeamMessageRequest',
@@ -5172,6 +5474,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SpillSource',
     declaration: 'export interface SpillSource {\n    toolName: string;\n    callId: CallId;\n    label: string;\n}',
+  },
+  {
+    name: 'StageFilesHostOperationRequest',
+    declaration: 'export interface StageFilesHostOperationRequest {\n    readonly type: \'stage-files\';\n    readonly source: HostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly changes: readonly SelectedProjectGitChange[];\n}',
+  },
+  {
+    name: 'StageFilesHostOperationResult',
+    declaration: 'export interface StageFilesHostOperationResult {\n    readonly type: \'stage-files\';\n    readonly changes: readonly AppliedProjectGitChange[];\n    readonly resultingIndex: Extract<ProjectGitIndexEvidence, {\n        readonly kind: \'tree\';\n    }>;\n}',
+  },
+  {
+    name: 'StageFilesIntent',
+    declaration: 'export interface StageFilesIntent {\n    readonly type: \'stage-files\';\n    readonly intentId: SakiControlIntentId;\n    readonly expected: GitMutationExpectation;\n    readonly changes: readonly SelectedProjectGitChange[];\n}',
   },
   {
     name: 'StorageBackend',
@@ -5660,6 +5974,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'UnavailableInheritedChangeBaseline',
     declaration: 'export interface UnavailableInheritedChangeBaseline {\n    readonly kind: \'unavailable\';\n    readonly reason: InheritedChangeBaselineUnavailableReason;\n    readonly observed: InheritedChangeBaselineObservedLimits;\n}',
+  },
+  {
+    name: 'UnstageFilesHostOperationRequest',
+    declaration: 'export interface UnstageFilesHostOperationRequest {\n    readonly type: \'unstage-files\';\n    readonly source: HostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly changes: readonly SelectedProjectGitChange[];\n}',
+  },
+  {
+    name: 'UnstageFilesHostOperationResult',
+    declaration: 'export interface UnstageFilesHostOperationResult {\n    readonly type: \'unstage-files\';\n    readonly changes: readonly AppliedProjectGitChange[];\n    readonly resultingIndex: Extract<ProjectGitIndexEvidence, {\n        readonly kind: \'tree\';\n    }>;\n}',
+  },
+  {
+    name: 'UnstageFilesIntent',
+    declaration: 'export interface UnstageFilesIntent {\n    readonly type: \'unstage-files\';\n    readonly intentId: SakiControlIntentId;\n    readonly expected: GitMutationExpectation;\n    readonly changes: readonly SelectedProjectGitChange[];\n}',
   },
   {
     name: 'UpdateTeamTaskRequest',

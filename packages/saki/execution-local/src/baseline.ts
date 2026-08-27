@@ -31,6 +31,7 @@ export type CapturedInventoryWorktree =
   | {
     readonly kind: 'unavailable'
     readonly reason: InheritedChangeBaselineUnavailableReason
+    readonly observedMode?: CapturedInventoryGitObject['mode']
   }
 
 /** Conversion classes retained in memory for one exact inventory path. */
@@ -50,6 +51,7 @@ export interface CapturedRepositoryInventoryEntry {
     CapturedInventoryGitObject | undefined,
     CapturedInventoryGitObject | undefined,
   ]
+  readonly skipWorktree?: boolean
   readonly untracked: boolean
   readonly current: CapturedInventoryWorktree
   readonly conversion: CapturedInventoryConversion
@@ -57,6 +59,15 @@ export interface CapturedRepositoryInventoryEntry {
 
 type CapturedRepositoryInventoryEntryWithCurrent = CapturedRepositoryInventoryEntry & {
   readonly current: Extract<CapturedInventoryWorktree, { readonly kind: 'captured' }>
+}
+
+/** Shared HEAD, index, current, and conversion comparison for one inventory entry. */
+export interface CapturedInventoryChangeClassification {
+  readonly changed: boolean
+  readonly staged: boolean
+  readonly unstaged: boolean
+  readonly conflicted: boolean
+  readonly conversionAmbiguous: boolean
 }
 
 /** Complete raw-byte inventory needed to derive changed membership and retention. */
@@ -96,9 +107,11 @@ export function buildInheritedChangeBaseline(
   const startedAt = performance.now()
   signal.throwIfAborted()
   const changed = inventory.entries
-    .filter(entry => inventoryEntryChanged(entry, inventory.comparison))
+    .filter(entry => classifyCapturedInventoryEntry(entry, inventory.comparison).changed)
     .sort((left, right) => Buffer.compare(Buffer.from(left.path), Buffer.from(right.path)))
-  const conversionAmbiguous = inventory.entries.some(entry => conversionIsAmbiguous(entry, inventory.comparison))
+  const conversionAmbiguous = inventory.entries.some(
+    entry => classifyCapturedInventoryEntry(entry, inventory.comparison).conversionAmbiguous,
+  )
   signal.throwIfAborted()
   const stableObserved = {
     entries: changed.length,
@@ -136,12 +149,12 @@ export function buildInheritedChangeBaseline(
   for (const raw of capturedChanged) {
     signal.throwIfAborted()
     if (elapsedMs() > bounds.maxCaptureMs) return unavailable('time-limit')
-    const pathDigest = exactBytesDigest('saki/inherited-path/v1', withNul(raw.path))
+    const pathDigest = capturedInventoryPathDigest(raw.path)
     if (pathDigests.has(pathDigest)) return unavailable('duplicate-path')
     pathDigests.add(pathDigest)
-    const entry = retainedInventoryEntry(raw, pathDigest)
+    const entry = projectCapturedBaselineEntry(raw, pathDigest)
     if (entry === undefined) return unavailable('unsupported-state')
-    entries.push({ ...entry, digest: canonicalDigest('saki/inherited-entry/v1', entry) })
+    entries.push(entry)
   }
   const digest = canonicalDigest('saki/inherited-baseline/v1', {
     formatVersion: 1,
@@ -160,48 +173,87 @@ export function buildInheritedChangeBaseline(
   }
 }
 
-function retainedInventoryEntry(
+/**
+ * Project one captured changed entry into the exact retained baseline form.
+ * @param raw - inventory entry whose current evidence is complete.
+ * @param pathDigest - exact raw Git path-byte identity.
+ * @returns retained entry, or undefined for an unsupported membership state.
+ */
+export function projectCapturedBaselineEntry(
   raw: CapturedRepositoryInventoryEntryWithCurrent,
   pathDigest: string,
-): BaselineEntryWithoutDigest | undefined {
+): InheritedChangeBaselineEntry | undefined {
   const common = { formatVersion: 1 as const, pathDigest }
   if (raw.stages.some(stage => stage !== undefined)) {
-    return {
+    return withInheritedEntryDigest({
       ...common,
       statusKind: 'unmerged',
       head: objectSlot(raw.head),
       stages: [objectSlot(raw.stages[0]), objectSlot(raw.stages[1]), objectSlot(raw.stages[2])],
       worktree: raw.current.evidence,
-    }
+    })
   }
   if (raw.head !== undefined || raw.index !== undefined) {
-    return {
+    return withInheritedEntryDigest({
       ...common,
       statusKind: 'tracked',
       head: objectSlot(raw.head),
       index: objectSlot(raw.index),
       worktree: raw.current.evidence,
-    }
+    })
   }
   if (raw.untracked
     && (raw.current.evidence.kind === 'regular' || raw.current.evidence.kind === 'symlink')) {
-    return { ...common, statusKind: 'untracked', worktree: raw.current.evidence }
+    return withInheritedEntryDigest({ ...common, statusKind: 'untracked', worktree: raw.current.evidence })
   }
   return undefined
+}
+
+function withInheritedEntryDigest<Entry extends BaselineEntryWithoutDigest>(
+  entry: Entry,
+): Entry & { readonly digest: string } {
+  return { ...entry, digest: canonicalDigest('saki/inherited-entry/v1', entry) }
 }
 
 function objectSlot(value: CapturedInventoryGitObject | undefined): InheritedGitObjectSlot {
   return value === undefined ? { kind: 'missing' } : { kind: 'object', ...value }
 }
 
-function inventoryEntryChanged(
+/**
+ * Classify one inventory entry with the comparison semantics used by baselines and status.
+ * @param entry - exact joined repository inventory entry.
+ * @param comparison - observed Git worktree comparison settings.
+ * @returns shared change, stage, conflict, and conversion facts.
+ */
+export function classifyCapturedInventoryEntry(
   entry: CapturedRepositoryInventoryEntry,
   comparison: CapturedRepositoryInventory['comparison'],
-): boolean {
-  if (entry.stages.some(stage => stage !== undefined) || entry.untracked) return true
-  if (!sameGitObject(entry.head, entry.index)) return true
-  if (entry.current.kind === 'unavailable') return true
-  return !currentMatchesIndex(entry.current, entry.index, comparison)
+): CapturedInventoryChangeClassification {
+  const conflicted = entry.stages.some(stage => stage !== undefined)
+  const staged = conflicted || !sameGitObject(entry.head, entry.index)
+  const unstaged = entry.skipWorktree === true
+    ? false
+    : entry.untracked || entry.current.kind === 'unavailable'
+      || !currentMatchesIndex(entry.current, entry.index, comparison)
+  return {
+    changed: conflicted || entry.untracked || staged || unstaged,
+    staged,
+    unstaged,
+    conflicted,
+    conversionAmbiguous: conversionIsAmbiguous(entry, comparison),
+  }
+}
+
+/**
+ * Test whether any retained object slot or current evidence identifies a Gitlink.
+ * @param entry - exact joined repository inventory entry.
+ * @returns whether the path carries submodule semantics in any observed layer.
+ */
+export function capturedInventoryEntryHasGitlink(entry: CapturedRepositoryInventoryEntry): boolean {
+  return entry.head?.mode === '160000'
+    || entry.index?.mode === '160000'
+    || entry.stages.some(stage => stage?.mode === '160000')
+    || (entry.current.kind === 'captured' && entry.current.evidence.kind === 'submodule')
 }
 
 function conversionIsAmbiguous(
@@ -244,8 +296,13 @@ function sameGitObject(
     : left.mode === right.mode && left.objectId === right.objectId
 }
 
-function withNul(bytes: Uint8Array): Uint8Array {
-  const framed = new Uint8Array(bytes.byteLength + 1)
-  framed.set(bytes)
-  return framed
+/**
+ * Digest one exact Git path with terminal framing shared by status and baselines.
+ * @param path - raw repository-relative Git path bytes.
+ * @returns domain-separated lowercase SHA-256 path identity.
+ */
+export function capturedInventoryPathDigest(path: Uint8Array): string {
+  const bytes = new Uint8Array(path.byteLength + 1)
+  bytes.set(path)
+  return exactBytesDigest('saki/inherited-path/v1', bytes)
 }

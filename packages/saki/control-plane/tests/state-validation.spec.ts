@@ -5,7 +5,12 @@ import {
   SAKI_PROJECT_PROJECTION_FIXTURES,
   SAKI_PROJECT_REQUEST_FIXTURES,
 } from '../src/fixtures.ts'
-import { sakiControlPlaneV2DomainSpec, sakiControlPlaneV3DomainSpec } from '../src/migration.ts'
+import {
+  sakiControlPlaneMigrationPlan,
+  sakiControlPlaneV2DomainSpec,
+  sakiControlPlaneV3DomainSpec,
+  sakiControlPlaneV4DomainSpec,
+} from '../src/migration.ts'
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
@@ -39,13 +44,16 @@ import {
   validateCurrentSakiState,
   validateSakiV2SourceState,
   validateSakiV3SourceState,
+  validateSakiV4SourceState,
 } from '../src/state-validation.ts'
 import {
   createStorageGenerationSeal,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
+  sakiStorageGenerationV2DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
+  storageGenerationV2SealRecordSchema,
 } from '../src/state-version.ts'
 import type { StorageGenerationSealRecord, StorageGenerationV1SealRecord } from '../src/state-version.ts'
 import type {
@@ -93,7 +101,7 @@ interface CurrentFixture {
 type HistoricalControl = TableValueOf<typeof sakiControlPlaneV2DomainSpec, 'control_state'>
 type HistoricalInstallation = TableValueOf<typeof sakiControlPlaneV2DomainSpec, 'installations'>
 type HistoricalAccess = TableValueOf<typeof sakiControlPlaneV2DomainSpec, 'installation_access'>
-type HistoricalIntent = TableValueOf<typeof sakiControlPlaneV2DomainSpec, 'registration_intents'>
+type HistoricalIntent = ReturnType<typeof historicalRegistrationIntentRecordSchema.parse>
 
 interface HistoricalFixture {
   readonly controlState: Map<typeof CONTROL_STATE_KEY, HistoricalControl>
@@ -333,6 +341,8 @@ function currentDomains(
     registration_intents: readonlyTable(fixture.intents),
     github_project_sync: readonlyTable(githubProjectSync),
     github_sync_configuration_intents: readonlyTable(new Map()),
+    git_operation_intents: readonlyTable(new Map()),
+    binding_write_admissions: readonlyTable(new Map()),
   }
   const controlPlane = {
     name: sakiControlPlaneDomainSpec.name,
@@ -408,6 +418,47 @@ function historicalDomain(fixture: HistoricalFixture): Domain<typeof sakiControl
     table: (name: keyof typeof tables) => tables[name],
     close: rejectUnexpectedMutation,
   } as unknown as Domain<typeof sakiControlPlaneV2DomainSpec>
+}
+
+function v4Domains(fixture: HistoricalFixture) {
+  const v2 = {
+    global: null,
+    tables: {
+      control_state: Object.fromEntries(fixture.controlState),
+      installations: Object.fromEntries(fixture.installations),
+      hosts: Object.fromEntries(fixture.hosts),
+      principals: Object.fromEntries(fixture.principals),
+      grants: Object.fromEntries(fixture.grants),
+      installation_access: Object.fromEntries(fixture.access),
+      development_project_registry: Object.fromEntries(fixture.registries),
+      registration_intents: Object.fromEntries(fixture.intents),
+    },
+  }
+  const v3 = sakiControlPlaneMigrationPlan.steps[0]!.migrate(v2)
+  const v4 = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3)
+  const tables = Object.fromEntries(Object.entries(v4.tables).map(([name, records]) => [
+    name,
+    readonlyTable(new Map(Object.entries(records ?? {}))),
+  ]))
+  const controlPlane = {
+    name: sakiControlPlaneV4DomainSpec.name,
+    table: (name: string) => tables[name],
+    close: rejectUnexpectedMutation,
+  } as unknown as Domain<typeof sakiControlPlaneV4DomainSpec>
+  const seal = storageGenerationV2SealRecordSchema.parse({
+    schemaVersion: 2,
+    installationId: INSTALLATION_ID,
+    storageGenerationId: STORAGE_GENERATION_ID,
+    stateVersion: 4,
+    createdByBuildId: BUILD_ID,
+  })
+  const storageTables = { storage_generation: readonlyTable(new Map([[STORAGE_GENERATION_KEY, seal]])) }
+  const storageGeneration = {
+    name: sakiStorageGenerationV2DomainSpec.name,
+    table: (name: keyof typeof storageTables) => storageTables[name],
+    close: rejectUnexpectedMutation,
+  } as unknown as Domain<typeof sakiStorageGenerationV2DomainSpec>
+  return { controlPlane, storageGeneration }
 }
 
 function readonlyTable<K extends string, V>(records: ReadonlyMap<K, V>): KvTable<K, V> {
@@ -772,6 +823,34 @@ describe('current Saki state validation', () => {
         BUILD_ID,
       )
     }).not.toThrow()
+  })
+})
+
+describe('historical Saki v4 source validation', () => {
+  it('validates the frozen v4 tables and storage-generation v2 singleton without later Git tables', () => {
+    const domains = v4Domains(historicalFixture())
+    expect(() => {
+      validateSakiV4SourceState(
+        domains.controlPlane,
+        domains.storageGeneration,
+        INSTALLATION_ID,
+        STORAGE_GENERATION_ID,
+        BUILD_ID,
+      )
+    }).not.toThrow()
+  })
+
+  it('rejects storage-generation metadata from another physical generation', () => {
+    const domains = v4Domains(historicalFixture())
+    expect(() => {
+      validateSakiV4SourceState(
+        domains.controlPlane,
+        domains.storageGeneration,
+        INSTALLATION_ID,
+        OTHER_STORAGE_GENERATION_ID,
+        BUILD_ID,
+      )
+    }).toThrow('selected generation metadata')
   })
 })
 

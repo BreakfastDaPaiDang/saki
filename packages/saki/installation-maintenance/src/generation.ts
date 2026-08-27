@@ -8,8 +8,6 @@ import type { DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   createStorageGenerationSeal,
-  sakiStateCapability,
-  sakiStateControlPlaneMigrationPlan,
   sakiStorageGenerationDomainSpec,
   STORAGE_GENERATION_KEY,
 } from '@breakfastdapaidang/saki-control-plane'
@@ -18,6 +16,7 @@ import type {
   SakiInstallationId,
   SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
+import { sakiStateCapability, sakiStateControlPlaneMigrationPlan } from './state-version.ts'
 
 /** Identity materialized in one new current Saki generation. */
 export interface NewSakiGenerationIdentity {
@@ -97,6 +96,12 @@ export async function materializeFreshSakiGeneration(
       emptySnapshot(controlPlane),
       { targetBackend: 'candidate', signal },
     )
+    const hostExecution = sakiStateCapability.writable.hostExecution
+    await facility.materialize(
+      hostExecution,
+      emptySnapshot(hostExecution),
+      { targetBackend: 'candidate', signal },
+    )
     await facility.materialize(
       sakiStorageGenerationDomainSpec,
       sealSnapshot(identity),
@@ -109,7 +114,7 @@ export async function materializeFreshSakiGeneration(
 }
 
 /**
- * Migrate exact retained v2 or v3 control state into a missing current SQLite database and add its seal.
+ * Migrate exact retained v2, v3, or v4 control state into a missing current SQLite database and add its seal.
  * Product relationships must be validated before this generic transformation is called and
  * are validated again against the complete current candidate by the outer operation.
  * @param sourceDatabasePath - exact closed retained source selected by manifest or legacy config.
@@ -138,6 +143,12 @@ export async function migrateSakiGeneration(
       targetBackend: 'candidate',
       signal,
     })
+    const hostExecution = sakiStateCapability.writable.hostExecution
+    await facility.materialize(
+      hostExecution,
+      emptySnapshot(hostExecution),
+      { targetBackend: 'candidate', signal },
+    )
     await facility.materialize(
       sakiStorageGenerationDomainSpec,
       sealSnapshot(identity),

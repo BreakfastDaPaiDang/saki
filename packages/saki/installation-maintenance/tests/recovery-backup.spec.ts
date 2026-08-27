@@ -4,13 +4,9 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  sakiStateCapability,
-} from '@breakfastdapaidang/saki-control-plane'
 import type {
   SakiBuildId,
   SakiInstallationId,
-  SakiStateCapability,
   SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
 import { captureSqliteArtifactSet } from '../src/artifacts.ts'
@@ -31,6 +27,7 @@ import type {
   RecoveryBackupStore,
   RecoveryBackupWindowsAcl,
 } from '../src/recovery-backup.ts'
+import { sakiStateCapability, type SakiStateCapability } from '../src/state-version.ts'
 import {
   protectRecoveryBackupPathWin32,
   requireRecoveryBackupPathOwnerOnlyWin32,
@@ -440,7 +437,7 @@ describe('Saki Recovery Backup primitive', () => {
     const nonErrorRoot = await root()
     const nonErrorFailure = 'non-Error finalization rejection'
     const nonErrorStore = testStore({
-      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- fault injection proves unknown rejection normalization.
+      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Exercises normalization of hostile non-Error rejections.
       beforeFinalize: () => Promise.reject(nonErrorFailure),
     })
     await expect(publish(
@@ -627,7 +624,7 @@ describe('Saki Recovery Backup primitive', () => {
       async reservation => await store.create(
         reservation,
         source,
-        { ...request(), stateVersion: 5 } as unknown as RecoveryBackupCreateRequest,
+        { ...request(), stateVersion: 6 } as unknown as RecoveryBackupCreateRequest,
         sakiStateCapability,
         AbortSignal.timeout(2_000),
       ),
@@ -734,7 +731,7 @@ describe('Saki Recovery Backup primitive', () => {
   it('rejects unsupported, noncanonical, malformed, and oversized metadata', async () => {
     const cases: Array<(installationRoot: string) => Promise<void>> = [
       async (installationRoot) => {
-        await rewriteManifest(installationRoot, (value) => { value.stateVersion = 5 })
+        await rewriteManifest(installationRoot, (value) => { value.stateVersion = 6 })
       },
       async (installationRoot) => {
         await rewriteManifest(installationRoot, (value) => { value.purpose = 'portable-backup' })

@@ -8,11 +8,16 @@ import {
   sakiAccessProjectionSchema,
   sakiBoardResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
+  sakiCreateCommitResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiInspectProjectSelectionResultSchema,
+  sakiProjectDiffResultSchema,
+  sakiProjectChangesResultSchema,
   sakiRegisterDevelopmentProjectResultSchema,
   sakiProjectIndexResultSchema,
   sakiProjectSettingsResultSchema,
+  sakiStageFilesResultSchema,
+  sakiUnstageFilesResultSchema,
 } from '../wire.ts'
 import type {
   SakiWireAccessExchangeResult,
@@ -22,14 +27,23 @@ import type {
   SakiWireBoardResult,
   SakiWireConfigureGitHubSynchronizationIntent,
   SakiWireConfigureGitHubSynchronizationResult,
+  SakiWireCreateCommitIntent,
+  SakiWireCreateCommitResult,
   SakiWireDevelopmentWorkspaceResult,
   SakiWireHostId,
   SakiWireInspectProjectSelectionResult,
   SakiWireProjectId,
+  SakiWireProjectDiffRequest,
+  SakiWireProjectDiffResult,
   SakiWireProjectIndexResult,
+  SakiWireProjectChangesResult,
   SakiWireProjectSettingsResult,
   SakiWireRegisterDevelopmentProjectIntent,
   SakiWireRegisterDevelopmentProjectResult,
+  SakiWireStageFilesIntent,
+  SakiWireStageFilesResult,
+  SakiWireUnstageFilesIntent,
+  SakiWireUnstageFilesResult,
 } from '../wire.ts'
 
 const CHANNEL = '/saki'
@@ -74,6 +88,32 @@ export interface SakiHostClient {
     expectedRegistryRevision: number,
     signal?: AbortSignal,
   ): Promise<SakiWireDevelopmentWorkspaceResult>
+  /**
+   * Read one Project's current structured Git status.
+   * @param projectId - stable Project id.
+   * @param expectedRegistryRevision - caller-observed Registry revision.
+   * @param signal - optional cancellation.
+   * @returns bounded status evidence or a typed authorization, resolution, or Host failure.
+   */
+  queryProjectChanges(
+    projectId: SakiWireProjectId,
+    expectedRegistryRevision: number,
+    signal?: AbortSignal,
+  ): Promise<SakiWireProjectChangesResult>
+  /**
+   * Read one bounded file-scoped Diff page without supplying a path.
+   * @param projectId - stable Project id.
+   * @param expectedRegistryRevision - caller-observed Registry revision.
+   * @param request - expected status, opaque change id, layer, and optional cursor.
+   * @param signal - optional cancellation.
+   * @returns one bounded Diff page or a typed authorization, resolution, or Host failure.
+   */
+  readProjectDiff(
+    projectId: SakiWireProjectId,
+    expectedRegistryRevision: number,
+    request: SakiWireProjectDiffRequest,
+    signal?: AbortSignal,
+  ): Promise<SakiWireProjectDiffResult>
   /**
    * Read one Project's GitHub synchronization settings.
    * @param projectId - stable Project id.
@@ -121,6 +161,42 @@ export interface SakiHostClient {
     requestToken: string,
     signal?: AbortSignal,
   ): Promise<SakiWireConfigureGitHubSynchronizationResult>
+  /**
+   * Stage an exact set of opaque rows from one observed Changes Projection.
+   * @param intent - revision-fenced, path-free StageFiles Intent.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns a succeeded receipt or a typed durable/recoverable outcome.
+   */
+  stageFiles(
+    intent: SakiWireStageFilesIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireStageFilesResult>
+  /**
+   * Unstage an exact set of opaque rows from one observed Changes Projection.
+   * @param intent - revision-fenced, path-free UnstageFiles Intent.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns a succeeded receipt or a typed durable/recoverable outcome.
+   */
+  unstageFiles(
+    intent: SakiWireUnstageFilesIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireUnstageFilesResult>
+  /**
+   * Create one deterministic hook-free unsigned Commit from observed Git evidence.
+   * @param intent - revision-fenced message and Git evidence without identity or ref authority.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns a succeeded receipt or a typed durable/recoverable outcome.
+   */
+  createCommit(
+    intent: SakiWireCreateCommitIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireCreateCommitResult>
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -197,6 +273,33 @@ export class SakiHostClientService extends Service implements SakiHostClient {
   }
 
   /** @inheritdoc */
+  async queryProjectChanges(
+    projectId: SakiWireProjectId,
+    expectedRegistryRevision: number,
+    signal?: AbortSignal,
+  ): Promise<SakiWireProjectChangesResult> {
+    return sakiProjectChangesResultSchema.parse(await this.call(
+      'control/query',
+      { type: 'project-changes', projectId, expectedRegistryRevision },
+      signal,
+    ))
+  }
+
+  /** @inheritdoc */
+  async readProjectDiff(
+    projectId: SakiWireProjectId,
+    expectedRegistryRevision: number,
+    request: SakiWireProjectDiffRequest,
+    signal?: AbortSignal,
+  ): Promise<SakiWireProjectDiffResult> {
+    return sakiProjectDiffResultSchema.parse(await this.call(
+      'control/query',
+      { type: 'project-diff', projectId, expectedRegistryRevision, request },
+      signal,
+    ))
+  }
+
+  /** @inheritdoc */
   async queryProjectSettings(
     projectId: SakiWireProjectId,
     signal?: AbortSignal,
@@ -242,6 +345,48 @@ export class SakiHostClientService extends Service implements SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireConfigureGitHubSynchronizationResult> {
     return sakiConfigureGitHubSynchronizationResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  /** @inheritdoc */
+  async stageFiles(
+    intent: SakiWireStageFilesIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireStageFilesResult> {
+    return sakiStageFilesResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  /** @inheritdoc */
+  async unstageFiles(
+    intent: SakiWireUnstageFilesIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireUnstageFilesResult> {
+    return sakiUnstageFilesResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  /** @inheritdoc */
+  async createCommit(
+    intent: SakiWireCreateCommitIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireCreateCommitResult> {
+    return sakiCreateCommitResultSchema.parse(await this.call(
       'control/submit',
       intent,
       signal,

@@ -1,6 +1,10 @@
 import { DatabaseSync } from 'node:sqlite'
 import type { KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
-import { canonicalDigest } from '@breakfastdapaidang/saki-execution'
+import {
+  canonicalDigest,
+  exactBytesDigest,
+  inheritedChangeBaselineIdentityMaterial,
+} from '@breakfastdapaidang/saki-execution'
 import {
   sakiControlPlaneV2DomainSpec,
   type SakiInstallationId,
@@ -39,22 +43,87 @@ const TRUSTED_PROJECT_OBSERVATION = {
   comparison: { fileMode: true, symlinks: true, autocrlf: false },
 } as const
 
-/** Exact B03 product state with non-default Registry state retained through migration. */
-function b03Snapshot(): KvUnitSnapshot {
-  const intent = SAKI_PROJECT_REQUEST_FIXTURES.registration
-  const receipt = SAKI_PROJECT_RECEIPT_FIXTURES.confirmed.receipt
-  const registrationInspection = {
-    projection: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection,
+type CurrentProjectProjection = typeof SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection
+
+function historicalInspection(current: CurrentProjectProjection) {
+  if (current.head.kind !== 'commit') {
+    throw new Error('registered B03 fixture requires a committed HEAD')
+  }
+  const { fingerprint: _fingerprint, observationVersion: _version, head: _head, ...retained } = current
+  const projectionWithoutFingerprint = {
+    ...retained,
+    observationVersion: 1 as const,
+    head: current.head.objectId,
+    ...(current.head.symbolicRef === undefined
+      ? { detached: true as const }
+      : { branch: current.head.symbolicRef.slice('refs/heads/'.length), detached: false as const }),
+  }
+  const material = {
+    observationVersion: 1,
+    hostId: projectionWithoutFingerprint.hostId,
+    displayLocation: projectionWithoutFingerprint.displayLocation,
+    worktreePathDigest: exactBytesDigest(
+      'saki/worktree-path/v1',
+      new TextEncoder().encode(TRUSTED_PROJECT_OBSERVATION.canonicalWorktreePath),
+    ),
+    gitDirectoryDigest: exactBytesDigest(
+      'saki/git-directory/v1',
+      new TextEncoder().encode(TRUSTED_PROJECT_OBSERVATION.canonicalGitDirectory),
+    ),
+    commonDirectoryDigest: exactBytesDigest(
+      'saki/common-git-directory/v1',
+      new TextEncoder().encode(TRUSTED_PROJECT_OBSERVATION.canonicalCommonGitDirectory),
+    ),
+    gitDirectoryIdentity: TRUSTED_PROJECT_OBSERVATION.gitDirectoryIdentity,
+    commonGitDirectoryIdentity: TRUSTED_PROJECT_OBSERVATION.commonGitDirectoryIdentity,
+    objectFormat: projectionWithoutFingerprint.objectFormat,
+    head: projectionWithoutFingerprint.head,
+    ...('branch' in projectionWithoutFingerprint
+      ? { branch: `refs/heads/${projectionWithoutFingerprint.branch}` }
+      : {}),
+    detached: projectionWithoutFingerprint.detached,
+    locked: projectionWithoutFingerprint.locked,
+    inheritedChangeEntryCount: projectionWithoutFingerprint.inheritedChangeEntryCount,
+    conversionAmbiguous: projectionWithoutFingerprint.conversionAmbiguous,
+    comparison: TRUSTED_PROJECT_OBSERVATION.comparison,
+    workspace: projectionWithoutFingerprint.workspaceId === undefined
+      ? { kind: 'absent' as const }
+      : { kind: 'present' as const, workspaceId: projectionWithoutFingerprint.workspaceId },
+    ...(projectionWithoutFingerprint.upstream === undefined
+      ? {}
+      : { upstream: projectionWithoutFingerprint.upstream }),
+    remotes: projectionWithoutFingerprint.remotes,
+    ...(projectionWithoutFingerprint.githubRepositoryCandidates === undefined
+      ? {}
+      : { githubRepositoryCandidates: projectionWithoutFingerprint.githubRepositoryCandidates }),
+    baseline: inheritedChangeBaselineIdentityMaterial(projectionWithoutFingerprint.baseline),
+  }
+  return {
+    projection: {
+      ...projectionWithoutFingerprint,
+      fingerprint: {
+        version: 1 as const,
+        digest: canonicalDigest('saki/project-inspection/v1', material),
+      },
+    },
     trusted: TRUSTED_PROJECT_OBSERVATION,
+  }
+}
+
+/** Exact B03 product state with non-default Registry state retained through migration. */
+export function b03Snapshot(): KvUnitSnapshot {
+  const currentIntent = SAKI_PROJECT_REQUEST_FIXTURES.registration
+  const receipt = SAKI_PROJECT_RECEIPT_FIXTURES.confirmed.receipt
+  const registrationInspection = historicalInspection(SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection)
+  const intent = {
+    ...currentIntent,
+    confirmedFingerprint: registrationInspection.projection.fingerprint,
   }
   const currentSelection = SAKI_PROJECT_PROJECTION_FIXTURES.developmentWorkspace.currentSelection
   if (currentSelection.workspaceId === undefined) {
     throw new Error('registered B03 fixture requires a Workspace identity')
   }
-  const workspaceInspection = {
-    projection: currentSelection,
-    trusted: TRUSTED_PROJECT_OBSERVATION,
-  }
+  const workspaceInspection = historicalInspection(currentSelection)
   const actor = {
     installationId: B03_INSTALLATION_ID,
     installationGenerationId: INSTALLATION_GENERATION_ID,

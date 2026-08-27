@@ -9,9 +9,12 @@ import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   sakiControlPlaneV2DomainSpec,
   sakiControlPlaneV3DomainSpec,
+  sakiControlPlaneV4DomainSpec,
   sakiStorageGenerationV1DomainSpec,
+  sakiStorageGenerationV2DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
+  storageGenerationV2SealRecordSchema,
   type SakiBuildId,
   type SakiInstallationId,
   type SakiStorageGenerationId,
@@ -48,8 +51,8 @@ describe('closed Saki generation creation', () => {
 
     await materializeFreshSakiGeneration(databasePath, identity, signal)
 
-    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 4 }, signal))
-      .resolves.toMatchObject({ stateVersion: 4 })
+    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 5 }, signal))
+      .resolves.toMatchObject({ stateVersion: 5 })
   })
 
   it('migrates a different closed v2 database and materializes the current seal', async () => {
@@ -71,14 +74,14 @@ describe('closed Saki generation creation', () => {
 
     await migrateSakiGeneration(sourcePath, targetPath, identity, signal)
 
-    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 4 }, signal))
-      .resolves.toMatchObject({ stateVersion: 4 })
+    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 5 }, signal))
+      .resolves.toMatchObject({ stateVersion: 5 })
   })
 
-  it('migrates an exact adjacent v3 generation into current v4 state', async () => {
+  it('migrates an exact retained v3 generation into current v5 state', async () => {
     const directory = await root()
     const sourcePath = join(directory, 'source-v3.sqlite')
-    const targetPath = join(directory, 'target-v4.sqlite')
+    const targetPath = join(directory, 'target-v5.sqlite')
     const signal = new AbortController().signal
     const context = new Context()
     await context.plugin(Storage)
@@ -108,10 +111,51 @@ describe('closed Saki generation creation', () => {
 
     await migrateSakiGeneration(sourcePath, targetPath, identity, signal)
 
-    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 4 }, signal)
-    expect(current.stateVersion).toBe(4)
+    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 5 }, signal)
+    expect(current.stateVersion).toBe(5)
     expect(current.controlPlane.table('github_project_sync').size).toBe(0)
     expect(current.controlPlane.table('github_sync_configuration_intents').size).toBe(0)
+    expect(current.controlPlane.table('git_operation_intents').size).toBe(0)
+    expect(current.controlPlane.table('binding_write_admissions').size).toBe(0)
+    expect(current.hostExecution.table('operations').size).toBe(0)
+  })
+
+  it('migrates an exact adjacent v4 generation into current v5 state', async () => {
+    const directory = await root()
+    const sourcePath = join(directory, 'source-v4.sqlite')
+    const targetPath = join(directory, 'target-v5.sqlite')
+    const signal = new AbortController().signal
+    const context = new Context()
+    await context.plugin(Storage)
+    const source = new SqliteStorageBackend({ path: sourcePath, journalMode: 'delete' })
+    context.storage.backend.register('source', source)
+    const facility = new DomainFacility(context, { backend: 'source' })
+    await facility.materialize(sakiControlPlaneV4DomainSpec, {
+      tables: Object.fromEntries(Object.keys(sakiControlPlaneV4DomainSpec.tables).map(table => [table, {}])),
+      global: null,
+    }, { targetBackend: 'source', signal })
+    await facility.materialize(sakiStorageGenerationV2DomainSpec, {
+      tables: {
+        storage_generation: {
+          [STORAGE_GENERATION_KEY]: storageGenerationV2SealRecordSchema.parse({
+            schemaVersion: 2,
+            installationId: identity.installationId,
+            storageGenerationId: identity.storageGenerationId,
+            stateVersion: 4,
+            createdByBuildId: identity.createdByBuildId,
+          }),
+        },
+      },
+      global: null,
+    }, { targetBackend: 'source', signal })
+    await source.close()
+    await context.fiber.dispose()
+
+    await migrateSakiGeneration(sourcePath, targetPath, identity, signal)
+
+    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 5 }, signal)
+    expect(current.stateVersion).toBe(5)
+    expect(current.hostExecution.table('operations').size).toBe(0)
   })
 
   it('propagates a failed fresh materialization after closing its resources', async () => {

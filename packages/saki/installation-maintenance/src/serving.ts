@@ -5,7 +5,6 @@ import { resolve } from 'node:path'
 import {
   sakiBuildIdSchema,
   sakiInstallationIdSchema,
-  sakiStateCapability,
   sakiStorageGenerationIdSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import type {
@@ -34,6 +33,7 @@ import {
   readClosedCurrentSakiState,
   readClosedProvisioningSakiState,
   readClosedSakiV3State,
+  readClosedSakiV4State,
 } from './closed-state.ts'
 import { publishMissingFile, replaceFileDurably } from './durable-files.ts'
 import type { DurableFileResult } from './durable-files.ts'
@@ -44,6 +44,7 @@ import type { PreparedSakiState } from './prepared-state.ts'
 import { validateClosedSakiV2Source } from './legacy-state.ts'
 import { publishSakiGenerationCandidate } from './candidate.ts'
 import { recoverActiveSakiOperation } from './recovery.ts'
+import { sakiStateCapability } from './state-version.ts'
 
 /** Filesystem and build inputs fixed for one Saki serving process. */
 export interface SakiServingInstallationOptions {
@@ -84,7 +85,7 @@ function newStorageGenerationId(): SakiStorageGenerationId {
 function preparedExpectation(generation: GenerationManifest): {
   readonly installationId: SakiInstallationId
   readonly storageGenerationId: SakiStorageGenerationId
-  readonly stateVersion: 4
+  readonly stateVersion: 5
   readonly createdByBuildId: SakiBuildId
 } {
   return {
@@ -153,6 +154,21 @@ async function prepareSelectedGeneration(
     throw new SakiMaintenanceError(
       'upgrade-required',
       'Saki state version 3 is valid but requires the offline upgrade command before serving',
+    )
+  }
+  if (readable?.version === 4) {
+    await readClosedSakiV4State(
+      selected.databasePath,
+      {
+        installationId: selected.installation.installationId,
+        storageGenerationId: selected.installation.storageGenerationId,
+        createdByBuildId: selected.generation.createdByBuildId,
+      },
+      signal,
+    )
+    throw new SakiMaintenanceError(
+      'upgrade-required',
+      'Saki state version 4 is valid but requires the offline upgrade command before serving',
     )
   }
   if (readable?.version !== sakiStateCapability.writable.version) {

@@ -1,5 +1,6 @@
 /** Durable Saki provisioning, entity, and Installation Access schemas. @module @breakfastdapaidang/saki-control-plane/src/spec */
 
+import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
@@ -19,13 +20,22 @@ import {
   githubRepositoryIdSchema,
 } from '@breakfastdapaidang/saki-github'
 import {
+  hostOperationPreparationSchema,
+  hostOperationRequestSchema,
+  hostOperationSnapshotSchema,
   canonicalDigest,
   inheritedChangeBaselineIdentityMaterial,
   inheritedChangeBaselineSchema,
   isAbsoluteHostPath,
+  MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES,
+  MAX_HOST_OPERATION_SELECTED_CHANGES,
   MAX_TRUSTED_PATH_CHARS,
+  projectGitHeadSchema,
+  projectGitStatusFingerprintSchema,
+  projectGitWorktreeFingerprintSchema,
   projectInspectionWorkspaceIndependentMaterial,
   projectSelectionInspectionSchema,
+  selectedProjectGitChangeSchema,
 } from '@breakfastdapaidang/saki-execution'
 import {
   SAKI_BOARD_WORK_ITEM_LIMIT,
@@ -58,7 +68,12 @@ import type {
   SakiPrincipalId,
   SakiControlIntentId,
   SakiDevelopmentProjectId,
+  SakiResourceBindingId,
   SakiGitHubScanFailure,
+  CreateCommitIntent,
+  GitMutationExpectation,
+  StageFilesIntent,
+  UnstageFilesIntent,
 } from './types.ts'
 
 const revision = z.number().int().nonnegative()
@@ -161,12 +176,22 @@ export const HISTORICAL_HOST_OPERATOR_ACTIONS = [
   'development-project:register',
 ] as const
 
-/** Current Host Operator actions, including Project Settings and GitHub synchronization configuration. */
-export const HOST_OPERATOR_ACTIONS = [
+/** Exact Host Operator action vocabulary retained by v4 Grant records. */
+export const V4_HOST_OPERATOR_ACTIONS = [
   ...HISTORICAL_HOST_OPERATOR_ACTIONS,
   'board:read',
   'project-settings:read',
   'github-synchronization:configure',
+] as const
+
+/** Current Host Operator actions, including structured Project change operations. */
+export const HOST_OPERATOR_ACTIONS = [
+  ...V4_HOST_OPERATOR_ACTIONS,
+  'project-changes:read',
+  'project-diff:read',
+  'project-changes:stage',
+  'project-changes:unstage',
+  'project-commit:create',
 ] as const
 
 const grantRecordSharedShape = {
@@ -185,6 +210,12 @@ const grantRecordSharedShape = {
 export const historicalGrantRecordSchema = z.object({
   ...grantRecordSharedShape,
   actions: z.array(z.enum(HISTORICAL_HOST_OPERATOR_ACTIONS)),
+}).strict()
+
+/** Exact Grant schema retained for v4 product state. */
+export const v4GrantRecordSchema = z.object({
+  ...grantRecordSharedShape,
+  actions: z.array(z.enum(V4_HOST_OPERATOR_ACTIONS)),
 }).strict()
 
 /** Independently revisioned current Host Operator Grant entity. */
@@ -391,9 +422,74 @@ export const registerDevelopmentProjectIntentSchema = z.object({
   hostId,
   directoryLocator: z.string().min(1).max(32_768),
   expectedRegistryRevision: revision,
-  confirmedFingerprint: z.object({ version: z.literal(1), digest }).strict(),
+  confirmedFingerprint: z.object({ version: z.literal(2), digest }).strict(),
   confirmedBaseline: inheritedChangeBaselineSchema,
 }).strict()
+
+/** Strict browser-confirmed evidence shared by structured Git mutation Intents. */
+export const gitMutationExpectationSchema: z.ZodType<GitMutationExpectation> = z.object({
+  projectId: developmentProjectId,
+  expectedRegistryRevision: revision,
+  expectedProjectRevision: revision,
+  expectedBinding: z.object({ id: resourceBindingId, revision }).strict(),
+  expectedStatus: projectGitStatusFingerprintSchema,
+  expectedHead: projectGitHeadSchema,
+  expectedIndex: z.object({
+    kind: z.literal('tree'),
+    treeId: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u),
+  }).strict(),
+  expectedWorktree: projectGitWorktreeFingerprintSchema,
+}).strict()
+
+const selectedGitChangesSchema = z.array(selectedProjectGitChangeSchema)
+  .min(1)
+  .max(MAX_HOST_OPERATION_SELECTED_CHANGES)
+  .superRefine((changes, context) => {
+    if (new Set(changes.map(change => change.id)).size !== changes.length) {
+      context.addIssue({ code: 'custom', message: 'structured Git selection repeats a change id' })
+    }
+  })
+
+/** Strict StageFiles Control Intent; browser paths are never accepted. */
+export const stageFilesIntentSchema = z.object({
+  type: z.literal('stage-files'),
+  intentId: controlIntentId,
+  expected: gitMutationExpectationSchema,
+  changes: selectedGitChangesSchema,
+}).strict() satisfies z.ZodType<StageFilesIntent>
+
+/** Strict UnstageFiles Control Intent; browser paths are never accepted. */
+export const unstageFilesIntentSchema = z.object({
+  type: z.literal('unstage-files'),
+  intentId: controlIntentId,
+  expected: gitMutationExpectationSchema,
+  changes: selectedGitChangesSchema,
+}).strict() satisfies z.ZodType<UnstageFilesIntent>
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (next < 0xdc00 || next > 0xdfff) return true
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) return true
+  }
+  return false
+}
+
+const commitMessageSchema = z.string().min(1)
+  .refine(value => !value.includes('\0'))
+  .refine(value => !hasUnpairedSurrogate(value))
+  .refine(value => new TextEncoder().encode(value).byteLength <= MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES)
+
+/** Strict deterministic CreateCommit Control Intent without identity or ref inputs. */
+export const createCommitIntentSchema = z.object({
+  type: z.literal('create-commit'),
+  intentId: controlIntentId,
+  expected: gitMutationExpectationSchema,
+  message: commitMessageSchema,
+}).strict() satisfies z.ZodType<CreateCommitIntent>
 
 /** Historical v2 registration authority evidence tied to an Installation State Generation. */
 export const historicalRegistrationActorSchema = z.object({
@@ -407,12 +503,17 @@ export const historicalRegistrationActorSchema = z.object({
 }).strict()
 
 /** Server-derived authority evidence retained in the immutable Intent digest. */
-export const registrationActorSchema = historicalRegistrationActorSchema
+export const controlIntentActorSchema = historicalRegistrationActorSchema
   .omit({ installationGenerationId: true })
   .extend({ storageGenerationId })
 
+/** Backward-compatible schema name for Project-registration records. */
+export const registrationActorSchema = controlIntentActorSchema
+
 /** Parsed server-derived registration authority evidence. */
-export type RegistrationActor = z.infer<typeof registrationActorSchema>
+export type ControlIntentActor = z.infer<typeof controlIntentActorSchema>
+/** Authority attribution retained by Project-registration Intents. */
+export type RegistrationActor = ControlIntentActor
 
 const registrationIntentRecordSharedShape = {
   id: controlIntentId,
@@ -1126,10 +1227,280 @@ export type GitHubSynchronizationConfigurationIntentRecord = z.infer<
   typeof githubSynchronizationConfigurationIntentRecordSchema
 >
 
+const gitOperationIntentSchema = z.discriminatedUnion('type', [
+  stageFilesIntentSchema,
+  unstageFilesIntentSchema,
+  createCommitIntentSchema,
+])
+
+/** Closed current lifecycle for one structured Git Control Intent. */
+export const gitOperationIntentPhaseSchema = z.enum([
+  'prepared',
+  'admission-reserved',
+  'host-prepared',
+  'accepted',
+  'succeeded',
+  'conflict',
+  'failed',
+  'canceled',
+  'reconciliation-required',
+])
+
+/** Safe terminal classifications retained with a structured Git Intent. */
+export const gitOperationTerminalReasonSchema = z.enum([
+  'expected-evidence',
+  'invalid-selection',
+  'source-conflict',
+  'authority-revoked',
+  'binding-stale',
+  'observation-stale',
+  'unsupported-state',
+  'source-canceled',
+  'effect-unknown',
+  'evidence-conflict',
+  'protocol',
+])
+
+/** Unified durable StageFiles, UnstageFiles, and CreateCommit Intent record. */
+export const gitOperationIntentRecordSchema = z.object({
+  id: controlIntentId,
+  schemaVersion: z.literal(1),
+  revision,
+  receiptId: intentReceiptId,
+  payloadDigest: digest,
+  payload: z.object({
+    intent: gitOperationIntentSchema,
+    actor: controlIntentActorSchema,
+  }).strict(),
+  requestRevision: revision,
+  hostRequest: hostOperationRequestSchema.optional(),
+  phase: gitOperationIntentPhaseSchema,
+  reservationRevision: revision.optional(),
+  preparation: hostOperationPreparationSchema.optional(),
+  admissionRevision: revision.optional(),
+  operationSnapshot: hostOperationSnapshotSchema.optional(),
+  terminalReason: gitOperationTerminalReasonSchema.optional(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  refineDurableIntentIdentity(value, context)
+  if (value.updatedAt < value.createdAt) {
+    context.addIssue({ code: 'custom', message: 'Intent update predates creation', path: ['updatedAt'] })
+  }
+  if (canonicalDigest('saki/git-operation-intent/v1', value.payload) !== value.payloadDigest) {
+    context.addIssue({ code: 'custom', message: 'Intent payload digest is stale', path: ['payloadDigest'] })
+  }
+  const hostRequest = value.hostRequest
+  const hasReservation = value.reservationRevision !== undefined
+  const hasPreparation = value.preparation !== undefined
+  const hasAdmission = value.admissionRevision !== undefined
+  const hasSnapshot = value.operationSnapshot !== undefined
+  const terminalWithReason = value.phase === 'conflict' || value.phase === 'failed' || value.phase === 'canceled'
+    || value.phase === 'reconciliation-required'
+  if (hostRequest === undefined) {
+    if (value.phase !== 'conflict'
+      || (value.terminalReason !== 'expected-evidence' && value.terminalReason !== 'invalid-selection')
+      || hasReservation || hasPreparation || hasAdmission || hasSnapshot) {
+      context.addIssue({ code: 'custom', message: 'pre-Host Git Intent conflict has invalid evidence' })
+    }
+    if (terminalWithReason !== (value.terminalReason !== undefined)) {
+      context.addIssue({ code: 'custom', message: 'Git Intent terminal reason disagrees with phase' })
+    }
+    return
+  }
+  const source = hostRequest.source
+  if (source.intentId !== value.id || source.intentRevision !== value.requestRevision
+    || source.payloadDigest !== value.payloadDigest) {
+    context.addIssue({ code: 'custom', message: 'Host request source disagrees with its Intent' })
+  }
+  const expected = value.payload.intent.expected
+  if (hostRequest.expected.binding.id !== expected.expectedBinding.id
+    || hostRequest.expected.binding.revision !== expected.expectedBinding.revision
+    || !isDeepStrictEqual(hostRequest.expected.status, expected.expectedStatus)
+    || !isDeepStrictEqual(hostRequest.expected.head, expected.expectedHead)
+    || !isDeepStrictEqual(hostRequest.expected.index, expected.expectedIndex)
+    || !isDeepStrictEqual(hostRequest.expected.worktree, expected.expectedWorktree)) {
+    context.addIssue({ code: 'custom', message: 'Host request evidence disagrees with its Intent' })
+  }
+  const expectedHostType = value.payload.intent.type === 'create-commit' ? 'commit' : value.payload.intent.type
+  if (hostRequest.type !== expectedHostType) {
+    context.addIssue({ code: 'custom', message: 'Host request kind disagrees with its Intent' })
+  } else if (value.payload.intent.type === 'create-commit' && hostRequest.type === 'commit') {
+    if (value.payload.intent.message !== hostRequest.message) {
+      context.addIssue({ code: 'custom', message: 'Host request message disagrees with its Intent' })
+    }
+  } else if (value.payload.intent.type !== 'create-commit' && hostRequest.type !== 'commit'
+    && !isDeepStrictEqual(value.payload.intent.changes, hostRequest.changes)) {
+    context.addIssue({ code: 'custom', message: 'Host request selection disagrees with its Intent' })
+  }
+  if (value.payload.actor.hostId !== hostRequest.expected.binding.hostId) {
+    context.addIssue({ code: 'custom', message: 'Git operation actor belongs to another Host' })
+  }
+  if (value.phase === 'prepared' && (hasReservation || hasPreparation || hasAdmission || hasSnapshot)) {
+    context.addIssue({ code: 'custom', message: 'prepared Git Intent retains later-phase evidence' })
+  }
+  if (value.phase === 'admission-reserved' && (!hasReservation || hasPreparation || hasAdmission || hasSnapshot)) {
+    context.addIssue({ code: 'custom', message: 'reserved Git Intent has invalid phase evidence' })
+  }
+  if (value.phase === 'host-prepared' && (!hasReservation || !hasPreparation || hasAdmission || !hasSnapshot)) {
+    context.addIssue({ code: 'custom', message: 'Host-prepared Git Intent has invalid phase evidence' })
+  }
+  if (value.phase === 'host-prepared' && value.operationSnapshot?.state !== 'prepared') {
+    context.addIssue({ code: 'custom', message: 'Host-prepared Git Intent has advanced Host evidence' })
+  }
+  if ((value.phase === 'accepted' || value.phase === 'succeeded')
+    && (!hasReservation || !hasPreparation || !hasAdmission || !hasSnapshot)) {
+    context.addIssue({ code: 'custom', message: 'accepted Git Intent has incomplete operation evidence' })
+  }
+  if (value.phase === 'accepted' && value.operationSnapshot !== undefined
+    && value.operationSnapshot.state !== 'prepared'
+    && value.operationSnapshot.state !== 'accepted'
+    && value.operationSnapshot.state !== 'planning'
+    && value.operationSnapshot.state !== 'publishing') {
+    context.addIssue({ code: 'custom', message: 'accepted Git Intent retains terminal Host evidence' })
+  }
+  if (value.phase === 'conflict') {
+    const validWithoutHost = !hasPreparation && !hasAdmission && !hasSnapshot
+    const validPreparedNoEffect = hasReservation && hasPreparation && !hasAdmission
+      && hasSnapshot && value.operationSnapshot?.state === 'prepared'
+    if (!validWithoutHost && !validPreparedNoEffect) {
+      context.addIssue({ code: 'custom', message: 'conflicted Git Intent has possible-effect evidence' })
+    }
+    if (value.terminalReason !== 'expected-evidence'
+      && value.terminalReason !== 'invalid-selection'
+      && value.terminalReason !== 'source-conflict'
+      && value.terminalReason !== 'protocol') {
+      context.addIssue({ code: 'custom', message: 'conflicted Git Intent has an invalid reason' })
+    }
+    if (value.terminalReason === 'expected-evidence' || value.terminalReason === 'invalid-selection') {
+      context.addIssue({ code: 'custom', message: 'pre-Host Git Intent conflict retains a Host request' })
+    }
+  }
+  if ((value.phase === 'failed' || value.phase === 'canceled')
+    && ((hasPreparation || hasAdmission || hasSnapshot)
+      && (!hasReservation || !hasPreparation || !hasSnapshot))) {
+    context.addIssue({ code: 'custom', message: 'no-effect Git Intent has partial Host evidence' })
+  }
+  if (value.phase === 'canceled'
+    && value.terminalReason !== 'source-canceled'
+    && value.terminalReason !== 'authority-revoked') {
+    context.addIssue({ code: 'custom', message: 'canceled Git Intent has an invalid reason' })
+  }
+  if (value.phase === 'reconciliation-required'
+    && (!hasReservation || !hasPreparation || !hasAdmission || !hasSnapshot
+      || value.operationSnapshot?.state !== 'reconciliation-required')) {
+    context.addIssue({ code: 'custom', message: 'reconciliation Git Intent has incomplete unknown-effect evidence' })
+  }
+  if (value.preparation !== undefined && value.operationSnapshot !== undefined
+    && (value.preparation.operation.id !== value.operationSnapshot.operation.id
+      || value.preparation.operation.hostId !== value.operationSnapshot.operation.hostId
+      || value.preparation.operation.type !== value.operationSnapshot.operation.type
+      || !isDeepStrictEqual(value.preparation.requestFingerprint, value.operationSnapshot.requestFingerprint))) {
+    context.addIssue({ code: 'custom', message: 'Git Intent preparation disagrees with Host snapshot' })
+  }
+  if (value.operationSnapshot !== undefined
+    && (value.operationSnapshot.source.intentId !== value.id
+      || value.operationSnapshot.source.intentRevision !== value.requestRevision
+      || value.operationSnapshot.source.payloadDigest !== value.payloadDigest
+      || value.operationSnapshot.bindingId !== expected.expectedBinding.id
+      || value.operationSnapshot.bindingRevision !== expected.expectedBinding.revision)) {
+    context.addIssue({ code: 'custom', message: 'Host snapshot disagrees with its Git Intent' })
+  }
+  if (value.operationSnapshot?.admission.kind === 'accepted'
+    && value.admissionRevision !== value.operationSnapshot.admission.revision) {
+    context.addIssue({ code: 'custom', message: 'Git Intent admission revision disagrees with Host evidence' })
+  }
+  if ((value.phase === 'failed' || value.phase === 'canceled')
+    && value.operationSnapshot?.admission.kind !== 'accepted'
+    && value.admissionRevision !== undefined) {
+    context.addIssue({ code: 'custom', message: 'no-effect Git Intent retains an unproven admission revision' })
+  }
+  if (terminalWithReason !== (value.terminalReason !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'Git Intent terminal reason disagrees with phase' })
+  }
+  if (value.phase === 'succeeded' && value.operationSnapshot?.state !== 'succeeded') {
+    context.addIssue({ code: 'custom', message: 'succeeded Git Intent lacks a succeeded Host snapshot' })
+  }
+  if (value.phase === 'failed' && value.operationSnapshot?.state !== 'failed') {
+    context.addIssue({ code: 'custom', message: 'failed Git Intent lacks a failed Host snapshot' })
+  }
+  if (value.phase === 'failed' && value.operationSnapshot?.state === 'failed'
+    && value.terminalReason !== value.operationSnapshot.failure.reason) {
+    context.addIssue({ code: 'custom', message: 'failed Git Intent reason disagrees with Host evidence' })
+  }
+  if (value.phase === 'canceled' && value.operationSnapshot !== undefined
+    && value.operationSnapshot.state !== 'canceled') {
+    context.addIssue({ code: 'custom', message: 'canceled Git Intent lacks a canceled Host snapshot' })
+  }
+  if (value.phase === 'canceled' && value.operationSnapshot?.state === 'canceled'
+    && value.terminalReason !== value.operationSnapshot.reason) {
+    context.addIssue({ code: 'custom', message: 'canceled Git Intent reason disagrees with Host evidence' })
+  }
+  if (value.phase === 'reconciliation-required'
+    && value.operationSnapshot?.state === 'reconciliation-required'
+    && value.terminalReason !== value.operationSnapshot.reason) {
+    context.addIssue({ code: 'custom', message: 'reconciliation reason disagrees with Host evidence' })
+  }
+})
+
+/** Parsed durable structured Git Intent. */
+export type GitOperationIntentRecord = z.infer<typeof gitOperationIntentRecordSchema>
+
+const bindingWriteAdmissionBase = {
+  id: resourceBindingId,
+  schemaVersion: z.literal(1),
+  revision,
+  updatedAt: timestamp,
+} as const
+
+const manualWriteAdmissionBase = {
+  ...bindingWriteAdmissionBase,
+  state: z.literal('manual-host-operation'),
+  bindingRevision: revision,
+  source: z.object({
+    kind: z.literal('control-intent'),
+    intentId: controlIntentId,
+    intentRevision: revision,
+    payloadDigest: digest,
+  }).strict(),
+  action: z.enum(['project-changes:stage', 'project-changes:unstage', 'project-commit:create']),
+  reservedAt: timestamp,
+} as const
+
+/** Single local write owner for one Resource Binding; unknown variants fail closed. */
+export const bindingWriteAdmissionRecordSchema = z.union([
+  z.object({ ...bindingWriteAdmissionBase, state: z.literal('available') }).strict(),
+  z.object({
+    ...manualWriteAdmissionBase,
+    phase: z.literal('reserved'),
+  }).strict(),
+  z.object({
+    ...manualWriteAdmissionBase,
+    phase: z.literal('accepted'),
+    preparation: hostOperationPreparationSchema,
+    acceptedAt: timestamp,
+  }).strict(),
+]).superRefine((value, context) => {
+  if (value.state === 'manual-host-operation'
+    && (value.updatedAt < value.reservedAt
+      || (value.phase === 'accepted'
+        && (value.acceptedAt < value.reservedAt || value.acceptedAt > value.updatedAt)))) {
+    context.addIssue({ code: 'custom', message: 'write admission timestamps are not monotonic' })
+  }
+  if (value.state === 'manual-host-operation' && value.phase === 'accepted'
+    && value.preparation.operation.type !== (value.action === 'project-commit:create'
+      ? 'commit' : value.action === 'project-changes:stage' ? 'stage-files' : 'unstage-files')) {
+    context.addIssue({ code: 'custom', message: 'write admission action disagrees with Host preparation' })
+  }
+})
+
+/** Parsed single-writer admission row. */
+export type BindingWriteAdmissionRecord = z.infer<typeof bindingWriteAdmissionRecordSchema>
+
 /** Exact Saki control-plane domain declaration. */
 export const sakiControlPlaneDomainSpec = defineDomain({
   name: 'saki_control_plane',
-  version: 4,
+  version: 5,
   tables: {
     control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
     installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
@@ -1147,5 +1518,10 @@ export const sakiControlPlaneDomainSpec = defineDomain({
       SakiControlIntentId,
       GitHubSynchronizationConfigurationIntentRecord
     >(githubSynchronizationConfigurationIntentRecordSchema),
+    git_operation_intents: domainTable<SakiControlIntentId, GitOperationIntentRecord>(gitOperationIntentRecordSchema),
+    binding_write_admissions: domainTable<
+      SakiResourceBindingId,
+      BindingWriteAdmissionRecord
+    >(bindingWriteAdmissionRecordSchema),
   },
 })

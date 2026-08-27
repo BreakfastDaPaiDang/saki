@@ -40,6 +40,7 @@
   },
   "peerDependencies": {
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
+    "@breakfastdapaidang/saki-execution-local": "workspace:^",
     "@deepseek-ai/dsh-brand": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
@@ -50,6 +51,7 @@
   "devDependencies": {
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
     "@breakfastdapaidang/saki-execution": "workspace:^",
+    "@breakfastdapaidang/saki-execution-local": "workspace:^",
     "@deepseek-ai/dsh-brand": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",

@@ -11,6 +11,7 @@ import {
   projectSelectionInspectionSchema,
 } from '@breakfastdapaidang/saki-execution'
 import type {
+  ActiveHostProjectBinding,
   ProjectSelectionInspection,
   ProjectSelectionProjection,
   SakiHostExecution,
@@ -42,6 +43,35 @@ import type {
   SakiResourceBindingId,
 } from './types.ts'
 
+/** Exact active Host binding resolved from the trusted durable Registry. */
+export interface ResolvedActiveProjectBinding {
+  readonly registryRevision: number
+  readonly projectId: SakiDevelopmentProjectId
+  readonly projectRevision: number
+  readonly binding: ActiveHostProjectBinding
+}
+
+/**
+ * Derive the complete Host authority frozen for one active Binding revision.
+ * @param resource - validated durable Resource Binding that owns the private evidence.
+ * @param revision - Binding revision retained by the Host request.
+ * @returns detached Host authority with no caller-supplied fields.
+ */
+export function activeHostProjectBinding(
+  resource: ResourceBindingRecord,
+  revision: number = resource.revision,
+): ActiveHostProjectBinding {
+  return {
+    id: resource.id,
+    revision,
+    health: 'active',
+    hostId: resource.hostId,
+    workspaceId: resource.workspaceId,
+    expectedInspection: cloneInspection(resource.registrationInspection),
+    inheritedChangeBaseline: structuredClone(resource.inheritedChangeBaseline),
+  }
+}
+
 type RegistryTable = KvTable<typeof DEVELOPMENT_PROJECT_REGISTRY_KEY, DevelopmentProjectRegistryRecord>
 type IntentTable = KvTable<SakiControlIntentId, RegistrationIntentRecord>
 type TerminalIntentPhase = 'confirmed' | 'conflict' | 'failure' | 'reconciliation-required'
@@ -65,6 +95,26 @@ interface ValidatedDevelopmentProjectsState<
 > {
   readonly registry: DevelopmentProjectRegistryRecord | undefined
   readonly intents: readonly I[]
+}
+
+/**
+ * Identify Registry children whose initial write admission is still recoverable by registration.
+ * @param registry - validated current Project Registry.
+ * @param intents - cross-validated current registration Intents.
+ * @returns Binding ids committed before registration completed its admission handoff.
+ */
+export function recoverableRegistrationAdmissionBindingIds(
+  registry: DevelopmentProjectRegistryRecord | undefined,
+  intents: readonly RegistrationIntentRecord[],
+): ReadonlySet<SakiResourceBindingId> {
+  if (registry === undefined) return new Set()
+  const intentById = new Map(intents.map(intent => [intent.id, intent] as const))
+  return new Set(registry.intentMappings.flatMap((mapping) => {
+    const intent = intentById.get(mapping.intentId)
+    return intent?.phase === 'workspace-observed' || intent?.phase === 'registry-committed'
+      ? [mapping.resourceBindingId]
+      : []
+  }))
 }
 
 interface CommittedRegistration {
@@ -95,6 +145,8 @@ export interface DevelopmentProjectsOptions {
   readonly workspaces: WorkspaceRegistry
   readonly authorityCurrent: (actor: RegistrationActor) => boolean
   readonly validateActorReference: (actor: RegistrationActor) => void
+  /** Materialize or verify the Binding's single-writer admission before registration confirms. */
+  readonly ensureBindingWriteAdmission?: (binding: ResourceBindingRecord) => Promise<void>
 }
 
 /**
@@ -295,6 +347,52 @@ export class DevelopmentProjects {
     }
   }
 
+  /**
+   * Resolve trusted active Host evidence at an exact caller-observed Registry revision.
+   * @param projectId - stable Project identity.
+   * @param expectedRevision - exact Project Registry revision.
+   * @returns detached trusted binding evidence or a bounded lookup failure.
+   */
+  activeBinding(
+    projectId: SakiDevelopmentProjectId,
+    expectedRevision: number,
+  ): ResolvedActiveProjectBinding | 'stale' | 'not-found' | 'binding-unavailable' {
+    const registry = this.registry()
+    if (registry.revision !== expectedRevision) return 'stale'
+    const project = registry.projects.find(candidate => candidate.id === projectId)
+    if (project === undefined) return 'not-found'
+    const resource = bindingFor(registry, project)
+    if (resource.health !== 'active') return 'binding-unavailable'
+    return {
+      registryRevision: registry.revision,
+      projectId: project.id,
+      projectRevision: project.revision,
+      binding: activeHostProjectBinding(resource),
+    }
+  }
+
+  /**
+   * Resolve one Project's current active Binding without coupling effect-boundary admission
+   * to unrelated Registry revision advances.
+   * @param projectId - stable Project identity retained by the accepted Intent.
+   * @returns current trusted binding evidence or a bounded lookup failure.
+   */
+  currentActiveBinding(
+    projectId: SakiDevelopmentProjectId,
+  ): ResolvedActiveProjectBinding | 'not-found' | 'binding-unavailable' {
+    const registry = this.registry()
+    const project = registry.projects.find(candidate => candidate.id === projectId)
+    if (project === undefined) return 'not-found'
+    const resource = bindingFor(registry, project)
+    if (resource.health !== 'active') return 'binding-unavailable'
+    return {
+      registryRevision: registry.revision,
+      projectId: project.id,
+      projectRevision: project.revision,
+      binding: activeHostProjectBinding(resource),
+    }
+  }
+
   private async resume(
     intentId: SakiControlIntentId,
     signal: AbortSignal,
@@ -425,6 +523,13 @@ export class DevelopmentProjects {
         continue
       }
 
+      const bindingId = record.resourceBindingId
+      /* v8 ignore next -- the record schema requires commit identities in this phase. */
+      if (bindingId === undefined) throw new Error('registry-committed Intent lacks its Resource Binding')
+      const binding = this.registry().resourceBindings.find(candidate => candidate.id === bindingId)
+      /* v8 ignore next -- durable cross-record validation requires the committed child. */
+      if (binding === undefined) throw new Error('registry-committed Intent references a missing Resource Binding')
+      await this.options.ensureBindingWriteAdmission?.(binding)
       await this.transition(record, { phase: 'confirmed' })
       fresh = undefined
     }
@@ -813,9 +918,8 @@ function summary(
       health: binding.health,
       hostId: binding.hostId,
       displayLocation: selection.displayLocation,
+      objectFormat: selection.objectFormat,
       head: selection.head,
-      ...(selection.branch === undefined ? {} : { branch: selection.branch }),
-      detached: selection.detached,
       inheritedChangeEntryCount: selection.inheritedChangeEntryCount,
       baseline: binding.inheritedChangeBaseline.kind,
       automaticMutationEligible: binding.health === 'active'

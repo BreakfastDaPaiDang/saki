@@ -24,6 +24,9 @@
       "path": "../../runtime-diagnostics/invariants"
     },
     {
+      "path": "../../storage/storage-domain"
+    },
+    {
       "path": "../../subprocess/subprocess"
     },
     {

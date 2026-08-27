@@ -1,6 +1,6 @@
 {
   "name": "@breakfastdapaidang/saki-execution",
-  "description": "Private Saki Host Execution Service Definition and inspection vocabulary",
+  "description": "Private Saki Host Execution Service Definition and structured operation vocabulary",
   "version": "0.1.0",
   "private": true,
   "type": "module",

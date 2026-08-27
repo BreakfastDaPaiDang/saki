@@ -19,14 +19,19 @@ import {
   sakiBoardResultSchema,
   sakiBootstrapExchangeRequestSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
+  sakiCreateCommitResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiEmptyRequestSchema,
   sakiInspectProjectSelectionResultSchema,
   sakiIntentRequestSchema,
   sakiRegisterDevelopmentProjectResultSchema,
   sakiProjectIndexResultSchema,
+  sakiProjectDiffResultSchema,
+  sakiProjectChangesResultSchema,
   sakiProjectSettingsResultSchema,
   sakiQueryRequestSchema,
+  sakiStageFilesResultSchema,
+  sakiUnstageFilesResultSchema,
 } from './wire.ts'
 
 export * from './wire.ts'
@@ -144,6 +149,12 @@ async function query(
     case 'development-workspace': {
       return reply({ ok: true, value: sakiDevelopmentWorkspaceResultSchema.parse(result) })
     }
+    case 'project-changes': {
+      return reply({ ok: true, value: sakiProjectChangesResultSchema.parse(result) })
+    }
+    case 'project-diff': {
+      return reply({ ok: true, value: sakiProjectDiffResultSchema.parse(result) })
+    }
     case 'project-settings': {
       return reply({ ok: true, value: sakiProjectSettingsResultSchema.parse(result) })
     }
@@ -201,6 +212,18 @@ async function authenticatedMutation(
           ok: true,
           value: sakiConfigureGitHubSynchronizationResultSchema.parse(result),
         })
+      }
+      case 'stage-files': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiStageFilesResultSchema.parse(result) })
+      }
+      case 'unstage-files': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiUnstageFilesResultSchema.parse(result) })
+      }
+      case 'create-commit': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiCreateCommitResultSchema.parse(result) })
       }
       /* v8 ignore next 2 -- Saki Intent input is closed and strict Host parsing rejects unknown tags before dispatch. */
       default: return assertNever(operation.intent)

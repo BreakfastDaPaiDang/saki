@@ -6,6 +6,12 @@ import type {
   InheritedChangeBaselineEntry,
   InheritedChangeBaselineObservedLimits,
   InheritedChangeBaselineUnavailableReason,
+  ProjectGitChange,
+  ProjectGitChangeFingerprint,
+  ProjectGitChangeId,
+  ProjectGitHead,
+  ProjectGitStatusFingerprint,
+  ProjectGitStatusObservation,
   ProjectInspectionFingerprint,
   ProjectSelectionProjection,
   RepositoryComparisonObservation,
@@ -40,7 +46,7 @@ export type ProjectInspectionWorkspaceObservation =
 
 /** Complete stable material covered by a project-inspection fingerprint. */
 export interface ProjectInspectionFingerprintMaterial {
-  readonly observationVersion: 1
+  readonly observationVersion: 2
   readonly hostId: ProjectSelectionProjection['hostId']
   readonly displayLocation: string
   readonly worktreePathDigest: string
@@ -49,9 +55,7 @@ export interface ProjectInspectionFingerprintMaterial {
   readonly gitDirectoryIdentity: TrustedProjectSelectionObservation['gitDirectoryIdentity']
   readonly commonGitDirectoryIdentity: TrustedProjectSelectionObservation['commonGitDirectoryIdentity']
   readonly objectFormat: ProjectSelectionProjection['objectFormat']
-  readonly head: string
-  readonly branch?: string
-  readonly detached: boolean
+  readonly head: ProjectGitHead
   readonly locked: boolean
   readonly inheritedChangeEntryCount: number
   readonly conversionAmbiguous: boolean
@@ -65,6 +69,122 @@ export interface ProjectInspectionFingerprintMaterial {
 
 /** Stable inspection material excluding only the phase-sensitive Workspace observation. */
 export type ProjectInspectionWorkspaceIndependentMaterial = Omit<ProjectInspectionFingerprintMaterial, 'workspace'>
+
+/** Complete stable material covered by one structured Git-status fingerprint. */
+export type ProjectGitStatusFingerprintMaterial = Omit<ProjectGitStatusObservation, 'fingerprint' | 'observedAt'>
+
+/** One public change row without its observation-scoped identity. */
+export type ProjectGitChangeMaterial = ProjectGitChange extends infer Change
+  ? Change extends ProjectGitChange ? Omit<Change, 'id'> : never
+  : never
+
+/** One exact change row before adding its fingerprint and observation-scoped id. */
+export type ProjectGitChangeFingerprintMaterial = ProjectGitChange extends infer Change
+  ? Change extends ProjectGitChange ? Omit<Change, 'id' | 'fingerprint'> : never
+  : never
+
+/** Complete status material used to scope every change identity before final fingerprinting. */
+export type ProjectGitStatusSeedMaterial = Omit<
+  ProjectGitStatusObservation,
+  'fingerprint' | 'changes' | 'observedAt'
+> & { readonly changes: readonly ProjectGitChangeMaterial[] }
+
+/**
+ * Remove change ids and the final fingerprint from one complete status.
+ * @param observation - complete status material before final fingerprinting.
+ * @returns canonical observation seed shared by every contained change id.
+ */
+export function projectGitStatusSeedMaterial(
+  observation: Omit<ProjectGitStatusObservation, 'fingerprint'>,
+): ProjectGitStatusSeedMaterial {
+  return {
+    observationVersion: observation.observationVersion,
+    bindingId: observation.bindingId,
+    bindingRevision: observation.bindingRevision,
+    bindingHealth: observation.bindingHealth,
+    locked: observation.locked,
+    objectFormat: observation.objectFormat,
+    head: observation.head,
+    branch: observation.branch,
+    ...(observation.upstream === undefined ? {} : { upstream: observation.upstream }),
+    index: observation.index,
+    worktree: observation.worktree,
+    changes: observation.changes.map(({ id: _id, ...change }) => change),
+    structuredMutation: observation.structuredMutation,
+  }
+}
+
+/**
+ * Digest the complete id-free status observation used to scope change identities.
+ * @param material - canonical status seed with id-free rows.
+ * @returns lowercase SHA-256 seed digest.
+ */
+export function computeProjectGitStatusSeedDigest(material: ProjectGitStatusSeedMaterial): string {
+  return canonicalDigest('saki/project-git-status-seed/v1', material)
+}
+
+/**
+ * Fingerprint one exact public change row independently of its observation.
+ * @param change - exact row before its fingerprint and scoped id are attached.
+ * @returns versioned canonical row fingerprint.
+ */
+export function computeProjectGitChangeFingerprint(
+  change: ProjectGitChangeFingerprintMaterial,
+): ProjectGitChangeFingerprint {
+  return { version: 1, digest: canonicalDigest('saki/project-git-change/v1', change) }
+}
+
+/**
+ * Derive one opaque change id from the complete observation seed and its public row.
+ * @param statusSeedDigest - digest of the complete id-free status observation.
+ * @param change - one id-free canonical change row contained by that observation.
+ * @returns observation-scoped branded Git change identity.
+ */
+export function computeProjectGitChangeId(
+  statusSeedDigest: string,
+  change: ProjectGitChangeMaterial,
+): ProjectGitChangeId {
+  return `git-change-${canonicalDigest('saki/project-git-change-id/v1', { statusSeedDigest, change })}` as ProjectGitChangeId
+}
+
+/**
+ * Reconstruct all facts covered by one structured Git-status fingerprint.
+ * @param observation - complete status values, with or without their fingerprint.
+ * @returns typed canonical material for durable comparison.
+ */
+export function projectGitStatusFingerprintMaterial(
+  observation: Omit<ProjectGitStatusObservation, 'fingerprint'>,
+): ProjectGitStatusFingerprintMaterial {
+  return {
+    observationVersion: observation.observationVersion,
+    bindingId: observation.bindingId,
+    bindingRevision: observation.bindingRevision,
+    bindingHealth: observation.bindingHealth,
+    locked: observation.locked,
+    objectFormat: observation.objectFormat,
+    head: observation.head,
+    branch: observation.branch,
+    ...(observation.upstream === undefined ? {} : { upstream: observation.upstream }),
+    index: observation.index,
+    worktree: observation.worktree,
+    changes: observation.changes,
+    structuredMutation: observation.structuredMutation,
+  }
+}
+
+/**
+ * Recompute the fingerprint for one complete structured Git-status observation.
+ * @param observation - complete status values, with or without their fingerprint.
+ * @returns versioned canonical status fingerprint.
+ */
+export function computeProjectGitStatusFingerprint(
+  observation: Omit<ProjectGitStatusObservation, 'fingerprint'>,
+): ProjectGitStatusFingerprint {
+  return {
+    version: 1,
+    digest: canonicalDigest('saki/project-git-status/v1', projectGitStatusFingerprintMaterial(observation)),
+  }
+}
 
 /**
  * Remove observation-time fields from baseline evidence used for identity.
@@ -107,8 +227,6 @@ export function projectInspectionFingerprintMaterial(
     commonGitDirectoryIdentity: trusted.commonGitDirectoryIdentity,
     objectFormat: projection.objectFormat,
     head: projection.head,
-    ...(projection.branch === undefined ? {} : { branch: `refs/heads/${projection.branch}` }),
-    detached: projection.detached,
     locked: projection.locked,
     inheritedChangeEntryCount: projection.inheritedChangeEntryCount,
     conversionAmbiguous: projection.conversionAmbiguous,
@@ -150,7 +268,7 @@ export function computeProjectInspectionFingerprint(
   trusted: TrustedProjectSelectionObservation,
 ): ProjectInspectionFingerprint {
   return {
-    version: 1,
-    digest: canonicalDigest('saki/project-inspection/v1', projectInspectionFingerprintMaterial(projection, trusted)),
+    version: 2,
+    digest: canonicalDigest('saki/project-inspection/v2', projectInspectionFingerprintMaterial(projection, trusted)),
   }
 }

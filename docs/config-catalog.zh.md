@@ -15,12 +15,12 @@
 
 ## `@breakfastdapaidang/saki-execution-local`
 
-需要：`fs` · `subprocess` · `workspaceRegistry`
+需要：`fs` · `storageDomain` · `subprocess` · `workspaceRegistry`
 
 ```ts config-catalog
 type ResolvedConfig = Required<Config>
 
-/** Local Git observation and baseline resource limits. */
+/** Local Git observation, baseline, and operation resource limits. */
 export interface Config {
   /** Wall-clock bound for each Git process. */
   gitCommandTimeoutMs?: number
@@ -54,10 +54,14 @@ export interface Config {
   baselineMaxTotalFileBytes?: number
   /** Wall-clock bound for content baseline capture. */
   baselineMaxCaptureMs?: number
+  /** Maximum source or target Git index bytes retained by one operation. */
+  operationMaxIndexBytes?: number
+  /** Maximum reflog bytes inspected while recovering one Commit publication. */
+  operationMaxReflogBytes?: number
 }
 ```
 
-来源：[`packages/saki/execution-local/src/index.ts:54`](../packages/saki/execution-local/src/index.ts)
+来源：[`packages/saki/execution-local/src/index.ts:99`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 

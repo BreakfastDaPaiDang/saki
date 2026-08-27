@@ -75,6 +75,13 @@ async function storageContext(
   await provideSakiInstallationState(ctx, state)
   ctx.provide('sakiHostExecution', {
     inspectProjectSelection: () => Promise.resolve({ ok: false, reason: 'unavailable' }),
+    inspectProject: () => Promise.resolve({ ok: false, reason: 'unavailable' }),
+    readDiff: () => Promise.resolve({ ok: false, reason: 'unavailable' }),
+    prepareOperation: () => Promise.resolve({ ok: false, reason: 'unavailable' }),
+    startOperation: () => Promise.reject(new Error('Host Operations are outside access invariant tests')),
+    inspectOperation: () => Promise.reject(new Error('Host Operations are outside access invariant tests')),
+    cancelOperation: () => Promise.reject(new Error('Host Operations are outside access invariant tests')),
+    onChanged: () => () => undefined,
   } as never)
   ctx.provide('workspaceRegistry', {
     list: () => [],

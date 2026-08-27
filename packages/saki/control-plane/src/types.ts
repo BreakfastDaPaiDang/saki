@@ -19,14 +19,35 @@ import type {
   GitHubRepositoryId,
 } from '@breakfastdapaidang/saki-github'
 import type {
+  CommitHostOperationResult,
+  HostOperationId,
+  HostOperationKind,
+  HostOperationSnapshot,
   InheritedChangeBaseline,
+  InspectProjectResult,
   InspectProjectSelectionResult,
+  ProjectGitChangeFingerprint,
+  ProjectGitChangeId,
+  ProjectGitHead,
+  ProjectGitIndexEvidence,
+  ProjectGitMutationBlocker,
+  ProjectGitStatusFingerprint,
+  ProjectGitStatusObservation,
+  ProjectGitWorktreeFingerprint,
   ProjectInspectionFingerprint,
   ProjectSelectionProjection,
+  ReadProjectDiffRequest,
+  ReadProjectDiffResult,
+  SakiControlIntentId,
   SakiHostId,
+  SakiResourceBindingId,
+  SelectedProjectGitChange,
+  StageFilesHostOperationResult,
+  UnstageFilesHostOperationResult,
 } from '@breakfastdapaidang/saki-execution'
 
-export type { SakiHostId } from '@breakfastdapaidang/saki-execution'
+export type { SakiControlIntentId, SakiHostId, SakiResourceBindingId } from '@breakfastdapaidang/saki-execution'
+export type { ProjectGitChangeFingerprint, ProjectGitChangeId, SelectedProjectGitChange }
 export type {
   GitHubAccountId,
   GitHubAppId,
@@ -64,10 +85,6 @@ export type SakiBootstrapChallengeId = Branded<'SakiBootstrapChallengeId'>
 export type SakiBrowserSessionId = Branded<'SakiBrowserSessionId'>
 /** Stable identity of one Development Project. */
 export type SakiDevelopmentProjectId = Branded<'SakiDevelopmentProjectId'>
-/** Stable identity of one Host-owned Resource Binding. */
-export type SakiResourceBindingId = Branded<'SakiResourceBindingId'>
-/** Stable idempotency identity of one Control Intent. */
-export type SakiControlIntentId = Branded<'SakiControlIntentId'>
 /** Stable receipt identity retained with one accepted Intent. */
 export type SakiIntentReceiptId = Branded<'SakiIntentReceiptId'>
 /** Stable identity of one GitHub-backed Work Item across Project membership changes. */
@@ -156,6 +173,21 @@ export interface SakiDevelopmentWorkspaceQuery {
   readonly expectedRegistryRevision: number
 }
 
+/** Current structured Git status for one Project at an exact Registry revision. */
+export interface SakiProjectChangesQuery {
+  readonly type: 'project-changes'
+  readonly projectId: SakiDevelopmentProjectId
+  readonly expectedRegistryRevision: number
+}
+
+/** One opaque file-scoped Diff read at an exact Registry and status observation. */
+export interface SakiProjectDiffQuery {
+  readonly type: 'project-diff'
+  readonly projectId: SakiDevelopmentProjectId
+  readonly expectedRegistryRevision: number
+  readonly request: ReadProjectDiffRequest
+}
+
 /** Project Settings query for one Development Project. */
 export interface SakiProjectSettingsQuery {
   readonly type: 'project-settings'
@@ -195,9 +227,8 @@ export interface SakiDevelopmentProjectSummary {
     readonly health: 'active' | 'missing' | 'repair-required'
     readonly hostId: SakiHostId
     readonly displayLocation: string
-    readonly head: string
-    readonly branch?: string
-    readonly detached: boolean
+    readonly objectFormat: 'sha1' | 'sha256'
+    readonly head: ProjectGitHead
     readonly inheritedChangeEntryCount: number
     readonly baseline: 'complete' | 'unavailable'
     readonly automaticMutationEligible: boolean
@@ -235,6 +266,104 @@ export interface SakiDevelopmentWorkspaceProjection {
       | 'locked'
     )[]
   }
+}
+
+/** Browser-safe structured Git status from one exact Project and Binding revision. */
+export type SakiProjectChangesObservationResult =
+  | { readonly ok: true; readonly observation: ProjectGitStatusObservation }
+  | Extract<InspectProjectResult, { readonly ok: false }>
+
+/** Browser-safe operation reference without Host routing evidence. */
+export interface SakiGitOperationReferenceProjection {
+  readonly id: HostOperationId
+  readonly type: HostOperationKind
+  readonly revision: number
+  readonly state: HostOperationSnapshot['state']
+}
+
+/** Repository-level reason why a structured mutation is not currently eligible. */
+export type SakiGitOperationUnavailableReason =
+  | ProjectGitMutationBlocker
+  | 'detached-head'
+  | 'no-staged-changes'
+  | 'status-unavailable'
+  | 'action-denied'
+  | 'write-admission-busy'
+  | 'write-admission-unavailable'
+
+/** Repository-level eligibility; selected rows are validated only when an Intent is submitted. */
+export type SakiGitOperationAvailabilityProjection =
+  | { readonly available: true; readonly reasons: readonly [] }
+  | { readonly available: false; readonly reasons: readonly SakiGitOperationUnavailableReason[] }
+
+type SakiHostOperationKindForIntent<T extends SakiGitOperationIntent['type']> =
+  T extends 'create-commit' ? 'commit' : T
+
+/** Intent- and lifecycle-correlated browser-safe Host Operation reference. */
+export type SakiGitOperationReferenceProjectionFor<
+  T extends SakiGitOperationIntent['type'],
+  S extends HostOperationSnapshot['state'],
+> = Omit<SakiGitOperationReferenceProjection, 'type' | 'state'> & {
+  readonly type: SakiHostOperationKindForIntent<T>
+  readonly state: S
+}
+
+type SakiCurrentGitOperationProjectionFor<T extends SakiGitOperationIntent['type']> =
+  | {
+    readonly intentId: SakiControlIntentId
+    readonly type: T
+    readonly state: 'admission-reserved'
+  }
+  | {
+    readonly intentId: SakiControlIntentId
+    readonly type: T
+    readonly state: 'host-prepared'
+    readonly operation: SakiGitOperationReferenceProjectionFor<T, 'prepared'>
+  }
+  | {
+    readonly intentId: SakiControlIntentId
+    readonly type: T
+    readonly state: 'accepted'
+    readonly operation: SakiGitOperationReferenceProjectionFor<T, 'accepted' | 'planning' | 'publishing'>
+  }
+  | {
+    readonly intentId: SakiControlIntentId
+    readonly type: T
+    readonly state: 'reconciliation-required'
+    readonly operation: SakiGitOperationReferenceProjectionFor<T, 'reconciliation-required'>
+  }
+
+/** Current write-owning Intent, if the Binding cannot admit another Saki writer. */
+export type SakiCurrentGitOperationProjection =
+  | SakiCurrentGitOperationProjectionFor<'stage-files'>
+  | SakiCurrentGitOperationProjectionFor<'unstage-files'>
+  | SakiCurrentGitOperationProjectionFor<'create-commit'>
+
+/** Structured Git actions and the Binding's current single-writer state. */
+export interface SakiGitOperationsProjection {
+  readonly stageFiles: SakiGitOperationAvailabilityProjection
+  readonly unstageFiles: SakiGitOperationAvailabilityProjection
+  readonly createCommit: SakiGitOperationAvailabilityProjection
+  readonly current?: SakiCurrentGitOperationProjection
+}
+
+/** Browser-safe structured Git status from one exact Project and Binding revision. */
+export interface SakiProjectChangesProjection {
+  readonly type: 'project-changes'
+  readonly registryRevision: number
+  readonly projectId: SakiDevelopmentProjectId
+  readonly projectRevision: number
+  readonly result: SakiProjectChangesObservationResult
+  readonly gitOperations: SakiGitOperationsProjection
+}
+
+/** Browser-safe bounded Diff result from one exact Project and status observation. */
+export interface SakiProjectDiffProjection {
+  readonly type: 'project-diff'
+  readonly registryRevision: number
+  readonly projectId: SakiDevelopmentProjectId
+  readonly projectRevision: number
+  readonly result: ReadProjectDiffResult
 }
 
 /** Status-option identities whose node ids remain authoritative across display-name changes. */
@@ -579,6 +708,18 @@ export interface SakiQueryMap {
     readonly projection: SakiDevelopmentWorkspaceProjection
     readonly failure: 'denied' | 'unavailable' | 'stale' | 'not-found'
   }
+  /** One Project's current structured Git status. */
+  readonly 'project-changes': {
+    readonly request: SakiProjectChangesQuery
+    readonly projection: SakiProjectChangesProjection
+    readonly failure: 'denied' | 'unavailable' | 'stale' | 'not-found' | 'binding-unavailable'
+  }
+  /** One bounded file-scoped Project Diff page. */
+  readonly 'project-diff': {
+    readonly request: SakiProjectDiffQuery
+    readonly projection: SakiProjectDiffProjection
+    readonly failure: 'denied' | 'unavailable' | 'stale' | 'not-found' | 'binding-unavailable'
+  }
   /** One Project's configuration and synchronization activation state. */
   readonly 'project-settings': {
     readonly request: SakiProjectSettingsQuery
@@ -623,10 +764,55 @@ export interface ConfigureGitHubSynchronizationIntent {
   readonly patch: GitHubSynchronizationConfigurationPatch
 }
 
+/** Browser-confirmed repository and Binding evidence for one structured Git mutation. */
+export interface GitMutationExpectation {
+  readonly projectId: SakiDevelopmentProjectId
+  readonly expectedRegistryRevision: number
+  readonly expectedProjectRevision: number
+  readonly expectedBinding: {
+    readonly id: SakiResourceBindingId
+    readonly revision: number
+  }
+  readonly expectedStatus: ProjectGitStatusFingerprint
+  readonly expectedHead: ProjectGitHead
+  readonly expectedIndex: Extract<ProjectGitIndexEvidence, { readonly kind: 'tree' }>
+  readonly expectedWorktree: ProjectGitWorktreeFingerprint
+}
+
+/** Stage an exact non-empty set of rows from one complete Changes observation. */
+export interface StageFilesIntent {
+  readonly type: 'stage-files'
+  readonly intentId: SakiControlIntentId
+  readonly expected: GitMutationExpectation
+  readonly changes: readonly SelectedProjectGitChange[]
+}
+
+/** Reset the index side of an exact non-empty set of staged rows. */
+export interface UnstageFilesIntent {
+  readonly type: 'unstage-files'
+  readonly intentId: SakiControlIntentId
+  readonly expected: GitMutationExpectation
+  readonly changes: readonly SelectedProjectGitChange[]
+}
+
+/** Create one deterministic hook-free unsigned Commit from an exact index tree. */
+export interface CreateCommitIntent {
+  readonly type: 'create-commit'
+  readonly intentId: SakiControlIntentId
+  readonly expected: GitMutationExpectation
+  readonly message: string
+}
+
+/** Browser-originated structured Git mutation Intent. */
+export type SakiGitOperationIntent = StageFilesIntent | UnstageFilesIntent | CreateCommitIntent
+
 /** Control-plane Intent request map. */
 export interface SakiIntentMap {
   readonly 'register-development-project': RegisterDevelopmentProjectIntent
   readonly 'configure-github-synchronization': ConfigureGitHubSynchronizationIntent
+  readonly 'stage-files': StageFilesIntent
+  readonly 'unstage-files': UnstageFilesIntent
+  readonly 'create-commit': CreateCommitIntent
 }
 
 /** Control Intent union derived from the request map. */
@@ -689,6 +875,134 @@ export type SakiGitHubSynchronizationReceipt =
     readonly reason: 'authority'
   })
 
+/** Safe control-plane lifecycle for one structured Git mutation. */
+export type SakiGitOperationReceiptState =
+  | 'prepared'
+  | 'admission-reserved'
+  | 'host-prepared'
+  | 'accepted'
+  | 'succeeded'
+  | 'conflict'
+  | 'failed'
+  | 'canceled'
+  | 'reconciliation-required'
+
+/** Safe terminal reason without Host routing, authority, or admission evidence. */
+export type SakiGitOperationTerminalReason =
+  | 'expected-evidence'
+  | 'invalid-selection'
+  | 'source-conflict'
+  | 'authority-revoked'
+  | 'binding-stale'
+  | 'observation-stale'
+  | 'unsupported-state'
+  | 'source-canceled'
+  | 'effect-unknown'
+  | 'evidence-conflict'
+  | 'protocol'
+
+interface SakiGitOperationReceiptBase<T extends SakiGitOperationIntent['type']> {
+  readonly id: SakiIntentReceiptId
+  readonly intentId: SakiControlIntentId
+  readonly type: T
+  readonly projectId: SakiDevelopmentProjectId
+}
+
+interface SakiGitOperationResultMap {
+  readonly 'stage-files': StageFilesHostOperationResult
+  readonly 'unstage-files': UnstageFilesHostOperationResult
+  readonly 'create-commit': CommitHostOperationResult
+}
+
+type SakiGitOperationReceiptFor<T extends SakiGitOperationIntent['type']> =
+  | (SakiGitOperationReceiptBase<T> & { readonly state: 'prepared' | 'admission-reserved' })
+  | (SakiGitOperationReceiptBase<T> & {
+    readonly state: 'host-prepared'
+    readonly operation: SakiGitOperationReferenceProjectionFor<T, 'prepared'>
+  })
+  | (SakiGitOperationReceiptBase<T> & {
+    readonly state: 'accepted'
+    readonly operation: SakiGitOperationReferenceProjectionFor<T, 'accepted' | 'planning' | 'publishing'>
+  })
+  | (SakiGitOperationReceiptBase<T> & {
+    readonly state: 'succeeded'
+    readonly operation: SakiGitOperationReferenceProjectionFor<T, 'succeeded'>
+    readonly result: SakiGitOperationResultMap[T]
+  })
+  | (SakiGitOperationReceiptBase<T> & {
+    readonly state: 'conflict'
+    readonly reason: 'expected-evidence' | 'invalid-selection' | 'source-conflict' | 'protocol'
+    readonly operation?: SakiGitOperationReferenceProjectionFor<T, 'prepared'>
+  })
+  | (SakiGitOperationReceiptBase<T> & {
+    readonly state: 'failed'
+    readonly reason: Exclude<SakiGitOperationTerminalReason,
+      | 'expected-evidence'
+      | 'source-conflict'
+      | 'protocol'
+      | 'source-canceled'
+      | 'authority-revoked'
+      | 'effect-unknown'
+      | 'evidence-conflict'>
+    readonly operation: SakiGitOperationReferenceProjectionFor<T, 'failed'>
+  })
+  | (SakiGitOperationReceiptBase<T> & {
+    readonly state: 'canceled'
+    readonly reason: 'source-canceled' | 'authority-revoked'
+    readonly operation?: SakiGitOperationReferenceProjectionFor<T, 'canceled'>
+  })
+  | (SakiGitOperationReceiptBase<T> & {
+    readonly state: 'reconciliation-required'
+    readonly reason: 'effect-unknown' | 'evidence-conflict'
+    readonly operation: SakiGitOperationReferenceProjectionFor<T, 'reconciliation-required'>
+  })
+
+interface SakiGitOperationReceiptMap {
+  readonly 'stage-files': SakiGitOperationReceiptFor<'stage-files'>
+  readonly 'unstage-files': SakiGitOperationReceiptFor<'unstage-files'>
+  readonly 'create-commit': SakiGitOperationReceiptFor<'create-commit'>
+}
+
+/** Browser-safe durable receipt for StageFiles, UnstageFiles, or CreateCommit. */
+export type SakiGitOperationReceipt<
+  T extends SakiGitOperationIntent['type'] = SakiGitOperationIntent['type'],
+> = SakiGitOperationReceiptMap[T]
+
+/** Submit result shared by the three structured Git mutation Intents. */
+export type SakiGitOperationIntentReceipt<T extends SakiGitOperationIntent['type']> =
+  | {
+    readonly ok: true
+    readonly receipt: Extract<SakiGitOperationReceipt<T>, { readonly state: 'succeeded' }>
+  }
+  | { readonly ok: false; readonly reason: 'denied'; readonly receipt?: never }
+  | {
+    readonly ok: false
+    readonly reason: 'unavailable'
+    readonly receipt?: Extract<SakiGitOperationReceipt<T>, {
+      readonly state: 'prepared' | 'admission-reserved' | 'host-prepared' | 'accepted'
+    }>
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'conflict'
+    readonly receipt?: Extract<SakiGitOperationReceipt<T>, { readonly state: 'conflict' }>
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'failure'
+    readonly receipt: Extract<SakiGitOperationReceipt<T>, { readonly state: 'failed' }>
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'canceled'
+    readonly receipt: Extract<SakiGitOperationReceipt<T>, { readonly state: 'canceled' }>
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'reconciliation-required'
+    readonly receipt: Extract<SakiGitOperationReceipt<T>, { readonly state: 'reconciliation-required' }>
+  }
+
 /** Intent-correlated receipt result map. */
 export interface SakiIntentReceiptMap {
   readonly 'register-development-project':
@@ -732,6 +1046,9 @@ export interface SakiIntentReceiptMap {
       readonly reason: 'failure'
       readonly receipt: Extract<SakiGitHubSynchronizationReceipt, { readonly state: 'failure' }>
     }
+  readonly 'stage-files': SakiGitOperationIntentReceipt<'stage-files'>
+  readonly 'unstage-files': SakiGitOperationIntentReceipt<'unstage-files'>
+  readonly 'create-commit': SakiGitOperationIntentReceipt<'create-commit'>
 }
 
 /** Stable terminal or recoverable result of submitting a Control Intent. */
@@ -739,7 +1056,7 @@ export type SakiIntentReceipt<K extends keyof SakiIntentReceiptMap = 'register-d
   K extends keyof SakiIntentReceiptMap ? SakiIntentReceiptMap[K] : never
 
 /** Projection key invalidated after a committed access or authority change. */
-export type SakiProjectionKey = 'access' | 'project-index' | 'development-workspace' | 'project-settings' | 'board'
+export type SakiProjectionKey = 'access' | 'project-index' | 'development-workspace' | 'project-changes' | 'project-settings' | 'board'
 
 /** Disposer for a contained post-commit Projection invalidation listener. */
 export type SakiChangedDisposer = () => void

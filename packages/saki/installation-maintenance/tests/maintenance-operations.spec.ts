@@ -9,9 +9,12 @@ import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   sakiControlPlaneMigrationPlan,
   sakiControlPlaneV3DomainSpec,
+  sakiControlPlaneV4DomainSpec,
   sakiStorageGenerationV1DomainSpec,
+  sakiStorageGenerationV2DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
+  storageGenerationV2SealRecordSchema,
   type SakiBuildId,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
@@ -35,11 +38,13 @@ import {
   B03_RETIRED_INSTALLATION_ID,
   B03_REGISTRY_REVISION,
   B03_STORAGE_GENERATION_ID,
+  b03Snapshot,
   writeB03Database,
 } from './b03-fixture.ts'
 
 const roots: string[] = []
 const V3_SOURCE_BUILD_ID = 'saki-build-0.1.0-b18-test' as SakiBuildId
+const V4_SOURCE_BUILD_ID = 'saki-build-0.1.0-b29-test' as SakiBuildId
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(async (root) => {
@@ -63,10 +68,14 @@ async function fixture(): Promise<{ readonly options: SakiMaintenanceOptions; re
   }
 }
 
-async function publishSelectedV3(options: SakiMaintenanceOptions): Promise<string> {
+async function publishSelectedHistorical(
+  options: SakiMaintenanceOptions,
+  stateVersion: 3 | 4,
+): Promise<string> {
   const signal = new AbortController().signal
+  const sourceBuildId = stateVersion === 3 ? V3_SOURCE_BUILD_ID : V4_SOURCE_BUILD_ID
   const historical = await readClosedSakiV2State(options.legacyDatabasePath, signal)
-  const controlSnapshot = sakiControlPlaneMigrationPlan.steps[0]!.migrate(
+  const v3Snapshot = sakiControlPlaneMigrationPlan.steps[0]!.migrate(
     historical.controlPlaneSnapshot,
   )
   const directory = resolve(
@@ -79,32 +88,59 @@ async function publishSelectedV3(options: SakiMaintenanceOptions): Promise<strin
   const context = new Context()
   await context.plugin(Storage)
   const backend = new SqliteStorageBackend({ path: databasePath, journalMode: 'delete' })
-  context.storage.backend.register('source-v3', backend)
-  const facility = new DomainFacility(context, { backend: 'source-v3' })
+  const sourceBackend = `source-v${stateVersion}`
+  context.storage.backend.register(sourceBackend, backend)
+  const facility = new DomainFacility(context, { backend: sourceBackend })
   try {
-    await facility.materialize(
-      sakiControlPlaneV3DomainSpec,
-      controlSnapshot,
-      { targetBackend: 'source-v3', signal },
-    )
-    await facility.materialize(
-      sakiStorageGenerationV1DomainSpec,
-      {
-        tables: {
-          storage_generation: {
-            [STORAGE_GENERATION_KEY]: storageGenerationV1SealRecordSchema.parse({
-              schemaVersion: 1,
-              installationId: B03_INSTALLATION_ID,
-              storageGenerationId: B03_STORAGE_GENERATION_ID,
-              stateVersion: 3,
-              createdByBuildId: V3_SOURCE_BUILD_ID,
-            }),
+    if (stateVersion === 3) {
+      await facility.materialize(
+        sakiControlPlaneV3DomainSpec,
+        v3Snapshot,
+        { targetBackend: sourceBackend, signal },
+      )
+      await facility.materialize(
+        sakiStorageGenerationV1DomainSpec,
+        {
+          tables: {
+            storage_generation: {
+              [STORAGE_GENERATION_KEY]: storageGenerationV1SealRecordSchema.parse({
+                schemaVersion: 1,
+                installationId: B03_INSTALLATION_ID,
+                storageGenerationId: B03_STORAGE_GENERATION_ID,
+                stateVersion,
+                createdByBuildId: sourceBuildId,
+              }),
+            },
           },
+          global: null,
         },
-        global: null,
-      },
-      { targetBackend: 'source-v3', signal },
-    )
+        { targetBackend: sourceBackend, signal },
+      )
+    } else {
+      await facility.materialize(
+        sakiControlPlaneV4DomainSpec,
+        sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3Snapshot),
+        { targetBackend: sourceBackend, signal },
+      )
+      await facility.materialize(
+        sakiStorageGenerationV2DomainSpec,
+        {
+          tables: {
+            storage_generation: {
+              [STORAGE_GENERATION_KEY]: storageGenerationV2SealRecordSchema.parse({
+                schemaVersion: 2,
+                installationId: B03_INSTALLATION_ID,
+                storageGenerationId: B03_STORAGE_GENERATION_ID,
+                stateVersion,
+                createdByBuildId: sourceBuildId,
+              }),
+            },
+          },
+          global: null,
+        },
+        { targetBackend: sourceBackend, signal },
+      )
+    }
   } finally {
     await facility.closeAll()
     await backend.close()
@@ -113,8 +149,8 @@ async function publishSelectedV3(options: SakiMaintenanceOptions): Promise<strin
   const generationBytes = renderGenerationManifest(
     B03_INSTALLATION_ID,
     B03_STORAGE_GENERATION_ID,
-    3,
-    V3_SOURCE_BUILD_ID,
+    stateVersion,
+    sourceBuildId,
   )
   await writeFile(join(directory, 'generation.json'), generationBytes)
   const generation = JSON.parse(generationBytes.toString('utf8')) as Parameters<
@@ -129,6 +165,14 @@ async function publishSelectedV3(options: SakiMaintenanceOptions): Promise<strin
     ),
   )
   return databasePath
+}
+
+async function publishSelectedV3(options: SakiMaintenanceOptions): Promise<string> {
+  return await publishSelectedHistorical(options, 3)
+}
+
+async function publishSelectedV4(options: SakiMaintenanceOptions): Promise<string> {
+  return await publishSelectedHistorical(options, 4)
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -239,12 +283,12 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 4 })
+    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 5 })
     expect(await readFile(legacy)).toEqual(before)
     expect(result.selected.installation).toMatchObject({
       phase: 'ready',
       installationId: B03_INSTALLATION_ID,
-      stateVersion: 4,
+      stateVersion: 5,
     })
     const current = await readClosedCurrentSakiState(
       result.selected.databasePath,
@@ -303,16 +347,18 @@ describe('offline Saki Installation operations', () => {
     })
     const reopenedBackup = await readClosedSakiV2State(verifiedBackup.databasePath, signal)
     expect(reopenedBackup.controlPlane.table('development_project_registry')
-      .get('development-project-registry')).toEqual(registry)
+      .get('development-project-registry')).toEqual(
+      b03Snapshot().tables.development_project_registry?.['development-project-registry'],
+    )
     await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
     await expect(readInstallationManifest(options.installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 4 },
+      value: { phase: 'ready', stateVersion: 5 },
     })
 
     const currentBackup = await backupSakiInstallation(options, signal)
     expect(currentBackup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
-      stateVersion: 4,
+      stateVersion: 5,
       sourceBuildId: options.currentBuildId,
     })
     await expect(upgradeSakiInstallation(options, signal)).rejects.toMatchObject({
@@ -374,7 +420,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, new AbortController().signal)
 
-    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 4 })
+    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 5 })
     expect(result.backup.manifest).toMatchObject({
       stateVersion: 2,
       sourceBuildId: options.legacyBuildId,
@@ -383,7 +429,7 @@ describe('offline Saki Installation operations', () => {
     await expect(readInstallationManifest(
       options.installationRoot,
       new AbortController().signal,
-    )).resolves.toMatchObject({ value: { phase: 'ready', stateVersion: 4 } })
+    )).resolves.toMatchObject({ value: { phase: 'ready', stateVersion: 5 } })
   })
 
   it('upgrades a manifest-selected exact v3 generation without mutating it', async () => {
@@ -394,7 +440,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 3, targetVersion: 4 })
+    expect(result).toMatchObject({ sourceVersion: 3, targetVersion: 5 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -414,6 +460,72 @@ describe('offline Saki Installation operations', () => {
     expect(current.controlPlane.table('github_project_sync').size).toBe(0)
     expect(current.controlPlane.table('github_sync_configuration_intents').size).toBe(0)
     await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
+  })
+
+  it('upgrades a nonempty manifest-selected v4 generation and derives v5 write admission', async () => {
+    const { options } = await fixture()
+    const selectedDatabasePath = await publishSelectedV4(options)
+    const before = await readFile(selectedDatabasePath)
+    const signal = new AbortController().signal
+
+    const result = await upgradeSakiInstallation(options, signal)
+
+    expect(result).toMatchObject({ sourceVersion: 4, targetVersion: 5 })
+    expect(result.backup.manifest).toMatchObject({
+      installationId: B03_INSTALLATION_ID,
+      storageGenerationId: B03_STORAGE_GENERATION_ID,
+      stateVersion: 4,
+      sourceBuildId: V4_SOURCE_BUILD_ID,
+    })
+    expect(await readFile(selectedDatabasePath)).toEqual(before)
+    await expect(readInstallationManifest(options.installationRoot, signal)).resolves.toMatchObject({
+      value: { phase: 'ready', stateVersion: 5 },
+    })
+    await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
+
+    const current = await readClosedCurrentSakiState(
+      result.selected.databasePath,
+      {
+        installationId: result.selected.generation.installationId,
+        storageGenerationId: result.selected.generation.storageGenerationId,
+        createdByBuildId: result.selected.generation.createdByBuildId,
+      },
+      signal,
+    )
+    const registry = current.controlPlane.table('development_project_registry')
+      .get('development-project-registry')
+    if (registry === undefined) throw new Error('migrated v5 Registry is missing')
+    const project = registry.projects[0]
+    const binding = registry.resourceBindings[0]
+    const mapping = registry.intentMappings[0]
+    if (project === undefined || binding === undefined || mapping === undefined) {
+      throw new Error('migrated v5 registered Project aggregate is incomplete')
+    }
+    expect(project.resourceBindingId).toBe(binding.id)
+    expect(binding.projectId).toBe(project.id)
+    expect(mapping).toMatchObject({ projectId: project.id, resourceBindingId: binding.id })
+    const registration = current.controlPlane.table('registration_intents').get(mapping.intentId)
+    expect(registration).toMatchObject({
+      phase: 'confirmed',
+      projectId: project.id,
+      resourceBindingId: binding.id,
+    })
+    expect(current.controlPlane.table('binding_write_admissions').get(binding.id)).toEqual({
+      id: binding.id,
+      schemaVersion: 1,
+      revision: 0,
+      state: 'available',
+      updatedAt: binding.observedAt,
+    })
+    if (registration === undefined) throw new Error('migrated v5 registration Intent is missing')
+    expect(current.controlPlane.table('grants').get(registration.payload.actor.grantId)?.actions)
+      .toEqual(expect.arrayContaining([
+        'project-changes:read',
+        'project-diff:read',
+        'project-changes:stage',
+        'project-changes:unstage',
+        'project-commit:create',
+      ]))
   })
 
   it('requires a ready selected Installation before offline maintenance', async () => {

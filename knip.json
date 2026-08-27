@@ -226,7 +226,6 @@
         "tests/**/*.ts"
       ],
       "ignoreDependencies": [
-        "@breakfastdapaidang/saki-execution-local",
         "@breakfastdapaidang/saki-github-app",
         "@breakfastdapaidang/saki-host-api",
         "@deepseek-ai/dsh-credentials-windows-dpapi",

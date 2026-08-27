@@ -41,6 +41,8 @@ const CONFIG: Required<Config> = {
   baselineMaxFileBytes: 1024 * 1024,
   baselineMaxTotalFileBytes: 4 * 1024 * 1024,
   baselineMaxCaptureMs: 10_000,
+  operationMaxIndexBytes: 8 * 1024 * 1024,
+  operationMaxReflogBytes: 1024 * 1024,
 }
 
 async function deterministicAdministrativeDirectoryIdentity(
@@ -57,7 +59,9 @@ async function deterministicAdministrativeDirectoryIdentity(
 afterEach(async () => {
   vi.restoreAllMocks()
   await Promise.all(contexts.splice(0).map(async (context) => { await context.fiber.dispose() }))
-  await Promise.all(roots.splice(0).map(async (root) => { await rm(root, { recursive: true, force: true }) }))
+  await Promise.all(roots.splice(0).map(async (root) => {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  }))
 })
 
 function fixtureGitEnvironment(): NodeJS.ProcessEnv {
@@ -312,7 +316,8 @@ describe('safe repository admission', () => {
     for (const [args, stdin] of [
       [['check-attr', '--all', '-z', '--stdin'], emptyInput],
       [['ls-tree', '-r', '--full-tree', '-z', 'HEAD'], undefined],
-      [['ls-files', '-t', '--stage', '--full-name', '-z'], undefined],
+      [['ls-files', '--no-sparse', '-t', '--stage', '--full-name', '-z'], undefined],
+      [['ls-files', '-v', '-z', '--'], undefined],
       [['ls-files', '--others', '--exclude-standard', '--full-name', '-z'], undefined],
       [['rev-parse', '--show-object-format'], undefined],
       [['rev-parse', '--verify', 'HEAD'], undefined],
@@ -322,7 +327,12 @@ describe('safe repository admission', () => {
       [['config', '--no-includes', '--local', '--null', '--name-only', '--list'], undefined],
       [['config', '--no-includes', '--worktree', '--null', '--name-only', '--list'], undefined],
       [['config', '--no-includes', '--null', '--get-regexp', '^remote\\..*\\.url$'], undefined],
-      [['for-each-ref', '--count=2', '--format=%(refname)%00%(upstream)%00', 'refs/heads/main'], undefined],
+      [[
+        'for-each-ref',
+        '--count=2',
+        '--format=%(refname)%00%(upstream)%00%(upstream:short)%00',
+        'refs/heads/main',
+      ], undefined],
       [['config', '--no-includes', '--null', '--type=bool', '--get-all', 'core.autocrlf'], undefined],
       [['config', '--no-includes', '--null', '--type=bool', '--get-all', 'core.fileMode'], undefined],
       [['config', '--no-includes', '--null', '--type=bool', '--get-all', 'core.symlinks'], undefined],
@@ -343,7 +353,12 @@ describe('safe repository admission', () => {
       [['rev-parse', '--show-object-format'], emptyInput],
       [['symbolic-ref', 'HEAD', 'refs/heads/unsafe'], undefined],
       [['config', '--no-includes', '--null', '--get-all', 'core.hooksPath'], undefined],
-      [['for-each-ref', '--count=2', '--format=%(refname)%00%(upstream)%00', 'refs/tags/main'], undefined],
+      [[
+        'for-each-ref',
+        '--count=2',
+        '--format=%(refname)%00%(upstream)%00%(upstream:short)%00',
+        'refs/tags/main',
+      ], undefined],
     ] as const) {
       await expect(view.git.run(root, args, signal, stdin)).rejects.toThrow(/unavailable/u)
     }
@@ -351,6 +366,27 @@ describe('safe repository admission', () => {
     await view.git.run(root, ['rev-parse', '--verify', 'HEAD'], signal)
     await expect(view.git.run(root, worktreeList, signal)).resolves.toMatchObject({ stderr: Buffer.alloc(0) })
   })
+
+  it.each(['core.sparseCheckout', 'index.sparse'])(
+    'retains the effective %s fact without exposing the source config to repository queries',
+    async (key) => {
+      const root = await repository()
+      await git(root, 'config', key, 'true')
+      const harness = await localHarness()
+      const opened = await openSafeRepositoryView(
+        harness.fs,
+        harness.git,
+        await realpath(root),
+        MAX_CONTROL_FILE_BYTES,
+        new AbortController().signal,
+      )
+
+      expect(opened.kind).toBe('repository')
+      if (opened.kind !== 'repository') return
+      await using view = opened.view
+      expect(view.sparseIndexEnabled).toBe(true)
+    },
+  )
 
   it('uses common config when enabled linked-worktree config is absent', async () => {
     const root = await repository()
@@ -407,6 +443,7 @@ describe('safe repository admission', () => {
 
   it('admits the explicit files ref backend', async () => {
     const root = await repository()
+    await git(root, 'config', 'core.repositoryFormatVersion', '1')
     await git(root, 'config', 'extensions.refStorage', 'files')
     const harness = await localHarness()
 

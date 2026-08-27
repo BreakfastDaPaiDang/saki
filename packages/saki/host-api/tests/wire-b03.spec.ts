@@ -1,12 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalDigest } from '@breakfastdapaidang/saki-execution'
+import {
+  canonicalDigest,
+  computeProjectGitStatusFingerprint,
+  type ProjectGitStatusObservation,
+  type SakiResourceBindingId,
+} from '@breakfastdapaidang/saki-execution'
 import {
   sakiAccessProjectionSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiInspectProjectSelectionResultSchema,
   sakiIntentRequestSchema,
   sakiIntentResultSchema,
+  sakiProjectDiffResultSchema,
   sakiProjectIndexResultSchema,
+  sakiProjectChangesResultSchema,
   sakiQueryRequestSchema,
   sakiRegisterDevelopmentProjectIntentSchema,
 } from '../src/wire.ts'
@@ -14,7 +21,7 @@ import {
 const DIGEST = '1'.repeat(64)
 const HOST = 'host-11111111-1111-4111-8111-111111111111'
 const PROJECT = 'project-22222222-2222-4222-8222-222222222222'
-const BINDING = 'binding-33333333-3333-4333-8333-333333333333'
+const BINDING = 'binding-33333333-3333-4333-8333-333333333333' as SakiResourceBindingId
 
 const baselineMaterial = {
   formatVersion: 1,
@@ -59,6 +66,40 @@ describe('Saki Host wire schemas', () => {
     }
   })
 
+  it('admits only revision-fenced Project status and opaque Diff requests', () => {
+    const status = {
+      type: 'project-changes',
+      projectId: PROJECT,
+      expectedRegistryRevision: 7,
+    } as const
+    const diff = {
+      type: 'project-diff',
+      projectId: PROJECT,
+      expectedRegistryRevision: 7,
+      request: {
+        expectedStatus: { version: 1, digest: DIGEST },
+        changeId: `git-change-${DIGEST}`,
+        layer: 'unstaged',
+      },
+    } as const
+
+    expect(sakiQueryRequestSchema.parse(status)).toEqual(status)
+    expect(sakiQueryRequestSchema.parse(diff)).toEqual(diff)
+    for (const reserved of [
+      { binding: { id: BINDING } },
+      { path: 'src/private.ts' },
+      { cwd: 'D:/trusted' },
+      { argv: ['diff'] },
+      { expectedInspection: { trusted: {} } },
+    ]) {
+      expect(sakiQueryRequestSchema.safeParse({ ...status, ...reserved }).success).toBe(false)
+      expect(sakiQueryRequestSchema.safeParse({
+        ...diff,
+        request: { ...diff.request, ...reserved },
+      }).success).toBe(false)
+    }
+  })
+
   it('requires the bounded title and exact confirmed baseline for registration', () => {
     const request = {
       type: 'register-development-project',
@@ -67,7 +108,7 @@ describe('Saki Host wire schemas', () => {
       hostId: HOST,
       directoryLocator: 'D:/repo',
       expectedRegistryRevision: 0,
-      confirmedFingerprint: { version: 1, digest: DIGEST },
+      confirmedFingerprint: { version: 2, digest: DIGEST },
       confirmedBaseline: completeBaseline,
     }
     expect(sakiIntentRequestSchema.parse(request)).toEqual(request)
@@ -116,9 +157,8 @@ describe('Saki Host wire schemas', () => {
             health: 'active',
             hostId: HOST,
             displayLocation: 'repository',
-            head: '1'.repeat(40),
-            branch: 'main',
-            detached: false,
+            objectFormat: 'sha1',
+            head: { kind: 'commit', objectId: '1'.repeat(40), symbolicRef: 'refs/heads/main' },
             inheritedChangeEntryCount: 0,
             baseline: 'complete',
             automaticMutationEligible: true,
@@ -149,14 +189,52 @@ describe('Saki Host wire schemas', () => {
         ...index.projection,
         projects: [{
           ...index.projection.projects[0],
-          binding: { ...index.projection.projects[0].binding, branch: undefined, detached: true },
+          binding: {
+            ...index.projection.projects[0].binding,
+            head: { kind: 'commit' as const, objectId: '2'.repeat(40) },
+          },
         }],
       },
     }
     expect(sakiProjectIndexResultSchema.parse(detached)).toEqual(detached)
+    const unborn = {
+      ...index,
+      projection: {
+        ...index.projection,
+        projects: [{
+          ...index.projection.projects[0],
+          binding: {
+            ...index.projection.projects[0].binding,
+            head: { kind: 'unborn' as const, symbolicRef: 'refs/heads/initial' },
+          },
+        }],
+      },
+    }
+    expect(sakiProjectIndexResultSchema.parse(unborn)).toEqual(unborn)
+    const sha256 = {
+      ...index,
+      projection: {
+        ...index.projection,
+        projects: [{
+          ...index.projection.projects[0],
+          binding: {
+            ...index.projection.projects[0].binding,
+            objectFormat: 'sha256' as const,
+            head: { kind: 'commit' as const, objectId: '3'.repeat(64) },
+          },
+        }],
+      },
+    }
+    expect(sakiProjectIndexResultSchema.parse(sha256)).toEqual(sha256)
     for (const binding of [
-      { ...index.projection.projects[0].binding, branch: undefined },
-      { ...index.projection.projects[0].binding, detached: true },
+      { ...index.projection.projects[0].binding, head: { kind: 'commit', objectId: '1'.repeat(64) } },
+      { ...index.projection.projects[0].binding, objectFormat: 'sha256' },
+      {
+        ...index.projection.projects[0].binding,
+        head: { kind: 'unborn', symbolicRef: 'refs/heads/initial', objectId: '1'.repeat(40) },
+      },
+      { ...index.projection.projects[0].binding, branch: 'main' },
+      { ...index.projection.projects[0].binding, detached: false },
       { ...index.projection.projects[0].binding, configurationGaps: ['binding-missing', 'binding-missing'] },
       { ...index.projection.projects[0].binding, health: 'missing' },
     ]) {
@@ -186,6 +264,173 @@ describe('Saki Host wire schemas', () => {
         recovery: { state: 'blocked', reasons: ['dirty', 'dirty'] },
       },
     }).success).toBe(false)
+  })
+
+  it('validates complete Project status observations through the execution schema', () => {
+    const material = {
+      observationVersion: 1 as const,
+      observedAt: 1,
+      bindingId: BINDING,
+      bindingRevision: 2,
+      bindingHealth: 'active' as const,
+      locked: false,
+      objectFormat: 'sha1' as const,
+      head: { kind: 'commit' as const, objectId: '1'.repeat(40), symbolicRef: 'refs/heads/main' },
+      branch: { kind: 'attached' as const, ref: 'refs/heads/main', name: 'main' },
+      upstream: {
+        ref: 'refs/remotes/origin/main',
+        name: 'origin/main',
+        divergence: { ahead: 0, behind: 0 },
+      },
+      index: { kind: 'tree' as const, treeId: '2'.repeat(40) },
+      worktree: { version: 1 as const, digest: '3'.repeat(64) },
+      changes: [],
+      structuredMutation: { available: true as const, blockers: [] as const },
+    } satisfies Omit<ProjectGitStatusObservation, 'fingerprint'>
+    const status = {
+      ok: true,
+      projection: {
+        type: 'project-changes',
+        registryRevision: 7,
+        projectId: PROJECT,
+        projectRevision: 3,
+        result: {
+          ok: true,
+          observation: { ...material, fingerprint: computeProjectGitStatusFingerprint(material) },
+        },
+        gitOperations: {
+          stageFiles: { available: true, reasons: [] },
+          unstageFiles: { available: true, reasons: [] },
+          createCommit: { available: false, reasons: ['no-staged-changes'] },
+        },
+      },
+    } as const
+
+    expect(sakiProjectChangesResultSchema.parse(status)).toEqual(status)
+    const { upstream: _upstream, ...attached } = material
+    const detachedMaterial = {
+      ...attached,
+      head: { kind: 'commit' as const, objectId: material.head.objectId },
+      branch: { kind: 'detached' as const },
+    }
+    const detached = {
+      ...status,
+      projection: {
+        ...status.projection,
+        result: {
+          ok: true as const,
+          observation: {
+            ...detachedMaterial,
+            fingerprint: computeProjectGitStatusFingerprint(detachedMaterial),
+          },
+        },
+        gitOperations: {
+          ...status.projection.gitOperations,
+          createCommit: {
+            available: false as const,
+            reasons: ['detached-head', 'no-staged-changes'] as const,
+          },
+        },
+      },
+    }
+    expect(sakiProjectChangesResultSchema.parse(detached)).toEqual(detached)
+    expect(sakiProjectChangesResultSchema.safeParse({
+      ...detached,
+      projection: {
+        ...detached.projection,
+        gitOperations: {
+          ...detached.projection.gitOperations,
+          stageFiles: { available: false, reasons: ['detached-head'] },
+        },
+      },
+    }).success).toBe(false)
+    expect(sakiProjectChangesResultSchema.safeParse({
+      ...detached,
+      projection: {
+        ...detached.projection,
+        gitOperations: {
+          ...detached.projection.gitOperations,
+          createCommit: { available: true, reasons: [] },
+        },
+      },
+    }).success).toBe(false)
+    expect(sakiProjectChangesResultSchema.safeParse({
+      ...status,
+      projection: {
+        ...status.projection,
+        result: {
+          ok: true,
+          observation: {
+            ...status.projection.result.observation,
+            fingerprint: { version: 1, digest: '0'.repeat(64) },
+          },
+        },
+      },
+    }).success).toBe(false)
+    expect(sakiProjectChangesResultSchema.safeParse({
+      ...status,
+      projection: { ...status.projection, expectedInspection: { trusted: { canonicalWorktreePath: 'D:/secret' } } },
+    }).success).toBe(false)
+    expect(sakiProjectChangesResultSchema.safeParse({
+      ...status,
+      projection: {
+        ...status.projection,
+        result: { ...status.projection.result, preEffectBaseline: completeBaseline },
+      },
+    }).success).toBe(false)
+  })
+
+  it('validates bounded Project Diff pages through the execution schema', () => {
+    const changeId = `git-change-${DIGEST}`
+    const lines = ['diff --git a/file b/file', '--- a/file', '+++ b/file'] as const
+    const pageUtf8Bytes = lines.reduce(
+      (bytes, line) => bytes + new TextEncoder().encode(line).byteLength + 1,
+      0,
+    )
+    const diff = {
+      ok: true,
+      projection: {
+        type: 'project-diff',
+        registryRevision: 7,
+        projectId: PROJECT,
+        projectRevision: 3,
+        result: {
+          ok: true,
+          page: {
+            pageVersion: 1,
+            observation: { version: 1, digest: '4'.repeat(64) },
+            changeId,
+            layer: 'unstaged',
+            patchFingerprint: { version: 1, digest: '5'.repeat(64) },
+            range: { startLine: 0, endLineExclusive: lines.length, totalLines: lines.length },
+            lines,
+            pageUtf8Bytes,
+            totalUtf8Bytes: pageUtf8Bytes,
+            omittedBeforeLines: 0,
+            omittedAfterLines: 0,
+            truncated: false,
+          },
+        },
+      },
+    } as const
+
+    expect(sakiProjectDiffResultSchema.parse(diff)).toEqual(diff)
+    expect(sakiProjectDiffResultSchema.safeParse({
+      ...diff,
+      projection: {
+        ...diff.projection,
+        result: {
+          ok: true,
+          page: { ...diff.projection.result.page, pageUtf8Bytes: pageUtf8Bytes + 1 },
+        },
+      },
+    }).success).toBe(false)
+    expect(sakiProjectDiffResultSchema.safeParse({
+      ...diff,
+      projection: { ...diff.projection, canonicalWorktreePath: 'D:/secret' },
+    }).success).toBe(false)
+    expect(sakiProjectDiffResultSchema.parse({ ok: false, reason: 'binding-unavailable' }))
+      .toEqual({ ok: false, reason: 'binding-unavailable' })
   })
 
   it('keeps registration receipts derived and phase-specific', () => {

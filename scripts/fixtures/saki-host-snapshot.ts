@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline'
 import type { Readable } from 'node:stream'
 import { promisify } from 'node:util'
 import { expect } from 'vitest'
+import type { ProjectGitHead } from '@breakfastdapaidang/saki-execution'
 import { sakiSnapshotEnvironment } from '../saki-snapshot-environment.ts'
 
 const SNAPSHOT_RPC_TIMEOUT_MS = 30_000
@@ -37,6 +38,17 @@ export interface RawHttpResponse {
   readonly status: number
   readonly headers: IncomingHttpHeaders
   readonly body: string
+}
+
+/** Exact external-Git observation of the snapshot repository's HEAD, index, and worktree. */
+export interface SnapshotRepositoryGitState {
+  readonly headObjectId: string
+  readonly headBlobObjectId: string
+  readonly indexBlobObjectId: string
+  readonly worktreeBlobObjectId: string
+  readonly commitCount: number
+  readonly stagedPaths: readonly string[]
+  readonly unstagedPaths: readonly string[]
 }
 
 /**
@@ -334,8 +346,76 @@ export async function rpc(
   })
   expect(response.status).toBe(200)
   const envelope = await response.json() as { result: { ok: boolean; value?: unknown } }
-  expect(envelope.result.ok).toBe(true)
+  expect(envelope.result.ok, JSON.stringify(envelope.result)).toBe(true)
   return { response, value: envelope.result.value }
+}
+
+/**
+ * Complete one real `/saki` RPC request but discard its business response after the first body bytes arrive.
+ * @param port - Saki Host loopback port.
+ * @param endpoint - logical `/saki` RPC endpoint.
+ * @param payload - endpoint payload.
+ * @param options - authenticated cookie and request token when required.
+ * @returns transport evidence that the response began before the client discarded it.
+ */
+export async function dropRpcResponse(
+  port: number,
+  endpoint: string,
+  payload: unknown,
+  options: { readonly cookie?: string; readonly requestToken?: string } = {},
+): Promise<{ readonly status: number; readonly discarded: 'after-first-byte' }> {
+  const body = JSON.stringify({
+    type: 'client-request',
+    rpcId: `snapshot-${endpoint}-discarded`,
+    method: endpoint,
+    payload,
+  })
+  return await new Promise<{ readonly status: number; readonly discarded: 'after-first-byte' }>((resolveRequest, reject) => {
+    let settled = false
+    const settleFailure = (error: Error): void => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+    const request = httpRequest({
+      hostname: '127.0.0.1',
+      port,
+      path: `/saki/${endpoint}`,
+      method: 'POST',
+      headers: {
+        'content-length': String(Buffer.byteLength(body)),
+        'content-type': 'application/json',
+        origin: `http://127.0.0.1:${String(port)}`,
+        ...(options.cookie === undefined ? {} : { cookie: options.cookie }),
+        ...(options.requestToken === undefined ? {} : { 'x-saki-request-token': options.requestToken }),
+      },
+    }, (response) => {
+      const status = response.statusCode ?? 0
+      response.once('error', settleFailure)
+      response.once('data', (chunk: Buffer) => {
+        if (settled) return
+        if (status !== 200) {
+          settleFailure(new Error(`Saki snapshot discarded RPC returned HTTP ${String(status)}`))
+          return
+        }
+        if (chunk.byteLength === 0) {
+          settleFailure(new Error('Saki snapshot discarded RPC returned an empty first body chunk'))
+          return
+        }
+        settled = true
+        resolveRequest({ status, discarded: 'after-first-byte' })
+        response.destroy()
+      })
+      response.once('end', () => {
+        if (!settled) settleFailure(new Error('Saki snapshot discarded RPC returned no body bytes'))
+      })
+    })
+    request.setTimeout(SNAPSHOT_RPC_TIMEOUT_MS, () => {
+      request.destroy(new Error('Saki snapshot discarded RPC timed out'))
+    })
+    request.once('error', settleFailure)
+    request.end(body)
+  })
 }
 
 /**
@@ -367,7 +447,8 @@ export async function registerSnapshotProject(
         readonly ok: true
         readonly selection: {
           readonly displayLocation: string
-          readonly detached: boolean
+          readonly objectFormat: 'sha1' | 'sha256'
+          readonly head: ProjectGitHead
           readonly inheritedChangeEntryCount: number
           readonly automaticMutationEligible: boolean
           readonly workspaceId?: string
@@ -379,7 +460,8 @@ export async function registerSnapshotProject(
   }
   readonly selection: {
     readonly displayLocation: string
-    readonly detached: boolean
+    readonly objectFormat: 'sha1' | 'sha256'
+    readonly head: ProjectGitHead
     readonly inheritedChangeEntryCount: number
     readonly automaticMutationEligible: boolean
     readonly workspaceId?: string
@@ -434,7 +516,8 @@ export async function registerSnapshotProject(
         readonly ok: true
         readonly selection: {
           readonly displayLocation: string
-          readonly detached: boolean
+          readonly objectFormat: 'sha1' | 'sha256'
+          readonly head: ProjectGitHead
           readonly inheritedChangeEntryCount: number
           readonly automaticMutationEligible: boolean
           readonly workspaceId?: string
@@ -523,6 +606,54 @@ export async function rawRequest(
 }
 
 /**
+ * Re-read the snapshot repository through an isolated external Git process.
+ * @param repository - exact snapshot repository root.
+ * @returns independent HEAD, index, worktree, and diff evidence for `tracked.txt`.
+ */
+export async function inspectSnapshotRepositoryGitState(
+  repository: string,
+): Promise<SnapshotRepositoryGitState> {
+  const environment = fixtureGitEnvironment()
+  const gitText = async (arguments_: readonly string[]): Promise<string> => {
+    const { stdout } = await run('git', [
+      '--no-pager',
+      '--no-optional-locks',
+      '-c', 'core.hooksPath=',
+      '-c', 'core.autocrlf=false',
+      ...arguments_,
+    ], { cwd: repository, env: environment, timeout: 20_000, windowsHide: true, encoding: 'utf8' })
+    return stdout.trim()
+  }
+  const objectId = (value: string, label: string): string => {
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(value)) {
+      throw new Error(`Saki snapshot external Git returned an invalid ${label}`)
+    }
+    return value
+  }
+  const paths = (value: string): readonly string[] => value === '' ? [] : value.split('\n')
+  const indexEntry = await gitText(['ls-files', '--stage', '--', 'tracked.txt'])
+  const indexMatch = /^[0-7]{6} ([0-9a-f]{40}(?:[0-9a-f]{24})?) 0\ttracked\.txt$/.exec(indexEntry)
+  if (indexMatch?.[1] === undefined) throw new Error('Saki snapshot external Git returned an invalid index entry')
+  const commitCountText = await gitText(['rev-list', '--count', 'HEAD'])
+  const commitCount = Number(commitCountText)
+  if (!Number.isSafeInteger(commitCount) || commitCount < 1) {
+    throw new Error('Saki snapshot external Git returned an invalid Commit count')
+  }
+  return {
+    headObjectId: objectId(await gitText(['rev-parse', '--verify', 'HEAD']), 'HEAD object id'),
+    headBlobObjectId: objectId(await gitText(['rev-parse', '--verify', 'HEAD:tracked.txt']), 'HEAD blob object id'),
+    indexBlobObjectId: objectId(indexMatch[1], 'index blob object id'),
+    worktreeBlobObjectId: objectId(
+      await gitText(['hash-object', '--no-filters', '--', 'tracked.txt']),
+      'worktree blob object id',
+    ),
+    commitCount,
+    stagedPaths: paths(await gitText(['diff', '--cached', '--name-only', '--'])),
+    unstagedPaths: paths(await gitText(['diff', '--name-only', '--'])),
+  }
+}
+
+/**
  * Create one isolated clean Git repository accepted by the Saki registration flow.
  * @param directory - temporary parent directory.
  * @returns absolute repository path.
@@ -540,6 +671,8 @@ export async function createRepository(directory: string): Promise<string> {
     ], { ...(cwd === undefined ? {} : { cwd }), env: environment, timeout: 20_000, windowsHide: true })
   }
   await git(['init', '--initial-branch=main', '--template=', repository])
+  await git(['config', '--local', 'user.name', 'Saki Snapshot'], repository)
+  await git(['config', '--local', 'user.email', 'saki@example.invalid'], repository)
   await writeFile(join(repository, 'tracked.txt'), 'initial\n')
   await git(['add', '--', 'tracked.txt'], repository)
   await git([

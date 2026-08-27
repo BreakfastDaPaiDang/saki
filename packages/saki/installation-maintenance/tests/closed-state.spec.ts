@@ -5,14 +5,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
 import { descriptorOf, type DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
+import { sakiHostExecutionDomainSpec } from '@breakfastdapaidang/saki-execution-local'
 import {
   createStorageGenerationSeal,
   sakiControlPlaneV2DomainSpec,
   sakiControlPlaneV3DomainSpec,
+  sakiControlPlaneV4DomainSpec,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
+  sakiStorageGenerationV2DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
+  storageGenerationV2SealRecordSchema,
   type SakiBuildId,
   type SakiGrantId,
   type SakiHostId,
@@ -31,6 +35,7 @@ import {
   readClosedProvisioningSakiState,
   readClosedSakiV2State,
   readClosedSakiV3State,
+  readClosedSakiV4State,
 } from '../src/closed-state.ts'
 
 const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId
@@ -43,8 +48,7 @@ const ACCESS_ID = 'access-00000000-0000-4000-8000-000000000006' as SakiInstallat
 const BUILD_ID = 'saki-build-closed-state-test' as SakiBuildId
 const OTHER_BUILD_ID = 'saki-build-other' as SakiBuildId
 const roots: string[] = []
-// oxlint-disable-next-line typescript/unbound-method -- fault tests invoke it with the backend receiver.
-const realClose = SqliteStorageBackend.prototype.close
+const realClose = Reflect.get(SqliteStorageBackend.prototype, 'close')
 
 afterEach(async () => {
   vi.restoreAllMocks()
@@ -144,6 +148,8 @@ function currentControlSnapshot(): KvUnitSnapshot {
       registration_intents: {},
       github_project_sync: {},
       github_sync_configuration_intents: {},
+      git_operation_intents: {},
+      binding_write_admissions: {},
     },
   }
 }
@@ -168,6 +174,16 @@ function v3ControlSnapshot(): KvUnitSnapshot {
   const tables = { ...current.tables }
   delete tables['github_project_sync']
   delete tables['github_sync_configuration_intents']
+  delete tables['git_operation_intents']
+  delete tables['binding_write_admissions']
+  return { global: null, tables }
+}
+
+function v4ControlSnapshot(): KvUnitSnapshot {
+  const current = currentControlSnapshot()
+  const tables = { ...current.tables }
+  delete tables['git_operation_intents']
+  delete tables['binding_write_admissions']
   return { global: null, tables }
 }
 
@@ -181,6 +197,23 @@ function v1SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapsho
           installationId: INSTALLATION_ID,
           storageGenerationId: STORAGE_GENERATION_ID,
           stateVersion: 3,
+          createdByBuildId,
+        }),
+      },
+    },
+  }
+}
+
+function v2SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot {
+  return {
+    global: null,
+    tables: {
+      storage_generation: {
+        [STORAGE_GENERATION_KEY]: storageGenerationV2SealRecordSchema.parse({
+          schemaVersion: 2,
+          installationId: INSTALLATION_ID,
+          storageGenerationId: STORAGE_GENERATION_ID,
+          stateVersion: 4,
           createdByBuildId,
         }),
       },
@@ -216,6 +249,7 @@ describe('closed Saki state reads', () => {
     const path = await databasePath()
     await materialize(path, [
       { spec: sakiControlPlaneDomainSpec, snapshot: currentControlSnapshot() },
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
       { spec: sakiStorageGenerationDomainSpec, snapshot: sealSnapshot() },
     ])
     await writeFile(`${path}-shm`, Buffer.from([1, 3, 3, 7]))
@@ -229,6 +263,7 @@ describe('closed Saki state reads', () => {
 
     expect(state.controlPlane.table('installations').get(INSTALLATION_ID)?.currentHostId).toBe(HOST_ID)
     expect(state.storageGeneration.table('storage_generation').size).toBe(1)
+    expect(state.hostExecution.table('operations').size).toBe(0)
     const installations = state.controlPlane.table('installations')
     const installation = installations.get(INSTALLATION_ID)!
     expect([...installations.keys()]).toEqual([INSTALLATION_ID])
@@ -245,6 +280,7 @@ describe('closed Saki state reads', () => {
     const path = await databasePath()
     await materialize(path, [
       { spec: sakiControlPlaneDomainSpec, snapshot: emptySnapshot(sakiControlPlaneDomainSpec) },
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
       { spec: sakiStorageGenerationDomainSpec, snapshot: sealSnapshot() },
     ])
     await writeFile(`${path}-shm`, Buffer.from([2, 4, 6, 8]))
@@ -253,7 +289,7 @@ describe('closed Saki state reads', () => {
     const state = await readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 4,
+      stateVersion: 5,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))
 
@@ -263,10 +299,25 @@ describe('closed Saki state reads', () => {
     expect(await exactFiles(path)).toEqual(before)
   })
 
+  it('rejects a current control plane without its Host Execution domain', async () => {
+    const path = await databasePath()
+    await materialize(path, [
+      { spec: sakiControlPlaneDomainSpec, snapshot: currentControlSnapshot() },
+      { spec: sakiStorageGenerationDomainSpec, snapshot: sealSnapshot() },
+    ])
+
+    await expect(readClosedCurrentSakiState(path, {
+      installationId: INSTALLATION_ID,
+      storageGenerationId: STORAGE_GENERATION_ID,
+      createdByBuildId: BUILD_ID,
+    }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
+  })
+
   it('rejects a provisioning generation with no seal without changing source artifacts', async () => {
     const path = await databasePath()
     await materialize(path, [
       { spec: sakiControlPlaneDomainSpec, snapshot: emptySnapshot(sakiControlPlaneDomainSpec) },
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
     ])
     await writeFile(`${path}-shm`, Buffer.from([5, 5, 5]))
     const before = await exactFiles(path)
@@ -274,7 +325,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 4,
+      stateVersion: 5,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -284,6 +335,7 @@ describe('closed Saki state reads', () => {
     const path = await databasePath()
     await materialize(path, [
       { spec: sakiControlPlaneDomainSpec, snapshot: emptySnapshot(sakiControlPlaneDomainSpec) },
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
       { spec: sakiStorageGenerationDomainSpec, snapshot: emptySnapshot(sakiStorageGenerationDomainSpec) },
     ])
     const before = await readFile(path)
@@ -291,7 +343,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 4,
+      stateVersion: 5,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     await expect(readFile(path)).resolves.toEqual(before)
@@ -301,6 +353,7 @@ describe('closed Saki state reads', () => {
     const path = await databasePath()
     await materialize(path, [
       { spec: sakiControlPlaneDomainSpec, snapshot: emptySnapshot(sakiControlPlaneDomainSpec) },
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
       { spec: sakiStorageGenerationDomainSpec, snapshot: sealSnapshot(OTHER_BUILD_ID) },
     ])
     await writeFile(`${path}-shm`, Buffer.from([7, 7, 7]))
@@ -309,7 +362,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 4,
+      stateVersion: 5,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -317,7 +370,10 @@ describe('closed Saki state reads', () => {
 
   it('rejects a selected current generation with a missing seal without changing source artifacts', async () => {
     const path = await databasePath()
-    await materialize(path, [{ spec: sakiControlPlaneDomainSpec, snapshot: currentControlSnapshot() }])
+    await materialize(path, [
+      { spec: sakiControlPlaneDomainSpec, snapshot: currentControlSnapshot() },
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
+    ])
     await writeFile(`${path}-shm`, 'sidecar-evidence')
     const before = await exactFiles(path)
 
@@ -335,6 +391,7 @@ describe('closed Saki state reads', () => {
     corrupt.tables.control_state = { [CONTROL_STATE_KEY]: { corrupt: true } }
     await materialize(path, [
       { spec: sakiControlPlaneDomainSpec, snapshot: corrupt },
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
       { spec: sakiStorageGenerationDomainSpec, snapshot: sealSnapshot() },
     ])
     await writeFile(`${path}-shm`, Buffer.from([9, 8, 7]))
@@ -378,6 +435,32 @@ describe('closed Saki state reads', () => {
     expect(historical.stateVersion).toBe(3)
     expect(historical.controlPlane.table('installations').get(INSTALLATION_ID)?.currentHostId).toBe(HOST_ID)
     expect(historical.storageGeneration.table('storage_generation').size).toBe(1)
+  })
+
+  it('validates exact historical v4 domains and rejects a v4-plus-Host-Execution hybrid', async () => {
+    const path = await databasePath()
+    await materialize(path, [
+      { spec: sakiControlPlaneV4DomainSpec, snapshot: v4ControlSnapshot() },
+      { spec: sakiStorageGenerationV2DomainSpec, snapshot: v2SealSnapshot() },
+    ])
+
+    const historical = await readClosedSakiV4State(path, {
+      installationId: INSTALLATION_ID,
+      storageGenerationId: STORAGE_GENERATION_ID,
+      createdByBuildId: BUILD_ID,
+    }, AbortSignal.timeout(2_000))
+
+    expect(historical.stateVersion).toBe(4)
+    expect(historical.controlPlane.table('installations').get(INSTALLATION_ID)?.currentHostId).toBe(HOST_ID)
+
+    await materialize(path, [
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
+    ])
+    await expect(readClosedSakiV4State(path, {
+      installationId: INSTALLATION_ID,
+      storageGenerationId: STORAGE_GENERATION_ID,
+      createdByBuildId: BUILD_ID,
+    }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
   })
 
   it('classifies a historical v3 seal that disagrees with selected build provenance', async () => {
