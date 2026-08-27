@@ -257,6 +257,8 @@ flowchart TD
     pkg_saki_control_plane["saki/control-plane"]
     pkg_saki_execution["saki/execution"]
     pkg_saki_execution_local["saki/execution-local"]
+    pkg_saki_github["saki/github"]
+    pkg_saki_github_app["saki/github-app"]
     pkg_saki_host_api["saki/host-api"]
     pkg_saki_installation_maintenance["saki/installation-maintenance"]
   end
@@ -423,6 +425,9 @@ flowchart TD
   pkg_credentials_windows_dpapi --> pkg_credentials
   pkg_credentials_windows_dpapi --> pkg_home_paths
   pkg_credentials_windows_dpapi --> pkg_invariants
+  pkg_saki_github --> pkg_brand
+  pkg_saki_github --> pkg_credentials
+  pkg_saki_github --> pkg_invariants
   pkg_settings_file --> pkg_atomic_write
   pkg_settings_file --> pkg_home_paths
   pkg_settings_file --> pkg_invariants
@@ -457,6 +462,10 @@ flowchart TD
   pkg_lsp --> pkg_brand
   pkg_lsp --> pkg_invariants
   pkg_lsp --> pkg_llm
+  pkg_saki_github_app --> pkg_credentials
+  pkg_saki_github_app --> pkg_invariants
+  pkg_saki_github_app --> pkg_saki_github
+  pkg_saki_github_app --> pkg_timeout
   pkg_llm_pi_ai --> pkg_attachment
   pkg_llm_pi_ai --> pkg_authorization
   pkg_llm_pi_ai --> pkg_credentials
@@ -1210,9 +1219,12 @@ flowchart TD
   pkg_acp_demo --> pkg_tools
   pkg_saki_control_plane --> pkg_brand
   pkg_saki_control_plane --> pkg_client_connection
+  pkg_saki_control_plane --> pkg_credentials
   pkg_saki_control_plane --> pkg_invariants
   pkg_saki_control_plane --> pkg_saki_execution
+  pkg_saki_control_plane --> pkg_saki_github
   pkg_saki_control_plane --> pkg_storage_domain
+  pkg_saki_control_plane --> pkg_timeout
   pkg_saki_control_plane --> pkg_workspace
   pkg_api_remotes --> pkg_agent
   pkg_api_remotes --> pkg_agent_presets
@@ -1551,6 +1563,7 @@ flowchart TD
 | [`client-hmr`](../packages/client/hmr) | `client` | [`client-modules`](../packages/client/modules), [`host-webserver`](../packages/host/webserver), [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`credentials-local`](../packages/credentials/credentials-local) | `credentials` | [`atomic-write`](../packages/util/atomic-write), [`credentials`](../packages/credentials/credentials), [`home-paths`](../packages/util/home-paths), [`invariants`](../packages/runtime-diagnostics/invariants), [`launch-environment`](../packages/util/launch-environment) |
 | [`credentials-windows-dpapi`](../packages/credentials/credentials-windows-dpapi) | `credentials` | [`atomic-write`](../packages/util/atomic-write), [`credentials`](../packages/credentials/credentials), [`home-paths`](../packages/util/home-paths), [`invariants`](../packages/runtime-diagnostics/invariants) |
+| [`saki/github`](../packages/saki/github) | `saki` | [`brand`](../packages/util/brand), [`credentials`](../packages/credentials/credentials), [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`settings-file`](../packages/settings/settings-file) | `settings` | [`atomic-write`](../packages/util/atomic-write), [`home-paths`](../packages/util/home-paths), [`invariants`](../packages/runtime-diagnostics/invariants), [`settings`](../packages/settings/settings) |
 | [`llm-deepseek`](../packages/llm/llm-deepseek) | `llm` | [`anonymous-user-id`](../packages/identity/anonymous-user-id), [`atomic-write`](../packages/util/atomic-write), [`attachment`](../packages/attachment/attachment), [`brand`](../packages/util/brand), [`credentials`](../packages/credentials/credentials), [`home-paths`](../packages/util/home-paths), [`invariants`](../packages/runtime-diagnostics/invariants), [`launch-environment`](../packages/util/launch-environment), [`llm`](../packages/llm/llm), [`settings`](../packages/settings/settings), [`timeout`](../packages/util/timeout) |
 | [`session`](../packages/core/session) | `core` | [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope), [`typert-protocol`](../packages/typert/protocol) |
@@ -1559,6 +1572,7 @@ flowchart TD
 | [`web`](../packages/web/web) | `web` | [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm) |
 | [`authorization`](../packages/credentials/authorization) | `credentials` | [`credentials`](../packages/credentials/credentials), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm) |
 | [`lsp`](../packages/lsp/lsp) | `lsp` | [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm) |
+| [`saki/github-app`](../packages/saki/github-app) | `saki` | [`credentials`](../packages/credentials/credentials), [`invariants`](../packages/runtime-diagnostics/invariants), [`saki/github`](../packages/saki/github), [`timeout`](../packages/util/timeout) |
 | [`llm-pi-ai`](../packages/llm/llm-pi-ai) | `llm` | [`attachment`](../packages/attachment/attachment), [`authorization`](../packages/credentials/authorization), [`credentials`](../packages/credentials/credentials), [`invariants`](../packages/runtime-diagnostics/invariants), [`launch-environment`](../packages/util/launch-environment), [`llm`](../packages/llm/llm), [`settings`](../packages/settings/settings), [`timeout`](../packages/util/timeout) |
 | [`agent`](../packages/core/agent) | `core` | [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope), [`session`](../packages/core/session), [`system-prompt`](../packages/core/system-prompt), [`typert-protocol`](../packages/typert/protocol) |
 | [`skill-badge`](../packages/skill/skill-badge) | `skill` | [`invariants`](../packages/runtime-diagnostics/invariants), [`skill`](../packages/skill/skill) |
@@ -1694,7 +1708,7 @@ flowchart TD
 | [`subagent-dsh-sdk`](../packages/subagent/subagent-dsh-sdk) | `subagent` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`sdk-client`](../packages/sdk/client), [`session`](../packages/core/session), [`subagent`](../packages/subagent/subagent), [`subprocess`](../packages/subprocess/subprocess) |
 | [`api-gateway`](../packages/api/gateway) | `api` | [`client-connection`](../packages/client/connection), [`invariants`](../packages/runtime-diagnostics/invariants), [`typert-registry`](../packages/typert/registry) |
 | [`acp-demo`](../packages/examples/acp-demo) | `examples` | [`acp`](../packages/acp/acp), [`agent-instructions`](../packages/context/agent-instructions), [`agent-spine-demo`](../packages/examples/agent-spine-demo), [`app-boot`](../packages/boot/app-boot), [`invariants`](../packages/runtime-diagnostics/invariants), [`session-checkpoint-policy`](../packages/session/session-checkpoint-policy), [`session-persistence-jsonl`](../packages/session/session-persistence-jsonl), [`session-query`](../packages/session-query/session-query), [`session-query-sqlite`](../packages/session-query/session-query-sqlite), [`tools`](../packages/core/tools) |
-| [`saki/control-plane`](../packages/saki/control-plane) | `saki` | [`brand`](../packages/util/brand), [`client-connection`](../packages/client/connection), [`invariants`](../packages/runtime-diagnostics/invariants), [`saki/execution`](../packages/saki/execution), [`storage-domain`](../packages/storage/storage-domain), [`workspace`](../packages/workspace/workspace) |
+| [`saki/control-plane`](../packages/saki/control-plane) | `saki` | [`brand`](../packages/util/brand), [`client-connection`](../packages/client/connection), [`credentials`](../packages/credentials/credentials), [`invariants`](../packages/runtime-diagnostics/invariants), [`saki/execution`](../packages/saki/execution), [`saki/github`](../packages/saki/github), [`storage-domain`](../packages/storage/storage-domain), [`timeout`](../packages/util/timeout), [`workspace`](../packages/workspace/workspace) |
 | [`api-remotes`](../packages/api/remotes) | `api` | [`agent`](../packages/core/agent), [`agent-presets`](../packages/preset/agent-presets), [`api-gateway`](../packages/api/gateway), [`commands`](../packages/interaction/commands), [`cordis-host-runner`](../packages/extensions/cordis-host-runner), [`credentials`](../packages/credentials/credentials), [`file-reference`](../packages/context/file-reference), [`goal`](../packages/goal/goal), [`host-plugin-inventory`](../packages/host/plugin-inventory), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`message-feedback`](../packages/feedback/message-feedback), [`session`](../packages/core/session), [`session-persistence`](../packages/session/session-persistence), [`session-reference`](../packages/context/session-reference), [`settings`](../packages/settings/settings), [`typert-registry`](../packages/typert/registry) |
 | [`saki/host-api`](../packages/saki/host-api) | `saki` | [`client-connection`](../packages/client/connection), [`invariants`](../packages/runtime-diagnostics/invariants), [`saki/control-plane`](../packages/saki/control-plane), [`saki/execution`](../packages/saki/execution) |
 | [`saki/installation-maintenance`](../packages/saki/installation-maintenance) | `saki` | [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants), [`saki/control-plane`](../packages/saki/control-plane), [`storage`](../packages/storage/storage), [`storage-domain`](../packages/storage/storage-domain), [`storage-sqlite`](../packages/storage/storage-sqlite) |
