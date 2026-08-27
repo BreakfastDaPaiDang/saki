@@ -464,10 +464,29 @@ type RegistrationIntentRecordForValidation =
   | z.infer<typeof historicalRegistrationIntentRecordBaseSchema>
   | z.infer<typeof registrationIntentRecordBaseSchema>
 
+interface DurableIntentIdentityForValidation {
+  readonly id: string
+  readonly receiptId: string
+  readonly payload: { readonly intent: { readonly intentId: string } }
+}
+
+function refineDurableIntentIdentity(
+  value: DurableIntentIdentityForValidation,
+  context: z.RefinementCtx,
+): void {
+  if (value.id !== value.payload.intent.intentId) {
+    context.addIssue({ code: 'custom', message: 'Intent id disagrees with immutable payload', path: ['id'] })
+  }
+  if (value.receiptId !== value.id.replace(/^intent-/u, 'receipt-')) {
+    context.addIssue({ code: 'custom', message: 'receipt id disagrees with Intent id', path: ['receiptId'] })
+  }
+}
+
 function refineRegistrationIntent(
   value: RegistrationIntentRecordForValidation,
   context: z.RefinementCtx,
 ): void {
+  refineDurableIntentIdentity(value, context)
   const terminal = value.phase === 'conflict'
     || value.phase === 'failure'
     || value.phase === 'reconciliation-required'
@@ -476,12 +495,6 @@ function refineRegistrationIntent(
   }
   if (terminal !== (value.terminalReason !== undefined)) {
     context.addIssue({ code: 'custom', message: 'Intent terminal reason disagrees with phase', path: ['terminalReason'] })
-  }
-  if (value.id !== value.payload.intent.intentId) {
-    context.addIssue({ code: 'custom', message: 'Intent id disagrees with immutable payload', path: ['id'] })
-  }
-  if (value.receiptId !== value.id.replace(/^intent-/u, 'receipt-')) {
-    context.addIssue({ code: 'custom', message: 'receipt id disagrees with Intent id', path: ['receiptId'] })
   }
   if (value.payload.actor.hostId !== value.payload.intent.hostId) {
     context.addIssue({ code: 'custom', message: 'registration actor belongs to another Host' })
@@ -631,12 +644,8 @@ export const githubSynchronizationConfigurationSchema = z.object(
 
 /** Non-empty field-scoped configuration patch accepted from the browser-facing Intent seam. */
 export const githubSynchronizationConfigurationPatchSchema = z.object(
-  Object.fromEntries(Object.entries(githubSynchronizationConfigurationShape).map(([key, schema]) => [
-    key,
-    schema.optional(),
-  ])) as { [K in keyof typeof githubSynchronizationConfigurationShape]:
-    z.ZodOptional<(typeof githubSynchronizationConfigurationShape)[K]> },
-).strict().refine(value => Object.keys(value).length > 0, 'configuration patch must change at least one field')
+  githubSynchronizationConfigurationShape,
+).partial().strict().refine(value => Object.keys(value).length > 0, 'configuration patch must change at least one field')
 
 /** Strict field-scoped GitHub synchronization configuration Intent. */
 export const configureGitHubSynchronizationIntentSchema = z.object({
@@ -1084,12 +1093,7 @@ const githubConfigurationIntentRecordBaseSchema = z.object({
 /** Recoverable configuration Intent whose aggregate commit and receipt can survive acknowledgement loss. */
 export const githubSynchronizationConfigurationIntentRecordSchema = githubConfigurationIntentRecordBaseSchema
   .superRefine((value, context) => {
-    if (value.id !== value.payload.intent.intentId) {
-      context.addIssue({ code: 'custom', message: 'Intent id disagrees with immutable payload', path: ['id'] })
-    }
-    if (value.receiptId !== value.id.replace(/^intent-/u, 'receipt-')) {
-      context.addIssue({ code: 'custom', message: 'receipt id disagrees with Intent id', path: ['receiptId'] })
-    }
+    refineDurableIntentIdentity(value, context)
     if (canonicalDigest('saki/configure-github-synchronization/v1', value.payload) !== value.payloadDigest) {
       context.addIssue({ code: 'custom', message: 'Intent payload digest is stale', path: ['payloadDigest'] })
     }

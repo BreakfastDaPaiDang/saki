@@ -115,6 +115,11 @@ interface DetachedDomain<S extends DomainSpec> {
   readonly snapshot: KvUnitSnapshot
 }
 
+interface DetachedDomainPair<C extends DomainSpec, S extends DomainSpec> {
+  readonly controlPlane: DetachedDomain<C>
+  readonly storageGeneration: DetachedDomain<S>
+}
+
 interface ClosedRead<T> {
   readonly value: T
   readonly sourceArtifacts: SqliteArtifactSet
@@ -137,20 +142,20 @@ export async function readClosedCurrentSakiState(
 ): Promise<ClosedCurrentSakiState> {
   const result = await withSourcePreservingBackend(databasePath, signal, async (backend) => {
     try {
-      const { controlPlane, storageGeneration } = await readDetachedCurrentDomains(backend, signal)
+      const domains = await readDetachedDomains(
+        backend,
+        currentControlSpec,
+        sakiStorageGenerationDomainSpec,
+        signal,
+      )
       validateCurrentSakiState(
-        controlPlane.domain,
-        storageGeneration.domain,
+        domains.controlPlane.domain,
+        domains.storageGeneration.domain,
         expected.installationId,
         expected.storageGenerationId,
         expected.createdByBuildId,
       )
-      return {
-        controlPlane: controlPlane.domain,
-        storageGeneration: storageGeneration.domain,
-        controlPlaneSnapshot: controlPlane.snapshot,
-        storageGenerationSnapshot: storageGeneration.snapshot,
-      }
+      return detachedDomainPairResult(domains)
     } catch (error) {
       preserveCancellation(signal, error)
       throw recoveryFailure('selected current Saki generation is missing, malformed, or inconsistent', error)
@@ -181,14 +186,14 @@ export async function readClosedProvisioningSakiState(
 ): Promise<ClosedProvisioningSakiState> {
   const result = await withSourcePreservingBackend(databasePath, signal, async (backend) => {
     try {
-      const { controlPlane, storageGeneration } = await readDetachedCurrentDomains(backend, signal)
-      validateExpectedStorageGenerationSeal(storageGeneration.domain, expected)
-      return {
-        controlPlane: controlPlane.domain,
-        storageGeneration: storageGeneration.domain,
-        controlPlaneSnapshot: controlPlane.snapshot,
-        storageGenerationSnapshot: storageGeneration.snapshot,
-      }
+      const domains = await readDetachedDomains(
+        backend,
+        currentControlSpec,
+        sakiStorageGenerationDomainSpec,
+        signal,
+      )
+      validateExpectedStorageGenerationSeal(domains.storageGeneration.domain, expected)
+      return detachedDomainPairResult(domains)
     } catch (error) {
       preserveCancellation(signal, error)
       throw recoveryFailure('selected provisioning Saki generation is missing, malformed, or inconsistent', error)
@@ -249,27 +254,20 @@ export async function readClosedSakiV3State(
 ): Promise<ClosedSakiV3State> {
   const result = await withSourcePreservingBackend(databasePath, signal, async (backend) => {
     try {
-      const controlPlaneSnapshot = await readExactDomain(backend, sakiControlPlaneV3DomainSpec, signal)
-      const storageGenerationSnapshot = await readExactDomain(
+      const domains = await readDetachedDomains(
         backend,
+        sakiControlPlaneV3DomainSpec,
         sakiStorageGenerationV1DomainSpec,
         signal,
       )
-      const controlPlane = detachDomain(sakiControlPlaneV3DomainSpec, controlPlaneSnapshot)
-      const storageGeneration = detachDomain(sakiStorageGenerationV1DomainSpec, storageGenerationSnapshot)
       validateSakiV3SourceState(
-        controlPlane.domain,
-        storageGeneration.domain,
+        domains.controlPlane.domain,
+        domains.storageGeneration.domain,
         expected.installationId,
         expected.storageGenerationId,
         expected.createdByBuildId,
       )
-      return {
-        controlPlane: controlPlane.domain,
-        storageGeneration: storageGeneration.domain,
-        controlPlaneSnapshot: controlPlane.snapshot,
-        storageGenerationSnapshot: storageGeneration.snapshot,
-      }
+      return detachedDomainPairResult(domains)
     } catch (error) {
       preserveCancellation(signal, error)
       throw recoveryFailure('selected historical v3 Saki generation is missing, malformed, or inconsistent', error)
@@ -278,22 +276,26 @@ export async function readClosedSakiV3State(
   return { stateVersion: 3, ...result.value, sourceArtifacts: result.sourceArtifacts }
 }
 
-async function readDetachedCurrentDomains(
+async function readDetachedDomains<C extends DomainSpec, S extends DomainSpec>(
   backend: SqliteStorageBackend,
+  controlSpec: C,
+  storageSpec: S,
   signal: AbortSignal,
-): Promise<{
-  readonly controlPlane: DetachedDomain<typeof currentControlSpec>
-  readonly storageGeneration: DetachedDomain<typeof sakiStorageGenerationDomainSpec>
-}> {
-  const controlPlaneSnapshot = await readExactDomain(backend, currentControlSpec, signal)
-  const storageGenerationSnapshot = await readExactDomain(
-    backend,
-    sakiStorageGenerationDomainSpec,
-    signal,
-  )
+): Promise<DetachedDomainPair<C, S>> {
+  const controlPlaneSnapshot = await readExactDomain(backend, controlSpec, signal)
+  const storageGenerationSnapshot = await readExactDomain(backend, storageSpec, signal)
   return {
-    controlPlane: detachDomain(currentControlSpec, controlPlaneSnapshot),
-    storageGeneration: detachDomain(sakiStorageGenerationDomainSpec, storageGenerationSnapshot),
+    controlPlane: detachDomain(controlSpec, controlPlaneSnapshot),
+    storageGeneration: detachDomain(storageSpec, storageGenerationSnapshot),
+  }
+}
+
+function detachedDomainPairResult<C extends DomainSpec, S extends DomainSpec>(domains: DetachedDomainPair<C, S>) {
+  return {
+    controlPlane: domains.controlPlane.domain,
+    storageGeneration: domains.storageGeneration.domain,
+    controlPlaneSnapshot: domains.controlPlane.snapshot,
+    storageGenerationSnapshot: domains.storageGeneration.snapshot,
   }
 }
 

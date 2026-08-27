@@ -174,7 +174,6 @@ const SCAN_SOURCE: GitHubProjectBoardFingerprintSource = {
   },
   rateObservations: [
     REST_RATE_OBSERVATION,
-    REST_RATE_OBSERVATION,
     ...Array.from({ length: 10 }, () => GRAPHQL_RATE_OBSERVATION),
   ],
   observedAt: OBSERVED_AT,

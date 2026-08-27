@@ -33,7 +33,12 @@ import type {
   GitHubRepositoryFact,
 } from '@breakfastdapaidang/saki-github'
 import type { ResolvedConfig } from './index.ts'
-import { queryGraphql } from './graphql.ts'
+import {
+  graphqlIssueNodeSchema,
+  graphqlProjectNodeSchema,
+  graphqlRepositoryNodeSchema,
+  queryGraphql,
+} from './graphql.ts'
 import { inspectInstallation } from './installation.ts'
 import { GitHubOperationSession } from './operation-session.ts'
 import type { InstallationPriorityQueue } from './priority-queue.ts'
@@ -170,27 +175,13 @@ const rateSchema = z.object({
   }
 })
 
-const repositoryNodeSchema = z.object({
+const repositoryNodeSchema = graphqlRepositoryNodeSchema.extend({
   __typename: z.literal('Repository'),
-  id: z.string().min(1),
-  databaseId: githubRepositoryDatabaseIdSchema,
-  nameWithOwner: z.string().min(3),
-  visibility: z.enum(['PUBLIC', 'PRIVATE', 'INTERNAL']),
-  url: z.url(),
-  updatedAt: z.iso.datetime(),
-  owner: z.object({ id: z.string().min(1) }).loose(),
   issues: z.object({ totalCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).loose(),
 }).loose()
 
-const projectNodeSchema = z.object({
+const projectNodeSchema = graphqlProjectNodeSchema.extend({
   __typename: z.literal('ProjectV2'),
-  id: z.string().min(1),
-  number: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  title: z.string().min(1),
-  closed: z.boolean(),
-  url: z.url(),
-  updatedAt: z.iso.datetime(),
-  owner: z.object({ id: z.string().min(1) }).loose(),
   items: z.object({ totalCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).loose(),
 }).loose()
 
@@ -273,18 +264,7 @@ const itemFieldValuesDataSchema = z.object({
   rateLimit: rateSchema,
 }).loose()
 
-const issueNodeSchema = z.object({
-  id: z.string().min(1),
-  number: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  state: z.enum(['OPEN', 'CLOSED']),
-  title: z.string().min(1),
-  url: z.url(),
-  updatedAt: z.iso.datetime(),
-  repository: z.object({
-    id: z.string().min(1),
-    databaseId: githubRepositoryDatabaseIdSchema,
-  }).loose(),
-}).loose()
+const issueNodeSchema = graphqlIssueNodeSchema
 
 const openIssuesDataSchema = z.object({
   repository: z.object({

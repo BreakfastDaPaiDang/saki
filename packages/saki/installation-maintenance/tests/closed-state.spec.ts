@@ -171,7 +171,7 @@ function v3ControlSnapshot(): KvUnitSnapshot {
   return { global: null, tables }
 }
 
-function v1SealSnapshot(): KvUnitSnapshot {
+function v1SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot {
   return {
     global: null,
     tables: {
@@ -181,7 +181,7 @@ function v1SealSnapshot(): KvUnitSnapshot {
           installationId: INSTALLATION_ID,
           storageGenerationId: STORAGE_GENERATION_ID,
           stateVersion: 3,
-          createdByBuildId: BUILD_ID,
+          createdByBuildId,
         }),
       },
     },
@@ -378,6 +378,20 @@ describe('closed Saki state reads', () => {
     expect(historical.stateVersion).toBe(3)
     expect(historical.controlPlane.table('installations').get(INSTALLATION_ID)?.currentHostId).toBe(HOST_ID)
     expect(historical.storageGeneration.table('storage_generation').size).toBe(1)
+  })
+
+  it('classifies a historical v3 seal that disagrees with selected build provenance', async () => {
+    const path = await databasePath()
+    await materialize(path, [
+      { spec: sakiControlPlaneV3DomainSpec, snapshot: v3ControlSnapshot() },
+      { spec: sakiStorageGenerationV1DomainSpec, snapshot: v1SealSnapshot(OTHER_BUILD_ID) },
+    ])
+
+    await expect(readClosedSakiV3State(path, {
+      installationId: INSTALLATION_ID,
+      storageGenerationId: STORAGE_GENERATION_ID,
+      createdByBuildId: BUILD_ID,
+    }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
   })
 
   it('preserves a state-read failure together with backend-close failure', async () => {

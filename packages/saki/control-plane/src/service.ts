@@ -79,6 +79,7 @@ import type {
   SakiIntent,
   ConfigureGitHubSynchronizationIntent,
 } from './types.ts'
+import { enqueueKeyedOperation } from './keyed-operation.ts'
 import type { SakiInstallationState } from './installation-state.ts'
 import {
   assertRegistrationActorReference,
@@ -694,13 +695,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     intentId: SakiControlIntentId,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const previous = this.intentOperationTails.get(intentId) ?? Promise.resolve()
-    const result = previous.then(operation)
-    const tail = result.then(() => undefined, () => undefined)
-    this.intentOperationTails.set(intentId, tail)
-    return result.finally(() => {
-      if (this.intentOperationTails.get(intentId) === tail) this.intentOperationTails.delete(intentId)
-    })
+    return enqueueKeyedOperation(this.intentOperationTails, intentId, operation)
   }
 
   private operationSignal(signal: AbortSignal): AbortSignal {
@@ -1416,7 +1411,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       this.githubSynchronizationConsumer = consumer
       consumer.wake()
       providerContext.effect(() => async () => {
-        if (this.githubSynchronizationConsumer === consumer) this.githubSynchronizationConsumer = undefined
+        this.githubSynchronizationConsumer = undefined
         await consumer.dispose()
       }, 'saki-control-plane.githubSynchronizationConsumer')
     })

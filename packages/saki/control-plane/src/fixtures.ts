@@ -372,6 +372,22 @@ const FRESH_BOARD = {
   ageMs: 10_000,
 } as const
 
+const PENDING_SYNCHRONIZATION_EVIDENCE_FIXTURE = {
+  checkpoint: CHECKPOINT,
+  mapping: { state: 'revalidation-required', configurationRevision: 2 },
+  freshness: FRESH_BOARD,
+  scan: {
+    state: 'scheduled',
+    priority: 'interactive',
+    reason: 'configuration',
+    attemptAt: BOARD_CONFIRMED_AT + 6_000,
+  },
+  effectiveMutationAvailability: {
+    available: false,
+    reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
+  },
+} as const
+
 const STALE_BOARD = {
   state: 'stale',
   confirmedAt: BOARD_CONFIRMED_AT,
@@ -420,19 +436,7 @@ export const SAKI_BOARD_PROJECTION_FIXTURES = Object.freeze({
     state: 'confirmed',
     synchronizationRevision: 2,
     confirmed: CONFIRMED_BOARD,
-    checkpoint: CHECKPOINT,
-    mapping: { state: 'revalidation-required', configurationRevision: 2 },
-    freshness: FRESH_BOARD,
-    scan: {
-      state: 'scheduled',
-      priority: 'interactive',
-      reason: 'configuration',
-      attemptAt: BOARD_CONFIRMED_AT + 6_000,
-    },
-    effectiveMutationAvailability: {
-      available: false,
-      reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
-    },
+    ...PENDING_SYNCHRONIZATION_EVIDENCE_FIXTURE,
   } as const satisfies SakiBoardProjection,
   confirmedStaleFailure: {
     type: 'board',
@@ -472,19 +476,7 @@ export const SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES = Object.freeze({
       state: 'saved',
       active: ACTIVE_SYNCHRONIZATION_CONFIGURATION,
       pending: SAVED_PENDING_CONFIGURATION,
-      checkpoint: CHECKPOINT,
-      mapping: { state: 'revalidation-required', configurationRevision: 2 },
-      freshness: FRESH_BOARD,
-      scan: {
-        state: 'scheduled',
-        priority: 'interactive',
-        reason: 'configuration',
-        attemptAt: BOARD_CONFIRMED_AT + 6_000,
-      },
-      effectiveMutationAvailability: {
-        available: false,
-        reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
-      },
+      ...PENDING_SYNCHRONIZATION_EVIDENCE_FIXTURE,
     },
   } as const satisfies SakiProjectSettingsProjection,
   activating: {

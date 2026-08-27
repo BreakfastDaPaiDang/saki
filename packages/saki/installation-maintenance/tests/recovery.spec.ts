@@ -44,8 +44,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 
 import {
+  sakiControlPlaneMigrationPlan,
   sakiControlPlaneV2DomainSpec,
+  sakiControlPlaneV3DomainSpec,
   sakiStateCapability,
+  sakiStorageGenerationV1DomainSpec,
+  STORAGE_GENERATION_KEY,
+  storageGenerationV1SealRecordSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
   captureSqliteArtifactSet,
@@ -224,6 +229,45 @@ async function materializeHistorical(databasePath: string, signal: AbortSignal):
   }
 }
 
+async function materializeHistoricalV3(databasePath: string, signal: AbortSignal): Promise<void> {
+  const backend = new SqliteStorageBackend({ path: databasePath, journalMode: 'delete' })
+  try {
+    const closed = backend.kv.closed
+    if (closed === undefined) throw new Error('test SQLite backend has no closed operations')
+    const units = [
+      {
+        spec: sakiControlPlaneV3DomainSpec,
+        snapshot: sakiControlPlaneMigrationPlan.steps[0]!.migrate(historicalSnapshot()),
+      },
+      {
+        spec: sakiStorageGenerationV1DomainSpec,
+        snapshot: {
+          global: null,
+          tables: {
+            storage_generation: {
+              [STORAGE_GENERATION_KEY]: storageGenerationV1SealRecordSchema.parse({
+                schemaVersion: 1,
+                installationId: INSTALLATION_ID,
+                storageGenerationId: OLD_STORAGE_GENERATION_ID,
+                stateVersion: 3,
+                createdByBuildId: OLD_BUILD_ID,
+              }),
+            },
+          },
+        },
+      },
+    ] as const
+    for (const unit of units) {
+      await closed.withReservedUnit(unit.spec.name, signal, async (lease) => {
+        const result = await lease.materializeMissing(descriptorOf(unit.spec), unit.snapshot)
+        if (result.outcome !== 'durable') throw result.cause
+      })
+    }
+  } finally {
+    await backend.close()
+  }
+}
+
 async function createJournalBackup(
   root: string,
   journal: Extract<ReturnType<typeof createOperationJournal>, { kind: 'upgrade' }>,
@@ -269,6 +313,35 @@ async function publishHistoricalGeneration(
     INSTALLATION_ID,
     OLD_STORAGE_GENERATION_ID,
     2,
+    OLD_BUILD_ID,
+  )
+  await writeFile(join(generationDirectory, 'generation.json'), generationBytes)
+  const generation = JSON.parse(generationBytes.toString('utf8')) as Parameters<
+    typeof renderInstallationManifest
+  >[1]
+  await writeFile(
+    join(root, 'installation.json'),
+    renderInstallationManifest(
+      'ready',
+      generation,
+      generationManifestReference(OLD_STORAGE_GENERATION_ID, generationBytes),
+    ),
+  )
+  return { databasePath, generationBytes }
+}
+
+async function publishHistoricalV3Generation(
+  root: string,
+  signal: AbortSignal,
+): Promise<{ readonly databasePath: string; readonly generationBytes: Buffer }> {
+  const generationDirectory = join(root, 'generations', OLD_STORAGE_GENERATION_ID)
+  await mkdir(generationDirectory, { recursive: true })
+  const databasePath = join(generationDirectory, 'state.sqlite')
+  await materializeHistoricalV3(databasePath, signal)
+  const generationBytes = renderGenerationManifest(
+    INSTALLATION_ID,
+    OLD_STORAGE_GENERATION_ID,
+    3,
     OLD_BUILD_ID,
   )
   await writeFile(join(generationDirectory, 'generation.json'), generationBytes)
@@ -786,6 +859,35 @@ describe('active Saki operation recovery', () => {
       legacyDatabasePath: prepared.legacyPath,
       currentBuildId: BUILD_ID,
     }, signal, async () => undefined)).rejects.toMatchObject({ code: 'upgrade-required' })
+  })
+
+  it('settles an interrupted upgrade while an exact selected v3 source remains authoritative', async () => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(10_000)
+    const selected = await publishHistoricalV3Generation(root, signal)
+    const before = await readFile(selected.databasePath)
+    const journal = createOperationJournal({
+      kind: 'upgrade',
+      operationId: createSakiMaintenanceOperationId(),
+      installationId: INSTALLATION_ID,
+      ...V3_UPGRADE_SOURCE,
+      backupId: createSakiRecoveryBackupId(),
+      candidateStorageGenerationId: CANDIDATE_ID,
+    })
+    if (journal.kind !== 'upgrade') throw new Error('test journal changed kind')
+    await publishActiveOperation(root, journal, signal)
+
+    await recoverActiveSakiOperation(root, join(root, 'unused-legacy.sqlite'), signal)
+
+    expect(await readFile(selected.databasePath)).toEqual(before)
+    await expect(readInstallationManifest(root, signal)).resolves.toMatchObject({
+      value: {
+        phase: 'ready',
+        stateVersion: 3,
+        storageGenerationId: OLD_STORAGE_GENERATION_ID,
+      },
+    })
+    await expect(readActiveOperation(root, signal)).resolves.toBeUndefined()
   })
 
   it('rolls back an upgrade interrupted before its backup and candidate exist', async () => {

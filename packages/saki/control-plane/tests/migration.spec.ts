@@ -19,6 +19,7 @@ const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001'
 const HOST_ID = 'host-00000000-0000-4000-8000-000000000002'
 const PRINCIPAL_ID = 'principal-00000000-0000-4000-8000-000000000003'
 const GRANT_ID = 'grant-00000000-0000-4000-8000-000000000004'
+const OTHER_GRANT_ID = 'grant-00000000-0000-4000-8000-000000000104'
 const ACCESS_ID = 'access-00000000-0000-4000-8000-000000000005'
 const INTENT_ID = SAKI_PROJECT_REQUEST_FIXTURES.registration.intentId
 
@@ -425,5 +426,33 @@ describe('Saki control-plane retained migrations', () => {
     for (const [table, spec] of Object.entries(sakiControlPlaneDomainSpec.tables)) {
       for (const value of Object.values(v4.tables[table] ?? {})) spec.valueSchema.parse(value)
     }
+  })
+
+  it('retains a non-Host-Operator Grant unchanged during the v3-to-v4 migration', () => {
+    const source = historicalSnapshot()
+    const v3 = sakiControlPlaneMigrationPlan.steps[0]!.migrate({
+      global: null,
+      tables: parsedHistoricalTables(source),
+    })
+    const operatorGrant = sakiControlPlaneV3DomainSpec.tables.grants.valueSchema.parse(
+      v3.tables['grants']![GRANT_ID],
+    )
+    const retainedGrant = sakiControlPlaneV3DomainSpec.tables.grants.valueSchema.parse({
+      ...operatorGrant,
+      id: OTHER_GRANT_ID,
+      revision: 2,
+    })
+    const v4 = sakiControlPlaneMigrationPlan.steps[1]!.migrate({
+      ...v3,
+      tables: {
+        ...v3.tables,
+        grants: {
+          ...v3.tables['grants'],
+          [OTHER_GRANT_ID]: retainedGrant,
+        },
+      },
+    })
+
+    expect(v4.tables['grants']![OTHER_GRANT_ID]).toEqual(retainedGrant)
   })
 })

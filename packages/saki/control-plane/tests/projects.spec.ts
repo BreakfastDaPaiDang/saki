@@ -96,6 +96,7 @@ interface DurablePaths {
 
 class FakeBoardGitHub extends SakiGitHub {
   readonly requests: GitHubScanMap['project-board']['request'][] = []
+  nextFailure: Error | undefined
 
   constructor(ctx: Context, private readonly candidate: GitHubProjectBoardScanCandidate) {
     super(ctx)
@@ -113,6 +114,11 @@ class FakeBoardGitHub extends SakiGitHub {
   ): Promise<GitHubScanMap[K]['result']> {
     signal.throwIfAborted()
     this.requests.push(structuredClone(request))
+    if (this.nextFailure !== undefined) {
+      const failure = this.nextFailure
+      this.nextFailure = undefined
+      throw failure
+    }
     return structuredClone(this.candidate)
   }
 }
@@ -856,7 +862,10 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const repo = await repository(durable.root, 'github-sync-consumer')
     const configuration = githubSynchronizationConfiguration()
     const ctx = await context(durable)
-    const github = new FakeBoardGitHub(ctx, githubBoardCandidate(configuration))
+    let github: FakeBoardGitHub | undefined
+    const providerFiber = await ctx.plugin((providerContext: Context) => {
+      github = new FakeBoardGitHub(providerContext, githubBoardCandidate(configuration))
+    })
     const harness = await mountControlPlane(ctx)
     const registered = await harness.control.submit(harness.authentication, intent(
       'intent-20202020-2020-4020-8020-202020202020',
@@ -876,6 +885,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     }, new AbortController().signal)).toMatchObject({ ok: true, receipt: { state: 'saved' } })
 
     const board = await waitForConfirmedBoard(harness, registered.receipt.projectId)
+    if (github === undefined) throw new Error('GitHub Provider fixture did not start')
     expect(github.requests).toHaveLength(1)
     expect(github.requests[0]).toMatchObject({
       installation: { appId: configuration.appId },
@@ -888,6 +898,22 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       confirmed: { generation: 1, configurationRevision: 1 },
       checkpoint: { generation: 1, configurationRevision: 1 },
     })
+    const diagnostic = vi.spyOn(ctx.logger, 'error').mockImplementation(() => ctx.logger)
+    github.nextFailure = new Error('provider escaped its typed failure interface')
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: registered.receipt.projectId,
+      refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    for (let attempt = 0; attempt < 200 && diagnostic.mock.calls.length === 0; attempt++) {
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+    }
+    expect(github.requests).toHaveLength(2)
+    expect(github.requests[1]).toMatchObject({ priority: 'interactive' })
+    expect(diagnostic).toHaveBeenCalledWith(
+      'Saki GitHub synchronization provider failed outside its typed failure interface',
+    )
+    await providerFiber.dispose()
     await harness.close()
   })
 
@@ -1214,6 +1240,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       new AbortController().signal,
     )
     if (!registered.ok) throw new Error('registration failed')
+    const missingProjectId = 'project-18181818-1818-4818-8818-181818181819' as SakiDevelopmentProjectId
 
     expect(await harness.control.query(harness.authentication, {
       type: 'development-workspace',
@@ -1222,8 +1249,22 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     }, new AbortController().signal)).toEqual({ ok: false, reason: 'stale' })
     expect(await harness.control.query(harness.authentication, {
       type: 'development-workspace',
-      projectId: 'project-18181818-1818-4818-8818-181818181819' as typeof registered.receipt.projectId,
+      projectId: missingProjectId,
       expectedRegistryRevision: 1,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-settings',
+      projectId: missingProjectId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: missingProjectId,
+      refresh: 'cached',
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: missingProjectId,
+      refresh: 'interactive',
     }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
     expect(await harness.control.query(harness.authentication, {
       type: 'inspect-project-selection',
@@ -1236,6 +1277,11 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         result: { ok: false, reason: 'missing' },
       },
     })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'inspect-project-selection',
+      hostId: 'host-18181818-1818-4818-8818-181818181818' as SakiHostId,
+      directoryLocator: repo,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
     expect(await harness.control.submit(harness.authentication, {
       ...request,
       intentId: 'intent-18181818-1818-4818-8818-18181818181a' as SakiControlIntentId,
@@ -1247,6 +1293,21 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       intentId: 'intent-18181818-1818-4818-8818-18181818181b' as SakiControlIntentId,
       hostId: 'host-18181818-1818-4818-8818-181818181818' as SakiHostId,
       expectedRegistryRevision: 1,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    await setGrantActions(harness, ['development-project:register'])
+    expect(await harness.control.query(harness.authentication, {
+      type: 'inspect-project-selection',
+      hostId: harness.control.identity().hostId,
+      directoryLocator: repo,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-settings',
+      projectId: registered.receipt.projectId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: registered.receipt.projectId,
+      refresh: 'cached',
     }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
     expect(liveSakiDomain(harness.ctx).table('development_project_registry')
       .get('development-project-registry')?.projects).toHaveLength(1)

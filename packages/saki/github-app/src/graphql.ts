@@ -2,12 +2,51 @@
 
 import { z } from 'zod'
 import type { Octokit } from '@octokit/core'
-import { GitHubProviderError } from '@breakfastdapaidang/saki-github'
+import {
+  GitHubProviderError,
+  githubRepositoryDatabaseIdSchema,
+} from '@breakfastdapaidang/saki-github'
 import { githubRateLimitFailure } from './errors.ts'
 
 const envelopeSchema = z.object({
   data: z.unknown().optional(),
   errors: z.array(z.unknown()).optional(),
+}).loose()
+
+/** Common GraphQL Repository fields admitted by Product App reads. */
+export const graphqlRepositoryNodeSchema = z.object({
+  id: z.string().min(1),
+  databaseId: githubRepositoryDatabaseIdSchema,
+  nameWithOwner: z.string().min(3),
+  visibility: z.enum(['PUBLIC', 'PRIVATE', 'INTERNAL']),
+  url: z.url(),
+  updatedAt: z.iso.datetime(),
+  owner: z.object({ id: z.string().min(1) }).loose(),
+}).loose()
+
+/** Common GraphQL ProjectV2 fields admitted by Product App reads. */
+export const graphqlProjectNodeSchema = z.object({
+  id: z.string().min(1),
+  number: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  title: z.string().min(1),
+  closed: z.boolean(),
+  url: z.url(),
+  updatedAt: z.iso.datetime(),
+  owner: z.object({ id: z.string().min(1) }).loose(),
+}).loose()
+
+/** Common GraphQL Issue fields admitted by Product App reads. */
+export const graphqlIssueNodeSchema = z.object({
+  id: z.string().min(1),
+  number: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  state: z.enum(['OPEN', 'CLOSED']),
+  title: z.string().min(1),
+  url: z.url(),
+  updatedAt: z.iso.datetime(),
+  repository: z.object({
+    id: z.string().min(1),
+    databaseId: githubRepositoryDatabaseIdSchema,
+  }).loose(),
 }).loose()
 
 /**

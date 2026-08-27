@@ -212,12 +212,8 @@ const githubSynchronizationConfigurationField = z.enum([
 const GITHUB_SYNCHRONIZATION_CONFIGURATION_FIELDS = githubSynchronizationConfigurationField.options
 
 const githubSynchronizationConfigurationPatchSchema = z.object(
-  Object.fromEntries(Object.entries(githubSynchronizationConfigurationShape).map(([key, schema]) => [
-    key,
-    schema.optional(),
-  ])) as { [K in keyof typeof githubSynchronizationConfigurationShape]:
-    z.ZodOptional<(typeof githubSynchronizationConfigurationShape)[K]> },
-).strict()
+  githubSynchronizationConfigurationShape,
+).partial().strict()
   .transform((value): GitHubSynchronizationConfigurationPatch => Object.fromEntries(
     Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined),
   ) as GitHubSynchronizationConfigurationPatch)
@@ -442,6 +438,8 @@ const githubMappingIssueListSchema = boundedArray(
     }
   })
 
+// Browser input must remain independently validated without loading provider or durable-state modules.
+/* jscpd:ignore-start */
 const standardGitHubProviderFailureSchema = z.discriminatedUnion('code', [
   z.object({ code: z.literal('cancelled') }).strict(),
   z.object({ code: z.literal('auth-unavailable'), credentialRef: credentialRef.optional() }).strict(),
@@ -519,6 +517,7 @@ const githubScanFailureSchema = z.discriminatedUnion('kind', [
   }).strict(),
   z.object({ kind: z.literal('attempt'), reason: z.literal('expired') }).strict(),
 ]) satisfies z.ZodType<SakiGitHubScanFailure>
+/* jscpd:ignore-end */
 
 const githubSynchronizationFailureProjectionSchema = z.object({
   attemptId: scanAttemptId,
@@ -1323,24 +1322,33 @@ const reconciliationReceiptSchema = z.object({
   state: z.literal('reconciliation-required'),
   reason: z.enum(['workspace', 'observation']),
 }).strict().refine(receipt => receipt.id === receipt.intentId.replace(/^intent-/u, 'receipt-'))
+const deniedIntentResultSchema = z.object({ ok: z.literal(false), reason: z.literal('denied') }).strict()
+const unavailableIntentResultSchema = z.object({ ok: z.literal(false), reason: z.literal('unavailable') }).strict()
+const preparedIntentResultSchema = z.object({
+  ok: z.literal(false),
+  reason: z.literal('unavailable'),
+  receipt: preparedReceiptSchema,
+}).strict()
+const plainConflictIntentResultSchema = z.object({ ok: z.literal(false), reason: z.literal('conflict') }).strict()
+const authorityFailureIntentResultSchema = z.object({
+  ok: z.literal(false),
+  reason: z.literal('failure'),
+  receipt: failureReceiptSchema,
+}).strict()
 
 /** Development Project registration business-result schema. */
 export const sakiRegisterDevelopmentProjectResultSchema = z.union([
   z.object({ ok: z.literal(true), receipt: confirmedReceiptSchema }).strict(),
-  z.object({ ok: z.literal(false), reason: z.literal('denied') }).strict(),
-  z.object({ ok: z.literal(false), reason: z.literal('unavailable') }).strict(),
-  z.object({
-    ok: z.literal(false),
-    reason: z.literal('unavailable'),
-    receipt: preparedReceiptSchema,
-  }).strict(),
-  z.object({ ok: z.literal(false), reason: z.literal('conflict') }).strict(),
+  deniedIntentResultSchema,
+  unavailableIntentResultSchema,
+  preparedIntentResultSchema,
+  plainConflictIntentResultSchema,
   z.object({
     ok: z.literal(false),
     reason: z.literal('conflict'),
     receipt: conflictReceiptSchema,
   }).strict(),
-  z.object({ ok: z.literal(false), reason: z.literal('failure'), receipt: failureReceiptSchema }).strict(),
+  authorityFailureIntentResultSchema,
   z.object({
     ok: z.literal(false),
     reason: z.literal('reconciliation-required'),
@@ -1376,20 +1384,16 @@ const githubSynchronizationConflictReceiptSchema = z.object({
 /** GitHub synchronization configuration business-result schema. */
 export const sakiConfigureGitHubSynchronizationResultSchema = z.union([
   z.object({ ok: z.literal(true), receipt: savedGitHubSynchronizationReceiptSchema }).strict(),
-  z.object({ ok: z.literal(false), reason: z.literal('denied') }).strict(),
-  z.object({ ok: z.literal(false), reason: z.literal('unavailable') }).strict(),
-  z.object({
-    ok: z.literal(false),
-    reason: z.literal('unavailable'),
-    receipt: preparedReceiptSchema,
-  }).strict(),
-  z.object({ ok: z.literal(false), reason: z.literal('conflict') }).strict(),
+  deniedIntentResultSchema,
+  unavailableIntentResultSchema,
+  preparedIntentResultSchema,
+  plainConflictIntentResultSchema,
   z.object({
     ok: z.literal(false),
     reason: z.literal('conflict'),
     receipt: githubSynchronizationConflictReceiptSchema,
   }).strict(),
-  z.object({ ok: z.literal(false), reason: z.literal('failure'), receipt: failureReceiptSchema }).strict(),
+  authorityFailureIntentResultSchema,
 ]) satisfies z.ZodType<SakiIntentReceipt<'configure-github-synchronization'>>
 
 /** Union schema retained for callers that intentionally handle every Control Intent result. */

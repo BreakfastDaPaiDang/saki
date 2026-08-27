@@ -1637,6 +1637,17 @@ describe('GitHub synchronization coordinator regressions', () => {
     expect(issuePaths(githubProjectSyncRecordSchema.safeParse(emptyChanges)))
       .toContainEqual(['pending', 'changedFields'])
 
+    const repeatedChanges = mutableRecord(pending)
+    repeatedChanges.pending!.changedFields = ['rateLimitReserve', 'rateLimitReserve']
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(repeatedChanges)))
+      .toContain('pending configuration repeats changed fields')
+
+    const repeatedStatusOption = mutableRecord(pending)
+    repeatedStatusOption.pending!.configuration.statusOptionNodeIds.done
+      = repeatedStatusOption.pending!.configuration.statusOptionNodeIds.ready
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(repeatedStatusOption)))
+      .toContain('GitHub Status option ids must be distinct')
+
     const mismatchedRevision = mutableRecord(pending)
     mismatchedRevision.revision = 0
     expect(issueMessages(githubProjectSyncRecordSchema.safeParse(mismatchedRevision)))
@@ -1662,6 +1673,52 @@ describe('GitHub synchronization coordinator regressions', () => {
       expect(result.success ? [] : result.error.issues.map(value => value.path.map(String)))
         .toContainEqual([field])
     }
+
+    const intentIssue = (
+      mutate: (candidate: Mutable<NonNullable<typeof savedIntent>>) => void,
+      message: string,
+    ): void => {
+      const candidate = structuredClone(savedIntent)
+      mutate(candidate)
+      expect(issueMessages(githubSynchronizationConfigurationIntentRecordSchema.safeParse(candidate)))
+        .toContain(message)
+    }
+    intentIssue((candidate) => {
+      candidate.id = intentId(98)
+    }, 'Intent id disagrees with immutable payload')
+    intentIssue((candidate) => {
+      candidate.receiptId = sakiIntentReceiptIdSchema.parse('receipt-00000000-0000-4000-8000-000000000098')
+    }, 'receipt id disagrees with Intent id')
+    intentIssue((candidate) => {
+      candidate.payloadDigest = '0'.repeat(64)
+    }, 'Intent payload digest is stale')
+    intentIssue((candidate) => {
+      candidate.updatedAt = candidate.createdAt - 1
+    }, 'Intent update predates creation')
+    intentIssue((candidate) => {
+      delete candidate.candidateRevision
+    }, 'saved Intent evidence is incomplete')
+    intentIssue((candidate) => {
+      candidate.phase = 'prepared'
+    }, 'non-saved Intent retains candidate evidence')
+    intentIssue((candidate) => {
+      candidate.phase = 'prepared'
+      delete candidate.candidateRevision
+      delete candidate.synchronizationRevision
+      candidate.terminalReason = 'expected-revision'
+    }, 'Intent terminal reason disagrees with phase')
+    intentIssue((candidate) => {
+      candidate.phase = 'failure'
+      delete candidate.candidateRevision
+      delete candidate.synchronizationRevision
+      candidate.terminalReason = 'expected-revision'
+    }, 'failure phase has an invalid terminal reason')
+    intentIssue((candidate) => {
+      candidate.phase = 'conflict'
+      delete candidate.candidateRevision
+      delete candidate.synchronizationRevision
+      candidate.terminalReason = 'authority'
+    }, 'conflict phase has an invalid terminal reason')
   })
 
   it('rejects inconsistent Board, checkpoint, failure, and scheduling relationships durably', async () => {
@@ -1740,6 +1797,42 @@ describe('GitHub synchronization coordinator regressions', () => {
     expect(issueMessages(githubProjectSyncRecordSchema.safeParse(joinedOrder)))
       .toContain('joined Work Item order disagrees with its Project API order')
 
+    const projectItemOnly = mutableRecord(record)
+    delete projectItemOnly.confirmedBoard!.items[0]!.source.apiOrder
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(projectItemOnly)))
+      .toContain('joined Work Item source evidence is incomplete')
+
+    const apiOrderOnly = mutableRecord(record)
+    delete apiOrderOnly.confirmedBoard!.items[0]!.source.projectItemId
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(apiOrderOnly)))
+      .toContain('joined Work Item source evidence is incomplete')
+
+    const joinedMarkedAbsent = mutableRecord(record)
+    joinedMarkedAbsent.confirmedBoard!.items[0]!.notInProject = true
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(joinedMarkedAbsent)))
+      .toContain('Work Item membership disagrees with its source evidence')
+
+    const unjoinedWrongStatus = mutableRecord(record)
+    delete unjoinedWrongStatus.confirmedBoard!.items[0]!.source.projectItemId
+    delete unjoinedWrongStatus.confirmedBoard!.items[0]!.source.apiOrder
+    unjoinedWrongStatus.confirmedBoard!.items[0]!.notInProject = true
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(unjoinedWrongStatus)))
+      .toContain('unjoined Work Item must be an unarchived Inbox card')
+
+    const unjoinedArchived = mutableRecord(record)
+    delete unjoinedArchived.confirmedBoard!.items[0]!.source.projectItemId
+    delete unjoinedArchived.confirmedBoard!.items[0]!.source.apiOrder
+    unjoinedArchived.confirmedBoard!.items[0]!.notInProject = true
+    unjoinedArchived.confirmedBoard!.items[0]!.status = 'inbox'
+    unjoinedArchived.confirmedBoard!.items[0]!.archived = true
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(unjoinedArchived)))
+      .toContain('unjoined Work Item must be an unarchived Inbox card')
+
+    const archivedNotCanceled = mutableRecord(record)
+    archivedNotCanceled.confirmedBoard!.items[0]!.archived = true
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(archivedNotCanceled)))
+      .toContain('archived Work Item must be Canceled')
+
     const closedUnjoined = mutableRecord(record)
     const closedItem = closedUnjoined.confirmedBoard!.items[0]!
     delete closedItem.source.projectItemId
@@ -1777,6 +1870,65 @@ describe('GitHub synchronization coordinator regressions', () => {
     reversedCheckpointTime.checkpoint!.confirmedAt = reversedCheckpointTime.checkpoint!.observedAt - 1
     expect(issueMessages(githubProjectSyncRecordSchema.safeParse(reversedCheckpointTime)))
       .toContain('checkpoint confirmation cannot precede its observation')
+
+    const boardWithoutCheckpoint = mutableRecord(record)
+    delete boardWithoutCheckpoint.checkpoint
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(boardWithoutCheckpoint)))
+      .toContain('confirmed Board and checkpoint must be retained together')
+
+    const checkpointWithoutBoard = mutableRecord(record)
+    delete checkpointWithoutBoard.confirmedBoard
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(checkpointWithoutBoard)))
+      .toContain('confirmed Board and checkpoint must be retained together')
+
+    const boardWithoutActive = mutableRecord(record)
+    delete boardWithoutActive.active
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(boardWithoutActive)))
+      .toContain('active configuration and confirmed Board must be retained together')
+
+    const activeWithoutBoard = mutableRecord(record)
+    delete activeWithoutBoard.confirmedBoard
+    delete activeWithoutBoard.checkpoint
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(activeWithoutBoard)))
+      .toContain('active configuration and confirmed Board must be retained together')
+
+    const staleBoardGeneration = mutableRecord(record)
+    staleBoardGeneration.nextBoardGeneration = staleBoardGeneration.confirmedBoard!.generation
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(staleBoardGeneration)))
+      .toContain('next Board generation is not monotonic')
+
+    const advancedEmptyBoard = mutableRecord(emptySyncRecord())
+    advancedEmptyBoard.nextBoardGeneration = 2
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(advancedEmptyBoard)))
+      .toContain('Board generation advanced without a confirmed Board')
+
+    const activatingHarness = synchronizationHarness()
+    await saveConfiguration(activatingHarness)
+    await begin(activatingHarness)
+    const activating = activatingHarness.syncTable.get(PROJECT_A)
+    if (activating?.pending === undefined || activating.inFlightAttempt === undefined) {
+      throw new Error('activating fixture is incomplete')
+    }
+    const stalePending = mutableRecord(record)
+    stalePending.pending = structuredClone(activating.pending)
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(stalePending)))
+      .toContain('pending configuration does not follow active configuration')
+
+    const wrongAttemptRevision = mutableRecord(activating)
+    wrongAttemptRevision.inFlightAttempt!.configurationRevision += 1
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(wrongAttemptRevision)))
+      .toContain('in-flight scan does not target the current configuration')
+
+    const activatingWithoutAttempt = mutableRecord(activating)
+    delete activatingWithoutAttempt.inFlightAttempt
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(activatingWithoutAttempt)))
+      .toContain('activating configuration has no matching in-flight scan')
+
+    const failedWithoutFailure = mutableRecord(activating)
+    failedWithoutFailure.pending!.state = 'activation-failed'
+    delete failedWithoutFailure.inFlightAttempt
+    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(failedWithoutFailure)))
+      .toContain('failed configuration has no matching current failure')
 
     const directWrongField = mutableRecord(record)
     directWrongField.currentFailure = {
@@ -2629,6 +2781,8 @@ describe('GitHub synchronization coordinator regressions', () => {
     })
     expect(mappingResult.success).toBe(false)
     expect(mappingIssues.elementReads()).toBe(0)
+    expect(issueMessages(sakiGitHubScanFailureSchema.safeParse({ kind: 'mapping', issues: {} })))
+      .toContain('value must be an array')
   })
 
   it('publishes exactly the Board limit and rejects an oversized Board during restart validation', {

@@ -14,7 +14,6 @@ import {
   githubReleaseByTagObservationSchema,
   githubReleaseId,
   githubRepositoryDatabaseId,
-  githubRepositoryDatabaseIdSchema,
   githubRepositoryFactSchema,
   githubRepositoryId,
   githubTagObjectId,
@@ -41,7 +40,12 @@ import type {
   GitHubTagTarget,
 } from '@breakfastdapaidang/saki-github'
 import type { ResolvedConfig } from './index.ts'
-import { queryGraphql } from './graphql.ts'
+import {
+  graphqlIssueNodeSchema,
+  graphqlProjectNodeSchema,
+  graphqlRepositoryNodeSchema,
+  queryGraphql,
+} from './graphql.ts'
 import { GitHubOperationSession } from './operation-session.ts'
 import type { InstallationPriorityQueue } from './priority-queue.ts'
 
@@ -91,15 +95,8 @@ query SakiProject($projectId: ID!) {
 }`
 
 const repositoryDataSchema = z.object({
-  node: z.object({
+  node: graphqlRepositoryNodeSchema.extend({
     __typename: z.literal('Repository'),
-    id: z.string().min(1),
-    databaseId: githubRepositoryDatabaseIdSchema,
-    nameWithOwner: z.string().min(3),
-    visibility: z.enum(['PUBLIC', 'PRIVATE', 'INTERNAL']),
-    url: z.url(),
-    updatedAt: z.iso.datetime(),
-    owner: z.object({ id: z.string().min(1) }).loose(),
   }).loose().nullable(),
   rateLimit: z.object({
     cost: z.number().int().nonnegative(),
@@ -110,32 +107,15 @@ const repositoryDataSchema = z.object({
 }).loose()
 
 const issueDataSchema = z.object({
-  node: z.object({
+  node: graphqlIssueNodeSchema.extend({
     __typename: z.literal('Issue'),
-    id: z.string().min(1),
-    number: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    state: z.enum(['OPEN', 'CLOSED']),
-    title: z.string().min(1),
-    url: z.url(),
-    updatedAt: z.iso.datetime(),
-    repository: z.object({
-      id: z.string().min(1),
-      databaseId: githubRepositoryDatabaseIdSchema,
-    }).loose(),
   }).loose().nullable(),
   rateLimit: repositoryDataSchema.shape.rateLimit,
 }).loose()
 
 const projectDataSchema = z.object({
-  node: z.object({
+  node: graphqlProjectNodeSchema.extend({
     __typename: z.literal('ProjectV2'),
-    id: z.string().min(1),
-    number: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    title: z.string().min(1),
-    closed: z.boolean(),
-    url: z.url(),
-    updatedAt: z.iso.datetime(),
-    owner: z.object({ id: z.string().min(1) }).loose(),
   }).loose().nullable(),
   rateLimit: repositoryDataSchema.shape.rateLimit,
 }).loose()

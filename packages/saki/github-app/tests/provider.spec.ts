@@ -843,8 +843,8 @@ describe('Saki Product GitHub App provider', () => {
     })
     expect(candidate.fingerprint.version).toBe(1)
     expect(candidate.fingerprint.digest).toMatch(/^[0-9a-f]{64}$/)
-    expect(candidate.rateObservations).toHaveLength(20)
-    expect(candidate.rateObservations.slice(0, 2).map((observation) => {
+    expect(candidate.rateObservations).toHaveLength(19)
+    expect(candidate.rateObservations.slice(0, 1).map((observation) => {
       const { observedAt: _observedAt, ...stable } = observation
       return stable
     })).toEqual([
@@ -856,16 +856,8 @@ describe('Saki Product GitHub App provider', () => {
         remaining: 4_999,
         resetAt: 1_893_553_445_000,
       },
-      {
-        kind: 'rest',
-        resource: 'core',
-        limit: 5_000,
-        used: 1,
-        remaining: 4_999,
-        resetAt: 1_893_553_445_000,
-      },
     ])
-    expect(candidate.rateObservations.slice(2).every(observation => observation.kind === 'graphql')).toBe(true)
+    expect(candidate.rateObservations.slice(1).every(observation => observation.kind === 'graphql')).toBe(true)
 
     substituteOpenIssueTitle = true
     await expect(ctx.sakiGitHub.scan(scanRequest, new AbortController().signal)).rejects.toMatchObject({

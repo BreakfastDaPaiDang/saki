@@ -63,6 +63,15 @@ interface FoundationSnapshot {
   readonly grants: ReadonlyMap<SakiGrantId, GrantRecord>
 }
 
+interface FoundationRecords {
+  readonly controlEntries: readonly (readonly [typeof CONTROL_STATE_KEY, ControlStateRecord])[]
+  readonly installations: ReadonlyMap<SakiInstallationId, InstallationRecord>
+  readonly hosts: ReadonlyMap<SakiHostId, HostRecord>
+  readonly principals: ReadonlyMap<SakiPrincipalId, PrincipalRecord>
+  readonly grants: ReadonlyMap<SakiGrantId, GrantRecord>
+  readonly access: ReadonlyMap<SakiInstallationAccessId, InstallationAccessRecord>
+}
+
 interface HistoricalFoundationSnapshot {
   readonly control: HistoricalControlState
   readonly installations: ReadonlyMap<SakiInstallationId, HistoricalInstallation>
@@ -91,24 +100,11 @@ export function validateCurrentSakiState(
   expectedStorageGenerationId: SakiStorageGenerationId,
   expectedCreatedByBuildId: SakiBuildId,
 ): void {
-  validateStorageGenerationSeal(
-    storageGeneration,
-    expectedInstallationId,
-    expectedStorageGenerationId,
-    expectedCreatedByBuildId,
-  )
-  const foundation = validateFoundationRecords(
-    [...controlPlane.table('control_state').entries()],
-    identifiedRecords(controlPlane.table('installations'), 'Installation'),
-    identifiedRecords(controlPlane.table('hosts'), 'Host'),
-    identifiedRecords(controlPlane.table('principals'), 'Principal'),
-    identifiedRecords(controlPlane.table('grants'), 'Grant'),
-    expectedInstallationId,
-  )
-  validateAccessRecords(
-    identifiedRecords(controlPlane.table('installation_access'), 'Installation Access'),
-    foundation,
-  )
+  validateStorageGenerationSeal(storageGeneration, expectedInstallationId, expectedStorageGenerationId, expectedCreatedByBuildId)
+  const foundation = validateFoundationAndAccess(foundationRecords(
+    controlPlane.table('control_state'), controlPlane.table('installations'), controlPlane.table('hosts'),
+    controlPlane.table('principals'), controlPlane.table('grants'), controlPlane.table('installation_access'),
+  ), expectedInstallationId)
   validateProjects(controlPlane, foundation)
 }
 
@@ -148,30 +144,51 @@ export function validateSakiV3SourceState(
   expectedStorageGenerationId: SakiStorageGenerationId,
   expectedCreatedByBuildId: SakiBuildId,
 ): void {
-  validateStorageGenerationV1Seal(
-    storageGeneration,
-    expectedInstallationId,
-    expectedStorageGenerationId,
-    expectedCreatedByBuildId,
-  )
-  const foundation = validateFoundationRecords(
-    [...controlPlane.table('control_state').entries()],
-    identifiedRecords(controlPlane.table('installations'), 'Installation'),
-    identifiedRecords(controlPlane.table('hosts'), 'Host'),
-    identifiedRecords(controlPlane.table('principals'), 'Principal'),
-    identifiedRecords(controlPlane.table('grants'), 'Grant'),
-    expectedInstallationId,
-  )
-  validateAccessRecords(
-    identifiedRecords(controlPlane.table('installation_access'), 'Installation Access'),
-    foundation,
-  )
+  validateStorageGenerationV1Seal(storageGeneration, expectedInstallationId, expectedStorageGenerationId, expectedCreatedByBuildId)
+  const foundation = validateFoundationAndAccess(foundationRecords(
+    controlPlane.table('control_state'), controlPlane.table('installations'), controlPlane.table('hosts'),
+    controlPlane.table('principals'), controlPlane.table('grants'), controlPlane.table('installation_access'),
+  ), expectedInstallationId)
   validateDevelopmentProjectsDurableState(
     controlPlane.table('development_project_registry'),
     controlPlane.table('registration_intents'),
     value => value,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
+}
+
+function validateFoundationAndAccess(
+  records: FoundationRecords,
+  expectedInstallationId: SakiInstallationId,
+): FoundationSnapshot {
+  const foundation = validateFoundationRecords(
+    records.controlEntries,
+    records.installations,
+    records.hosts,
+    records.principals,
+    records.grants,
+    expectedInstallationId,
+  )
+  validateAccessRecords(records.access, foundation)
+  return foundation
+}
+
+function foundationRecords(
+  controlState: KvTable<typeof CONTROL_STATE_KEY, ControlStateRecord>,
+  installations: KvTable<SakiInstallationId, InstallationRecord>,
+  hosts: KvTable<SakiHostId, HostRecord>,
+  principals: KvTable<SakiPrincipalId, PrincipalRecord>,
+  grants: KvTable<SakiGrantId, GrantRecord>,
+  access: KvTable<SakiInstallationAccessId, InstallationAccessRecord>,
+): FoundationRecords {
+  return {
+    controlEntries: [...controlState.entries()],
+    installations: identifiedRecords(installations, 'Installation'),
+    hosts: identifiedRecords(hosts, 'Host'),
+    principals: identifiedRecords(principals, 'Principal'),
+    grants: identifiedRecords(grants, 'Grant'),
+    access: identifiedRecords(access, 'Installation Access'),
+  }
 }
 
 function validateStorageGenerationSeal(
