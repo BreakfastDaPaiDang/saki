@@ -37,7 +37,7 @@ type Workspace = Extract<SakiWireDevelopmentWorkspaceResult, { ok: true }>['proj
 
 type IndexState =
   | { phase: 'loading' }
-  | { phase: 'ready'; projection: ProjectIndex; refreshing: boolean }
+  | { phase: 'ready'; projection: ProjectIndex }
   | { phase: 'denied' | 'unavailable' | 'offline' }
 
 type WorkspaceState =
@@ -76,21 +76,18 @@ export function ProjectPage(props: ProjectPageProps) {
   const [index, setIndex] = useState<IndexState>({ phase: 'loading' })
   const [registerOpen, setRegisterOpen] = useState(false)
 
-  const loadIndex = useCallback(async (refreshing: boolean) => {
-    if (refreshing) {
-      setIndex(current => current.phase === 'ready' ? { ...current, refreshing: true } : current)
-    }
+  const loadIndex = useCallback(async () => {
     try {
       const result = await props.queryProjectIndex()
-      if (result.ok) setIndex({ phase: 'ready', projection: result.projection, refreshing: false })
+      if (result.ok) setIndex({ phase: 'ready', projection: result.projection })
       else setIndex({ phase: result.reason === 'denied' ? 'denied' : 'unavailable' })
     } catch {
-      setIndex(current => current.phase === 'ready' ? { ...current, refreshing: false } : { phase: 'offline' })
+      setIndex(current => current.phase === 'ready' ? current : { phase: 'offline' })
     }
     // The inject face is created once per apply, so the callback is stable.
   }, [props.queryProjectIndex])
 
-  useEffect(() => { void loadIndex(false) }, [loadIndex])
+  useEffect(() => { void loadIndex() }, [loadIndex])
 
   if (props.projectId !== null) {
     return (
@@ -99,8 +96,7 @@ export function ProjectPage(props: ProjectPageProps) {
         index={index}
         queryDevelopmentWorkspace={props.queryDevelopmentWorkspace}
         nav={props.nav}
-        onRefresh={() => void loadIndex(true)}
-        onRefreshIndex={() => void loadIndex(false)}
+        onRefreshIndex={() => void loadIndex()}
         t={t}
       />
     )
@@ -113,27 +109,26 @@ export function ProjectPage(props: ProjectPageProps) {
       {index.phase === 'offline' ? (
         <div className={css.notice} role="alert">
           <p>{t('workspace.offline')}</p>
-          <button type="button" className={css.secondaryAction} onClick={() => void loadIndex(false)}>{t('common.retry')}</button>
+          <button type="button" className={css.secondaryAction} onClick={() => void loadIndex()}>{t('common.retry')}</button>
         </div>
       ) : null}
       {index.phase === 'denied' ? <p className={css.notice} role="alert">{t('workspace.denied')}</p> : null}
       {index.phase === 'unavailable' ? (
         <div className={css.notice} role="alert">
           <p>{t('workspace.unavailable')}</p>
-          <button type="button" className={css.secondaryAction} onClick={() => void loadIndex(false)}>{t('common.retry')}</button>
+          <button type="button" className={css.secondaryAction} onClick={() => void loadIndex()}>{t('common.retry')}</button>
         </div>
       ) : null}
       {index.phase === 'ready' ? (
         index.projection.projects.length === 0 ? (
           <div className={css.empty}>
             <p>{t('project.selector.empty')}</p>
-            <button type="button" className={css.primaryAction} onClick={() => setRegisterOpen(true)}>
+            <button type="button" className={css.primaryAction} onClick={() => { setRegisterOpen(true) }}>
               {t('project.selector.register')}
             </button>
           </div>
         ) : (
           <>
-            {index.refreshing ? <p className={css.refreshing} role="status">{t('workspace.refreshing')}</p> : null}
             <ul className={css.projectList}>
               {index.projection.projects.map(project => (
                 <li key={project.id}>
@@ -154,7 +149,7 @@ export function ProjectPage(props: ProjectPageProps) {
               ))}
             </ul>
             <div className={css.selectorActions}>
-              <button type="button" className={css.secondaryAction} onClick={() => setRegisterOpen(true)}>
+              <button type="button" className={css.secondaryAction} onClick={() => { setRegisterOpen(true) }}>
                 {t('project.selector.register')}
               </button>
             </div>
@@ -168,13 +163,13 @@ export function ProjectPage(props: ProjectPageProps) {
           requestToken={props.access.requestToken}
           inspectProjectSelection={props.inspectProjectSelection}
           registerDevelopmentProject={props.registerDevelopmentProject}
-          onClose={() => setRegisterOpen(false)}
+          onClose={() => { setRegisterOpen(false) }}
           onRegistered={(projectId) => {
             setRegisterOpen(false)
             // The registry advanced: refresh the index before opening the
             // workspace so the query carries the current revision.
             void (async () => {
-              await loadIndex(false)
+              await loadIndex()
               props.nav.selectProject(projectId)
             })()
           }}
@@ -191,7 +186,6 @@ function WorkspaceView(props: {
   index: IndexState
   queryDevelopmentWorkspace: ProjectPageProps['queryDevelopmentWorkspace']
   nav: SakiNavigationActionsFace
-  onRefresh: () => void
   onRefreshIndex: () => void
   t: TranslateNS<typeof NS>
 }) {
@@ -291,7 +285,7 @@ function WorkspaceFacts(props: { workspace: Workspace; refreshing: boolean; t: T
           <dd>
             {binding.configurationGaps.length === 0
               ? t('workspace.facts.none')
-              : binding.configurationGaps.map(gap => t(`workspace.gap.${gap}` as Parameters<typeof t>[0])).join('；')}
+              : binding.configurationGaps.map(gap => t(`workspace.gap.${gap}`)).join('；')}
           </dd>
         </div>
       </dl>
