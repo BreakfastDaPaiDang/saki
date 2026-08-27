@@ -9,6 +9,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { SlotRegistry, createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { apply, inject } from '@breakfastdapaidang/saki-web-ui/client'
+import { apply as hostApply } from '../src/index.ts'
 
 interface NavigationSnapshot {
   surface: 'work' | 'project' | null
@@ -105,5 +106,68 @@ describe('saki-web-ui apply', () => {
     expect(slots.entries('sidebar.primary.action')).toHaveLength(0)
     expect(slots.entries('main.surface')).toHaveLength(0)
     expect(layout.requestSurface).toHaveBeenLastCalledWith(null)
+  })
+
+  it('opens the project surface from the project sidebar entry', async () => {
+    const { ctx, slots, layout } = await bench()
+    await ctx.plugin({ inject: [...inject], apply }).await()
+    const face = (slots.entries('sidebar.primary.action')[1]!.inject as () => { open: () => void })()
+    face.open()
+    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:project')
+  })
+
+  it('keeps the Saki surface when the current session switches to another session', async () => {
+    const { ctx, slots, layout, sessionsList } = await bench()
+    await ctx.plugin({ inject: [...inject], apply }).await()
+    const face = (slots.entries('sidebar.primary.action')[0]!.inject as () => {
+      open: () => void
+      hooks: { navigation: { getSnapshot: () => NavigationSnapshot } }
+    })()
+    face.open()
+    sessionsList.update((draft) => { draft.current = 'session-1' })
+    expect(face.hooks.navigation.getSnapshot().surface).toBeNull()
+    face.open()
+    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+    // A session-to-session switch is not a fallback transition.
+    sessionsList.update((draft) => { draft.current = 'session-2' })
+    expect(face.hooks.navigation.getSnapshot().surface).toBe('work')
+    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+  })
+
+  it('delegates every surface-face read to the host client with the exact arguments', async () => {
+    const { ctx, slots, layout, hostClient } = await bench()
+    await ctx.plugin({ inject: [...inject], apply }).await()
+    const face = (slots.entries('main.surface')[0]!.inject as () => {
+      readAccess: (signal?: AbortSignal) => unknown
+      exchangeBootstrap: (secret: string, signal?: AbortSignal) => unknown
+      queryProjectIndex: (signal?: AbortSignal) => unknown
+      inspectProjectSelection: (hostId: string, directoryLocator: string, signal?: AbortSignal) => unknown
+      queryDevelopmentWorkspace: (projectId: string, expectedRegistryRevision: number, signal?: AbortSignal) => unknown
+      registerDevelopmentProject: (intent: unknown, requestToken: string, signal?: AbortSignal) => unknown
+      nav: { showWork: () => void }
+    })()
+    const signal = new AbortController().signal
+    face.readAccess(signal)
+    expect(hostClient.readAccess).toHaveBeenCalledWith(signal)
+    face.exchangeBootstrap('secret-1', signal)
+    expect(hostClient.exchangeBootstrap).toHaveBeenCalledWith('secret-1', signal)
+    face.queryProjectIndex(signal)
+    expect(hostClient.queryProjectIndex).toHaveBeenCalledWith(signal)
+    face.inspectProjectSelection('host-1', 'D:\\p', signal)
+    expect(hostClient.inspectProjectSelection).toHaveBeenCalledWith('host-1', 'D:\\p', signal)
+    face.queryDevelopmentWorkspace('project-1', 3, signal)
+    expect(hostClient.queryDevelopmentWorkspace).toHaveBeenCalledWith('project-1', 3, signal)
+    const intent = { type: 'register-development-project' }
+    face.registerDevelopmentProject(intent, 'token-1', signal)
+    expect(hostClient.registerDevelopmentProject).toHaveBeenCalledWith(intent, 'token-1', signal)
+    // The face's nav is the shared navigation instance wired to the shell sync.
+    face.nav.showWork()
+    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+  })
+})
+
+describe('saki-web-ui host half', () => {
+  it('is a deliberate no-op: the browser half ships via exports["./client"]', () => {
+    expect(() => { hostApply() }).not.toThrow()
   })
 })
