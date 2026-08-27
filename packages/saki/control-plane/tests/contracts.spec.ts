@@ -6,11 +6,13 @@ import {
   SAKI_ACCESS_FIXTURES,
   SAKI_ACCESS_LIFECYCLE_FIXTURES,
   SAKI_ACCESS_RESULT_FIXTURES,
+  SAKI_BOARD_PROJECTION_FIXTURES,
   SAKI_CONTROL_RESULT_FIXTURES,
   SAKI_EMPTY_PROJECT_INDEX_FIXTURE,
   SAKI_PROJECT_PROJECTION_FIXTURES,
   SAKI_PROJECT_RECEIPT_FIXTURES,
   SAKI_PROJECT_REQUEST_FIXTURES,
+  SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES,
   SAKI_SECURITY_RECORD_FIXTURES,
 } from '../src/fixtures.ts'
 import {
@@ -106,15 +108,146 @@ describe('Saki control-plane public contracts', () => {
     const serialized = JSON.stringify([
       SAKI_ACCESS_FIXTURES,
       SAKI_ACCESS_RESULT_FIXTURES,
+      SAKI_BOARD_PROJECTION_FIXTURES,
       SAKI_CONTROL_RESULT_FIXTURES,
       SAKI_PROJECT_REQUEST_FIXTURES,
       SAKI_PROJECT_PROJECTION_FIXTURES,
       SAKI_PROJECT_RECEIPT_FIXTURES,
+      SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES,
       SAKI_ACCESS_LIFECYCLE_FIXTURES,
       SAKI_SECURITY_RECORD_FIXTURES,
     ])
     expect(serialized).not.toMatch(/bootstrapSecret|cookieDigest|requestTokenDerivation/)
+    expect(serialized).not.toMatch(/privateKey|installationToken|accessToken|-----BEGIN [A-Z ]*PRIVATE KEY-----/)
     expect(serialized).not.toMatch(/canonicalWorktreePath|canonicalGitDirectory|canonicalCommonGitDirectory/)
     expect(serialized).not.toContain('/fixture/repository')
+  })
+
+  it('publishes relational Board and Project Settings synchronization fixtures', () => {
+    expect(SAKI_PROJECT_REQUEST_FIXTURES.projectSettings).toEqual({
+      type: 'project-settings',
+      projectId: SAKI_PROJECT_PROJECTION_FIXTURES.projectIndex.projects[0]?.id,
+    })
+    expect(SAKI_PROJECT_REQUEST_FIXTURES.cachedBoard).toEqual({
+      type: 'board',
+      projectId: SAKI_PROJECT_PROJECTION_FIXTURES.projectIndex.projects[0]?.id,
+      refresh: 'cached',
+    })
+
+    const { saved, activating, activated } = SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES
+    expect([saved.synchronization.state, activating.synchronization.state, activated.synchronization.state])
+      .toEqual(['saved', 'activating', 'activated'])
+    expect(saved.synchronization).toMatchObject({
+      revision: 2,
+      active: { revision: 1 },
+      pending: {
+        revision: 2,
+        state: 'saved',
+        changedFields: ['activePollIntervalMs'],
+        configuration: { credentialRef: 'SAKI_GITHUB_APP_PRIVATE_KEY' },
+      },
+      mapping: { state: 'revalidation-required', configurationRevision: 2 },
+      scan: { state: 'scheduled', reason: 'configuration' },
+      effectiveMutationAvailability: {
+        available: false,
+        reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
+      },
+    })
+    expect(activating.synchronization).toMatchObject({
+      revision: 2,
+      active: { revision: 1 },
+      pending: { revision: 2, state: 'activating', changedFields: ['activePollIntervalMs'] },
+      mapping: { state: 'revalidation-required', configurationRevision: 2 },
+      scan: { state: 'in-flight', configurationRevision: 2 },
+      effectiveMutationAvailability: {
+        available: false,
+        reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
+      },
+    })
+    expect(activated.synchronization).toMatchObject({
+      revision: 1,
+      state: 'activated',
+      active: { revision: 1 },
+      checkpoint: { generation: 1, configurationRevision: 1 },
+      mapping: { state: 'valid', configurationRevision: 1 },
+      scan: { state: 'idle' },
+      effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+    })
+    expect(activated.synchronization.mapping).toEqual({
+      state: 'valid',
+      configurationRevision: activated.synchronization.checkpoint?.configurationRevision,
+      validatedAt: activated.synchronization.checkpoint?.confirmedAt,
+    })
+
+    const {
+      unconfigured,
+      awaitingFirstCheckpoint,
+      mappingRevalidation,
+      confirmedStaleFailure,
+    } = SAKI_BOARD_PROJECTION_FIXTURES
+    expect(unconfigured).toMatchObject({
+      state: 'unconfigured',
+      synchronizationRevision: 0,
+      mapping: { state: 'unconfigured' },
+      freshness: { state: 'unavailable' },
+      scan: { state: 'idle' },
+      effectiveMutationAvailability: {
+        available: false,
+        reasons: ['synchronization-unconfigured', 'checkpoint-unavailable', 'no-concrete-mutation'],
+      },
+    })
+    expect(awaitingFirstCheckpoint).toMatchObject({
+      state: 'awaiting-first-checkpoint',
+      synchronizationRevision: 1,
+      mapping: { state: 'revalidation-required', configurationRevision: 1 },
+      freshness: { state: 'unavailable' },
+      effectiveMutationAvailability: {
+        available: false,
+        reasons: [
+          'configuration-not-activated',
+          'mapping-revalidation-required',
+          'checkpoint-unavailable',
+          'no-concrete-mutation',
+        ],
+      },
+    })
+    expect(mappingRevalidation).toMatchObject({
+      state: 'confirmed',
+      synchronizationRevision: 2,
+      confirmed: { generation: 1, configurationRevision: 1 },
+      checkpoint: { generation: 1, configurationRevision: 1 },
+      mapping: { state: 'revalidation-required', configurationRevision: 2 },
+      effectiveMutationAvailability: {
+        available: false,
+        reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
+      },
+    })
+    expect(confirmedStaleFailure).toMatchObject({
+      state: 'confirmed',
+      synchronizationRevision: 1,
+      confirmed: { generation: 1, configurationRevision: 1 },
+      checkpoint: { generation: 1, configurationRevision: 1 },
+      mapping: { state: 'valid', configurationRevision: 1 },
+      failure: {
+        configurationRevision: 1,
+        failure: { kind: 'provider', failure: { code: 'transient-transport' } },
+      },
+      freshness: { state: 'stale' },
+      scan: { state: 'scheduled', reason: 'retry' },
+      effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+    })
+    expect(confirmedStaleFailure.confirmed?.generation)
+      .toBe(confirmedStaleFailure.checkpoint?.generation)
+    expect(confirmedStaleFailure.confirmed?.configurationRevision)
+      .toBe(confirmedStaleFailure.checkpoint?.configurationRevision)
+    if (confirmedStaleFailure.freshness.state !== 'stale') throw new Error('fixture must be stale')
+    expect(confirmedStaleFailure.freshness.staleAt)
+      .toBe(confirmedStaleFailure.freshness.confirmedAt + 30_000)
+
+    expect(SAKI_CONTROL_RESULT_FIXTURES.confirmedBoard).toEqual({
+      ok: true,
+      projection: confirmedStaleFailure,
+    })
+    expect(SAKI_CONTROL_RESULT_FIXTURES.savedProjectSettings).toEqual({ ok: true, projection: saved })
   })
 })

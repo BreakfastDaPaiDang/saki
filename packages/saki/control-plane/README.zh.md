@@ -2,7 +2,9 @@
 
 [English](README.md) | 中文
 
-Saki 私有控制面模块拥有本地 Installation 置备、Installation Access、Development Project Registry，以及可恢复的项目登记 Intent。它要求维护层先发布固定且已经验证的 `ctx.sakiInstallationState`，其中包含活跃 Installation 与 storage generation 标识，再注册 `ctx.sakiControlPlane`；调用方使用收窄的 `SakiAccess` 与 `SakiControlPlaneModule` 接口，而不访问存储表。仅供 Host 使用的 `./host` 入口把传输凭据解析为可信的进程内 `SakiAuthenticationContext`，面向浏览器的 `./fixtures` 入口则发布经过脱敏的访问、检查、登记、Project-index 与 Development-Workspace 状态。
+Saki 私有控制面模块拥有本地 Installation 置备、Installation Access、Development Project Registry、可恢复的项目登记 Intent，以及持久 GitHub Board 同步。它要求维护层先发布固定且已经验证的 `ctx.sakiInstallationState`，其中包含活跃 Installation 与 storage generation 标识，再注册 `ctx.sakiControlPlane`；调用方使用收窄的 `SakiAccess` 与 `SakiControlPlaneModule` 接口，而不访问存储表。仅供 Host 使用的 `./host` 入口把传输凭据解析为可信的进程内 `SakiAuthenticationContext`，面向浏览器的 `./fixtures` 入口则发布经过脱敏的访问、检查、登记、Project-index、Development-Workspace、Board 与 Project Settings 状态。
+
+`SAKI_BOARD_PROJECTION_FIXTURES` 覆盖未配置、等待首个 checkpoint、mapping 重验，以及 freshness 已陈旧且带有当前失败证据的已确认视图。`SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES` 覆盖已保存、激活中与已激活视图。已配置 fixture 把同步与配置 revision、已确认 Board generation、checkpoint、mapping evidence、失败与 freshness evidence、扫描状态，以及实际 mutation 不可用原因作为一组具有明确关系的示例予以保留。
 
 ## 持久记录
 
@@ -14,11 +16,17 @@ Saki 私有控制面模块拥有本地 Installation 置备、Installation Access
 
 每次被接受的检查都包含面向浏览器的安全 Git 事实和继承变更 baseline；其中明文路径与文件内容会替换为精确摘要和有界元数据。采集时间与耗时仍作为证据保留，但不会造成 baseline 身份漂移。每次执行 Workspace 列举、创建或恢复前，控制面都会把保留的规范 worktree 路径作为不可信 locator 交给新的 Host 检查，并比较所需的 Git、规范路径、Git 管理目录文件系统对象与 Workspace 证据。因此，在同一路径替换 clone 或 Git 管理目录会使 Binding 进入 `repair-required`；先前保留的 Projection 或可信路径观察本身绝不授权后续 effect。
 
+`github_project_sync` 是每个 Development Project 一条带 revision 的 aggregate。它拥有 pending 与 active GitHub 同步配置、下一条持久扫描请求或 in-flight lease、最近一次 confirmed Board 与 GitHub Sync Checkpoint、有界 failure 与 rate evidence，以及单调递增的本地扫描 generation。`github_sync_configuration_intents` 保存带 Actor 归因与准确 changed-field evidence 的幂等 field-scoped 配置变更。若 patch 解析后与当前 pending 或 active 配置相同，系统会返回 `configuration-unchanged`，而不会分配 candidate 或 synchronization revision。保存已变更配置只会使它进入 pending；只有完整且经过校验的 GitHub 扫描才会在同一次 expected-revision update 中激活配置并发布 Board 与 checkpoint。一次发布最多接纳 10,000 个 Work Item；更大的完整候选结果会记录带固定上限与观察数量的类型化容量失败，不会发布或截断。任何局部、不稳定、超限、已取消、权限、mapping、rate-limit、transport 或过期 attempt 都会保留此前 active configuration 与 confirmed publication。启动时会在 effect 前校验每项身份关系、使残留 attempt 过期并请求立即恢复。
+
+Board mapping 只使用已配置的 GitHub node id。已配置 Repository 中匹配的 Issue item 按 GitHub Project API order 排列；archived item 变为 Canceled，尚未进入 Project 的开放 Repository Issue 变为 Inbox，并带有明确的非 membership evidence。其他 Repository、pull request、draft item、redacted item、重复 Issue membership、重复派生 Work Item id 与畸形 Provider 关系绝不会进入 confirmed Board。Status field 或 option 缺失时进入可见 mapping repair，不会按名称猜测。
+
 只有经过域分离的 bootstrap 哈希摘要与 Cookie 哈希摘要会持久化。原始 bootstrap 机密值、原始 Cookie 凭据、派生请求令牌和独立的请求防伪机密值都不会进入存储。Bootstrap Challenge 与 Browser Session 条目的终态转换保持单调，且只有经过 `terminalRetentionMs` 后才会删除。
 
 ## 访问与控制操作
 
-`SakiAccess` 读取封闭的 Access Projection、交换启动器机密值，并登出当前 Browser Session。Bootstrap 与登出只能修改 Installation Access。主模块暴露稳定的 Installation 与 Host 身份标识；只读的项目选择检查、Project-index 与 Development-Workspace 查询；持久化的 `register-development-project` Intent；以及提交后的 Projection 失效通知。仅写入 Intent 阶段不会使 Project 视图失效；Registry 提交会让索引与详情视图各失效一次。一个失效通知 listener 失败时，系统只发出固定且不含凭据的诊断，不会阻止后续 listener 运行；每项注册仍可独立 dispose（资源释放）。
+`SakiAccess` 读取封闭的 Access Projection、交换启动器机密值，并登出当前 Browser Session。Bootstrap 与登出只能修改 Installation Access。主模块暴露稳定的 Installation 与 Host 身份标识；只读的项目选择检查、Project-index、Development-Workspace、Board 与 Project Settings 查询；持久化的 `register-development-project` 与 `configure-github-synchronization` Intent；以及提交后的 Projection 失效通知。Cached Board query 是纯持久读取。Interactive query 会持久请求一条高优先级扫描，并在不等待 GitHub 的情况下返回当前 Projection。仅写入 Intent 阶段不会使 Project 视图失效；Registry 或同步更新提交后会使受影响视图失效。一个失效通知 listener 失败时，系统只发出固定且不含凭据的诊断，不会阻止后续 listener 运行；每项注册仍可独立 dispose（资源释放）。
+
+该模块可选消费 `ctx.sakiGitHub`。没有此 Provider 的 composition 仍能加载，并暴露未配置或缓存状态。Provider 存在时，一个内含 Consumer 会按 interactive-first 顺序处理持久 attempt，只通过 aggregate owner 发布完整候选结果，在 dispose 时取消活跃工作并等待完全停稳。同一 Project 的每次 scan write 都通过同一条逐 Project operation tail 串行，因此其原子存储更新只有一个 writer。逐 Project 同步配置拥有 active 与 background polling interval 及 background rate reserve；控制面插件只拥有 attempt lease lifetime。完整发布协议参见 [ADR 0013](../../../docs/adr/0013-polling-first-staged-github-synchronization.zh.md)。
 
 每个受保护操作都会重新解析状态为 `active` 的 Browser Session，并检查其 storage generation id 是否等于 `ctx.sakiInstallationState.storageGenerationId`，同时检查 Principal 生命周期，以及当前 Grant 的 action 与 scope。保留的登记 Actor 可以为历史归因引用更早的合法 storage generation，但只有维护层选择的活跃 storage generation 拥有当前权限。Intent 接受时保留的 Actor 修订号是不可变归因，而不是授权快照：Principal 或 Grant 的良性修订变化不会阻止恢复；退役、storage generation 替换、scope 收窄或撤销会阻止尚未开始的 effect。一旦 Workspace dispatch 可能已经完成，恢复流程可以接纳其精确的持久 Workspace 身份，而不会启动第二次 effect。
 
@@ -35,6 +43,7 @@ Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机
 | `sessionTtlMs` | 12 小时 | Browser Session 生命周期 |
 | `terminalRetentionMs` | 7 天 | 清理终态记录前的最短保留期 |
 | `cookieName` | `saki_session` | 仅供 Host 提取 Cookie 的名称 |
+| `githubScanAttemptTtlMs` | 5 分钟 | 一次持久完整扫描 lease 的最长生命周期 |
 
 ## 模型体验
 
@@ -47,5 +56,5 @@ Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机
 ## 已知限制与暂缓事项
 
 - **只支持一个本地 Host Operator**：尚未实现 GitHub 登录、组织成员关系、多用户、远程 Host 或非回环部署。
-- **只支持登记**：尚未实现 Resource Binding 重绑定与退役、Execution Lease、后继 Session、仓库自动变更和人工接管。预期 revision CAS 的失败方会保留已创建或接纳的可复用 DSH Workspace，而不创建 Saki Project 或 Resource Binding；控制面不会删除本次登记可能并非独占的 Workspace。
+- **只支持登记与只读 GitHub 同步**：尚未实现 Resource Binding 重绑定与退役、Execution Lease、后继 Session、仓库或 Board 自动变更、mapping repair 和人工接管。预期 revision CAS 的失败方会保留已创建或接纳的可复用 DSH Workspace，而不创建 Saki Project 或 Resource Binding；控制面不会删除本次登记可能并非独占的 Workspace。因此即使已经确认一次扫描，Board mutation availability 仍明确为 unavailable。
 - **只支持启动器恢复**：本地访问恢复需要重新启动具备权限的启动器，不提供只依赖浏览器的凭据恢复流程。

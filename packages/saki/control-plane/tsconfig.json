@@ -24,10 +24,16 @@
       "path": "../execution"
     },
     {
+      "path": "../github"
+    },
+    {
       "path": "../../runtime-diagnostics/invariants"
     },
     {
       "path": "../../storage/storage-domain"
+    },
+    {
+      "path": "../../util/timeout"
     },
     {
       "path": "../../util/brand"

@@ -8,7 +8,9 @@ Saki-specific product semantics live under `packages/saki/<pkg>` and use the `@b
 | --- | --- | --- |
 | [`execution/`](execution/README.md) | Host-neutral read-only project-selection inspection Service Definition | `sakiHostExecution` |
 | [`execution-local/`](execution-local/README.md) | Local filesystem, Git, subprocess, and Workspace-index Service Provider for Host inspection | provides `sakiHostExecution` |
-| [`control-plane/`](control-plane/README.md) | Installation provisioning, local Access authority, durable Project registration and Registry, and protected product Projections | `sakiControlPlane` |
+| [`github/`](github/README.md) | Provider-neutral GitHub reads, complete Project-board scans, raw facts, closed failures, and Provider contract | `sakiGitHub` |
+| [`github-app/`](github-app/README.md) | Saki Product GitHub App Service Provider with operation-scoped read tokens and bounded complete scans | provides `sakiGitHub` |
+| [`control-plane/`](control-plane/README.md) | Installation provisioning, local Access authority, durable Project registration, atomic GitHub Board publication, and protected product Projections | `sakiControlPlane` |
 | [`host-api/`](host-api/README.md) | Dual-face `/saki` Host and browser transport adapter | `sakiHostClient` on the browser face |
 | [`installation-maintenance/`](installation-maintenance/README.md) | Installation-wide lease, manifest-selected state generations, verified Recovery Backups, and offline forward upgrades | — |
 | [`bundle/`](bundle/README.md) | Saki composition root and repository-local Host launcher | mounts the control plane, transport, and `saki-readiness` |

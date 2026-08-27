@@ -25,7 +25,13 @@ describe('Saki bundle package', () => {
       { schema: entryListSchema },
     )
     const insert = (parsed as Array<{
-      insert: Array<{ id: string; name: string; config?: unknown; inject?: string[] }>
+      insert: Array<{
+        id: string
+        name: string
+        config?: unknown
+        inject?: string[]
+        disabled?: unknown
+      }>
     }>)[0]!.insert
     expect(insert.map(entry => [entry.id, entry.name])).toEqual([
       ['storage', '@deepseek-ai/dsh-storage'],
@@ -38,6 +44,8 @@ describe('Saki bundle package', () => {
       ['fs-local', '@deepseek-ai/dsh-fs-local'],
       ['subprocess', '@deepseek-ai/dsh-subprocess-local'],
       ['saki-execution-local', '@breakfastdapaidang/saki-execution-local'],
+      ['saki-credentials', '@deepseek-ai/dsh-credentials-windows-dpapi'],
+      ['saki-github-app', '@breakfastdapaidang/saki-github-app'],
       ['saki-webserver', '@deepseek-ai/dsh-host-webserver'],
       ['saki-connection', '@deepseek-ai/dsh-client-connection'],
       ['saki-control-plane', '@breakfastdapaidang/saki-control-plane'],
@@ -61,6 +69,13 @@ describe('Saki bundle package', () => {
     })
     expect(insert.find(entry => entry.id === 'session-persistence-jsonl')?.config).toEqual({
       root: { __jsExpr: "dshHomePath('sessions')" },
+    })
+    expect(insert.find(entry => entry.id === 'saki-credentials')?.disabled).toEqual({
+      __jsExpr: "process.platform !== 'win32'",
+    })
+    expect(insert.find(entry => entry.id === 'saki-github-app')).toMatchObject({
+      inject: ['credentials'],
+      disabled: { __jsExpr: "process.platform !== 'win32'" },
     })
     expect(insert.find(entry => entry.id === 'saki-webserver')?.config).toEqual({
       host: '127.0.0.1',

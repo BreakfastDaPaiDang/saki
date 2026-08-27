@@ -2,7 +2,18 @@ import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { SakiBuildId } from '@breakfastdapaidang/saki-control-plane'
+import { Context } from '@deepseek-ai/cordis'
+import Storage from '@deepseek-ai/dsh-storage'
+import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
+import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
+import {
+  sakiControlPlaneMigrationPlan,
+  sakiControlPlaneV3DomainSpec,
+  sakiStorageGenerationV1DomainSpec,
+  STORAGE_GENERATION_KEY,
+  storageGenerationV1SealRecordSchema,
+  type SakiBuildId,
+} from '@breakfastdapaidang/saki-control-plane'
 import {
   readActiveOperation,
   readClosedCurrentSakiState,
@@ -11,6 +22,7 @@ import {
   backupSakiInstallation,
   createSakiMaintenanceOperations,
   generationManifestReference,
+  LEGACY_B03_BUILD_ID,
   renderGenerationManifest,
   renderInstallationManifest,
   upgradeSakiInstallation,
@@ -27,6 +39,7 @@ import {
 } from './b03-fixture.ts'
 
 const roots: string[] = []
+const V3_SOURCE_BUILD_ID = 'saki-build-0.1.0-b18-test' as SakiBuildId
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(async (root) => {
@@ -44,10 +57,78 @@ async function fixture(): Promise<{ readonly options: SakiMaintenanceOptions; re
     options: {
       installationRoot,
       legacyDatabasePath: legacy,
-      currentBuildId: 'saki-build-0.1.0-b18-test' as SakiBuildId,
-      legacyBuildId: 'saki-build-0.1.0-b03-test' as SakiBuildId,
+      currentBuildId: 'saki-build-0.1.0-b05-test' as SakiBuildId,
+      legacyBuildId: LEGACY_B03_BUILD_ID,
     },
   }
+}
+
+async function publishSelectedV3(options: SakiMaintenanceOptions): Promise<string> {
+  const signal = new AbortController().signal
+  const historical = await readClosedSakiV2State(options.legacyDatabasePath, signal)
+  const controlSnapshot = sakiControlPlaneMigrationPlan.steps[0]!.migrate(
+    historical.controlPlaneSnapshot,
+  )
+  const directory = resolve(
+    options.installationRoot,
+    'generations',
+    B03_STORAGE_GENERATION_ID,
+  )
+  await mkdir(directory, { recursive: true })
+  const databasePath = join(directory, 'state.sqlite')
+  const context = new Context()
+  await context.plugin(Storage)
+  const backend = new SqliteStorageBackend({ path: databasePath, journalMode: 'delete' })
+  context.storage.backend.register('source-v3', backend)
+  const facility = new DomainFacility(context, { backend: 'source-v3' })
+  try {
+    await facility.materialize(
+      sakiControlPlaneV3DomainSpec,
+      controlSnapshot,
+      { targetBackend: 'source-v3', signal },
+    )
+    await facility.materialize(
+      sakiStorageGenerationV1DomainSpec,
+      {
+        tables: {
+          storage_generation: {
+            [STORAGE_GENERATION_KEY]: storageGenerationV1SealRecordSchema.parse({
+              schemaVersion: 1,
+              installationId: B03_INSTALLATION_ID,
+              storageGenerationId: B03_STORAGE_GENERATION_ID,
+              stateVersion: 3,
+              createdByBuildId: V3_SOURCE_BUILD_ID,
+            }),
+          },
+        },
+        global: null,
+      },
+      { targetBackend: 'source-v3', signal },
+    )
+  } finally {
+    await facility.closeAll()
+    await backend.close()
+    await context.fiber.dispose()
+  }
+  const generationBytes = renderGenerationManifest(
+    B03_INSTALLATION_ID,
+    B03_STORAGE_GENERATION_ID,
+    3,
+    V3_SOURCE_BUILD_ID,
+  )
+  await writeFile(join(directory, 'generation.json'), generationBytes)
+  const generation = JSON.parse(generationBytes.toString('utf8')) as Parameters<
+    typeof renderInstallationManifest
+  >[1]
+  await writeFile(
+    join(options.installationRoot, 'installation.json'),
+    renderInstallationManifest(
+      'ready',
+      generation,
+      generationManifestReference(B03_STORAGE_GENERATION_ID, generationBytes),
+    ),
+  )
+  return databasePath
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -158,12 +239,12 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 3 })
+    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 4 })
     expect(await readFile(legacy)).toEqual(before)
     expect(result.selected.installation).toMatchObject({
       phase: 'ready',
       installationId: B03_INSTALLATION_ID,
-      stateVersion: 3,
+      stateVersion: 4,
     })
     const current = await readClosedCurrentSakiState(
       result.selected.databasePath,
@@ -225,13 +306,13 @@ describe('offline Saki Installation operations', () => {
       .get('development-project-registry')).toEqual(registry)
     await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
     await expect(readInstallationManifest(options.installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 3 },
+      value: { phase: 'ready', stateVersion: 4 },
     })
 
     const currentBackup = await backupSakiInstallation(options, signal)
     expect(currentBackup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
-      stateVersion: 3,
+      stateVersion: 4,
       sourceBuildId: options.currentBuildId,
     })
     await expect(upgradeSakiInstallation(options, signal)).rejects.toMatchObject({
@@ -255,7 +336,7 @@ describe('offline Saki Installation operations', () => {
     await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
   })
 
-  it('rejects non-absolute maintenance paths before taking the Installation lease', async () => {
+  it('rejects invalid maintenance options before taking the Installation lease', async () => {
     const { options } = await fixture()
     const signal = new AbortController().signal
 
@@ -267,6 +348,10 @@ describe('offline Saki Installation operations', () => {
       ...options,
       legacyDatabasePath: 'control.sqlite',
     }, signal)).rejects.toThrow('legacy Saki database path must be an absolute filesystem path')
+    await expect(backupSakiInstallation({
+      ...options,
+      legacyBuildId: 'saki-build-not-b03' as SakiBuildId,
+    }, signal)).rejects.toThrow(`legacy Saki build provenance must be '${LEGACY_B03_BUILD_ID}'`)
   })
 
   it('rejects maintenance when neither an Installation manifest nor B03 source exists', async () => {
@@ -289,7 +374,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, new AbortController().signal)
 
-    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 3 })
+    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 4 })
     expect(result.backup.manifest).toMatchObject({
       stateVersion: 2,
       sourceBuildId: options.legacyBuildId,
@@ -298,7 +383,37 @@ describe('offline Saki Installation operations', () => {
     await expect(readInstallationManifest(
       options.installationRoot,
       new AbortController().signal,
-    )).resolves.toMatchObject({ value: { phase: 'ready', stateVersion: 3 } })
+    )).resolves.toMatchObject({ value: { phase: 'ready', stateVersion: 4 } })
+  })
+
+  it('upgrades a manifest-selected exact v3 generation without mutating it', async () => {
+    const { options } = await fixture()
+    const selectedDatabasePath = await publishSelectedV3(options)
+    const before = await readFile(selectedDatabasePath)
+    const signal = new AbortController().signal
+
+    const result = await upgradeSakiInstallation(options, signal)
+
+    expect(result).toMatchObject({ sourceVersion: 3, targetVersion: 4 })
+    expect(result.backup.manifest).toMatchObject({
+      installationId: B03_INSTALLATION_ID,
+      storageGenerationId: B03_STORAGE_GENERATION_ID,
+      stateVersion: 3,
+      sourceBuildId: V3_SOURCE_BUILD_ID,
+    })
+    expect(await readFile(selectedDatabasePath)).toEqual(before)
+    const current = await readClosedCurrentSakiState(
+      result.selected.databasePath,
+      {
+        installationId: result.selected.generation.installationId,
+        storageGenerationId: result.selected.generation.storageGenerationId,
+        createdByBuildId: result.selected.generation.createdByBuildId,
+      },
+      signal,
+    )
+    expect(current.controlPlane.table('github_project_sync').size).toBe(0)
+    expect(current.controlPlane.table('github_sync_configuration_intents').size).toBe(0)
+    await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
   })
 
   it('requires a ready selected Installation before offline maintenance', async () => {

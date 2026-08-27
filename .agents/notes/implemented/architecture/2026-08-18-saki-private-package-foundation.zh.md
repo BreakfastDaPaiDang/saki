@@ -16,13 +16,13 @@ Status: implemented
 
 **让工程检查不依赖包族。** 共享包规则、源码平面映射、项目引用、许可证与不变式检查、生成目录、模块图和组合包解析均接受两个已分类产品包族。[包治理参考](../../../../docs/saki/package-governance.zh.md)负责完整的当前包与发布规则。
 
-**让组合证据随产品切片落地。** `@breakfastdapaidang/saki-bundle` 拥有空 Cordis 基础配置、一层补丁与仓库本地启动器。该补丁只挂载已经实现的产品切片和稳定的就绪配置项。当前组合把 JSON 作为默认存储后端，把 Saki 控制面 domain 路由到 SQLite，并挂载 Session 持久化、Workspace、本地文件系统与子进程提供方、Local Host 执行提供方、回环 Host 传输、`saki-control-plane` 和 `saki-host-api`。启动器只在 `boot()` 完成配置项激活审计后输出就绪记录，并在 Saki Host 生命周期内持续运行；报告失败会先对应用执行 dispose（资源释放），再进入启动器失败路径。后续包随可独立验证的产品切片加入；规划中的名称不足以支持提前创建占位目录。
+**让组合证据随产品切片落地。** `@breakfastdapaidang/saki-bundle` 拥有空 Cordis 基础配置、一层补丁与仓库本地启动器。该补丁只挂载已经实现的产品切片和稳定的就绪配置项。当前组合把 JSON 作为默认存储后端，把 Saki 控制面与 Installation State Generation domain 路由到 SQLite，并挂载 Session 持久化、Workspace、本地文件系统与子进程提供方、Local Host 执行提供方、仅在 Windows 启用的 DPAPI 凭据提供方与 Product GitHub App、回环 Host 传输、`saki-control-plane` 和 `saki-host-api`。启动器会在 boot 前准备选定的 Installation State Generation，只在 `boot()` 完成配置项激活审计后输出就绪记录，并在 Saki Host 生命周期内持续运行；报告失败会先对应用执行 dispose（资源释放），再进入启动器失败路径。后续包随可独立验证的产品切片加入；规划中的名称不足以支持提前创建占位目录。
 
 ## 后果
 
 `pnpm run saki` 证明全新检出可以在没有凭据的情况下解析并运行 Saki 源码，构建后的可执行文件证明普通 Node 能解析产物。该命令仍是仓库入口，与机器本地 Windows 包装脚本和代理引导分离。生成的包文档使用无冲突的 `saki/<pkg>` 图节点，宽泛文件扫描也不能把 Saki 私有包的 manifest（元数据清单）变成 DSH 发布成员。
 
-该组合包包含本地身份与访问，以及已有目录检查和首次 Project 登记切片，但仍不包含 GitHub、agent（智能体）、模型或渲染后的 Web 行为。每个后续切片判断其职责是 DSH 组中的可复用 harness 能力，还是 `packages/saki/` 下的 Saki 产品语义；已接受架构和规划中的包名本身都不会创建包。
+该组合包包含本地身份与访问、Installation State Generation 维护、已有目录检查与 Project 登记，以及带 confirmed Board 的只读 GitHub 同步。在 Windows 上，Product GitHub App 通过 DPAPI 凭据提供方解析 private key。组合包仍不包含 agent（智能体）、模型或渲染后的 Web 行为。每个后续切片判断其职责是 DSH 组中的可复用 harness 能力，还是 `packages/saki/` 下的 Saki 产品语义；已接受架构和规划中的包名本身都不会创建包。
 
 ## 已考虑的替代方案
 

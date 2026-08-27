@@ -26,9 +26,9 @@ Windows 提供方报告来源 `windows-dpapi-current-user` 和 Credential Protec
 
 只有有特权的 Host 消费方能获得 `ResolvedCredential.value`。该提供方不注册包含凭据材料的 Agent 工具、Projection、会话事件、导出记录或模型上下文。其密文文档属于 Host 本地数据。通用包不实现进程崩溃收集、可携带的 Installation Export 或 Host 更换备份；Saki 组合层拥有这些场景的排除规则。`local-user-trust` 这一名称刻意表明其安全限制：任何有意以相同 Windows 用户身份运行的进程都可能对复制的密文调用 DPAPI。
 
-## 暂缓的 Saki 组合
+## Saki 组合
 
-目前没有 Saki 组合包、Provider Account Profile 实现、授权完成流程或派发准入消费方装配该提供方。因此，这项通用能力并不声称 Codex、Kimi 或 Product GitHub App 凭据已经要求 `local-user-trust`，不声称 Host 替换已经创建 Intervention Request，也不声称产品界面已经公开凭据健康状态。Saki 0.1.0 规格继续保留这些产品义务。后续高价值消费方只有在自身操作边界调用 `resolveRequired`，并在凭据提供方之外只保存引用与安全观测时，才满足这项决策。
+在 Windows 上，`@breakfastdapaidang/saki-bundle` 会装配该提供方与 Product GitHub App。GitHub 同步配置只持久化 private key 的 `CredentialRef`；Product App 的每次读取与扫描都会在认证前调用 `resolveRequired(ref, 'local-user-trust')`，并把解析后的值限制在该 operation 内。值缺失或 Credential Protection Level 不同时，会产生有界 `auth-unavailable` 失败。目前仍没有 Provider Account Profile 实现、Codex 或 Kimi 授权完成流程及派发准入消费方装配该提供方；Host 替换也不会创建 Intervention Request，产品界面也不会暴露凭据健康状态。Saki 0.1.0 的这些剩余义务继续遵守相同的 operation 边界与安全观测要求。
 
 组织共享同样不属于本次实现。`local-user-trust` 不足以保护供其他组织成员使用的 Host 账号；该能力需要运行于独立 OS 安全身份下的 Credential Broker 或外部机密管理器、经过认证的操作路径，以及证明 Agent 执行无法恢复原始值的对抗性验证。
 

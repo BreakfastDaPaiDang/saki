@@ -57,6 +57,39 @@ export interface Config {
 
 Source: [`packages/saki/execution-local/src/index.ts:54`](../packages/saki/execution-local/src/index.ts)
 
+<a id="breakfastdapaidangsaki-github-app"></a>
+
+## `@breakfastdapaidang/saki-github-app`
+
+Requires: `credentials`
+
+```ts config-catalog
+/** Complete provider configuration after Cordis applies defaults. */
+export type ResolvedConfig = Required<Config>
+
+/** Validated Product App request and scan resource limits. */
+export interface Config {
+  /** Items requested per GitHub connection page; defaults to 50 within 1..100. */
+  pageSize?: number
+  /** Pages traversed for one connection; defaults to 1,000 within 1..10,000. */
+  maxPages?: number
+  /** Project items or open Issues admitted per collection; defaults to 20,000 within 1..100,000. */
+  maxItems?: number
+  /** Item field values admitted across one scan; defaults to 100,000 within 1..1,000,000. */
+  maxFieldValues?: number
+  /** Bytes admitted from one HTTP response; defaults to 16 MiB within the safe-integer range. */
+  maxResponseBytes?: number
+  /** Wall-clock milliseconds per GitHub request; defaults to 30,000 within the timer range. */
+  requestTimeoutMs?: number
+  /** Annotated-tag objects admitted by one recursive peel; defaults to 32 within 1..100. */
+  tagPeelDepth?: number
+  /** Complete Project scans active across installations; defaults to 2 within 1..1,000. */
+  maxConcurrentScans?: number
+}
+```
+
+Source: [`packages/saki/github-app/src/index.ts:57`](../packages/saki/github-app/src/index.ts)
+
 <a id="deepseek-aidsh-acp"></a>
 
 ## `@deepseek-ai/dsh-acp`
@@ -3363,6 +3396,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 Abstract service classes — a deployment loads a concrete implementation package instead ([capability seams](../.agents/notes/implemented/architecture/2026-06-13-capability-seams.md)).
 
 - `@breakfastdapaidang/saki-execution` — abstract `SakiHostExecution` ([`packages/saki/execution/src/index.ts`](../packages/saki/execution/src/index.ts))
+- `@breakfastdapaidang/saki-github` — abstract `SakiGitHub` ([`packages/saki/github/src/index.ts`](../packages/saki/github/src/index.ts))
 - `@deepseek-ai/dsh-attachment` — abstract `AttachmentStore` ([`packages/attachment/attachment/src/index.ts`](../packages/attachment/attachment/src/index.ts))
 - `@deepseek-ai/dsh-code-runtime` — abstract `CodeRuntime` ([`packages/code-runtime/code-runtime/src/index.ts`](../packages/code-runtime/code-runtime/src/index.ts))
 - `@deepseek-ai/dsh-compaction` — abstract `CompactionEngine` ([`packages/compaction/compaction/src/index.ts`](../packages/compaction/compaction/src/index.ts))

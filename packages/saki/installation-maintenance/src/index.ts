@@ -19,12 +19,14 @@ export {
   readClosedProvisioningSakiState,
   readClosedCurrentSakiState,
   readClosedSakiV2State,
+  readClosedSakiV3State,
 } from './closed-state.ts'
 export type {
   ClosedCurrentSakiState,
   ClosedCurrentSakiStateExpectation,
   ClosedProvisioningSakiState,
   ClosedSakiV2State,
+  ClosedSakiV3State,
 } from './closed-state.ts'
 export {
   createDurableFileWriter,
@@ -81,7 +83,7 @@ export {
 } from './operation-files.ts'
 export type { OperationFileEffects } from './operation-files.ts'
 export { recoverActiveSakiOperation } from './recovery.ts'
-export { materializeFreshSakiGeneration, migrateSakiV2Generation } from './generation.ts'
+export { materializeFreshSakiGeneration, migrateSakiGeneration } from './generation.ts'
 export type { NewSakiGenerationIdentity } from './generation.ts'
 export { publishSakiGenerationCandidate } from './candidate.ts'
 export type {

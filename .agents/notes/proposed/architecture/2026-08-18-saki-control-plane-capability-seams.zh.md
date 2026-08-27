@@ -16,7 +16,7 @@ Saki 需要一个位置协调 Work Item、Work Session、Agent Run、模型账�
 
 0.1.0 只增加四个 Saki capability seam：Host Execution、GitHub、Model Account 和 Image Generation。它们共享 Control Intent identity、稳定外部 reference、provider-neutral error category、cancellation signal 和 reconciliation 义务，但不实现万能 adapter 基类。它们的授权、取消、排队、自然身份和结果观测语义差异足够大，需要精确的 capability-specific Interface。
 
-已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.zh.md)提供只读 Host Execution definition、Local Host Provider 与首个控制面 Consumer 操作。本 Agent Note 保持 proposed，因为 Host 修改操作以及 GitHub、Model Account 与 Image Generation seam 尚未实现。
+已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.zh.md)提供只读 Host Execution definition、Local Host Provider 与首个控制面 Consumer 操作。已实现的[polling-first GitHub 同步](../../implemented/architecture/2026-08-18-saki-polling-first-github-synchronization.zh.md)提供 GitHub Service Definition、Product App Provider、可恢复 polling Consumer、同步配置与只读 Board Projection，其 mutation declaration 保持为空。本 Agent Note 保持 proposed，因为 Host mutation operation、GitHub 写入与 mapping repair，以及 Model Account 和 Image Generation seam 尚未实现。
 
 Workspace、Session、Agent、LLM、compaction、credential reference、attachment、live job、skill、file、shell、terminal、sandbox 与 tool 直接使用现有 DSH Service。除非产品需要 DSH Interface 无法表达的行为，否则不增加透传包装层。普遍可复用的缺失行为，应先进入上游或通用 DSH Provider，再考虑成为 Saki 专用能力。
 
@@ -57,4 +57,4 @@ Host transport 只暴露公共 `SakiAccess` 与 `SakiControlPlane` 操作。Host
 
 ## 风险
 
-如果不约束私有 module 的所有权与依赖方向，模块化单体仍可能退化为无差别大 package。四个 seam 在所有 provider 协议验证前设计，因此 contract suite 必须推动接口细化，同时避免 provider 特例泄漏进产品类型。Saki 命名空间还跨越了仓库中“所有 package 都是官方 `@deepseek-ai/dsh-*`”的现有假设；遗漏任何治理或发布检查，都可能导致本地与 CI 行为不一致。单一活动写入者让 Host 迁移成为明确运维步骤，但放弃了控制面自动 failover；generation 切换增加维护与磁盘成本；在出现真正进程沙箱前，每个已安装第三方 plugin 都会加入 Host 信任边界。
+如果不约束私有 module 的所有权与依赖方向，模块化单体仍可能退化为无差别大 package。剩余 Host 与 GitHub mutation 协议以及 Model Account 与 Image Generation seam 的 contract suite 必须推动接口细化，同时避免 provider 特例泄漏进产品类型。Saki 命名空间还跨越了仓库中“所有 package 都是官方 `@deepseek-ai/dsh-*`”的现有假设；遗漏任何治理或发布检查，都可能导致本地与 CI 行为不一致。单一活动写入者让 Host 迁移成为明确运维步骤，但放弃了控制面自动 failover；generation 切换增加维护与磁盘成本；在出现真正进程沙箱前，每个已安装第三方 plugin 都会加入 Host 信任边界。

@@ -7,10 +7,12 @@ import { z } from 'zod'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import { parseLosslessJsonValue } from '@deepseek-ai/dsh-storage'
 import {
+  sakiBuildIdSchema,
   sakiInstallationIdSchema,
   sakiStorageGenerationIdSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import type {
+  SakiBuildId,
   SakiInstallationId,
   SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
@@ -175,6 +177,9 @@ export const backupOperationJournalSchema = z.object({
 export const upgradeOperationJournalSchema = z.object({
   ...operationJournalSharedShape,
   kind: z.literal('upgrade'),
+  sourceStateVersion: z.union([z.literal(2), z.literal(3)]),
+  sourceStorageGenerationId: sakiStorageGenerationIdSchema,
+  sourceBuildId: sakiBuildIdSchema,
   backupId: sakiRecoveryBackupIdSchema,
   backup: backupDestinationSchema,
   candidateStorageGenerationId: sakiStorageGenerationIdSchema,
@@ -182,6 +187,13 @@ export const upgradeOperationJournalSchema = z.object({
 }).strict().superRefine((value, context) => {
   refineBackupDestination(value, context)
   refineCandidateDestination(value, context)
+  if (value.sourceStorageGenerationId === value.candidateStorageGenerationId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['candidateStorageGenerationId'],
+      message: 'upgrade candidate must use a fresh physical generation identity',
+    })
+  }
 })
 
 /** Strict discriminated immutable journal format for every maintenance operation. */
@@ -224,6 +236,12 @@ export interface UpgradeOperationJournalRequest {
   readonly operationId: SakiMaintenanceOperationId
   /** Installation retained by backup and candidate. */
   readonly installationId: SakiInstallationId
+  /** Exact retained state format that the Recovery Backup must preserve. */
+  readonly sourceStateVersion: 2 | 3
+  /** Physical source generation that the Recovery Backup must preserve. */
+  readonly sourceStorageGenerationId: SakiStorageGenerationId
+  /** Source-build provenance that the Recovery Backup must repeat. */
+  readonly sourceBuildId: SakiBuildId
   /** Required pre-upgrade Recovery Backup identity. */
   readonly backupId: SakiRecoveryBackupId
   /** New physical generation identity. */

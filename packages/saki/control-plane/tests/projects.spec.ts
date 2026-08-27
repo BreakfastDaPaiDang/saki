@@ -18,6 +18,19 @@ import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import LocalSakiHostExecution from '@breakfastdapaidang/saki-execution-local'
 import {
+  computeGitHubProjectBoardFingerprint,
+  GitHubProviderError,
+  githubAppId,
+  SakiGitHub,
+  type GitHubIssueId,
+  type GitHubReadMap,
+  type GitHubProjectBoardScanCandidate,
+  type GitHubProjectBoardFingerprintSource,
+  type GitHubProjectItemId,
+  type GitHubProjectOptionId,
+  type GitHubScanMap,
+} from '@breakfastdapaidang/saki-github'
+import {
   canonicalDigest,
   computeProjectInspectionFingerprint,
 } from '@breakfastdapaidang/saki-execution'
@@ -31,21 +44,28 @@ import type {
 } from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import SakiControlPlane, {
+  type ConfigureGitHubSynchronizationIntent,
+  type GitHubSynchronizationConfiguration,
   type RegisterDevelopmentProjectIntent,
   type SakiAuthenticationContext,
+  type SakiBoardProjection,
   type SakiControlIntentId,
   type SakiControlPlaneModule,
+  type SakiDevelopmentProjectId,
 } from '../src/index.ts'
 import { SAKI_PROJECT_PROJECTION_FIXTURES } from '../src/fixtures.ts'
 import { resolveSakiAuthentication, takeSakiCookieHeader } from '../src/host.ts'
 import { DevelopmentProjects } from '../src/projects.ts'
+import { GitHubProjectSynchronization } from '../src/github-sync.ts'
 import {
+  githubSynchronizationConfigurationIntentRecordSchema,
   registrationIntentRecordSchema,
   resourceBindingRecordSchema,
   sakiControlPlaneDomainSpec,
 } from '../src/spec.ts'
 import type {
   DevelopmentProjectRegistryRecord,
+  GrantRecord,
   RegistrationIntentRecord,
   ResourceBindingRecord,
 } from '../src/spec.ts'
@@ -72,6 +92,35 @@ interface DurablePaths {
   readonly root: string
   readonly json: string
   readonly sqlite: string
+}
+
+class FakeBoardGitHub extends SakiGitHub {
+  readonly requests: GitHubScanMap['project-board']['request'][] = []
+  nextFailure: Error | undefined
+
+  constructor(ctx: Context, private readonly candidate: GitHubProjectBoardScanCandidate) {
+    super(ctx)
+  }
+
+  override async read<K extends keyof GitHubReadMap>(
+    request: GitHubReadMap[K]['request'],
+  ): Promise<GitHubReadMap[K]['result']> {
+    throw new GitHubProviderError({ code: 'not-found', resource: request.kind })
+  }
+
+  override async scan<K extends keyof GitHubScanMap>(
+    request: GitHubScanMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<GitHubScanMap[K]['result']> {
+    signal.throwIfAborted()
+    this.requests.push(structuredClone(request))
+    if (this.nextFailure !== undefined) {
+      const failure = this.nextFailure
+      this.nextFailure = undefined
+      throw failure
+    }
+    return structuredClone(this.candidate)
+  }
 }
 
 interface Harness {
@@ -218,6 +267,48 @@ function liveSakiDomain(ctx: Context): SakiDomain {
   return domain as unknown as SakiDomain
 }
 
+async function setGrantActions(
+  harness: Harness,
+  actions: readonly GrantRecord['actions'][number][],
+): Promise<void> {
+  const table = liveSakiDomain(harness.ctx).table('grants')
+  const entries = [...table.entries()]
+  if (entries.length !== 1 || entries[0] === undefined) throw new Error('Grant fixture is not a singleton')
+  await table.update(entries[0][0], current => ({
+    ...current,
+    revision: current.revision + 1,
+    actions: [...actions],
+  }))
+}
+
+function githubSynchronization(harness: Harness): GitHubProjectSynchronization {
+  const domain = liveSakiDomain(harness.ctx)
+  return new GitHubProjectSynchronization({
+    syncTable: domain.table('github_project_sync'),
+    intentTable: domain.table('github_sync_configuration_intents'),
+    installationId: harness.control.identity().installationId,
+    projectExists: () => true,
+    authorityCurrent: () => true,
+    validateActorReference: () => {},
+  })
+}
+
+async function waitForConfirmedBoard(
+  harness: Harness,
+  projectId: SakiDevelopmentProjectId,
+): Promise<SakiBoardProjection> {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const result = await harness.control.query<'board'>(harness.authentication, {
+      type: 'board',
+      projectId,
+      refresh: 'cached',
+    }, new AbortController().signal)
+    if (result.ok && result.projection.state === 'confirmed') return result.projection
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+  }
+  throw new Error('GitHub synchronization Consumer did not publish a confirmed Board')
+}
+
 async function editSaki(durable: DurablePaths, operation: (domain: SakiDomain) => Promise<void>): Promise<void> {
   const ctx = new Context()
   await ctx.plugin(Storage)
@@ -263,6 +354,129 @@ function intent(
     confirmedFingerprint: selection.fingerprint,
     confirmedBaseline: selection.baseline,
   }
+}
+
+function githubSynchronizationConfiguration(): GitHubSynchronizationConfiguration {
+  return {
+    appId: githubAppId('12345'),
+    githubInstallationId: '12345678',
+    accountNodeId: 'O_saki_test_account',
+    repositoryNodeId: 'R_saki_test_repository',
+    repositoryDatabaseId: '87654321',
+    projectNodeId: 'PVT_saki_test_project',
+    credentialRef: 'SAKI_GITHUB_APP_PRIVATE_KEY',
+    statusFieldNodeId: 'PVTSSF_saki_test_status',
+    statusOptionNodeIds: {
+      inbox: 'option-inbox',
+      backlog: 'option-backlog',
+      ready: 'option-ready',
+      inProgress: 'option-in-progress',
+      inReview: 'option-in-review',
+      done: 'option-done',
+      canceled: 'option-canceled',
+    },
+    activePollIntervalMs: 30_000,
+    backgroundPollIntervalMs: 300_000,
+    rateLimitReserve: 500,
+  } as GitHubSynchronizationConfiguration
+}
+
+function githubBoardCandidate(
+  configuration: GitHubSynchronizationConfiguration,
+): GitHubProjectBoardScanCandidate {
+  const statusOptions = [
+    configuration.statusOptionNodeIds.inbox,
+    configuration.statusOptionNodeIds.backlog,
+    configuration.statusOptionNodeIds.ready,
+    configuration.statusOptionNodeIds.inProgress,
+    configuration.statusOptionNodeIds.inReview,
+    configuration.statusOptionNodeIds.done,
+    configuration.statusOptionNodeIds.canceled,
+  ] satisfies readonly GitHubProjectOptionId[]
+  const issue = {
+    id: 'I_saki_test_issue' as GitHubIssueId,
+    repositoryId: configuration.repositoryNodeId,
+    repositoryDatabaseId: configuration.repositoryDatabaseId,
+    number: 27,
+    state: 'open' as const,
+    title: 'Publish a read-only Board',
+    url: 'https://github.example.invalid/saki/issues/27',
+    updatedAt: 9_000,
+  }
+  const source: GitHubProjectBoardFingerprintSource = {
+    kind: 'project-board',
+    formatVersion: 1,
+    installation: {
+      installationId: configuration.githubInstallationId,
+      account: { id: configuration.accountNodeId, login: 'saki', type: 'organization' },
+      repositorySelection: 'all',
+      permissions: { repository: [], organization: [] },
+      accessibleRepositoryIds: [],
+      tokenExpiresAt: 70_000,
+      observedAt: 10_000,
+    },
+    repository: {
+      id: configuration.repositoryNodeId,
+      databaseId: configuration.repositoryDatabaseId,
+      ownerAccountId: configuration.accountNodeId,
+      nameWithOwner: 'BreakfastDaPaiDang/saki',
+      visibility: 'public',
+      url: 'https://github.example.invalid/BreakfastDaPaiDang/saki',
+      updatedAt: 9_000,
+      observedAt: 10_000,
+    },
+    project: {
+      id: configuration.projectNodeId,
+      ownerAccountId: configuration.accountNodeId,
+      number: 1,
+      title: 'Saki',
+      closed: false,
+      url: 'https://github.example.invalid/orgs/BreakfastDaPaiDang/projects/1',
+      updatedAt: 9_000,
+      observedAt: 10_000,
+    },
+    statusFieldId: configuration.statusFieldNodeId,
+    fields: [{
+      kind: 'single-select',
+      id: configuration.statusFieldNodeId,
+      name: 'Status',
+      options: statusOptions.map((id, index) => ({ id, name: `Status ${index}` })),
+    }],
+    items: [{
+      id: 'PVTI_saki_test_item' as GitHubProjectItemId,
+      projectId: configuration.projectNodeId,
+      content: { kind: 'issue', issue },
+      statusOptionId: configuration.statusOptionNodeIds.ready,
+      archived: false,
+      apiOrder: 0,
+      updatedAt: 9_000,
+    }],
+    openIssues: [issue],
+    fences: {
+      before: { projectUpdatedAt: 9_000, repositoryUpdatedAt: 9_000, projectItemCount: 1, openIssueCount: 1 },
+      after: { projectUpdatedAt: 9_000, repositoryUpdatedAt: 9_000, projectItemCount: 1, openIssueCount: 1 },
+    },
+    rateObservations: [{
+      kind: 'graphql',
+      cost: 10,
+      limit: 5_000,
+      used: 100,
+      remaining: 4_900,
+      resetAt: 60_000,
+      observedAt: 10_000,
+    }],
+    observedAt: 10_000,
+  }
+  return { ...source, fingerprint: computeGitHubProjectBoardFingerprint(source) }
+}
+
+function refingerprintCandidate(
+  candidate: GitHubProjectBoardScanCandidate,
+  patch: Partial<GitHubProjectBoardFingerprintSource>,
+): GitHubProjectBoardScanCandidate {
+  const { fingerprint: _fingerprint, ...source } = candidate
+  const revised = { ...source, ...patch }
+  return { ...revised, fingerprint: computeGitHubProjectBoardFingerprint(revised) }
 }
 
 function signedInspection(
@@ -380,8 +594,8 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const database = new DatabaseSync(durable.sqlite)
     try {
       expect(database.prepare('SELECT name, version FROM units ORDER BY name').all()).toEqual([
-        { name: 'saki_control_plane', version: 3 },
-        { name: 'saki_storage_generation', version: 1 },
+        { name: 'saki_control_plane', version: 4 },
+        { name: 'saki_storage_generation', version: 2 },
       ])
       const tables = database.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
@@ -391,12 +605,14 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         'unit_tables',
         'units',
       ])
-      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(9)
+      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(11)
       expect(database.prepare(
         'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
       ).all('saki_control_plane')).toEqual([
         { table_name: 'control_state' },
         { table_name: 'development_project_registry' },
+        { table_name: 'github_project_sync' },
+        { table_name: 'github_sync_configuration_intents' },
         { table_name: 'grants' },
         { table_name: 'hosts' },
         { table_name: 'installation_access' },
@@ -412,6 +628,597 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     } finally {
       database.close()
     }
+    await harness.close()
+  })
+
+  it('saves a pending GitHub synchronization configuration without activating it', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'github-sync-save')
+    const harness = await start(durable)
+    const selection = await inspected(harness, repo)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-12121212-1212-4212-8212-121212121212',
+      'GitHub synchronization',
+      repo,
+      0,
+      selection,
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    const configuration = githubSynchronizationConfiguration()
+    const request = {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-13131313-1313-4313-8313-131313131313',
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: configuration,
+    } as unknown as ConfigureGitHubSynchronizationIntent
+
+    const saved = await harness.control.submit(harness.authentication, request, new AbortController().signal)
+    expect(saved).toMatchObject({
+      ok: true,
+      receipt: {
+        id: 'receipt-13131313-1313-4313-8313-131313131313',
+        intentId: request.intentId,
+        state: 'saved',
+        projectId: registered.receipt.projectId,
+        synchronizationRevision: 1,
+        candidateRevision: 1,
+      },
+    })
+    const settings = await harness.control.query(harness.authentication, {
+      type: 'project-settings',
+      projectId: registered.receipt.projectId,
+    }, new AbortController().signal)
+    expect(settings).toMatchObject({
+      ok: true,
+      projection: {
+        type: 'project-settings',
+        projectId: registered.receipt.projectId,
+        synchronization: {
+          revision: 1,
+          state: 'saved',
+          pending: {
+            revision: 1,
+            changedFields: Object.keys(configuration),
+            configuration,
+          },
+        },
+      },
+    })
+    expect(settings).not.toHaveProperty('projection.synchronization.active')
+    await harness.close()
+  })
+
+  it('uses the GitHub configuration action for submission and prepared-Intent recovery', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'github-sync-authority')
+    let harness = await start(durable)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-12131313-1213-4213-8213-121313131213',
+      'GitHub synchronization authority',
+      repo,
+      0,
+      await inspected(harness, repo),
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    await setGrantActions(harness, ['github-synchronization:configure'])
+
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-13141414-1314-4314-8314-131414141314' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: githubSynchronizationConfiguration(),
+    }, new AbortController().signal)).toMatchObject({ ok: true, receipt: { state: 'saved' } })
+
+    const recoveringId = 'intent-14151515-1415-4415-8415-141515151415' as SakiControlIntentId
+    const intents = liveSakiDomain(harness.ctx).table('github_sync_configuration_intents')
+    const put = intents.put.bind(intents)
+    vi.spyOn(intents, 'put').mockImplementationOnce(async (key, value) => {
+      await put(key, value)
+      throw new Error('simulated crash after prepared GitHub Intent')
+    })
+    await expect(harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: recoveringId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 1,
+      patch: { rateLimitReserve: 750 },
+    }, new AbortController().signal)).rejects.toThrow('simulated crash after prepared GitHub Intent')
+    expect(intents.get(recoveringId)).toMatchObject({ phase: 'prepared' })
+    await harness.close()
+
+    harness = await start(durable)
+    expect(liveSakiDomain(harness.ctx).table('github_sync_configuration_intents').get(recoveringId))
+      .toMatchObject({ phase: 'saved', synchronizationRevision: 2, candidateRevision: 2 })
+    expect(liveSakiDomain(harness.ctx).table('github_project_sync').get(registered.receipt.projectId))
+      .toMatchObject({ revision: 2, pending: { revision: 2 } })
+
+    const revokedRecoveryId = 'intent-15161616-1516-4516-8516-151616161516' as SakiControlIntentId
+    const restartedIntents = liveSakiDomain(harness.ctx).table('github_sync_configuration_intents')
+    const restartedPut = restartedIntents.put.bind(restartedIntents)
+    vi.spyOn(restartedIntents, 'put').mockImplementationOnce(async (key, value) => {
+      await restartedPut(key, value)
+      throw new Error('simulated crash before revoked GitHub recovery')
+    })
+    await expect(harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: revokedRecoveryId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 2,
+      patch: { rateLimitReserve: 900 },
+    }, new AbortController().signal)).rejects.toThrow('simulated crash before revoked GitHub recovery')
+    await setGrantActions(harness, ['development-project:register'])
+    await harness.close()
+
+    harness = await start(durable)
+    expect(liveSakiDomain(harness.ctx).table('github_sync_configuration_intents').get(revokedRecoveryId))
+      .toMatchObject({ phase: 'failure', terminalReason: 'authority' })
+    const deniedId = 'intent-16171717-1617-4617-8617-161717171617' as SakiControlIntentId
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: deniedId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 2,
+      patch: { rateLimitReserve: 950 },
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(liveSakiDomain(harness.ctx).table('github_sync_configuration_intents').get(deniedId)).toBeUndefined()
+    await harness.close()
+  })
+
+  it('reserves each Control Intent id across registration and GitHub configuration', async () => {
+    const durable = await paths()
+    const firstRepository = await repository(durable.root, 'cross-intent-first')
+    const secondRepository = await repository(durable.root, 'cross-intent-second')
+    const harness = await start(durable)
+    const firstSelection = await inspected(harness, firstRepository)
+    const firstRegistration = await harness.control.submit(harness.authentication, intent(
+      'intent-14141414-1414-4414-8414-141414141414',
+      'First Project',
+      firstRepository,
+      0,
+      firstSelection,
+    ), new AbortController().signal)
+    if (!firstRegistration.ok) throw new Error('first registration failed')
+
+    const configureFirstId = 'intent-15151515-1515-4515-8515-151515151515' as SakiControlIntentId
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: configureFirstId,
+      projectId: firstRegistration.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: githubSynchronizationConfiguration(),
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    expect(await harness.control.submit(harness.authentication, intent(
+      configureFirstId,
+      'Conflicting registration',
+      firstRepository,
+      1,
+      firstSelection,
+    ), new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+
+    const secondSelection = await inspected(harness, secondRepository)
+    const registerFirstId = 'intent-16161616-1616-4616-8616-161616161616' as SakiControlIntentId
+    const secondRegistration = await harness.control.submit(harness.authentication, intent(
+      registerFirstId,
+      'Second Project',
+      secondRepository,
+      1,
+      secondSelection,
+    ), new AbortController().signal)
+    if (!secondRegistration.ok) throw new Error('second registration failed')
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: registerFirstId,
+      projectId: secondRegistration.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: githubSynchronizationConfiguration(),
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+
+    const domain = liveSakiDomain(harness.ctx)
+    expect(domain.table('registration_intents').get(configureFirstId)).toBeUndefined()
+    expect(domain.table('github_sync_configuration_intents').get(registerFirstId)).toBeUndefined()
+    await harness.close()
+
+    await editSaki(durable, async (editable) => {
+      const table = editable.table('github_sync_configuration_intents')
+      const source = table.get(configureFirstId)
+      if (source === undefined) throw new Error('GitHub configuration fixture is unavailable')
+      const payload = {
+        ...source.payload,
+        intent: {
+          ...source.payload.intent,
+          intentId: registerFirstId,
+          projectId: secondRegistration.receipt.projectId,
+        },
+      }
+      const {
+        candidateRevision: _candidateRevision,
+        synchronizationRevision: _synchronizationRevision,
+        ...withoutSavedEvidence
+      } = source
+      await table.put(registerFirstId, githubSynchronizationConfigurationIntentRecordSchema.parse({
+        ...withoutSavedEvidence,
+        id: registerFirstId,
+        receiptId: registerFirstId.replace(/^intent-/u, 'receipt-'),
+        payload,
+        payloadDigest: canonicalDigest('saki/configure-github-synchronization/v1', payload),
+        phase: 'conflict',
+        terminalReason: 'expected-revision',
+      }))
+    })
+
+    const restarted = await context(durable)
+    try {
+      await expect(restarted.plugin(SakiControlPlane, CONTROL_CONFIG))
+        .rejects.toThrow(`Saki Control Intent '${registerFirstId}' is retained by multiple Intent kinds`)
+    } finally {
+      await restarted.fiber.dispose()
+    }
+  })
+
+  it('drives durable configuration work through an optional GitHub Provider', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'github-sync-consumer')
+    const configuration = githubSynchronizationConfiguration()
+    const ctx = await context(durable)
+    let github: FakeBoardGitHub | undefined
+    const providerFiber = await ctx.plugin((providerContext: Context) => {
+      github = new FakeBoardGitHub(providerContext, githubBoardCandidate(configuration))
+    })
+    const harness = await mountControlPlane(ctx)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-20202020-2020-4020-8020-202020202020',
+      'GitHub synchronization Consumer',
+      repo,
+      0,
+      await inspected(harness, repo),
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-21202020-2020-4120-8120-212020202020' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: configuration,
+    }, new AbortController().signal)).toMatchObject({ ok: true, receipt: { state: 'saved' } })
+
+    const board = await waitForConfirmedBoard(harness, registered.receipt.projectId)
+    if (github === undefined) throw new Error('GitHub Provider fixture did not start')
+    expect(github.requests).toHaveLength(1)
+    expect(github.requests[0]).toMatchObject({
+      installation: { appId: configuration.appId },
+      projectId: configuration.projectNodeId,
+      statusFieldId: configuration.statusFieldNodeId,
+      priority: 'background',
+    })
+    expect(board).toMatchObject({
+      synchronizationRevision: 1,
+      confirmed: { generation: 1, configurationRevision: 1 },
+      checkpoint: { generation: 1, configurationRevision: 1 },
+    })
+    const diagnostic = vi.spyOn(ctx.logger, 'error').mockImplementation(() => ctx.logger)
+    github.nextFailure = new Error('provider escaped its typed failure interface')
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: registered.receipt.projectId,
+      refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    for (let attempt = 0; attempt < 200 && diagnostic.mock.calls.length === 0; attempt++) {
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+    }
+    expect(github.requests).toHaveLength(2)
+    expect(github.requests[1]).toMatchObject({ priority: 'interactive' })
+    expect(diagnostic).toHaveBeenCalledWith(
+      'Saki GitHub synchronization provider failed outside its typed failure interface',
+    )
+    await providerFiber.dispose()
+    await harness.close()
+  })
+
+  it('atomically publishes one confirmed Board checkpoint and activates its saved configuration', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'github-board-publish')
+    const harness = await start(durable)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-21212121-2121-4121-8121-212121212121',
+      'GitHub Board publication',
+      repo,
+      0,
+      await inspected(harness, repo),
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    const configuration = githubSynchronizationConfiguration()
+    const saved = await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-22222222-2222-4222-8222-222222222222' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: configuration,
+    }, new AbortController().signal)
+    expect(saved).toMatchObject({ ok: true, receipt: { state: 'saved' } })
+
+    const synchronization = githubSynchronization(harness)
+    const begun = await synchronization.beginScan(
+      registered.receipt.projectId,
+      'interactive',
+      Date.now() + 60_000,
+      new AbortController().signal,
+    )
+    if (!begun.ok) throw new Error(`scan did not begin: ${begun.reason}`)
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-settings',
+      projectId: registered.receipt.projectId,
+    }, new AbortController().signal)).toMatchObject({
+      ok: true,
+      projection: { synchronization: { revision: 1, state: 'activating', scan: { state: 'in-flight' } } },
+    })
+
+    expect(await synchronization.publishScan(
+      registered.receipt.projectId,
+      begun.lease.attemptId,
+      githubBoardCandidate(configuration),
+      new AbortController().signal,
+    )).toEqual({ state: 'published', generation: 1, configurationRevision: 1 })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: registered.receipt.projectId,
+      refresh: 'cached',
+    }, new AbortController().signal)).toMatchObject({
+      ok: true,
+      projection: {
+        state: 'confirmed',
+        synchronizationRevision: 1,
+        confirmed: {
+          generation: 1,
+          configurationRevision: 1,
+          items: [{ issueNumber: 27, status: 'ready', order: 0, notInProject: false }],
+        },
+        checkpoint: { generation: 1, configurationRevision: 1 },
+        mapping: { state: 'valid', configurationRevision: 1 },
+        effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+      },
+    })
+    await harness.close()
+  })
+
+  it('retains the prior confirmed Board when one joined Issue has no mapped Status', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'github-board-mapping-failure')
+    const harness = await start(durable)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-23232323-2323-4323-8323-232323232323',
+      'GitHub Board mapping failure',
+      repo,
+      0,
+      await inspected(harness, repo),
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    const configuration = githubSynchronizationConfiguration()
+    await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-24242424-2424-4424-8424-242424242424' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: configuration,
+    }, new AbortController().signal)
+    const synchronization = githubSynchronization(harness)
+    const first = await synchronization.beginScan(
+      registered.receipt.projectId,
+      'interactive',
+      Date.now() + 60_000,
+      new AbortController().signal,
+    )
+    if (!first.ok) throw new Error('first scan did not begin')
+    expect(await synchronization.publishScan(
+      registered.receipt.projectId,
+      first.lease.attemptId,
+      githubBoardCandidate(configuration),
+      new AbortController().signal,
+    )).toMatchObject({ state: 'published', generation: 1 })
+    const before = await harness.control.query<'board'>(harness.authentication, {
+      type: 'board',
+      projectId: registered.receipt.projectId,
+      refresh: 'cached',
+    }, new AbortController().signal)
+    if (!before.ok) throw new Error('confirmed Board is unavailable')
+
+    await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-25252525-2525-4525-8525-252525252525' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 1,
+      patch: { activePollIntervalMs: 45_000 },
+    }, new AbortController().signal)
+    const second = await synchronization.beginScan(
+      registered.receipt.projectId,
+      'interactive',
+      Date.now() + 60_000,
+      new AbortController().signal,
+    )
+    if (!second.ok) throw new Error('second scan did not begin')
+    const complete = githubBoardCandidate({ ...configuration, activePollIntervalMs: 45_000 })
+    const joined = complete.items[0]
+    if (joined === undefined) throw new Error('joined Issue fixture is absent')
+    const { statusOptionId: _statusOptionId, ...missingStatus } = joined
+    const mappingFailure = refingerprintCandidate(complete, { items: [missingStatus] })
+    expect(await synchronization.publishScan(
+      registered.receipt.projectId,
+      second.lease.attemptId,
+      mappingFailure,
+      new AbortController().signal,
+    )).toEqual({
+      state: 'activation-failed',
+      issues: [{ reason: 'work-item-status-missing', issueId: 'I_saki_test_issue' }],
+    })
+    expect(await synchronization.publishScan(
+      registered.receipt.projectId,
+      second.lease.attemptId,
+      complete,
+      new AbortController().signal,
+    )).toEqual({ state: 'stale' })
+    const after = await harness.control.query<'board'>(harness.authentication, {
+      type: 'board',
+      projectId: registered.receipt.projectId,
+      refresh: 'cached',
+    }, new AbortController().signal)
+    if (!after.ok) throw new Error('retained Board is unavailable')
+    expect(after.projection.synchronizationRevision).toBe(2)
+    expect(after.projection.confirmed).toEqual(before.projection.confirmed)
+    expect(after.projection.checkpoint).toEqual(before.projection.checkpoint)
+    expect(after.projection.mapping).toEqual({
+      state: 'repair-required',
+      configurationRevision: 2,
+      issues: [{ reason: 'work-item-status-missing', issueId: 'I_saki_test_issue' }],
+    })
+    expect(after.projection.failure).toMatchObject({
+      configurationRevision: 2,
+      failure: { kind: 'mapping' },
+    })
+    expect(after.projection.effectiveMutationAvailability).toEqual({
+      available: false,
+      reasons: ['configuration-not-activated', 'mapping-repair-required', 'no-concrete-mutation'],
+    })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-settings',
+      projectId: registered.receipt.projectId,
+    }, new AbortController().signal)).toMatchObject({
+      ok: true,
+      projection: {
+        synchronization: {
+          revision: 2,
+          state: 'activation-failed',
+          active: { revision: 1 },
+          pending: { revision: 2, state: 'activation-failed' },
+          checkpoint: { generation: 1, configurationRevision: 1 },
+        },
+      },
+    })
+    await harness.close()
+  })
+
+  it('replays exact synchronization saves, rejects changed replay, and applies later patches by CAS', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'github-sync-replay')
+    const harness = await start(durable)
+    const selection = await inspected(harness, repo)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-14141414-1414-4414-8414-141414141414',
+      'GitHub synchronization replay',
+      repo,
+      0,
+      selection,
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    const first: ConfigureGitHubSynchronizationIntent = {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-15151515-1515-4515-8515-151515151515' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: githubSynchronizationConfiguration(),
+    }
+    const saved = await harness.control.submit(harness.authentication, first, new AbortController().signal)
+    expect(await harness.control.submit(harness.authentication, first, new AbortController().signal)).toEqual(saved)
+    expect(await harness.control.submit(harness.authentication, {
+      ...first,
+      patch: { ...first.patch, activePollIntervalMs: 45_000 },
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+
+    const stale: ConfigureGitHubSynchronizationIntent = {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-16161616-1616-4616-8616-161616161616' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: { activePollIntervalMs: 45_000 },
+    }
+    expect(await harness.control.submit(harness.authentication, stale, new AbortController().signal)).toMatchObject({
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'expected-revision' },
+    })
+
+    const next: ConfigureGitHubSynchronizationIntent = {
+      ...stale,
+      intentId: 'intent-17171717-1717-4717-8717-171717171717' as SakiControlIntentId,
+      expectedSynchronizationRevision: 1,
+    }
+    expect(await harness.control.submit(harness.authentication, next, new AbortController().signal)).toMatchObject({
+      ok: true,
+      receipt: { state: 'saved', synchronizationRevision: 2, candidateRevision: 2 },
+    })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-settings',
+      projectId: registered.receipt.projectId,
+    }, new AbortController().signal)).toMatchObject({
+      ok: true,
+      projection: {
+        synchronization: {
+          revision: 2,
+          state: 'saved',
+          pending: {
+            revision: 2,
+            changedFields: Object.keys(first.patch),
+            configuration: {
+              appId: first.patch.appId,
+              activePollIntervalMs: 45_000,
+            },
+          },
+        },
+      },
+    })
+    await harness.close()
+  })
+
+  it('reopens superseded saved synchronization Intents and preserves their replay receipts', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'github-sync-restart')
+    let harness = await start(durable)
+    const selection = await inspected(harness, repo)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-18181818-1818-4818-8818-181818181818',
+      'GitHub synchronization restart',
+      repo,
+      0,
+      selection,
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    const first: ConfigureGitHubSynchronizationIntent = {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-19191919-1919-4919-8919-191919191919' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: githubSynchronizationConfiguration(),
+    }
+    const second: ConfigureGitHubSynchronizationIntent = {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-20202020-2020-4020-8020-202020202020' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 1,
+      patch: { rateLimitReserve: 750 },
+    }
+    const firstSaved = await harness.control.submit(harness.authentication, first, new AbortController().signal)
+    const secondSaved = await harness.control.submit(harness.authentication, second, new AbortController().signal)
+    await harness.close()
+
+    harness = await start(durable)
+    expect(await harness.control.submit(harness.authentication, first, new AbortController().signal)).toEqual(firstSaved)
+    expect(await harness.control.submit(harness.authentication, second, new AbortController().signal)).toEqual(secondSaved)
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-settings',
+      projectId: registered.receipt.projectId,
+    }, new AbortController().signal)).toMatchObject({
+      ok: true,
+      projection: {
+        synchronization: {
+          revision: 2,
+          pending: {
+            revision: 2,
+            configuration: { rateLimitReserve: 750 },
+          },
+        },
+      },
+    })
     await harness.close()
   })
 
@@ -433,6 +1240,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       new AbortController().signal,
     )
     if (!registered.ok) throw new Error('registration failed')
+    const missingProjectId = 'project-18181818-1818-4818-8818-181818181819' as SakiDevelopmentProjectId
 
     expect(await harness.control.query(harness.authentication, {
       type: 'development-workspace',
@@ -441,8 +1249,22 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     }, new AbortController().signal)).toEqual({ ok: false, reason: 'stale' })
     expect(await harness.control.query(harness.authentication, {
       type: 'development-workspace',
-      projectId: 'project-18181818-1818-4818-8818-181818181819' as typeof registered.receipt.projectId,
+      projectId: missingProjectId,
       expectedRegistryRevision: 1,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-settings',
+      projectId: missingProjectId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: missingProjectId,
+      refresh: 'cached',
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: missingProjectId,
+      refresh: 'interactive',
     }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
     expect(await harness.control.query(harness.authentication, {
       type: 'inspect-project-selection',
@@ -455,6 +1277,11 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         result: { ok: false, reason: 'missing' },
       },
     })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'inspect-project-selection',
+      hostId: 'host-18181818-1818-4818-8818-181818181818' as SakiHostId,
+      directoryLocator: repo,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
     expect(await harness.control.submit(harness.authentication, {
       ...request,
       intentId: 'intent-18181818-1818-4818-8818-18181818181a' as SakiControlIntentId,
@@ -466,6 +1293,21 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       intentId: 'intent-18181818-1818-4818-8818-18181818181b' as SakiControlIntentId,
       hostId: 'host-18181818-1818-4818-8818-181818181818' as SakiHostId,
       expectedRegistryRevision: 1,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    await setGrantActions(harness, ['development-project:register'])
+    expect(await harness.control.query(harness.authentication, {
+      type: 'inspect-project-selection',
+      hostId: harness.control.identity().hostId,
+      directoryLocator: repo,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-settings',
+      projectId: registered.receipt.projectId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: registered.receipt.projectId,
+      refresh: 'cached',
     }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
     expect(liveSakiDomain(harness.ctx).table('development_project_registry')
       .get('development-project-registry')?.projects).toHaveLength(1)

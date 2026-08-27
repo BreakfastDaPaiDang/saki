@@ -18,6 +18,7 @@ import SakiControlPlane, {
 import { SakiAuthenticationContext } from '../src/authentication.ts'
 import {
   resolveSakiAuthentication,
+  sakiSessionCookieName,
   takeSakiCookieHeader,
 } from '../src/host.ts'
 import {
@@ -42,6 +43,7 @@ const CONTROL_PLANE_CONFIG = {
   challengeTtlMs: 60_000,
   sessionTtlMs: 3_600_000,
   terminalRetentionMs: 86_400_000,
+  githubScanAttemptTtlMs: 300_000,
   cookieName: COOKIE_NAME,
 } as const
 
@@ -668,6 +670,50 @@ describe('Saki Installation access', () => {
     }, AbortSignal.timeout(1_000))).toEqual({ ok: false, reason: 'denied' })
     expect(await running.controlPlane.access.readAccess(cookie, AbortSignal.timeout(1_000)))
       .toMatchObject({ kind: 'authenticated' })
+    await running.close()
+  })
+
+  it('keeps Host authentication and access projections closed around invalid session input', async () => {
+    const running = await start(await database())
+    const signal = AbortSignal.timeout(1_000)
+    const secret = running.controlPlane.bootstrap.take()!.consume()
+
+    expect(sakiSessionCookieName(running.controlPlane)).toBe(COOKIE_NAME)
+    await expect(resolveSakiAuthentication(
+      running.controlPlane,
+      undefined,
+      { origin: ORIGIN, mutation: false },
+      signal,
+    )).resolves.toEqual({ ok: false, reason: 'unavailable' })
+    await expect(resolveSakiAuthentication(
+      running.controlPlane,
+      'not-a-session',
+      { origin: ORIGIN, mutation: false },
+      signal,
+    )).resolves.toEqual({ ok: false, reason: 'unavailable' })
+    await expect(running.controlPlane.access.readAccess(undefined, signal)).resolves.toEqual({
+      kind: 'bootstrap-required',
+      message: 'Local bootstrap is required.',
+    })
+    await expect(running.controlPlane.access.readAccess('not-a-session', signal)).resolves.toEqual({
+      kind: 'bootstrap-required',
+      message: 'Local bootstrap is required.',
+    })
+    await expect(running.controlPlane.access.exchangeBootstrap(
+      { origin: 'http://127.0.0.1:1' },
+      { secret },
+      signal,
+    )).resolves.toEqual({ ok: false, reason: 'unavailable' })
+    await expect(running.controlPlane.access.exchangeBootstrap(
+      { origin: ORIGIN },
+      { secret },
+      signal,
+    )).resolves.toMatchObject({ ok: true })
+    await expect(running.controlPlane.access.readAccess('not-a-session', signal)).resolves.toEqual({
+      kind: 'session-required',
+      message: 'A local browser session is required.',
+    })
+
     await running.close()
   })
 

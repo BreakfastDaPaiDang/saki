@@ -7,6 +7,7 @@ import {
 import {
   sakiControlPlaneMigrationPlan,
   sakiControlPlaneV2DomainSpec,
+  sakiControlPlaneV3DomainSpec,
 } from '../src/migration.ts'
 import { sakiControlPlaneDomainSpec } from '../src/spec.ts'
 
@@ -18,6 +19,7 @@ const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001'
 const HOST_ID = 'host-00000000-0000-4000-8000-000000000002'
 const PRINCIPAL_ID = 'principal-00000000-0000-4000-8000-000000000003'
 const GRANT_ID = 'grant-00000000-0000-4000-8000-000000000004'
+const OTHER_GRANT_ID = 'grant-00000000-0000-4000-8000-000000000104'
 const ACCESS_ID = 'access-00000000-0000-4000-8000-000000000005'
 const INTENT_ID = SAKI_PROJECT_REQUEST_FIXTURES.registration.intentId
 
@@ -176,7 +178,7 @@ function parsedHistoricalTables(source: ReturnType<typeof historicalSnapshot>) {
   ))
 }
 
-describe('Saki control-plane v2 to v3 migration', () => {
+describe('Saki control-plane retained migrations', () => {
   it('moves generation ownership out of the Foundation while preserving the source UUID in retained references', () => {
     const source = historicalSnapshot()
     const migrated = sakiControlPlaneMigrationPlan.steps[0]!.migrate({
@@ -232,7 +234,7 @@ describe('Saki control-plane v2 to v3 migration', () => {
     expect(migrated.tables['grants']).toEqual(source.tables.grants)
     expect(migrated.tables['development_project_registry']).toEqual(source.tables.development_project_registry)
     expect(migrated.global).toBeNull()
-    for (const [table, spec] of Object.entries(sakiControlPlaneDomainSpec.tables)) {
+    for (const [table, spec] of Object.entries(sakiControlPlaneV3DomainSpec.tables)) {
       for (const value of Object.values(migrated.tables[table] ?? {})) spec.valueSchema.parse(value)
     }
     expect(JSON.stringify(migrated)).not.toContain('installationGenerationId')
@@ -353,17 +355,27 @@ describe('Saki control-plane v2 to v3 migration', () => {
     }).toThrow('deterministic bootstrap completion evidence')
   })
 
-  it('declares one strict adjacent B03 v2 to current v3 step', () => {
+  it('declares strict adjacent v2 to v3 to current v4 steps and keeps v3 frozen', () => {
     expect(sakiControlPlaneV2DomainSpec.version).toBe(2)
-    expect(sakiControlPlaneDomainSpec.version).toBe(3)
-    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(1)
+    expect(sakiControlPlaneV3DomainSpec.version).toBe(3)
+    expect(sakiControlPlaneDomainSpec.version).toBe(4)
+    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(2)
     expect(sakiControlPlaneMigrationPlan.steps[0]).toMatchObject({
       from: { name: 'saki_control_plane', version: 2 },
       to: { name: 'saki_control_plane', version: 3 },
     })
+    expect(sakiControlPlaneMigrationPlan.steps[1]).toMatchObject({
+      from: { name: 'saki_control_plane', version: 3 },
+      to: { name: 'saki_control_plane', version: 4 },
+    })
     expect(Object.keys(sakiControlPlaneV2DomainSpec.tables).sort()).toEqual(
-      Object.keys(sakiControlPlaneDomainSpec.tables).sort(),
+      Object.keys(sakiControlPlaneV3DomainSpec.tables).sort(),
     )
+    expect(Object.keys(sakiControlPlaneDomainSpec.tables).sort()).toEqual([
+      ...Object.keys(sakiControlPlaneV3DomainSpec.tables),
+      'github_project_sync',
+      'github_sync_configuration_intents',
+    ].sort())
 
     const source = historicalSnapshot()
     const historicalControl = source.tables.control_state['control-state']
@@ -371,7 +383,7 @@ describe('Saki control-plane v2 to v3 migration', () => {
       ...historicalControl,
       unexpected: true,
     }).success).toBe(false)
-    expect(sakiControlPlaneDomainSpec.tables.control_state.valueSchema.safeParse(historicalControl).success).toBe(false)
+    expect(sakiControlPlaneV3DomainSpec.tables.control_state.valueSchema.safeParse(historicalControl).success).toBe(false)
     expect(sakiControlPlaneV2DomainSpec.tables.control_state.valueSchema.safeParse({
       ...historicalControl,
       schemaVersion: 2,
@@ -388,5 +400,59 @@ describe('Saki control-plane v2 to v3 migration', () => {
       ...historicalIntent,
       schemaVersion: 2,
     }).success).toBe(false)
+
+    const v3 = sakiControlPlaneMigrationPlan.steps[0]!.migrate({
+      global: null,
+      tables: parsedHistoricalTables(source),
+    })
+    const v4 = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3)
+    expect(v4.tables['github_project_sync']).toEqual({})
+    expect(v4.tables['github_sync_configuration_intents']).toEqual({})
+    expect(v4.tables['grants']![GRANT_ID]).toMatchObject({
+      revision: 6,
+      actions: [
+        'inspect-project-selection',
+        'project-index:read',
+        'development-workspace:read',
+        'development-project:register',
+        'board:read',
+        'project-settings:read',
+        'github-synchronization:configure',
+      ],
+    })
+    expect(sakiControlPlaneV3DomainSpec.tables.grants.valueSchema.safeParse(
+      v4.tables['grants']![GRANT_ID],
+    ).success).toBe(false)
+    for (const [table, spec] of Object.entries(sakiControlPlaneDomainSpec.tables)) {
+      for (const value of Object.values(v4.tables[table] ?? {})) spec.valueSchema.parse(value)
+    }
+  })
+
+  it('retains a non-Host-Operator Grant unchanged during the v3-to-v4 migration', () => {
+    const source = historicalSnapshot()
+    const v3 = sakiControlPlaneMigrationPlan.steps[0]!.migrate({
+      global: null,
+      tables: parsedHistoricalTables(source),
+    })
+    const operatorGrant = sakiControlPlaneV3DomainSpec.tables.grants.valueSchema.parse(
+      v3.tables['grants']![GRANT_ID],
+    )
+    const retainedGrant = sakiControlPlaneV3DomainSpec.tables.grants.valueSchema.parse({
+      ...operatorGrant,
+      id: OTHER_GRANT_ID,
+      revision: 2,
+    })
+    const v4 = sakiControlPlaneMigrationPlan.steps[1]!.migrate({
+      ...v3,
+      tables: {
+        ...v3.tables,
+        grants: {
+          ...v3.tables['grants'],
+          [OTHER_GRANT_ID]: retainedGrant,
+        },
+      },
+    })
+
+    expect(v4.tables['grants']![OTHER_GRANT_ID]).toEqual(retainedGrant)
   })
 })

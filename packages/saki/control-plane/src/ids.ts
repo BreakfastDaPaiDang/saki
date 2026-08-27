@@ -3,11 +3,14 @@
 import { z } from 'zod'
 import type {
   SakiBootstrapChallengeId,
+  SakiBoardRemoteFingerprint,
+  SakiBoardWorkItemId,
   SakiBrowserSessionId,
   SakiBuildId,
   SakiControlIntentId,
   SakiDevelopmentProjectId,
   SakiGrantId,
+  SakiGitHubScanAttemptId,
   SakiHostId,
   SakiInstallationAccessId,
   SakiInstallationGenerationId,
@@ -27,6 +30,10 @@ const brandedId = <T extends string>(prefix: string) => z.string()
 
 const accessChildId = <T extends string>(kind: 'challenge' | 'session') => z.string()
   .regex(new RegExp(`^access-${UUID_PATTERN}:${kind}:${CHILD_ORDINAL_PATTERN}$`))
+  .transform(value => value as T)
+
+const digestId = <T extends string>(prefix: string) => z.string()
+  .regex(new RegExp(`^${prefix}-[0-9a-f]{64}$`))
   .transform(value => value as T)
 
 /** Strict Installation identity. */
@@ -57,6 +64,12 @@ export const sakiResourceBindingIdSchema = brandedId<SakiResourceBindingId>('bin
 export const sakiControlIntentIdSchema = brandedId<SakiControlIntentId>('intent')
 /** Strict Intent receipt identity. */
 export const sakiIntentReceiptIdSchema = brandedId<SakiIntentReceiptId>('receipt')
+/** Strict GitHub-backed Work Item identity. */
+export const sakiBoardWorkItemIdSchema = digestId<SakiBoardWorkItemId>('work-item')
+/** Strict complete-scan attempt identity. */
+export const sakiGitHubScanAttemptIdSchema = brandedId<SakiGitHubScanAttemptId>('scan-attempt')
+/** Strict confirmed remote-input fingerprint. */
+export const sakiBoardRemoteFingerprintSchema = digestId<SakiBoardRemoteFingerprint>('remote-fingerprint')
 /** Bounded non-path build provenance; it never decides format compatibility. */
 export const sakiBuildIdSchema = z.string()
   .min(1)

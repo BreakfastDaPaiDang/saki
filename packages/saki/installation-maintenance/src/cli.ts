@@ -33,15 +33,15 @@ export type SakiMaintenanceCliSuccess =
     readonly ok: true
     readonly command: 'backup' | 'verify'
     readonly backupId: SakiRecoveryBackupId
-    readonly stateVersion: 2 | 3
+    readonly stateVersion: 2 | 3 | 4
   }
   | {
     readonly ok: true
     readonly command: 'upgrade'
     readonly backupId: SakiRecoveryBackupId
     readonly storageGenerationId: SakiStorageGenerationId
-    readonly sourceVersion: 2
-    readonly targetVersion: 3
+    readonly sourceVersion: 2 | 3
+    readonly targetVersion: 4
   }
 
 /** Machine-readable CLI completion with its required process destination and exit code. */

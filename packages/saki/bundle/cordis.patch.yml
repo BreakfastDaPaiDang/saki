@@ -44,6 +44,16 @@
     - id: saki-execution-local
       name: '@breakfastdapaidang/saki-execution-local'
 
+    - id: saki-credentials
+      name: '@deepseek-ai/dsh-credentials-windows-dpapi'
+      disabled: !!js process.platform !== 'win32'
+
+    - id: saki-github-app
+      name: '@breakfastdapaidang/saki-github-app'
+      inject:
+        - credentials
+      disabled: !!js process.platform !== 'win32'
+
     - id: saki-webserver
       name: '@deepseek-ai/dsh-host-webserver'
       inject:

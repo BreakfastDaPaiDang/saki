@@ -1,9 +1,10 @@
 import { defineConfig } from 'tsdown'
 
-/** Build the public, Host-only, fixture, and invariant entries with one shared module identity. */
+/** Build the public, browser-safe constants, Host-only, fixture, and invariant entries with one shared module identity. */
 export default defineConfig({
   entry: [
     'lib/types/index.js',
+    'lib/types/constants.js',
     'lib/types/host.js',
     'lib/types/fixtures.js',
     'lib/types/invariant.js',

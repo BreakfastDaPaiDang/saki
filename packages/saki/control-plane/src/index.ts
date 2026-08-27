@@ -1,6 +1,11 @@
 /** Saki Installation control plane and local Access interface. @module @breakfastdapaidang/saki-control-plane */
 
 export { SakiControlPlaneService } from './service.ts'
+export {
+  SAKI_BOARD_WORK_ITEM_LIMIT,
+  SAKI_GITHUB_CAPACITY_OBSERVED_LIMIT,
+  SAKI_GITHUB_MAPPING_ISSUE_LIMIT,
+} from './constants.ts'
 export { SakiInstallationState } from './installation-state.ts'
 export {
   sakiBuildIdSchema,
@@ -12,17 +17,21 @@ export {
   sakiStateCapability,
   sakiStateControlPlaneMigrationPlan,
   sakiStorageGenerationDomainSpec,
+  sakiStorageGenerationV1DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationSealRecordSchema,
+  storageGenerationV1SealRecordSchema,
 } from './state-version.ts'
 export type {
   SakiStateCapability,
   SakiStateVersionSpec,
   StorageGenerationSealRecord,
+  StorageGenerationV1SealRecord,
 } from './state-version.ts'
 export {
   validateCurrentSakiState,
   validateSakiV2SourceState,
+  validateSakiV3SourceState,
 } from './state-validation.ts'
 export type {
   Config,
@@ -41,8 +50,30 @@ export type {
   SakiBootstrapChallengePurpose,
   SakiBootstrapExchangeRequest,
   SakiBootstrapTransportContext,
+  SakiBoardFreshnessProjection,
+  SakiBoardMutationAvailabilityProjection,
+  SakiBoardMutationUnavailableReason,
+  SakiBoardProjection,
+  SakiBoardQuery,
+  SakiBoardRemoteFingerprint,
+  SakiBoardStatus,
+  SakiBoardWorkItemId,
+  SakiBoardWorkItemProjection,
   SakiBrowserSessionId,
   SakiControlIntentId,
+  ConfigureGitHubSynchronizationIntent,
+  GitHubAccountId,
+  GitHubAppId,
+  GitHubInstallationId,
+  GitHubProjectFieldId,
+  GitHubProjectId,
+  GitHubProjectOptionId,
+  GitHubRepositoryDatabaseId,
+  GitHubRepositoryId,
+  GitHubStatusOptionMapping,
+  GitHubSynchronizationConfiguration,
+  GitHubSynchronizationConfigurationField,
+  GitHubSynchronizationConfigurationPatch,
   SakiDevelopmentProjectId,
   SakiDevelopmentProjectSummary,
   SakiDevelopmentWorkspaceProjection,
@@ -57,10 +88,23 @@ export type {
   SakiIntentInput,
   SakiIntentMap,
   SakiIntentReceipt,
+  SakiIntentReceiptMap,
   SakiIntentReceiptId,
+  SakiGitHubSynchronizationReceipt,
+  SakiGitHubMappingHealthProjection,
+  SakiGitHubMappingIssue,
+  SakiGitHubRateLimitProjection,
+  SakiGitHubScanAttemptId,
+  SakiGitHubScanFailure,
+  SakiGitHubScanStateProjection,
+  SakiGitHubSyncCheckpointProjection,
+  SakiGitHubSynchronizationFailureProjection,
+  SakiConfirmedBoardProjection,
   SakiPrincipalId,
   SakiProjectIndexProjection,
   SakiProjectIndexQuery,
+  SakiProjectSettingsProjection,
+  SakiProjectSettingsQuery,
   SakiProjectSelectionInspectionProjection,
   SakiInspectProjectSelectionQuery,
   SakiRegistrationReceipt,
@@ -76,6 +120,7 @@ export {
   migratedStorageGenerationId,
   sakiControlPlaneMigrationPlan,
   sakiControlPlaneV2DomainSpec,
+  sakiControlPlaneV3DomainSpec,
 } from './migration.ts'
 export { SakiBootstrapHandoff } from './secrets.ts'
 

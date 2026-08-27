@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/adr/0013-polling-first-staged-github-synchronization.md
-0013-polling-first-staged-github-synchronization.md: d963aa5fa28fa4f253f47098c1e78683b8cc2027
-0013-polling-first-staged-github-synchronization.zh.md: f93e944b9e6d79f3503f56ccb4a31ff452e5216f
+0013-polling-first-staged-github-synchronization.md: 581adf52ba7bd6cbd6a582d5d842a71100064ff2
+0013-polling-first-staged-github-synchronization.zh.md: 04b319b978226d1cde8cb36085dee677d3cca7c5

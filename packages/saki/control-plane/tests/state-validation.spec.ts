@@ -5,13 +5,14 @@ import {
   SAKI_PROJECT_PROJECTION_FIXTURES,
   SAKI_PROJECT_REQUEST_FIXTURES,
 } from '../src/fixtures.ts'
-import { sakiControlPlaneV2DomainSpec } from '../src/migration.ts'
+import { sakiControlPlaneV2DomainSpec, sakiControlPlaneV3DomainSpec } from '../src/migration.ts'
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
   controlStateRecordSchema,
   developmentProjectRegistryRecordSchema,
   grantRecordSchema,
+  githubProjectSyncRecordSchema,
   historicalControlStateRecordSchema,
   historicalInstallationAccessRecordSchema,
   historicalInstallationRecordSchema,
@@ -27,6 +28,7 @@ import type {
   ControlStateRecord,
   DevelopmentProjectRegistryRecord,
   GrantRecord,
+  GitHubProjectSyncRecord,
   HostRecord,
   InstallationAccessRecord,
   InstallationRecord,
@@ -36,16 +38,20 @@ import type {
 import {
   validateCurrentSakiState,
   validateSakiV2SourceState,
+  validateSakiV3SourceState,
 } from '../src/state-validation.ts'
 import {
   createStorageGenerationSeal,
   sakiStorageGenerationDomainSpec,
+  sakiStorageGenerationV1DomainSpec,
   STORAGE_GENERATION_KEY,
+  storageGenerationV1SealRecordSchema,
 } from '../src/state-version.ts'
-import type { StorageGenerationSealRecord } from '../src/state-version.ts'
+import type { StorageGenerationSealRecord, StorageGenerationV1SealRecord } from '../src/state-version.ts'
 import type {
   SakiBuildId,
   SakiControlIntentId,
+  SakiDevelopmentProjectId,
   SakiGrantId,
   SakiHostId,
   SakiInstallationAccessId,
@@ -62,6 +68,7 @@ const OTHER_STORAGE_GENERATION_ID =
 const HOST_ID = 'host-00000000-0000-4000-8000-000000000002' as SakiHostId
 const OTHER_HOST_ID = 'host-00000000-0000-4000-8000-000000000102' as SakiHostId
 const PRINCIPAL_ID = 'principal-00000000-0000-4000-8000-000000000003' as SakiPrincipalId
+const OTHER_PRINCIPAL_ID = 'principal-00000000-0000-4000-8000-000000000103' as SakiPrincipalId
 const GRANT_ID = 'grant-00000000-0000-4000-8000-000000000004' as SakiGrantId
 const OTHER_GRANT_ID = 'grant-00000000-0000-4000-8000-000000000104' as SakiGrantId
 const ACCESS_ID = 'access-00000000-0000-4000-8000-000000000005' as SakiInstallationAccessId
@@ -311,7 +318,10 @@ function fixtureInspection() {
   }
 }
 
-function currentDomains(fixture: CurrentFixture) {
+function currentDomains(
+  fixture: CurrentFixture,
+  githubProjectSync: ReadonlyMap<SakiDevelopmentProjectId, GitHubProjectSyncRecord> = new Map(),
+) {
   const tables = {
     control_state: readonlyTable(fixture.controlState),
     installations: readonlyTable(fixture.installations),
@@ -321,6 +331,8 @@ function currentDomains(fixture: CurrentFixture) {
     installation_access: readonlyTable(fixture.access),
     development_project_registry: readonlyTable(fixture.registries),
     registration_intents: readonlyTable(fixture.intents),
+    github_project_sync: readonlyTable(githubProjectSync),
+    github_sync_configuration_intents: readonlyTable(new Map()),
   }
   const controlPlane = {
     name: sakiControlPlaneDomainSpec.name,
@@ -333,6 +345,50 @@ function currentDomains(fixture: CurrentFixture) {
     table: (name: keyof typeof storageTables) => storageTables[name],
     close: rejectUnexpectedMutation,
   } as unknown as Domain<typeof sakiStorageGenerationDomainSpec>
+  return { controlPlane, storageGeneration }
+}
+
+function v1Seal(
+  overrides: Partial<StorageGenerationV1SealRecord> = {},
+): StorageGenerationV1SealRecord {
+  return storageGenerationV1SealRecordSchema.parse({
+    schemaVersion: 1,
+    installationId: INSTALLATION_ID,
+    storageGenerationId: STORAGE_GENERATION_ID,
+    stateVersion: 3,
+    createdByBuildId: BUILD_ID,
+    ...overrides,
+  })
+}
+
+function v3Domains(
+  fixture: CurrentFixture,
+  seals: ReadonlyMap<string, StorageGenerationV1SealRecord> = new Map([[
+    STORAGE_GENERATION_KEY,
+    v1Seal(),
+  ]]),
+) {
+  const tables = {
+    control_state: readonlyTable(fixture.controlState),
+    installations: readonlyTable(fixture.installations),
+    hosts: readonlyTable(fixture.hosts),
+    principals: readonlyTable(fixture.principals),
+    grants: readonlyTable(fixture.grants),
+    installation_access: readonlyTable(fixture.access),
+    development_project_registry: readonlyTable(fixture.registries),
+    registration_intents: readonlyTable(fixture.intents),
+  }
+  const controlPlane = {
+    name: sakiControlPlaneV3DomainSpec.name,
+    table: (name: keyof typeof tables) => tables[name],
+    close: rejectUnexpectedMutation,
+  } as unknown as Domain<typeof sakiControlPlaneV3DomainSpec>
+  const storageTables = { storage_generation: readonlyTable(seals) }
+  const storageGeneration = {
+    name: sakiStorageGenerationV1DomainSpec.name,
+    table: (name: keyof typeof storageTables) => storageTables[name],
+    close: rejectUnexpectedMutation,
+  } as unknown as Domain<typeof sakiStorageGenerationV1DomainSpec>
   return { controlPlane, storageGeneration }
 }
 
@@ -584,6 +640,31 @@ describe('current Saki state validation', () => {
     }).toThrow('Intents exist without the Project Registry')
   })
 
+  it('rejects a GitHub Project sync when the Project Registry is absent', () => {
+    const fixture = currentFixture()
+    fixture.registries.clear()
+    const projectId = SAKI_PROJECT_REQUEST_FIXTURES.projectSettings.projectId
+    const sync = githubProjectSyncRecordSchema.parse({
+      id: projectId,
+      schemaVersion: 1,
+      revision: 0,
+      installationId: INSTALLATION_ID,
+      nextCandidateRevision: 1,
+      nextBoardGeneration: 1,
+    })
+    const domains = currentDomains(fixture, new Map([[projectId, sync]]))
+
+    expect(() => {
+      validateCurrentSakiState(
+        domains.controlPlane,
+        domains.storageGeneration,
+        INSTALLATION_ID,
+        STORAGE_GENERATION_ID,
+        BUILD_ID,
+      )
+    }).toThrow('has no Development Project')
+  })
+
   it('rejects a registration actor whose captured Principal revision is from the future', () => {
     const fixture = currentFixture()
     const intent = currentIntent()
@@ -691,6 +772,94 @@ describe('current Saki state validation', () => {
         BUILD_ID,
       )
     }).not.toThrow()
+  })
+})
+
+describe('historical Saki v3 source validation', () => {
+  it('accepts a retained registration Intent alongside unrelated Foundation history without writes', () => {
+    const fixture = currentFixture()
+    fixture.installations.set(OTHER_INSTALLATION_ID, installationRecordSchema.parse({
+      id: OTHER_INSTALLATION_ID,
+      revision: 0,
+      state: 'retired',
+      currentHostId: OTHER_HOST_ID,
+    }))
+    fixture.hosts.set(OTHER_HOST_ID, hostRecordSchema.parse({
+      id: OTHER_HOST_ID,
+      revision: 0,
+      installationId: OTHER_INSTALLATION_ID,
+      state: 'retired',
+    }))
+    fixture.principals.set(OTHER_PRINCIPAL_ID, principalRecordSchema.parse({
+      id: OTHER_PRINCIPAL_ID,
+      revision: 0,
+      kind: 'human',
+      displayName: 'Previous Operator',
+      state: 'retired',
+    }))
+    const unrelatedGrant = grantRecordSchema.parse({
+      id: OTHER_GRANT_ID,
+      revision: 0,
+      installationId: OTHER_INSTALLATION_ID,
+      principalId: OTHER_PRINCIPAL_ID,
+      state: 'revoked',
+      actions: ['development-project:register'],
+      scope: { kind: 'installation', installationId: OTHER_INSTALLATION_ID },
+    })
+    fixture.grants.set(OTHER_GRANT_ID, unrelatedGrant)
+    const intent = currentIntent()
+    fixture.intents.set(intent.id, intent)
+    const domains = v3Domains(fixture)
+
+    expect(() => {
+      validateSakiV3SourceState(
+        domains.controlPlane,
+        domains.storageGeneration,
+        INSTALLATION_ID,
+        STORAGE_GENERATION_ID,
+        BUILD_ID,
+      )
+    }).not.toThrow()
+    expect(fixture.grants.get(OTHER_GRANT_ID)).toBe(unrelatedGrant)
+    expect(fixture.intents.get(intent.id)).toBe(intent)
+  })
+
+  it.each(['missing', 'wrong-key'] as const)(
+    'rejects a %s v1 storage-generation seal singleton',
+    (variant) => {
+      const seals = new Map<string, StorageGenerationV1SealRecord>()
+      if (variant === 'wrong-key') seals.set('storage-generation-shadow', v1Seal())
+      const domains = v3Domains(currentFixture(), seals)
+
+      expect(() => {
+        validateSakiV3SourceState(
+          domains.controlPlane,
+          domains.storageGeneration,
+          INSTALLATION_ID,
+          STORAGE_GENERATION_ID,
+          BUILD_ID,
+        )
+      }).toThrow('historical Saki storage generation seal is not the required singleton')
+    },
+  )
+
+  it.each([
+    ['Installation', { installationId: OTHER_INSTALLATION_ID }],
+    ['physical generation', { storageGenerationId: OTHER_STORAGE_GENERATION_ID }],
+    ['build provenance', { createdByBuildId: 'saki-build-other' as SakiBuildId }],
+  ] as const)('rejects v1 seal metadata for another %s', (_name, overrides) => {
+    const seals = new Map([[STORAGE_GENERATION_KEY, v1Seal(overrides)]])
+    const domains = v3Domains(currentFixture(), seals)
+
+    expect(() => {
+      validateSakiV3SourceState(
+        domains.controlPlane,
+        domains.storageGeneration,
+        INSTALLATION_ID,
+        STORAGE_GENERATION_ID,
+        BUILD_ID,
+      )
+    }).toThrow('historical Saki storage generation seal disagrees with selected generation metadata')
   })
 })
 

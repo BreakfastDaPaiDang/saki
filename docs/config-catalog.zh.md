@@ -59,6 +59,39 @@ export interface Config {
 
 来源：[`packages/saki/execution-local/src/index.ts:54`](../packages/saki/execution-local/src/index.ts)
 
+<a id="breakfastdapaidangsaki-github-app"></a>
+
+## `@breakfastdapaidang/saki-github-app`
+
+需要：`credentials`
+
+```ts config-catalog
+/** Complete provider configuration after Cordis applies defaults. */
+export type ResolvedConfig = Required<Config>
+
+/** Validated Product App request and scan resource limits. */
+export interface Config {
+  /** Items requested per GitHub connection page; defaults to 50 within 1..100. */
+  pageSize?: number
+  /** Pages traversed for one connection; defaults to 1,000 within 1..10,000. */
+  maxPages?: number
+  /** Project items or open Issues admitted per collection; defaults to 20,000 within 1..100,000. */
+  maxItems?: number
+  /** Item field values admitted across one scan; defaults to 100,000 within 1..1,000,000. */
+  maxFieldValues?: number
+  /** Bytes admitted from one HTTP response; defaults to 16 MiB within the safe-integer range. */
+  maxResponseBytes?: number
+  /** Wall-clock milliseconds per GitHub request; defaults to 30,000 within the timer range. */
+  requestTimeoutMs?: number
+  /** Annotated-tag objects admitted by one recursive peel; defaults to 32 within 1..100. */
+  tagPeelDepth?: number
+  /** Complete Project scans active across installations; defaults to 2 within 1..1,000. */
+  maxConcurrentScans?: number
+}
+```
+
+来源：[`packages/saki/github-app/src/index.ts:57`](../packages/saki/github-app/src/index.ts)
+
 <a id="deepseek-aidsh-acp"></a>
 
 ## `@deepseek-ai/dsh-acp`
@@ -3365,6 +3398,7 @@ export interface Config {
 抽象服务类——部署时应改为加载具体的实现包（参见[能力 seam](../.agents/notes/implemented/architecture/2026-06-13-capability-seams.zh.md)）。
 
 - `@breakfastdapaidang/saki-execution` — 抽象 `SakiHostExecution`（[`packages/saki/execution/src/index.ts`](../packages/saki/execution/src/index.ts)）
+- `@breakfastdapaidang/saki-github` — 抽象 `SakiGitHub`（[`packages/saki/github/src/index.ts`](../packages/saki/github/src/index.ts)）
 - `@deepseek-ai/dsh-attachment` — 抽象 `AttachmentStore`（[`packages/attachment/attachment/src/index.ts`](../packages/attachment/attachment/src/index.ts)）
 - `@deepseek-ai/dsh-code-runtime` — 抽象 `CodeRuntime`（[`packages/code-runtime/code-runtime/src/index.ts`](../packages/code-runtime/code-runtime/src/index.ts)）
 - `@deepseek-ai/dsh-compaction` — 抽象 `CompactionEngine`（[`packages/compaction/compaction/src/index.ts`](../packages/compaction/compaction/src/index.ts)）

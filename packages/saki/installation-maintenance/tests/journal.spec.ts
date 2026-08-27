@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type {
+  SakiBuildId,
   SakiInstallationId,
   SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
@@ -32,6 +33,14 @@ const OPERATION_ID = 'operation-00000000-0000-4000-8000-000000000002' as SakiMai
 const OTHER_OPERATION_ID = 'operation-00000000-0000-4000-8000-000000000102' as SakiMaintenanceOperationId
 const BACKUP_ID = 'backup-00000000-0000-4000-8000-000000000003' as SakiRecoveryBackupId
 const GENERATION_ID = 'storage-generation-00000000-0000-4000-8000-000000000004' as SakiStorageGenerationId
+const SOURCE_GENERATION_ID =
+  'storage-generation-00000000-0000-4000-8000-000000000005' as SakiStorageGenerationId
+const SOURCE_BUILD_ID = 'saki-build-journal-source' as SakiBuildId
+const UPGRADE_SOURCE = {
+  sourceStateVersion: 3,
+  sourceStorageGenerationId: SOURCE_GENERATION_ID,
+  sourceBuildId: SOURCE_BUILD_ID,
+} as const
 const roots: string[] = []
 
 async function root(): Promise<string> {
@@ -119,6 +128,7 @@ describe('Saki immutable operation journals', () => {
       kind: 'upgrade',
       operationId: OPERATION_ID,
       installationId: INSTALLATION_ID,
+      ...UPGRADE_SOURCE,
       backupId: BACKUP_ID,
       candidateStorageGenerationId: GENERATION_ID,
     })
@@ -127,6 +137,7 @@ describe('Saki immutable operation journals', () => {
     }
     expect(upgrade).toMatchObject({
       kind: 'upgrade',
+      ...UPGRADE_SOURCE,
       backup: backup.backup,
       candidate: fresh.candidate,
     })
@@ -134,6 +145,20 @@ describe('Saki immutable operation journals', () => {
       .toEqual(upgrade)
     expect(operationJournalSchema.safeParse({ ...upgrade, servingGenerationId: GENERATION_ID }).success)
       .toBe(false)
+    expect(operationJournalSchema.safeParse({
+      ...upgrade,
+      sourceStateVersion: undefined,
+      sourceStorageGenerationId: undefined,
+      sourceBuildId: undefined,
+    }).success).toBe(false)
+    expect(operationJournalSchema.safeParse({
+      ...upgrade,
+      candidateStorageGenerationId: SOURCE_GENERATION_ID,
+      candidate: {
+        partialLeaf: `generations/${SOURCE_GENERATION_ID}.partial`,
+        finalLeaf: `generations/${SOURCE_GENERATION_ID}`,
+      },
+    }).success).toBe(false)
   })
 
   it('reads only the exact active-operation reference', async () => {
@@ -142,6 +167,7 @@ describe('Saki immutable operation journals', () => {
       kind: 'upgrade',
       operationId: OPERATION_ID,
       installationId: INSTALLATION_ID,
+      ...UPGRADE_SOURCE,
       backupId: BACKUP_ID,
       candidateStorageGenerationId: GENERATION_ID,
     })

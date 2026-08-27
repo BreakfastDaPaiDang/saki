@@ -1,0 +1,536 @@
+/** Provider-neutral GitHub capability values for Saki. Types only. @module @breakfastdapaidang/saki-github/types */
+
+import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
+import type { Branded } from '@deepseek-ai/dsh-brand'
+
+/** Canonical positive-decimal GitHub App identity. */
+export type GitHubAppId = Branded<'GitHubAppId'>
+/** Opaque GitHub App installation identity. */
+export type GitHubInstallationId = Branded<'GitHubInstallationId'>
+/** Opaque GitHub user or organization node identity. */
+export type GitHubAccountId = Branded<'GitHubAccountId'>
+/** Opaque GitHub Repository node identity. */
+export type GitHubRepositoryId = Branded<'GitHubRepositoryId'>
+/** Canonical positive-decimal GitHub Repository database identity. */
+export type GitHubRepositoryDatabaseId = Branded<'GitHubRepositoryDatabaseId'>
+/** Opaque GitHub Project v2 node identity. */
+export type GitHubProjectId = Branded<'GitHubProjectId'>
+/** Opaque GitHub Project v2 field node identity. */
+export type GitHubProjectFieldId = Branded<'GitHubProjectFieldId'>
+/** Opaque GitHub Project v2 single-select option identity. */
+export type GitHubProjectOptionId = Branded<'GitHubProjectOptionId'>
+/** Opaque GitHub Project v2 item node identity. */
+export type GitHubProjectItemId = Branded<'GitHubProjectItemId'>
+/** Opaque GitHub Issue node identity. */
+export type GitHubIssueId = Branded<'GitHubIssueId'>
+/** Opaque GitHub pull-request node identity retained as raw item content. */
+export type GitHubPullRequestId = Branded<'GitHubPullRequestId'>
+/** Opaque annotated-tag object identity. */
+export type GitHubTagObjectId = Branded<'GitHubTagObjectId'>
+/** Opaque GitHub Release node identity. */
+export type GitHubReleaseId = Branded<'GitHubReleaseId'>
+/** Exact Git commit object identity. */
+export type GitHubCommitId = Branded<'GitHubCommitId'>
+/** Exact Saki release-tag name without the `refs/tags/` prefix. */
+export type GitHubReleaseTagName = Branded<'GitHubReleaseTagName'>
+/** Provider-neutral identity assigned before a future GitHub mutation begins. */
+export type GitHubExternalOperationId = Branded<'GitHubExternalOperationId'>
+/** Merge-extensible mutation-kind identity without a concrete B05 mutation member. */
+export type GitHubMutationKind = Branded<'GitHubMutationKind'>
+
+/** Caller-selected installation credentials and expected target account. */
+export interface GitHubInstallationProfile {
+  /** Canonical positive-decimal GitHub App id. */
+  readonly appId: GitHubAppId
+  /** Installation used to obtain a short-lived token. */
+  readonly installationId: GitHubInstallationId
+  /** Account the installation must target. */
+  readonly accountId: GitHubAccountId
+  /** Credential reference containing the GitHub App private key. */
+  readonly privateKeyRef: CredentialRef
+}
+
+/** One granted GitHub permission, kept in platform vocabulary. */
+export interface GitHubPermissionFact {
+  /** GitHub permission name. */
+  readonly name: string
+  /** Granted access level. */
+  readonly access: 'read' | 'write' | 'admin'
+}
+
+/** Safe installation, account, permission, and token-lifetime facts. */
+export interface GitHubInstallationFact {
+  /** Observed installation identity. */
+  readonly installationId: GitHubInstallationId
+  /** Account GitHub reports for the installation. */
+  readonly account: {
+    readonly id: GitHubAccountId
+    readonly login: string
+    readonly type: 'organization' | 'user'
+  }
+  /** Whether the installation reaches every repository or a selected set. */
+  readonly repositorySelection: 'all' | 'selected'
+  /** Platform permission grants separated by GitHub scope. */
+  readonly permissions: {
+    readonly repository: readonly GitHubPermissionFact[]
+    readonly organization: readonly GitHubPermissionFact[]
+  }
+  /** Repository node ids accessible to a selected-repository installation. */
+  readonly accessibleRepositoryIds: readonly GitHubRepositoryId[]
+  /** Suspension time, when GitHub reports the installation suspended. */
+  readonly suspendedAt?: number | undefined
+  /** Expiry of the short-lived installation token used for this observation. */
+  readonly tokenExpiresAt: number
+  /** Time the provider completed this observation. */
+  readonly observedAt: number
+}
+
+/** Raw GitHub Repository identity and visibility facts. */
+export interface GitHubRepositoryFact {
+  /** Repository node id. */
+  readonly id: GitHubRepositoryId
+  /** Repository database id. */
+  readonly databaseId: GitHubRepositoryDatabaseId
+  /** Owner account node id. */
+  readonly ownerAccountId: GitHubAccountId
+  /** Canonical `owner/name` spelling. */
+  readonly nameWithOwner: string
+  /** GitHub visibility value. */
+  readonly visibility: 'public' | 'private' | 'internal'
+  /** Credential-free canonical web URL. */
+  readonly url: string
+  /** Platform update observation. */
+  readonly updatedAt: number
+  /** Provider observation time. */
+  readonly observedAt: number
+}
+
+/** Raw GitHub Project v2 identity and update facts. */
+export interface GitHubProjectFact {
+  /** Project node id. */
+  readonly id: GitHubProjectId
+  /** Owner account node id. */
+  readonly ownerAccountId: GitHubAccountId
+  /** Account-local Project number. */
+  readonly number: number
+  /** Current Project title. */
+  readonly title: string
+  /** Whether the Project is closed. */
+  readonly closed: boolean
+  /** Credential-free canonical web URL. */
+  readonly url: string
+  /** Platform update observation. */
+  readonly updatedAt: number
+  /** Provider observation time. */
+  readonly observedAt: number
+}
+
+/** One raw Project v2 single-select option. */
+export interface GitHubProjectOptionFact {
+  /** Option node id. */
+  readonly id: GitHubProjectOptionId
+  /** Current platform label. */
+  readonly name: string
+}
+
+/** One Project v2 field, preserving single-select options and other field types. */
+export type GitHubProjectFieldFact =
+  | {
+    readonly kind: 'single-select'
+    readonly id: GitHubProjectFieldId
+    readonly name: string
+    readonly options: readonly GitHubProjectOptionFact[]
+  }
+  | {
+    readonly kind: 'field'
+    readonly id: GitHubProjectFieldId
+    readonly name: string
+    readonly dataType: string
+  }
+
+/** Raw Issue identity, state, title, URL, and update observation. */
+export interface GitHubIssueFact {
+  /** Issue node id. */
+  readonly id: GitHubIssueId
+  /** Owning Repository node id. */
+  readonly repositoryId: GitHubRepositoryId
+  /** Owning Repository database id. */
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  /** Repository-local Issue number. */
+  readonly number: number
+  /** GitHub Issue state. */
+  readonly state: 'open' | 'closed'
+  /** Current Issue title. */
+  readonly title: string
+  /** Credential-free canonical web URL. */
+  readonly url: string
+  /** Platform update observation used as the Issue revision. */
+  readonly updatedAt: number
+}
+
+/** Raw content attached to a Project item, including content Saki does not manage. */
+export type GitHubProjectItemContent =
+  | { readonly kind: 'issue'; readonly issue: GitHubIssueFact }
+  | {
+    readonly kind: 'pull-request'
+    readonly id: GitHubPullRequestId
+    readonly repositoryId?: GitHubRepositoryId | undefined
+    readonly url?: string | undefined
+  }
+  | { readonly kind: 'draft-issue'; readonly title: string }
+  | { readonly kind: 'redacted' }
+  | { readonly kind: 'other'; readonly typeName: string }
+
+/** One Project item in GitHub API order with raw content and field value. */
+export interface GitHubProjectItemFact {
+  /** Project item node id. */
+  readonly id: GitHubProjectItemId
+  /** Owning Project node id. */
+  readonly projectId: GitHubProjectId
+  /** Platform content union. */
+  readonly content: GitHubProjectItemContent
+  /** Selected option of the persisted Status field, when present. */
+  readonly statusOptionId?: GitHubProjectOptionId | undefined
+  /** GitHub archived flag. */
+  readonly archived: boolean
+  /** Zero-based order in the completely paged API result. */
+  readonly apiOrder: number
+  /** Item update observation. */
+  readonly updatedAt: number
+}
+
+/** Stable observations taken before and after all paginated board reads. */
+export interface GitHubProjectBoardUpdateFence {
+  /** Project update time. */
+  readonly projectUpdatedAt: number
+  /** Repository update time. */
+  readonly repositoryUpdatedAt: number
+  /** Complete Project item count. */
+  readonly projectItemCount: number
+  /** Complete open-Issue count. */
+  readonly openIssueCount: number
+}
+
+/** GraphQL primary-rate observation. */
+export interface GitHubGraphqlRateObservation {
+  readonly kind: 'graphql'
+  readonly cost: number
+  readonly limit: number
+  readonly used: number
+  readonly remaining: number
+  readonly resetAt: number
+  readonly observedAt: number
+}
+
+/** REST primary-rate headers and optional Retry-After. */
+export interface GitHubRestRateObservation {
+  readonly kind: 'rest'
+  readonly resource: string
+  readonly limit: number
+  readonly used: number
+  readonly remaining: number
+  readonly resetAt: number
+  readonly retryAfterMs?: number | undefined
+  readonly observedAt: number
+}
+
+/** Secondary-limit response observation. */
+export interface GitHubSecondaryRateObservation {
+  readonly kind: 'secondary-limit'
+  readonly retryAfterMs?: number | undefined
+  readonly observedAt: number
+}
+
+/** Safe GitHub rate information retained with a completed operation. */
+export type GitHubRateObservation =
+  | GitHubGraphqlRateObservation
+  | GitHubRestRateObservation
+  | GitHubSecondaryRateObservation
+
+/** Versioned deterministic identity for one complete Project-board candidate. */
+export interface GitHubProjectBoardFingerprint {
+  readonly version: 1
+  readonly digest: string
+}
+
+/** One complete, validated Project-board scan; no cursor or partial-result arm exists. */
+export interface GitHubProjectBoardScanCandidate {
+  readonly kind: 'project-board'
+  readonly formatVersion: 1
+  readonly installation: GitHubInstallationFact
+  readonly repository: GitHubRepositoryFact
+  readonly project: GitHubProjectFact
+  readonly statusFieldId: GitHubProjectFieldId
+  readonly fields: readonly GitHubProjectFieldFact[]
+  readonly items: readonly GitHubProjectItemFact[]
+  readonly openIssues: readonly GitHubIssueFact[]
+  readonly fences: {
+    readonly before: GitHubProjectBoardUpdateFence
+    readonly after: GitHubProjectBoardUpdateFence
+  }
+  readonly rateObservations: readonly GitHubRateObservation[]
+  readonly fingerprint: GitHubProjectBoardFingerprint
+  readonly observedAt: number
+}
+
+/** Fingerprint input; rate timing and operation observation time are deliberately ignored. */
+export type GitHubProjectBoardFingerprintSource = Omit<GitHubProjectBoardScanCandidate, 'fingerprint'>
+
+/** Read the installation identity, grants, repository access, and safe token expiry. */
+export interface GitHubInstallationReadRequest {
+  readonly kind: 'installation'
+  readonly installation: GitHubInstallationProfile
+}
+
+/** Read one exact Repository. */
+export interface GitHubRepositoryReadRequest {
+  readonly kind: 'repository'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+}
+
+/** Read one exact Issue revision. */
+export interface GitHubIssueReadRequest {
+  readonly kind: 'issue'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly issueId: GitHubIssueId
+}
+
+/** Read one exact Project v2 identity and update observation. */
+export interface GitHubProjectReadRequest {
+  readonly kind: 'project'
+  readonly installation: GitHubInstallationProfile
+  readonly projectId: GitHubProjectId
+}
+
+/** Read one exact `refs/tags/saki-v*` reference. */
+export interface GitHubTagReferenceReadRequest {
+  readonly kind: 'tag-reference'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly tagName: GitHubReleaseTagName
+}
+
+/** Git object target of a tag reference or annotated tag. */
+export type GitHubTagTarget =
+  | { readonly kind: 'tag'; readonly id: GitHubTagObjectId }
+  | { readonly kind: 'commit'; readonly id: GitHubCommitId }
+
+/** Exact Git tag reference observation. */
+export interface GitHubTagReferenceFact {
+  readonly repositoryId: GitHubRepositoryId
+  readonly tagName: GitHubReleaseTagName
+  readonly ref: string
+  readonly target: GitHubTagTarget
+  readonly observedAt: number
+}
+
+/** Read and recursively peel one tag target to a Commit. */
+export interface GitHubTagObjectReadRequest {
+  readonly kind: 'tag-object'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly target: GitHubTagTarget
+}
+
+/** One annotated tag in a recursive peel chain. */
+export interface GitHubTagObjectFact {
+  readonly id: GitHubTagObjectId
+  readonly target: GitHubTagTarget
+  readonly taggedAt?: number | undefined
+  readonly url?: string | undefined
+}
+
+/** Complete recursive annotated-tag peel result. */
+export interface GitHubTagPeelFact {
+  readonly repositoryId: GitHubRepositoryId
+  readonly tagObjects: readonly GitHubTagObjectFact[]
+  readonly commitId: GitHubCommitId
+  readonly observedAt: number
+}
+
+/** Read a Release whose `tag_name` exactly matches one Saki tag. */
+export interface GitHubReleaseByTagReadRequest {
+  readonly kind: 'release-by-tag'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly tagName: GitHubReleaseTagName
+}
+
+/** Raw GitHub Release facts relevant to release evidence. */
+export interface GitHubReleaseFact {
+  readonly id: GitHubReleaseId
+  readonly repositoryId: GitHubRepositoryId
+  readonly tagName: GitHubReleaseTagName
+  readonly targetCommitish: string
+  readonly draft: boolean
+  readonly prerelease: boolean
+  readonly url: string
+  readonly publishedAt?: number | undefined
+  readonly observedAt: number
+}
+
+/** Presence observation for a Release-by-tag lookup. */
+export type GitHubReleaseByTagObservation =
+  | { readonly kind: 'present'; readonly release: GitHubReleaseFact }
+  | {
+    readonly kind: 'absent'
+    readonly repositoryId: GitHubRepositoryId
+    readonly tagName: GitHubReleaseTagName
+    readonly observedAt: number
+  }
+
+/** Read one exact Commit, including a configured-upstream existence check. */
+export interface GitHubCommitReadRequest {
+  readonly kind: 'commit'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly commitId: GitHubCommitId
+}
+
+/** Exact GitHub Commit observation. */
+export interface GitHubCommitFact {
+  readonly id: GitHubCommitId
+  readonly repositoryId: GitHubRepositoryId
+  readonly url: string
+  readonly committedAt: number
+  readonly observedAt: number
+}
+
+/** Compare two exact Commits for ancestry evidence. */
+export interface GitHubCompareCommitsReadRequest {
+  readonly kind: 'compare-commits'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly baseCommitId: GitHubCommitId
+  readonly headCommitId: GitHubCommitId
+}
+
+/** Raw compare/ancestry result. */
+export interface GitHubCommitComparisonFact {
+  readonly repositoryId: GitHubRepositoryId
+  readonly baseCommitId: GitHubCommitId
+  readonly headCommitId: GitHubCommitId
+  readonly status: 'ahead' | 'behind' | 'identical' | 'diverged'
+  readonly aheadBy: number
+  readonly behindBy: number
+  readonly mergeBaseCommitId?: GitHubCommitId | undefined
+  readonly observedAt: number
+}
+
+/** Request a complete Project-board snapshot with persisted external Status ids. */
+export interface GitHubProjectBoardScanRequest {
+  readonly kind: 'project-board'
+  readonly installation: GitHubInstallationProfile
+  readonly projectId: GitHubProjectId
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly statusFieldId: GitHubProjectFieldId
+  readonly requiredStatusOptionIds: readonly GitHubProjectOptionId[]
+  readonly priority: 'interactive' | 'background'
+  /** Caller-resolved GraphQL points retained for higher-priority work. */
+  readonly rateLimitReserve: number
+}
+
+/** Declaration-merge operation map for provider-neutral GitHub reads. */
+export interface GitHubReadMap {
+  installation: { readonly request: GitHubInstallationReadRequest; readonly result: GitHubInstallationFact }
+  repository: { readonly request: GitHubRepositoryReadRequest; readonly result: GitHubRepositoryFact }
+  issue: { readonly request: GitHubIssueReadRequest; readonly result: GitHubIssueFact }
+  project: { readonly request: GitHubProjectReadRequest; readonly result: GitHubProjectFact }
+  'tag-reference': { readonly request: GitHubTagReferenceReadRequest; readonly result: GitHubTagReferenceFact }
+  'tag-object': { readonly request: GitHubTagObjectReadRequest; readonly result: GitHubTagPeelFact }
+  'release-by-tag': { readonly request: GitHubReleaseByTagReadRequest; readonly result: GitHubReleaseByTagObservation }
+  commit: { readonly request: GitHubCommitReadRequest; readonly result: GitHubCommitFact }
+  'compare-commits': { readonly request: GitHubCompareCommitsReadRequest; readonly result: GitHubCommitComparisonFact }
+}
+
+/** Declaration-merge operation map for complete GitHub scans. */
+export interface GitHubScanMap {
+  'project-board': {
+    readonly request: GitHubProjectBoardScanRequest
+    readonly result: GitHubProjectBoardScanCandidate
+  }
+}
+
+/** Declaration-merge vocabulary reserved for later mutation Service Definitions. */
+export interface GitHubMutationMap {}
+
+/** Union of every registered read request. */
+export type GitHubReadRequest = GitHubReadMap[keyof GitHubReadMap]['request']
+/** Union of every registered read result. */
+export type GitHubReadResult = GitHubReadMap[keyof GitHubReadMap]['result']
+/** Union of every registered scan request. */
+export type GitHubScanRequest = GitHubScanMap[keyof GitHubScanMap]['request']
+/** Union of every registered scan result. */
+export type GitHubScanResult = GitHubScanMap[keyof GitHubScanMap]['result']
+
+/** Closed safe failure codes shared by GitHub reads and scans. */
+export type GitHubFailureCode =
+  | 'cancelled'
+  | 'auth-unavailable'
+  | 'permission-mismatch'
+  | 'mapping-mismatch'
+  | 'not-found'
+  | 'invalid-external-response'
+  | 'primary-rate-limit'
+  | 'secondary-rate-limit'
+  | 'transient-transport'
+  | 'permanent-rejection'
+
+/** Safe provider failure data; raw SDK errors, response bodies, and credentials are excluded. */
+export type GitHubFailure =
+  | { readonly code: 'cancelled' }
+  | { readonly code: 'auth-unavailable'; readonly credentialRef?: CredentialRef | undefined }
+  | {
+    readonly code: 'permission-mismatch'
+    readonly permission: string
+    readonly required: 'none' | 'read' | 'write' | 'admin'
+    readonly observed?: 'none' | 'read' | 'write' | 'admin' | undefined
+    readonly requestId?: string | undefined
+  }
+  | {
+    readonly code: 'mapping-mismatch'
+    readonly reason: 'field-missing-or-not-single-select'
+    readonly statusFieldId: GitHubProjectFieldId
+  }
+  | {
+    readonly code: 'mapping-mismatch'
+    readonly reason: 'required-options-missing'
+    readonly statusFieldId: GitHubProjectFieldId
+    readonly missingRequiredStatusOptionIds: readonly GitHubProjectOptionId[]
+  }
+  | { readonly code: 'not-found'; readonly resource: string; readonly requestId?: string | undefined }
+  | { readonly code: 'invalid-external-response'; readonly operation: string; readonly requestId?: string | undefined }
+  | { readonly code: 'primary-rate-limit'; readonly resetAt?: number | undefined; readonly requestId?: string | undefined }
+  | { readonly code: 'secondary-rate-limit'; readonly retryAfterMs?: number | undefined; readonly requestId?: string | undefined }
+  | { readonly code: 'transient-transport'; readonly retryAfterMs?: number | undefined; readonly requestId?: string | undefined }
+  | { readonly code: 'permanent-rejection'; readonly status?: number | undefined; readonly requestId?: string | undefined }
+
+/** Identity recorded before a future provider mutation begins. */
+export interface GitHubMutationIdentity {
+  readonly operationId: GitHubExternalOperationId
+  readonly kind: GitHubMutationKind
+  readonly targetFingerprint: string
+}
+
+/** Provider-neutral post-crash observation vocabulary for a future mutation. */
+export type GitHubMutationInspection =
+  | { readonly state: 'pending'; readonly identity: GitHubMutationIdentity; readonly observedAt: number }
+  | { readonly state: 'observed'; readonly identity: GitHubMutationIdentity; readonly observedAt: number }
+  | { readonly state: 'absent'; readonly identity: GitHubMutationIdentity; readonly observedAt: number }
+  | { readonly state: 'unknown'; readonly identity: GitHubMutationIdentity; readonly observedAt: number }
+  | {
+    readonly state: 'error'
+    readonly identity: GitHubMutationIdentity
+    readonly failure: GitHubFailure
+    readonly observedAt: number
+  }

@@ -16,13 +16,16 @@ import {
   sakiAccessExchangeResultSchema,
   sakiAccessLogoutResultSchema,
   sakiAccessProjectionSchema,
+  sakiBoardResultSchema,
   sakiBootstrapExchangeRequestSchema,
+  sakiConfigureGitHubSynchronizationResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiEmptyRequestSchema,
   sakiInspectProjectSelectionResultSchema,
   sakiIntentRequestSchema,
-  sakiIntentResultSchema,
+  sakiRegisterDevelopmentProjectResultSchema,
   sakiProjectIndexResultSchema,
+  sakiProjectSettingsResultSchema,
   sakiQueryRequestSchema,
 } from './wire.ts'
 
@@ -141,6 +144,14 @@ async function query(
     case 'development-workspace': {
       return reply({ ok: true, value: sakiDevelopmentWorkspaceResultSchema.parse(result) })
     }
+    case 'project-settings': {
+      return reply({ ok: true, value: sakiProjectSettingsResultSchema.parse(result) })
+    }
+    case 'board': {
+      return reply({ ok: true, value: sakiBoardResultSchema.parse(result) })
+    }
+    /* v8 ignore next 2 -- SakiQuery is closed and strict Host parsing rejects unknown tags before dispatch. */
+    default: return assertNever(parsed.data)
   }
 }
 
@@ -176,11 +187,24 @@ async function authenticatedMutation(
   }
   const authentication = resolution.authentication
   if (operation.kind === 'submit') {
-    const result = await controlPlane.submit(authentication, operation.intent, signal)
-    return reply({
-      ok: true,
-      value: sakiIntentResultSchema.parse(result),
-    })
+    switch (operation.intent.type) {
+      case 'register-development-project': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({
+          ok: true,
+          value: sakiRegisterDevelopmentProjectResultSchema.parse(result),
+        })
+      }
+      case 'configure-github-synchronization': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({
+          ok: true,
+          value: sakiConfigureGitHubSynchronizationResultSchema.parse(result),
+        })
+      }
+      /* v8 ignore next 2 -- Saki Intent input is closed and strict Host parsing rejects unknown tags before dispatch. */
+      default: return assertNever(operation.intent)
+    }
   }
   const result = await controlPlane.access.logoutCurrentSession(authentication, requestToken, signal)
   const cookieHeader = takeSakiCookieHeader(result)
@@ -208,3 +232,9 @@ function badRequest(): RpcResult<never> {
 function reply(result: RpcResult<unknown>, headers?: Readonly<Record<string, string>>): ConnectionRpcReply {
   return { result, ...(headers === undefined ? {} : { headers }) }
 }
+
+/* v8 ignore start -- strict Host schemas make both closed switches exhaustive. */
+function assertNever(_value: never): never {
+  throw new TypeError('unexpected Saki discriminant')
+}
+/* v8 ignore stop */

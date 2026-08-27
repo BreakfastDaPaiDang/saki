@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/architecture/0.1.0-backend.md
-0.1.0-backend.md: a49fb30a17731ede514315b7756625449a29cc85
-0.1.0-backend.zh.md: ef8d4d580d69c69689eb83b5024c25b37ed63543
+0.1.0-backend.md: d115f1002d9d0af61b633be827a9d4006074c826
+0.1.0-backend.zh.md: 38f92be723012499b9b18f1b5d7b43ec9376bcff

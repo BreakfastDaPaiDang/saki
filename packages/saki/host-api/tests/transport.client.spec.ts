@@ -2,10 +2,21 @@ import { Context } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import { describe, expect, it, vi } from 'vitest'
 import SakiHostClientService from '../src/client/index.ts'
-import { sakiIntentRequestSchema, sakiQueryRequestSchema } from '../src/wire.ts'
+import {
+  sakiConfigureGitHubSynchronizationIntentSchema,
+  sakiQueryRequestSchema,
+  sakiRegisterDevelopmentProjectIntentSchema,
+} from '../src/wire.ts'
 
 const HOST_ID = 'host-11111111-1111-4111-8111-111111111111'
-const PROJECT_ID = 'project-22222222-2222-4222-8222-222222222222'
+const parsedProjectQuery = sakiQueryRequestSchema.parse({
+  type: 'project-settings',
+  projectId: 'project-22222222-2222-4222-8222-222222222222',
+})
+if (parsedProjectQuery.type !== 'project-settings') {
+  throw new Error('expected Project Settings query fixture')
+}
+const PROJECT_ID = parsedProjectQuery.projectId
 
 describe('Saki browser Host client', () => {
   it('requires an active Connection carrier', () => {
@@ -34,7 +45,7 @@ describe('Saki browser Host client', () => {
     if (workspaceQuery.type !== 'development-workspace') {
       throw new Error('expected Development Workspace query fixture')
     }
-    const intent = sakiIntentRequestSchema.parse({
+    const intent = sakiRegisterDevelopmentProjectIntentSchema.parse({
       type: 'register-development-project',
       intentId: 'intent-33333333-3333-4333-8333-333333333333',
       projectTitle: 'Client project',
@@ -48,13 +59,24 @@ describe('Saki browser Host client', () => {
         observed: { entries: 0, pathBytes: 0, gitOutputBytes: 0, hashedBytes: 0, elapsedMs: 0 },
       },
     })
+    const githubIntent = sakiConfigureGitHubSynchronizationIntentSchema.parse({
+      type: 'configure-github-synchronization',
+      intentId: 'intent-44444444-4444-4444-8444-444444444444',
+      projectId: PROJECT_ID,
+      expectedSynchronizationRevision: 0,
+      patch: { activePollIntervalMs: 45_000 },
+    })
 
     await ctx.sakiHostClient.readAccess()
     await ctx.sakiHostClient.queryProjectIndex()
     await ctx.sakiHostClient.inspectProjectSelection(intent.hostId, 'D:/repository')
     await ctx.sakiHostClient.queryDevelopmentWorkspace(workspaceQuery.projectId, 7)
+    await ctx.sakiHostClient.queryProjectSettings(PROJECT_ID)
+    await ctx.sakiHostClient.queryBoard(PROJECT_ID, 'cached')
+    await ctx.sakiHostClient.queryBoard(PROJECT_ID, 'interactive')
     await ctx.sakiHostClient.logout('request-token')
     await ctx.sakiHostClient.registerDevelopmentProject(intent, 'request-token')
+    await ctx.sakiHostClient.configureGitHubSynchronization(githubIntent, 'request-token')
 
     expect(call.mock.calls).toEqual([
       ['/saki', 'access/read', {}, { credentials: 'same-origin' }],
@@ -69,11 +91,29 @@ describe('Saki browser Host client', () => {
         projectId: PROJECT_ID,
         expectedRegistryRevision: 7,
       }, { credentials: 'same-origin' }],
+      ['/saki', 'control/query', {
+        type: 'project-settings',
+        projectId: PROJECT_ID,
+      }, { credentials: 'same-origin' }],
+      ['/saki', 'control/query', {
+        type: 'board',
+        projectId: PROJECT_ID,
+        refresh: 'cached',
+      }, { credentials: 'same-origin' }],
+      ['/saki', 'control/query', {
+        type: 'board',
+        projectId: PROJECT_ID,
+        refresh: 'interactive',
+      }, { credentials: 'same-origin' }],
       ['/saki', 'access/logout', {}, {
         credentials: 'same-origin',
         headers: { 'x-saki-request-token': 'request-token' },
       }],
       ['/saki', 'control/submit', intent, {
+        credentials: 'same-origin',
+        headers: { 'x-saki-request-token': 'request-token' },
+      }],
+      ['/saki', 'control/submit', githubIntent, {
         credentials: 'same-origin',
         headers: { 'x-saki-request-token': 'request-token' },
       }],
@@ -102,22 +142,58 @@ describe('Saki browser Host client', () => {
     await fiber.dispose()
   })
 
-  it('rejects a result for a different protected query kind', async () => {
-    const call = vi.fn().mockResolvedValue({
-      ok: true,
-      value: {
+  it('rejects a result for a different protected query or Control Intent kind', async () => {
+    const call = vi.fn()
+      .mockResolvedValueOnce({
         ok: true,
-        projection: {
-          type: 'inspect-project-selection',
-          result: { ok: false, reason: 'missing' },
+        value: {
+          ok: true,
+          projection: {
+            type: 'inspect-project-selection',
+            result: { ok: false, reason: 'missing' },
+          },
         },
-      },
-    })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          ok: true,
+          projection: {
+            type: 'project-index',
+            revision: 0,
+            hosts: [],
+            projects: [],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          ok: true,
+          receipt: {
+            id: 'receipt-55555555-5555-4555-8555-555555555555',
+            intentId: 'intent-55555555-5555-4555-8555-555555555555',
+            state: 'confirmed',
+            projectId: PROJECT_ID,
+            resourceBindingId: 'binding-66666666-6666-4666-8666-666666666666',
+            registryRevision: 1,
+          },
+        },
+      })
     const ctx = new Context()
     ctx.provide('connection', { rpc: { call } } as unknown as ConnectionHandle)
     const fiber = await ctx.plugin(SakiHostClientService)
 
     await expect(ctx.sakiHostClient.queryProjectIndex()).rejects.toThrow()
+    await expect(ctx.sakiHostClient.queryBoard(PROJECT_ID, 'cached')).rejects.toThrow()
+    const githubIntent = sakiConfigureGitHubSynchronizationIntentSchema.parse({
+      type: 'configure-github-synchronization',
+      intentId: 'intent-55555555-5555-4555-8555-555555555555',
+      projectId: PROJECT_ID,
+      expectedSynchronizationRevision: 0,
+      patch: { activePollIntervalMs: 45_000 },
+    })
+    await expect(ctx.sakiHostClient.configureGitHubSynchronization(githubIntent, 'request-token')).rejects.toThrow()
 
     await fiber.dispose()
   })

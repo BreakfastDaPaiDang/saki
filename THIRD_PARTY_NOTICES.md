@@ -48,6 +48,8 @@ External packages that a workspace package resolves at runtime. The tier covers 
 | [`@jridgewell/gen-mapping`](https://github.com/jridgewell/sourcemaps) | MIT |
 | [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk) | MIT |
 | [`@noble/hashes`](https://github.com/paulmillr/noble-hashes) | MIT |
+| [`@octokit/auth-app`](https://github.com/octokit/auth-app.js) | MIT |
+| [`@octokit/core`](https://github.com/octokit/core.js) | MIT |
 | [`@openai/codex`](https://github.com/openai/codex) | Apache-2.0 |
 | [`@opentelemetry/api`](https://github.com/open-telemetry/opentelemetry-js) | Apache-2.0 |
 | [`@opentelemetry/api-logs`](https://github.com/open-telemetry/opentelemetry-js) | Apache-2.0 |
@@ -67,6 +69,7 @@ External packages that a workspace package resolves at runtime. The tier covers 
 | [`diff`](https://github.com/kpdecker/jsdiff) | BSD-3-Clause |
 | [`e2b`](https://github.com/e2b-dev/e2b) | MIT |
 | [`eventsource-parser`](https://github.com/rexxars/eventsource-parser) | MIT |
+| [`fast-json-stable-stringify`](https://github.com/epoberezkin/fast-json-stable-stringify) | MIT |
 | [`fflate`](https://github.com/101arrowz/fflate) | MIT |
 | [`immer`](https://github.com/immerjs/immer) | MIT |
 | [`js-yaml`](https://github.com/nodeca/js-yaml) | MIT |

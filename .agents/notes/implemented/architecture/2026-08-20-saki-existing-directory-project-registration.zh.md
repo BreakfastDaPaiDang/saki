@@ -20,7 +20,7 @@ Status: implemented
 
 启动时会在任何修复写入或外部调用前，解析并交叉校验完整的置备、访问、Registry、Binding、索引、映射与 Intent 库存。只有完成这项纯校验后，系统才继续非终态登记；它可以识别 Registry 映射先于 Intent phase 推进而提交的情况，并通过新鲜 Host 检查刷新每项已提交 Binding。暂时不可用的检查会让 Intent 保持可恢复；身份变化或矛盾 Workspace 证据进入 `reconciliation-required`；预期 revision 或重复身份失败进入 `conflict`；dispatch 前失去当前权限进入 `failure`。回执只暴露对其 `prepared`、`confirmed`、`conflict`、`failure` 或 `reconciliation-required` 状态有效的字段。
 
-本决定只实现更广的[控制面能力 seam](../../proposed/architecture/2026-08-18-saki-control-plane-capability-seams.zh.md)、[稳定 Resource Binding](../../proposed/architecture/2026-08-18-saki-stable-resource-bindings.zh.md)与[可恢复 Control Intent](../../proposed/architecture/2026-08-18-saki-recoverable-control-intents.zh.md)提案中的 Host 检查与首次登记子集。这三篇 Agent Note 保持 proposed，因为其他三项能力 seam、重绑定、退役、repair、Execution Lease、后继 Session、通用外部 dispatch、补偿和其他 Intent 家族尚未实现。
+本决定只实现更广的[控制面能力 seam](../../proposed/architecture/2026-08-18-saki-control-plane-capability-seams.zh.md)、[稳定 Resource Binding](../../proposed/architecture/2026-08-18-saki-stable-resource-bindings.zh.md)与[可恢复 Control Intent](../../proposed/architecture/2026-08-18-saki-recoverable-control-intents.zh.md)提案中的 Host 检查与首次登记子集。独立的[polling-first GitHub 同步](2026-08-18-saki-polling-first-github-synchronization.zh.md)已实现只读 GitHub 切片。这些更广泛的 Agent Note 保持 proposed，因为 Host 与 GitHub mutation operation、剩余两项 Model Account 与 Image Generation 能力 seam、重绑定、退役、repair、Execution Lease、后继 Session、通用外部 dispatch、补偿和其他 Intent 家族尚未实现。
 
 ## 验证
 
