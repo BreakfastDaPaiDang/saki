@@ -135,7 +135,7 @@ Real-API tests and demos read `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`, 
 
 Track work in [GitHub Issues](docs/agents/issue-tracker.md) under [triage roles](docs/agents/triage-labels.md); navigate terminology through [CONTEXT-MAP.md](CONTEXT-MAP.md) and [domain-doc rules](docs/agents/domain.md).
 
-**Delegated standalone merges.** Without another confirmation, an entrusted agent may squash-merge a Ready, mergeable standalone PR only after re-fetching its exact head and confirming required checks pass with no unresolved thread or outstanding change request. Verify `MERGED` and no open PR uses its branch as a base, then delete the remote branch; otherwise stop and report. Stacks and upstream sync retain [their merge modes](.agents/notes/implemented/process/2026-08-27-delegated-standalone-pr-landing.md).
+**Delegated standalone merges.** Without another confirmation, an entrusted agent may squash-merge a Ready, mergeable standalone PR only after re-fetching its exact head and confirming required checks pass with no unresolved thread or outstanding change request. Merge with an expected-head match; verify `MERGED` and no open PR uses its branch as a base, then exact-lease delete the remote ref at that tested head. Otherwise stop and report. Stacks and upstream sync retain [their merge modes](.agents/notes/implemented/process/2026-08-27-delegated-standalone-pr-landing.md).
 
 ## Defensive patterns
 
@@ -143,11 +143,11 @@ Read [docs/defensive-patterns.md](docs/defensive-patterns.md) before lifecycle, 
 
 ## Type safety and documentation
 
-Code compiles under `strict: true` with `noImplicitAny`; every `any` explains why narrowing is infeasible. Modules and exports have concise JSDoc for non-obvious contracts; function-like exports include enforced `@param`/`@returns`. Heritage-declared members, plugin-protocol slots, and constructors keep docs at their declaring Service Definition, protocol, or class.
+All code compiles under `strict: true` and `noImplicitAny`; every `any` explains why narrowing is infeasible. Every module and export has concise JSDoc for non-obvious contracts; function-like exports include enforced `@param`/`@returns`. Heritage members, plugin-protocol slots, and constructors keep docs at their declaring Service Definition, protocol, or class.
 
-Comments and docs preserve behavior, failure, timing, ownership, safe-use facts, and non-obvious context without reasoning transcripts, control-flow or test narration, review history, code restatement, or metaphors. Name exact fields, validations, exports, and actors; reserve `contract` for relied-on obligations and `boundary` for literal process, wire, security, transaction, or lifecycle boundaries. Link rationale and use [dsh-prose-standard](.agents/skills/dsh-prose-standard/SKILL.md) for decisions. Wire mechanically checkable invariants into an executed top-level gate and prove each changed acceptance path rejects an invalid case. Use narrow, justified exceptions instead of disabling a rule globally.
+Comments and docs preserve behavior, failure, timing, ownership, safe-use facts, and non-obvious context; omit reasoning transcripts, control-flow or test narration, review history, code restatement, and metaphors. Name exact fields, validations, exports, and actors; reserve `contract` for relied-on obligations and `boundary` for literal process, wire, security, transaction, or lifecycle boundaries. Link rationale; use [dsh-prose-standard](.agents/skills/dsh-prose-standard/SKILL.md) for decisions. Wire mechanically checkable invariants into an executed top-level gate and prove every changed acceptance path rejects invalid input. Prefer narrow, justified exceptions to global rule disablement.
 
-Docs accompany code changes: update affected README and JSDoc together. Follow [docs/AGENTS.md](docs/AGENTS.md) for bilingual work, current-state prose, one-line paragraphs, single homes, and budgets; only explicit user invocation may run `dsh-translate-docs`.
+Docs accompany every code change: update affected README and JSDoc together. Follow [docs/AGENTS.md](docs/AGENTS.md) for bilingual work, current-state prose, one-line paragraphs, single homes, and budgets; only explicit user invocation may run `dsh-translate-docs`.
 
 ## Editing these instructions
 
