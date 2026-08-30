@@ -18,7 +18,7 @@ The `project-index` query returns the current Registry revision, enrolled Host c
 
 ## Project changes and Git operations
 
-The protected `project-changes` query reopens the exact active Resource Binding through `ctx.sakiHostExecution` and returns a complete path-free status observation. It includes exact Binding revision, HEAD, branch and upstream, index-tree evidence, worktree fingerprint, structured rows, status fingerprint, and repository-level eligibility for stage, unstage, and Commit. Each row uses an observation-scoped opaque id and fingerprint. `project-diff` resolves that identity and a staged, unstaged, or conflict layer against the exact observation and returns one bounded page tied to a complete patch fingerprint and cursor.
+The protected `project-changes` query reopens the exact active Resource Binding through `ctx.sakiHostExecution` and returns a complete display-safe status observation. It includes exact Binding revision, HEAD, branch and upstream, index-tree evidence, worktree fingerprint, structured rows with bounded repository-relative display paths, status fingerprint, and repository-level eligibility for stage, unstage, and Commit; canonical Host paths stay private. Each row uses an observation-scoped opaque id and fingerprint. `project-diff` resolves that identity and a staged, unstaged, or conflict layer against the exact observation and returns one bounded page tied to a complete patch fingerprint and cursor.
 
 `stage-files`, `unstage-files`, and `create-commit` are durable direct Control Intents. Submission freezes the authenticated Actor and authority plus the exact Registry, Project, Binding, status, HEAD, index, worktree, and inherited-change evidence. One Binding Write Admission row allows only one `manual-host-operation` writer for the Resource Binding. The control plane reserves it, prepares one idempotent `{ kind: 'control-intent' }` Host Operation, accepts that exact preparation, and starts or inspects it outside storage callbacks. Exact replay returns the same receipt; changed immutable input conflicts; unknown or contradictory effect evidence remains `reconciliation-required`.
 
@@ -54,18 +54,19 @@ identity(): SakiInstallationIdentity
  * @param authentication - trusted server-derived AuthenticationContext.
  * @param query - closed Projection query.
  * @param signal - caller cancellation.
- * @returns the authorized Projection or that query kind's typed failure:
- * `denied` or `unavailable`, plus `stale` or `not-found` for Development Workspace reads.
+ * @returns the authorized Projection or that query kind's typed `denied`,
+ * `unavailable`, `stale`, `not-found`, or `binding-unavailable` failure.
  */
 query<K extends keyof SakiQueryMap>( authentication: SakiAuthenticationContext, query: SakiQueryMap[K]['request'], signal: AbortSignal, ): Promise<SakiQueryResult<K>>
 
 /**
- * Submit one durable Project-registration Intent after current authorization.
+ * Submit one durable Control Intent after current authorization.
  * @param authentication - trusted server-derived AuthenticationContext.
- * @param intent - bounded immutable registration content.
+ * @param intent - bounded immutable content for one declared Intent kind.
  * @param signal - caller cancellation.
- * @returns a confirmed receipt or typed `denied`, `unavailable`, `conflict`,
- * `failure`, or `reconciliation-required` result with only phase-valid receipt fields.
+ * @returns the kind-correlated terminal or recoverable receipt, or a typed
+ * `denied`, `unavailable`, `conflict`, `failure`, `canceled`, or
+ * `reconciliation-required` result with only phase-valid receipt fields.
  */
 submit<I extends SakiIntent>( authentication: SakiAuthenticationContext, intent: I, signal: AbortSignal, ): Promise<SakiIntentReceipt<I['type']>>
 

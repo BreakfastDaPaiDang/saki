@@ -33,6 +33,6 @@ None; the composition has no request prefix.
 ## Known Limitations and Deferred Work
 
 - **Read-only GitHub foundation** — the Windows composition can inspect the Product App and publish confirmed Board reads after the operator installs and configures the App. GitHub Issue, Project-item, Repository, and Workflow mutations remain absent.
-- **Bounded Project lifecycle only** — the Host supports local access, existing-directory inspection, initial Development Project registration, Project index and workspace reads, path-free Changes and Diff reads, and direct structured stage, unstage, and Commit operations. Resource Binding rebind and retirement, automated dispatch, Agents, model providers, push, and rendered Web surfaces are not composed.
+- **Bounded Project lifecycle only** — the Host supports local access, existing-directory inspection, initial Development Project registration, Project index and workspace reads, display-safe Changes and bounded Diff reads with canonical Host paths kept private, and direct structured stage, unstage, and Commit operations whose browser requests carry no paths. Resource Binding rebind and retirement, automated dispatch, Agents, model providers, push, and rendered Web surfaces are not composed.
 - **The executable is repository-local** — Saki packages are private and absent from every npm release family.
 - **Loopback development Host only** — the fixed local bootstrap flow does not authorize remote browsers or replace the Windows Host wrapper described in [Saki host launcher](../../../docs/saki/host-launcher.md).

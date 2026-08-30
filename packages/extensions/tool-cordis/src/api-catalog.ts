@@ -1165,13 +1165,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'query<K extends keyof SakiQueryMap>( authentication: SakiAuthenticationContext, query: SakiQueryMap[K][\'request\'], signal: AbortSignal, ): Promise<SakiQueryResult<K>>',
         description: 'Query one protected Projection after revalidating current authority.',
         parameters: [{ name: 'authentication', description: 'trusted server-derived AuthenticationContext.' }, { name: 'query', description: 'closed Projection query.' }, { name: 'signal', description: 'caller cancellation.' }],
-        returns: 'the authorized Projection or that query kind\'s typed failure: `denied` or `unavailable`, plus `stale` or `not-found` for Development Workspace reads.',
+        returns: 'the authorized Projection or that query kind\'s typed `denied`, `unavailable`, `stale`, `not-found`, or `binding-unavailable` failure.',
       },
       {
         signature: 'submit<I extends SakiIntent>( authentication: SakiAuthenticationContext, intent: I, signal: AbortSignal, ): Promise<SakiIntentReceipt<I[\'type\']>>',
-        description: 'Submit one durable Project-registration Intent after current authorization.',
-        parameters: [{ name: 'authentication', description: 'trusted server-derived AuthenticationContext.' }, { name: 'intent', description: 'bounded immutable registration content.' }, { name: 'signal', description: 'caller cancellation.' }],
-        returns: 'a confirmed receipt or typed `denied`, `unavailable`, `conflict`, `failure`, or `reconciliation-required` result with only phase-valid receipt fields.',
+        description: 'Submit one durable Control Intent after current authorization.',
+        parameters: [{ name: 'authentication', description: 'trusted server-derived AuthenticationContext.' }, { name: 'intent', description: 'bounded immutable content for one declared Intent kind.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the kind-correlated terminal or recoverable receipt, or a typed `denied`, `unavailable`, `conflict`, `failure`, `canceled`, or `reconciliation-required` result with only phase-valid receipt fields.',
       },
       {
         signature: 'onChanged(listener: (keys: readonly SakiProjectionKey[]) => void): SakiChangedDisposer',

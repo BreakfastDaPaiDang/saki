@@ -1,5 +1,5 @@
 /**
- * Deep Saki control-plane module for Installation access and Project registration.
+ * Deep Saki control-plane module for Installation access, Projects, Git operations, and GitHub synchronization.
  * @module @breakfastdapaidang/saki-control-plane/src/service
  */
 
@@ -216,8 +216,8 @@ export interface SakiControlPlaneModule {
    * @param authentication - trusted server-derived AuthenticationContext.
    * @param query - closed Projection query.
    * @param signal - caller cancellation.
-   * @returns the authorized Projection or that query kind's typed failure:
-   * `denied` or `unavailable`, plus `stale` or `not-found` for Development Workspace reads.
+   * @returns the authorized Projection or that query kind's typed `denied`,
+   * `unavailable`, `stale`, `not-found`, or `binding-unavailable` failure.
    */
   query<K extends keyof SakiQueryMap>(
     authentication: SakiAuthenticationContext,
@@ -226,12 +226,13 @@ export interface SakiControlPlaneModule {
   ): Promise<SakiQueryResult<K>>
 
   /**
-   * Submit one durable Project-registration Intent after current authorization.
+   * Submit one durable Control Intent after current authorization.
    * @param authentication - trusted server-derived AuthenticationContext.
-   * @param intent - bounded immutable registration content.
+   * @param intent - bounded immutable content for one declared Intent kind.
    * @param signal - caller cancellation.
-   * @returns a confirmed receipt or typed `denied`, `unavailable`, `conflict`,
-   * `failure`, or `reconciliation-required` result with only phase-valid receipt fields.
+   * @returns the kind-correlated terminal or recoverable receipt, or a typed
+   * `denied`, `unavailable`, `conflict`, `failure`, `canceled`, or
+   * `reconciliation-required` result with only phase-valid receipt fields.
    */
   submit<I extends SakiIntent>(
     authentication: SakiAuthenticationContext,

@@ -18,7 +18,7 @@ Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现
 
 ## Project change 与 Git 操作
 
-受保护的 `project-changes` 查询会通过 `ctx.sakiHostExecution` 重新打开精确 active Resource Binding，并返回一份完整且不含路径的 status observation。它包含精确 Binding revision、HEAD、branch 与 upstream、index-tree evidence、worktree fingerprint、结构化 row、status fingerprint，以及 stage、unstage 与 Commit 的仓库级 eligibility。每项 row 使用 observation-scoped opaque id 与 fingerprint。`project-diff` 会针对精确 observation 解析该 identity 与 staged、unstaged 或 conflict layer，并返回绑定到完整 patch fingerprint 与 cursor 的一个有界页面。
+受保护的 `project-changes` 查询会通过 `ctx.sakiHostExecution` 重新打开精确 active Resource Binding，并返回一份完整且展示安全的 status observation。它包含精确 Binding revision、HEAD、branch 与 upstream、index-tree evidence、worktree fingerprint、带有界 repository-relative 展示路径的结构化 row、status fingerprint，以及 stage、unstage 与 Commit 的仓库级 eligibility；规范 Host 路径始终保持私有。每项 row 使用 observation-scoped opaque id 与 fingerprint。`project-diff` 会针对精确 observation 解析该 identity 与 staged、unstaged 或 conflict layer，并返回绑定到完整 patch fingerprint 与 cursor 的一个有界页面。
 
 `stage-files`、`unstage-files` 与 `create-commit` 是持久直接 Control Intent。提交会固定已认证 Actor 与 authority，以及精确 Registry、Project、Binding、status、HEAD、index、worktree 与 inherited-change evidence。一条 Binding Write Admission row 只允许该 Resource Binding 存在一个 `manual-host-operation` writer。控制面会预留它、prepare 一条幂等 `{ kind: 'control-intent' }` Host Operation、接受该精确 preparation，并在 storage callback 外启动或检查它。精确 replay 返回同一 receipt；不可变 input 改变会 conflict；未知或矛盾 effect evidence 会保持 `reconciliation-required`。
 
@@ -54,18 +54,19 @@ identity(): SakiInstallationIdentity
  * @param authentication - trusted server-derived AuthenticationContext.
  * @param query - closed Projection query.
  * @param signal - caller cancellation.
- * @returns the authorized Projection or that query kind's typed failure:
- * `denied` or `unavailable`, plus `stale` or `not-found` for Development Workspace reads.
+ * @returns the authorized Projection or that query kind's typed `denied`,
+ * `unavailable`, `stale`, `not-found`, or `binding-unavailable` failure.
  */
 query<K extends keyof SakiQueryMap>( authentication: SakiAuthenticationContext, query: SakiQueryMap[K]['request'], signal: AbortSignal, ): Promise<SakiQueryResult<K>>
 
 /**
- * Submit one durable Project-registration Intent after current authorization.
+ * Submit one durable Control Intent after current authorization.
  * @param authentication - trusted server-derived AuthenticationContext.
- * @param intent - bounded immutable registration content.
+ * @param intent - bounded immutable content for one declared Intent kind.
  * @param signal - caller cancellation.
- * @returns a confirmed receipt or typed `denied`, `unavailable`, `conflict`,
- * `failure`, or `reconciliation-required` result with only phase-valid receipt fields.
+ * @returns the kind-correlated terminal or recoverable receipt, or a typed
+ * `denied`, `unavailable`, `conflict`, `failure`, `canceled`, or
+ * `reconciliation-required` result with only phase-valid receipt fields.
  */
 submit<I extends SakiIntent>( authentication: SakiAuthenticationContext, intent: I, signal: AbortSignal, ): Promise<SakiIntentReceipt<I['type']>>
 

@@ -33,6 +33,6 @@ pnpm run saki
 ## 已知限制与延后工作
 
 - **只读 GitHub 基础**：操作者安装并配置 Product App 后，Windows 组合可以检查该 App 并发布已确认的 Board 读取结果；GitHub Issue、Project item、Repository 与 Workflow 修改仍不存在。
-- **只支持有界 Project 生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 workspace 读取、不含路径的 Changes 与 Diff 读取，以及直接结构化 stage、unstage 与 Commit 操作。尚未组合 Resource Binding 重绑定与退役、automated dispatch、agent（智能体）、模型提供方、push 和渲染后的 Web 界面。
+- **只支持有界 Project 生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 workspace 读取、返回有界 repository-relative 展示路径且不暴露规范 Host 路径的 Changes 读取、同样不暴露规范 Host 路径的有界 Diff 页面读取，以及浏览器请求不携带路径的直接结构化 stage、unstage 与 Commit 操作。尚未组合 Resource Binding 重绑定与退役、automated dispatch、agent（智能体）、模型提供方、push 和渲染后的 Web 界面。
 - **可执行入口仅供仓库本地使用**——Saki 包保持私有，不属于任何 npm 发布族。
 - **仅限回环开发 Host**：固定的本地 bootstrap 流程不会授权远程浏览器，也不替代 [Saki Host 启动器](../../../docs/saki/host-launcher.zh.md)所述的 Windows Host 包装层。
