@@ -61,7 +61,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/saki/execution-local/src/index.ts:101`](../packages/saki/execution-local/src/index.ts)
+来源：[`packages/saki/execution-local/src/index.ts:100`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 
