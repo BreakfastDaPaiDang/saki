@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { SAKI_PROJECT_PROJECTION_FIXTURES } from '@breakfastdapaidang/saki-control-plane/src/fixtures.ts'
 import {
   canonicalDigest,
+  computeProjectGitChangeFingerprint,
+  computeProjectGitChangeId,
   computeProjectGitStatusFingerprint,
+  computeProjectGitStatusSeedDigest,
   type ProjectGitStatusObservation,
+  type ProjectGitStatusSeedMaterial,
   type SakiResourceBindingId,
 } from '@breakfastdapaidang/saki-execution'
 import {
@@ -257,6 +262,10 @@ describe('Saki Host wire schemas', () => {
       },
     } as const
     expect(sakiDevelopmentWorkspaceResultSchema.parse(workspace)).toEqual(workspace)
+    expect(sakiDevelopmentWorkspaceResultSchema.parse({
+      ok: true,
+      projection: SAKI_PROJECT_PROJECTION_FIXTURES.developmentWorkspace,
+    })).toEqual({ ok: true, projection: SAKI_PROJECT_PROJECTION_FIXTURES.developmentWorkspace })
     expect(sakiDevelopmentWorkspaceResultSchema.safeParse({
       ...workspace,
       projection: {
@@ -307,6 +316,83 @@ describe('Saki Host wire schemas', () => {
     } as const
 
     expect(sakiProjectChangesResultSchema.parse(status)).toEqual(status)
+    const stagedChangeMaterial = {
+      path: 'staged.txt',
+      kind: 'ordinary' as const,
+      indexStatus: 'modified' as const,
+      worktreeStatus: 'unchanged' as const,
+      submodule: { kind: 'not-submodule' as const },
+      head: { mode: '100644' as const, objectId: '4'.repeat(40) },
+      index: { mode: '100644' as const, objectId: '5'.repeat(40) },
+      worktreeMode: '100644' as const,
+      worktreeEvidence: {
+        kind: 'regular' as const,
+        mode: '100644' as const,
+        byteLength: 1,
+        contentDigest: '6'.repeat(64),
+      },
+      attribution: 'unattributed' as const,
+    }
+    const stagedChange = {
+      ...stagedChangeMaterial,
+      fingerprint: computeProjectGitChangeFingerprint(stagedChangeMaterial),
+    }
+    const { observedAt, ...statusSeedWithoutTime } = material
+    const statusSeed = {
+      ...statusSeedWithoutTime,
+      changes: [stagedChange],
+    } satisfies ProjectGitStatusSeedMaterial
+    const stagedObservationMaterial = {
+      ...statusSeed,
+      observedAt,
+      changes: [{
+        id: computeProjectGitChangeId(computeProjectGitStatusSeedDigest(statusSeed), stagedChange),
+        ...stagedChange,
+      }],
+    }
+    const staged = {
+      ...status,
+      projection: {
+        ...status.projection,
+        result: {
+          ok: true as const,
+          observation: {
+            ...stagedObservationMaterial,
+            fingerprint: computeProjectGitStatusFingerprint(stagedObservationMaterial),
+          },
+        },
+        gitOperations: {
+          stageFiles: { available: true as const, reasons: [] as const },
+          unstageFiles: { available: true as const, reasons: [] as const },
+          createCommit: { available: true as const, reasons: [] as const },
+        },
+      },
+    }
+    expect(sakiProjectChangesResultSchema.parse(staged)).toEqual(staged)
+
+    const blockedObservationMaterial = {
+      ...material,
+      structuredMutation: { available: false as const, blockers: ['index-flags'] as const },
+    }
+    const blocked = {
+      ...status,
+      projection: {
+        ...status.projection,
+        result: {
+          ok: true as const,
+          observation: {
+            ...blockedObservationMaterial,
+            fingerprint: computeProjectGitStatusFingerprint(blockedObservationMaterial),
+          },
+        },
+        gitOperations: {
+          stageFiles: { available: false as const, reasons: ['index-flags'] as const },
+          unstageFiles: { available: false as const, reasons: ['index-flags'] as const },
+          createCommit: { available: false as const, reasons: ['index-flags'] as const },
+        },
+      },
+    }
+    expect(sakiProjectChangesResultSchema.parse(blocked)).toEqual(blocked)
     const { upstream: _upstream, ...attached } = material
     const detachedMaterial = {
       ...attached,

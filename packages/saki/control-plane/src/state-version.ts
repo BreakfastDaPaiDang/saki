@@ -7,6 +7,7 @@ import {
   sakiInstallationIdSchema,
   sakiStorageGenerationIdSchema,
 } from './ids.ts'
+import { v4Source } from './migration-v4-source.ts'
 import type {
   SakiBuildId,
   SakiInstallationId,
@@ -15,6 +16,13 @@ import type {
 
 /** Stable key of the one storage-generation seal record. */
 export const STORAGE_GENERATION_KEY = 'storage-generation' as const
+
+const {
+  V4_STORAGE_GENERATION_KEY,
+  v4BuildIdSchema,
+  v4InstallationIdSchema,
+  v4StorageGenerationIdSchema,
+} = v4Source
 
 /** Exact historical singleton that binds a v3 database to its Installation and physical generation. */
 export const storageGenerationV1SealRecordSchema = z.object({
@@ -28,10 +36,10 @@ export const storageGenerationV1SealRecordSchema = z.object({
 /** Exact historical singleton that binds a v4 database to its Installation and physical generation. */
 export const storageGenerationV2SealRecordSchema = z.object({
   schemaVersion: z.literal(2),
-  installationId: sakiInstallationIdSchema,
-  storageGenerationId: sakiStorageGenerationIdSchema,
+  installationId: v4InstallationIdSchema,
+  storageGenerationId: v4StorageGenerationIdSchema,
   stateVersion: z.literal(4),
-  createdByBuildId: sakiBuildIdSchema,
+  createdByBuildId: v4BuildIdSchema,
 }).strict()
 
 /** Required singleton that binds a current v5 database to its Installation and physical generation. */
@@ -68,7 +76,7 @@ export const sakiStorageGenerationV2DomainSpec = defineDomain({
   name: 'saki_storage_generation',
   version: 2,
   tables: {
-    storage_generation: domainTable<typeof STORAGE_GENERATION_KEY, StorageGenerationV2SealRecord>(
+    storage_generation: domainTable<typeof V4_STORAGE_GENERATION_KEY, StorageGenerationV2SealRecord>(
       storageGenerationV2SealRecordSchema,
     ),
   },

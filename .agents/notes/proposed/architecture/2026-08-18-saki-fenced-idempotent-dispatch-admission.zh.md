@@ -14,7 +14,7 @@ Dispatch 交付时间短于结果 Execution。让一条 claim 覆盖完整 Agent
 
 Saki dispatch module 将实现 [ADR 0010](../../../../docs/adr/0010-fenced-idempotent-dispatch-admission.zh.md)，作为 [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.zh.md)之下的精确 claim 与 admission 协议。Execution Dispatch、Dispatch Claim、Host Operation、Agent Run 与 Execution Lease 保持为不同记录，并具有不同的完成含义。
 
-[已实现的结构化 Git 决策](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.zh.md)已经提供直接 `control-intent` Host Operation source，以及 source-general `prepareOperation`、`startOperation`、`inspectOperation` 与 `cancelOperation` Host Execution 生命周期。它没有实现本提案的 Execution Dispatch、Agent Run、Dispatch Claim、fencing-token 或 Execution Lease 记录。Dispatch 增量会以 `execution-dispatch` 与 `agent-run` source 扩展 operation-source union，并加入这些 admission rule，而不会引入第二套 Host preparation API。
+[已实现的结构化 Git 决策](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.zh.md)提供直接 `control-intent` Host Operation source，以及 source-general `prepareOperation`、`startOperation`、`inspectOperation` 与 `cancelOperation` Host Execution 生命周期。它没有实现本提案的 Execution Dispatch、Agent Run、Dispatch Claim、fencing-token 或 Execution Lease 记录。Dispatch 增量会以 `execution-dispatch` 与 `agent-run` source 扩展 operation-source union，并加入这些 admission rule，而不会引入第二套 Host preparation API。
 
 ### 状态与所有权
 

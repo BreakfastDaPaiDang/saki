@@ -177,7 +177,7 @@ function validatePrePreparationHostRecord(
 ): void {
   if (sourceConflictedIntent(intent)) return
   const recoverablePhase = intent.phase === 'admission-reserved' || intent.phase === 'canceled'
-  if (!recoverablePhase || operation.snapshot.state !== 'prepared' || operation.effectPlan !== undefined) {
+  if (!recoverablePhase || operation.snapshot.state !== 'prepared') {
     throw new Error('Saki Control Intent has an unexplained pre-preparation Host Operation')
   }
 }
@@ -254,7 +254,10 @@ function terminalIntent(intent: GitOperationIntentRecord): boolean {
     || intent.phase === 'canceled' || intent.phase === 'reconciliation-required'
 }
 
+const TERMINAL_HOST_OPERATION_STATES: ReadonlySet<LocalHostOperationRecord['snapshot']['state']> = new Set([
+  'succeeded', 'failed', 'canceled', 'reconciliation-required',
+])
+
 function terminalHostOperation(operation: LocalHostOperationRecord): boolean {
-  return operation.snapshot.state === 'succeeded' || operation.snapshot.state === 'failed'
-    || operation.snapshot.state === 'canceled' || operation.snapshot.state === 'reconciliation-required'
+  return TERMINAL_HOST_OPERATION_STATES.has(operation.snapshot.state)
 }

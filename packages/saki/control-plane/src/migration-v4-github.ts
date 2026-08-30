@@ -2,30 +2,38 @@
 
 import { z } from 'zod'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
-import {
-  githubAccountIdSchema, githubAppIdSchema, githubFailureSchema, githubInstallationIdSchema,
-  githubIssueIdSchema, githubProjectBoardFingerprintSchema, githubProjectFieldIdSchema,
-  githubProjectIdSchema, githubProjectItemIdSchema, githubProjectOptionIdSchema,
-  githubRepositoryDatabaseIdSchema, githubRepositoryIdSchema,
-} from '@breakfastdapaidang/saki-github'
-import { canonicalDigest } from '@breakfastdapaidang/saki-execution'
-import { SAKI_BOARD_WORK_ITEM_LIMIT, SAKI_GITHUB_CAPACITY_OBSERVED_LIMIT,
-  SAKI_GITHUB_MAPPING_ISSUE_LIMIT } from './constants.ts'
-import {
-  sakiBoardRemoteFingerprintSchema as boardRemoteFingerprint,
-  sakiBoardWorkItemIdSchema as boardWorkItemId,
-  sakiControlIntentIdSchema as controlIntentId,
-  sakiDevelopmentProjectIdSchema as developmentProjectId,
-  sakiGitHubScanAttemptIdSchema as githubScanAttemptId,
-  sakiHostIdSchema as hostId,
-  sakiInstallationIdSchema as installationId,
-  sakiIntentReceiptIdSchema as intentReceiptId,
-  sakiGrantIdSchema as grantId,
-  sakiPrincipalIdSchema as principalId,
-  sakiStorageGenerationIdSchema as storageGenerationId,
-} from './ids.ts'
+import { v4CanonicalDigest } from './migration-v4-canonical.ts'
+import { v4Source } from './migration-v4-source.ts'
 import type { SakiGitHubScanFailure } from './types.ts'
 
+const {
+  V4_SAKI_BOARD_WORK_ITEM_LIMIT: SAKI_BOARD_WORK_ITEM_LIMIT,
+  V4_SAKI_GITHUB_CAPACITY_OBSERVED_LIMIT: SAKI_GITHUB_CAPACITY_OBSERVED_LIMIT,
+  V4_SAKI_GITHUB_MAPPING_ISSUE_LIMIT: SAKI_GITHUB_MAPPING_ISSUE_LIMIT,
+  v4BoardRemoteFingerprintSchema: boardRemoteFingerprint,
+  v4BoardWorkItemIdSchema: boardWorkItemId,
+  v4ControlIntentIdSchema: controlIntentId,
+  v4DevelopmentProjectIdSchema: developmentProjectId,
+  v4GitHubAccountIdSchema: githubAccountIdSchema,
+  v4GitHubAppIdSchema: githubAppIdSchema,
+  v4GitHubFailureSchema: githubFailureSchema,
+  v4GitHubInstallationIdSchema: githubInstallationIdSchema,
+  v4GitHubIssueIdSchema: githubIssueIdSchema,
+  v4GitHubProjectBoardFingerprintSchema: githubProjectBoardFingerprintSchema,
+  v4GitHubProjectFieldIdSchema: githubProjectFieldIdSchema,
+  v4GitHubProjectIdSchema: githubProjectIdSchema,
+  v4GitHubProjectItemIdSchema: githubProjectItemIdSchema,
+  v4GitHubProjectOptionIdSchema: githubProjectOptionIdSchema,
+  v4GitHubRepositoryDatabaseIdSchema: githubRepositoryDatabaseIdSchema,
+  v4GitHubRepositoryIdSchema: githubRepositoryIdSchema,
+  v4GitHubScanAttemptIdSchema: githubScanAttemptId,
+  v4InstallationIdSchema: installationId,
+  v4IntentReceiptIdSchema: intentReceiptId,
+  v4RegistrationActorSchema: registrationActorSchema,
+} = v4Source
+
+/* Historical v4 schemas are frozen migration inputs and cannot import mutable current-schema definitions. */
+/* jscpd:ignore-start */
 const revision = z.number().int().nonnegative()
 const positiveRevision = z.number().int().positive()
 const timestamp = z.number().int().nonnegative()
@@ -42,16 +50,6 @@ function boundedArrayPreflight(maximum: number, maximumMessage: string) {
     message: maximumMessage,
   })
 }
-
-const registrationActorSchema = z.object({
-  installationId,
-  hostId,
-  principalId,
-  principalRevision: revision,
-  grantId,
-  grantRevision: revision,
-  storageGenerationId,
-}).strict()
 
 function refineDurableIntentIdentity(
   value: { readonly id: string; readonly receiptId: string; readonly payload: { readonly intent: { readonly intentId: string } } },
@@ -276,7 +274,7 @@ const boardWorkItemSchema = z.object({
   }).strict(),
   remoteFingerprint: boardRemoteFingerprint,
 }).strict().superRefine((value, context) => {
-  const expectedId = `work-item-${canonicalDigest('saki/board-work-item/v1', {
+  const expectedId = `work-item-${v4CanonicalDigest('saki/board-work-item/v1', {
     repositoryId: value.source.repositoryId,
     issueId: value.source.issueId,
   })}`
@@ -551,7 +549,7 @@ const githubConfigurationIntentRecordBaseSchema = z.object({
 export const v4GitHubConfigurationIntentRecordSchema = githubConfigurationIntentRecordBaseSchema
   .superRefine((value, context) => {
     refineDurableIntentIdentity(value, context)
-    if (canonicalDigest('saki/configure-github-synchronization/v1', value.payload) !== value.payloadDigest) {
+    if (v4CanonicalDigest('saki/configure-github-synchronization/v1', value.payload) !== value.payloadDigest) {
       context.addIssue({ code: 'custom', message: 'Intent payload digest is stale', path: ['payloadDigest'] })
     }
     if (value.updatedAt < value.createdAt) {
@@ -577,3 +575,4 @@ export const v4GitHubConfigurationIntentRecordSchema = githubConfigurationIntent
       context.addIssue({ code: 'custom', message: 'conflict phase has an invalid terminal reason' })
     }
   })
+/* jscpd:ignore-end */

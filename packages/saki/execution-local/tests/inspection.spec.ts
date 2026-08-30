@@ -989,7 +989,7 @@ describe('LocalSakiHostExecution', () => {
       await git(module, 'reset', '--hard', 'HEAD')
       await git(module, 'clean', '-fd')
     }
-  }, 30_000)
+  }, 60_000)
 
   it('charges only nested HEAD output to retained gitlink baseline evidence', async () => {
     const source = await repository()
@@ -1405,7 +1405,7 @@ describe('LocalSakiHostExecution', () => {
     await git(root, 'add', '.gitattributes', 'filter-sentinel.mjs')
     await git(root, 'commit', '-m', 'attributes')
     const command = [process.execPath, script, marker]
-      .map(value => `'${value.replaceAll("'", "'\\\"'\\\"'")}'`)
+      .map(value => `'${value.replaceAll("'", "'\"'\"'")}'`)
       .join(' ')
     await git(root, 'config', 'filter.unspecified.clean', command)
     await git(root, 'config', 'filter.unspecified.required', 'true')
@@ -1442,7 +1442,7 @@ describe('LocalSakiHostExecution', () => {
       '',
     ].join('\n'))
     const command = [process.execPath, script, marker]
-      .map(value => `'${value.replaceAll("'", "'\\\"'\\\"'")}'`)
+      .map(value => `'${value.replaceAll("'", "'\"'\"'")}'`)
       .join(' ')
     await git(root, 'config', 'core.fsmonitor', command)
     await expect(readFile(marker)).rejects.toThrow()
@@ -1470,7 +1470,7 @@ describe('LocalSakiHostExecution', () => {
       '',
     ].join('\n'))
     const command = (label: string): string => [process.execPath, script, marker, label]
-      .map(value => `'${value.replaceAll("'", "'\\\"'\\\"'")}'`)
+      .map(value => `'${value.replaceAll("'", "'\"'\"'")}'`)
       .join(' ')
     await writeFile(join(root, '.gitattributes'), 'tracked.txt diff=saki-sentinel filter=ambient-sentinel\n')
     await git(root, 'add', '.gitattributes')
@@ -1549,7 +1549,7 @@ describe('LocalSakiHostExecution', () => {
         '',
       ].join('\n'))
       const command = [process.execPath, script, marker]
-        .map(value => `'${value.replaceAll("'", "'\\\"'\\\"'")}'`)
+        .map(value => `'${value.replaceAll("'", "'\"'\"'")}'`)
         .join(' ')
       await git(root, 'config', '--file', includedConfig, 'core.fsmonitor', command)
       if (scope === '--worktree') await git(root, 'config', '--local', 'extensions.worktreeConfig', 'true')

@@ -35,8 +35,8 @@ import { GitCommandError, type GitRunner } from './git-runner.ts'
 import { parseWorktreeList, type ParsedWorktreeRecord } from './git-observation.ts'
 import {
   captureRepositoryInventory,
+  captureRepositoryIndexFlagEvidence,
   createRepositoryObservationRound,
-  hasUnsupportedIndexState,
   RepositoryInventoryError,
   type RepositoryInventoryGit,
   type SubmoduleObjectObservation,
@@ -86,6 +86,13 @@ export interface BoundProjectResourceExpectation {
   readonly trusted: TrustedProjectSelectionObservation
 }
 
+/** Optional requirements applied while retaining one stable private repository view. */
+export interface StableLocalProjectSelectionRequirements {
+  readonly boundResource?: BoundProjectResourceExpectation
+  /** Stop before porcelain status when a structured mutation cannot safely proceed. */
+  readonly rejectUnsupportedIndexState?: boolean
+}
+
 /**
  * Same-Host reader for one stable Git administrative-directory identity.
  * @param path - canonical Git administrative-directory path.
@@ -98,7 +105,10 @@ export type AdministrativeDirectoryIdentityReader = (
 ) => Promise<RepositoryAdministrativeIdentity>
 
 /** Failure retained only inside the Local Host provider before public mapping. */
-export type StableLocalProjectSelectionFailureReason = ProjectSelectionRejectionReason | 'limit'
+export type StableLocalProjectSelectionFailureReason =
+  | ProjectSelectionRejectionReason
+  | 'limit'
+  | 'unsupported-index-state'
 
 /** Stable selected-project evidence retained only inside the Local Host provider. */
 export type StableLocalProjectSelectionResult =
@@ -154,7 +164,9 @@ export async function inspectLocalProjectSelection(
     identityReader,
   )
   if (result.ok) return { ok: true, inspection: result.inspection }
-  if (result.reason === 'limit') return { ok: false, reason: 'unavailable' }
+  if (result.reason === 'limit' || result.reason === 'unsupported-index-state') {
+    return { ok: false, reason: 'unavailable' }
+  }
   return { ok: false, reason: result.reason }
 }
 
@@ -167,7 +179,7 @@ export async function inspectLocalProjectSelection(
  * @param request - selected Host and untrusted directory locator.
  * @param signal - required caller lifetime.
  * @param identityReader - Local Host filesystem-object identity reader.
- * @param boundResource - admitted binding identity that must match before repository inventory reads.
+ * @param requirements - optional bound identity and mutation preflight requirements.
  * @returns detached inspection plus its final stable inventory, or a bounded rejection.
  */
 export async function inspectStableLocalProjectSelection(
@@ -178,9 +190,10 @@ export async function inspectStableLocalProjectSelection(
   request: InspectProjectSelectionRequest,
   signal: AbortSignal,
   identityReader: AdministrativeDirectoryIdentityReader,
-  boundResource?: BoundProjectResourceExpectation,
+  requirements: StableLocalProjectSelectionRequirements = {},
 ): Promise<StableLocalProjectSelectionResult> {
   signal.throwIfAborted()
+  const { boundResource, rejectUnsupportedIndexState = false } = requirements
   if (!isSafeLocalRepositoryPath(request.directoryLocator)) return { ok: false, reason: 'unavailable' }
   const inventoryBounds = {
     maxEntries: config.inventoryMaxEntries,
@@ -274,6 +287,16 @@ export async function inspectStableLocalProjectSelection(
     if (boundResource === undefined && inventory.entries.some(entry => entry.skipWorktree === true)) {
       return { ok: false, reason: 'unavailable' }
     }
+    const indexFlagEvidence = await captureRepositoryIndexFlagEvidence(
+      firstGit,
+      topLevel.path,
+      firstSignal,
+      inventory,
+      firstRepository.sparseIndexEnabled,
+    )
+    if (rejectUnsupportedIndexState && indexFlagEvidence.mutationBlocked) {
+      return { ok: false, reason: 'unsupported-index-state' }
+    }
     const status = await captureVerifiedRepositoryStatus(
       firstGit,
       topLevel.path,
@@ -282,13 +305,7 @@ export async function inspectStableLocalProjectSelection(
       inventory,
       inventoryBounds,
       firstSignal,
-    )
-    const unsupportedIndexState = await hasUnsupportedIndexState(
-      firstGit,
-      topLevel.path,
-      firstSignal,
-      inventory,
-      firstRepository.sparseIndexEnabled,
+      indexFlagEvidence.assumeUnchangedPaths,
     )
     const baselineFacts = buildInheritedChangeBaseline(inventory, {
       maxEntries: config.baselineMaxEntries,
@@ -425,6 +442,16 @@ export async function inspectStableLocalProjectSelection(
     if (boundResource === undefined && finalInventory.entries.some(entry => entry.skipWorktree === true)) {
       return { ok: false, reason: 'unavailable' }
     }
+    const finalIndexFlagEvidence = await captureRepositoryIndexFlagEvidence(
+      finalGit,
+      finalTopLevel.path,
+      finalSignal,
+      finalInventory,
+      finalRepository.sparseIndexEnabled,
+    )
+    if (rejectUnsupportedIndexState && finalIndexFlagEvidence.mutationBlocked) {
+      return { ok: false, reason: 'unsupported-index-state' }
+    }
     const finalStatus = await captureVerifiedRepositoryStatus(
       finalGit,
       finalTopLevel.path,
@@ -436,13 +463,7 @@ export async function inspectStableLocalProjectSelection(
       finalInventory,
       inventoryBounds,
       finalSignal,
-    )
-    const finalUnsupportedIndexState = await hasUnsupportedIndexState(
-      finalGit,
-      finalTopLevel.path,
-      finalSignal,
-      finalInventory,
-      finalRepository.sparseIndexEnabled,
+      finalIndexFlagEvidence.assumeUnchangedPaths,
     )
     const finalBaselineFacts = buildInheritedChangeBaseline(finalInventory, {
       maxEntries: config.baselineMaxEntries,
@@ -480,7 +501,7 @@ export async function inspectStableLocalProjectSelection(
       || !isDeepStrictEqual(finalBranch, branch)
       || !sameInventoryEvidence(finalInventory, inventory)
       || !isDeepStrictEqual(finalStatus, status)
-      || finalUnsupportedIndexState !== unsupportedIndexState
+      || !isDeepStrictEqual(finalIndexFlagEvidence, indexFlagEvidence)
       || finalBaselineFacts.inheritedChangeEntryCount !== baselineFacts.inheritedChangeEntryCount
       || finalBaselineFacts.conversionAmbiguous !== baselineFacts.conversionAmbiguous
       || !sameBaselineEvidence(finalBaselineFacts.baseline, baseline)
@@ -495,7 +516,7 @@ export async function inspectStableLocalProjectSelection(
       inspection: confirmed,
       inventory: finalInventory,
       status: finalStatus,
-      unsupportedIndexState: finalUnsupportedIndexState,
+      unsupportedIndexState: finalIndexFlagEvidence.mutationBlocked,
     }
   } catch (error) {
     if (signal.aborted) throw signal.reason

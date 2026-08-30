@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -193,6 +193,7 @@ describe('LocalSakiHostExecution project status', () => {
     const selected = await execution.inspectProjectSelection({ hostId: HOST_ID, directoryLocator: root }, signal)
     expect(selected.ok, JSON.stringify(selected)).toBe(true)
     if (!selected.ok) return
+    await writeFile(join(root, 'tracked.txt'), 'changed\n')
     await git(root, 'update-index', '--assume-unchanged', '--', 'tracked.txt')
 
     const result = await execution.inspectProject({
@@ -210,6 +211,50 @@ describe('LocalSakiHostExecution project status', () => {
     expect(result).toMatchObject({
       ok: true,
       observation: {
+        changes: [{
+          path: 'tracked.txt',
+          kind: 'ordinary',
+          indexStatus: 'unchanged',
+          worktreeStatus: 'modified',
+        }],
+        structuredMutation: { available: false, blockers: ['index-flags'] },
+      },
+    })
+  }, 30_000)
+
+  it('retains staged and hidden worktree changes together for an assume-unchanged entry', async () => {
+    const root = await repository()
+    const execution = await provider(root)
+    const signal = new AbortController().signal
+    const selected = await execution.inspectProjectSelection({ hostId: HOST_ID, directoryLocator: root }, signal)
+    expect(selected.ok, JSON.stringify(selected)).toBe(true)
+    if (!selected.ok) return
+    await writeFile(join(root, 'tracked.txt'), 'staged!!\n')
+    await git(root, 'add', '--', 'tracked.txt')
+    await writeFile(join(root, 'tracked.txt'), 'hidden!!\n')
+    await git(root, 'update-index', '--assume-unchanged', '--', 'tracked.txt')
+
+    const result = await execution.inspectProject({
+      binding: {
+        id: BINDING_ID,
+        revision: 0,
+        health: 'active',
+        hostId: HOST_ID,
+        workspaceId: WORKSPACE_ID,
+        expectedInspection: selected.inspection,
+        inheritedChangeBaseline: selected.inspection.projection.baseline,
+      },
+    }, signal)
+
+    expect(result).toMatchObject({
+      ok: true,
+      observation: {
+        changes: [{
+          path: 'tracked.txt',
+          kind: 'ordinary',
+          indexStatus: 'modified',
+          worktreeStatus: 'modified',
+        }],
         structuredMutation: { available: false, blockers: ['index-flags'] },
       },
     })
@@ -443,6 +488,7 @@ describe('LocalSakiHostExecution project status', () => {
 
   it('retains deletions, type changes, unmerged stages, and gitlink submodule facts', async () => {
     const root = await repository()
+    await git(root, 'config', 'core.symlinks', 'false')
     await writeFile(join(root, 'conflicted.txt'), 'base\n')
     await writeFile(join(root, 'delete.txt'), 'delete\n')
     await writeFile(join(root, 'type.txt'), 'type\n')
@@ -542,7 +588,7 @@ describe('LocalSakiHostExecution project status', () => {
     }
   }, 30_000)
 
-  it('does not execute a repository clean filter while observing status', async () => {
+  it.each(['clean', 'process'] as const)('does not execute a repository %s filter while observing status', async (filterKind) => {
     const root = await repository()
     const marker = join(root, 'status-filter-ran')
     const script = join(root, 'status-filter-sentinel.cjs')
@@ -556,19 +602,25 @@ describe('LocalSakiHostExecution project status', () => {
     await git(root, 'add', '--', '.gitattributes', 'status-filter-sentinel.cjs')
     await git(root, 'commit', '-m', 'add status filter declaration')
     const filterCommand = [process.execPath, script, marker, ownerNonce]
-      .map(value => `'${value.replaceAll("'", "'\\\"'\\\"'")}'`)
+      .map(value => `'${value.replaceAll("'", "'\"'\"'")}'`)
       .join(' ')
-    await git(root, 'config', 'filter.status-sentinel.clean', filterCommand)
+    await git(root, 'config', `filter.status-sentinel.${filterKind}`, filterCommand)
     await git(root, 'config', 'filter.status-sentinel.required', 'true')
     const previousOwner = process.env.SAKI_STATUS_FILTER_TEST_OWNER
     process.env.SAKI_STATUS_FILTER_TEST_OWNER = ownerNonce
     try {
+      const directFilter = git(root, 'hash-object', '--path=tracked.txt', '--', 'tracked.txt')
+      if (filterKind === 'clean') await expect(directFilter).resolves.toBeUndefined()
+      else await expect(directFilter).rejects.toBeDefined()
+      await expect(access(marker)).resolves.toBeUndefined()
+      await rm(marker)
+
       const execution = await provider(root)
       const signal = new AbortController().signal
       const selected = await execution.inspectProjectSelection({ hostId: HOST_ID, directoryLocator: root }, signal)
       expect(selected.ok, JSON.stringify(selected)).toBe(true)
       if (!selected.ok) return
-      await writeFile(join(root, 'tracked.txt'), 'changed through raw bytes\n')
+      await writeFile(join(root, 'tracked.txt'), 'changed\n')
 
       const result = await execution.inspectProject({
         binding: {
@@ -582,7 +634,18 @@ describe('LocalSakiHostExecution project status', () => {
         },
       }, signal)
 
-      expect(result.ok).toBe(true)
+      expect(result).toMatchObject({
+        ok: true,
+        observation: {
+          changes: [{
+            path: 'tracked.txt',
+            kind: 'ordinary',
+            indexStatus: 'unchanged',
+            worktreeStatus: 'modified',
+          }],
+        },
+      })
+      expect(await readFile(join(root, 'tracked.txt'), 'utf8')).toBe('changed\n')
       await expect(access(marker)).rejects.toBeDefined()
     } finally {
       if (previousOwner === undefined) delete process.env.SAKI_STATUS_FILTER_TEST_OWNER
@@ -693,8 +756,10 @@ describe('LocalSakiHostExecution project status', () => {
         ? selected.inspection.trusted.gitDirectoryIdentity
         : { version: 1, digest: 'f'.repeat(64) },
       {
-        workspaceId: WORKSPACE_ID,
-        trusted: selected.inspection.trusted,
+        boundResource: {
+          workspaceId: WORKSPACE_ID,
+          trusted: selected.inspection.trusted,
+        },
       },
     )).rejects.toBeInstanceOf(BoundProjectResourceMismatchError)
     expect(inventoryRounds).toBe(1)

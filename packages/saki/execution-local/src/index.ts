@@ -8,9 +8,9 @@ import {
   advanceLocalGitMutation,
   cancelPublishingOperation,
   cleanupTerminalGitMutation,
-  MIN_OPERATION_MAX_INDEX_BYTES,
   recoverPublishingOperation,
 } from './git-mutation.ts'
+import { localGitMutationInternalsFor } from './git-mutation-internals.ts'
 import {
   HostOperationAcceptance,
   MAX_INHERITED_BASELINE_ENTRIES,
@@ -51,7 +51,9 @@ import {
 import { readLocalAdministrativeDirectoryIdentity } from './identity.ts'
 import { buildProjectGitStatusObservation, ProjectGitStatusProjectionError } from './status.ts'
 import {
+  hostOperationSnapshotCore,
   localHostOperationRequestFingerprint,
+  MIN_OPERATION_MAX_INDEX_BYTES,
   sakiHostExecutionDomainSpec,
   type LocalHostOperationRecord,
 } from './operation-state.ts'
@@ -267,9 +269,14 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       fused.throwIfAborted()
       let record = this.requireOperation(operation)
       if (isTerminalHostOperation(record.snapshot)) {
-        await cleanupTerminalGitMutation(this.gitMutationDependencies(), record)
+        const advanced = await advanceLocalGitMutation(
+          this.gitMutationDependencies(),
+          record,
+          next => this.persistOperation(next),
+          fused,
+        )
         this.liveOperations.delete(operation.id)
-        return { ok: true, snapshot: record.snapshot as HostOperationSnapshot<K> }
+        return { ok: true, snapshot: advanced.record.snapshot as HostOperationSnapshot<K> }
       }
       const live = this.liveOperations.get(operation.id)
       if (!(acceptance instanceof LocalHostOperationAcceptance)
@@ -342,11 +349,8 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     operation: HostOperationReference<K>,
     signal: AbortSignal,
   ): Promise<HostOperationSnapshot<K>> {
-    if (this.lifetime.signal.aborted) throw this.lifetime.signal.reason
-    const fused = AbortSignal.any([signal, this.lifetime.signal])
-    return await this.track(this.enqueueOperation(async () => {
-      fused.throwIfAborted()
-      let record = this.requireOperation(operation)
+    return await this.withSerializedOperation(operation, signal, async (initial, fused) => {
+      let record = initial
       if (record.snapshot.state === 'publishing') {
         const recovered = await recoverPublishingOperation(
           this.gitMutationDependencies(),
@@ -361,7 +365,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
         this.liveOperations.delete(operation.id)
       }
       return record.snapshot as HostOperationSnapshot<K>
-    }))
+    })
   }
 
   override async cancelOperation<K extends HostOperationKind>(
@@ -369,11 +373,8 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     reason: HostOperationCancellationReason,
     signal: AbortSignal,
   ): Promise<HostOperationSnapshot<K>> {
-    if (this.lifetime.signal.aborted) throw this.lifetime.signal.reason
-    const fused = AbortSignal.any([signal, this.lifetime.signal])
-    return await this.track(this.enqueueOperation(async () => {
-      fused.throwIfAborted()
-      let record = this.requireOperation(operation)
+    return await this.withSerializedOperation(operation, signal, async (initial, fused) => {
+      let record = initial
       if (isTerminalHostOperation(record.snapshot)) {
         await cleanupTerminalGitMutation(this.gitMutationDependencies(), record)
         this.liveOperations.delete(operation.id)
@@ -392,7 +393,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       }
       const completedAt = Date.now()
       const snapshot: HostOperationSnapshot = {
-        ...snapshotCore(record.snapshot),
+        ...hostOperationSnapshotCore(record.snapshot),
         state: 'canceled',
         revision: record.snapshot.revision + 1,
         completedAt,
@@ -403,7 +404,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       await this.persistOperation({ ...record, snapshot })
       this.liveOperations.delete(operation.id)
       return snapshot as HostOperationSnapshot<K>
-    }))
+    })
   }
 
   override onChanged(listener: (change: HostOperationChange) => void): HostOperationChangedDisposer {
@@ -429,8 +430,10 @@ export class LocalSakiHostExecution extends SakiHostExecution {
         signal,
         readLocalAdministrativeDirectoryIdentity,
         {
-          workspaceId: binding.workspaceId,
-          trusted: binding.expectedInspection.trusted,
+          boundResource: {
+            workspaceId: binding.workspaceId,
+            trusted: binding.expectedInspection.trusted,
+          },
         },
       )
     } catch (error) {
@@ -470,6 +473,19 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     return await tracked
   }
 
+  private async withSerializedOperation<K extends HostOperationKind, T>(
+    reference: HostOperationReference<K>,
+    signal: AbortSignal,
+    operation: (record: LocalHostOperationRecord, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (this.lifetime.signal.aborted) throw this.lifetime.signal.reason
+    const fused = AbortSignal.any([signal, this.lifetime.signal])
+    return await this.track(this.enqueueOperation(async () => {
+      fused.throwIfAborted()
+      return await operation(this.requireOperation(reference), fused)
+    }))
+  }
+
   private requireOperationTable(): KvTable<HostOperationReference['id'], LocalHostOperationRecord> {
     if (this.operationTable === undefined) throw new Error('Saki Local Host Operation storage is not started')
     return this.operationTable
@@ -488,6 +504,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
   }
 
   private gitMutationDependencies() {
+    const internals = localGitMutationInternalsFor(this.ctx)
     return {
       fs: this.ctx.fs,
       workspaces: this.ctx.workspaceRegistry,
@@ -498,6 +515,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
         this.requireOperationTable().get(record.snapshot.operation.id),
         record,
       ),
+      ...(internals === undefined ? {} : { internals }),
     }
   }
 
@@ -512,8 +530,8 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     for (const listener of [...this.changedListeners]) {
       try {
         listener(change)
-      } catch (error) {
-        this.ctx.logger.warn(`Saki Host Operation change listener failed: ${String(error)}`)
+      } catch {
+        this.ctx.logger.warn('[saki-execution-local] Host Operation change listener failed')
       }
     }
   }
@@ -577,20 +595,6 @@ function isTerminalHostOperation(snapshot: HostOperationSnapshot): boolean {
     || snapshot.state === 'reconciliation-required'
 }
 
-function snapshotCore(snapshot: HostOperationSnapshot) {
-  return {
-    operation: snapshot.operation,
-    revision: snapshot.revision,
-    source: snapshot.source,
-    requestFingerprint: snapshot.requestFingerprint,
-    bindingId: snapshot.bindingId,
-    bindingRevision: snapshot.bindingRevision,
-    preparedAt: snapshot.preparedAt,
-    updatedAt: snapshot.updatedAt,
-    admission: snapshot.admission,
-  }
-}
-
 function bindingResourceMatches(
   binding: ActiveHostProjectBinding,
   current: ProjectSelectionInspection,
@@ -613,6 +617,7 @@ function projectInspectionFailure(reason: StableLocalProjectSelectionFailureReas
     case 'ambiguous': return { ok: false, reason: 'ambiguous' }
     case 'unavailable': return { ok: false, reason: 'unavailable' }
     case 'limit': return { ok: false, reason: 'limit' }
+    case 'unsupported-index-state': return { ok: false, reason: 'unavailable' }
     case 'not-directory':
     case 'not-git':
     case 'bare':
@@ -649,7 +654,7 @@ export function assertSupportedGitVersion(bytes: Uint8Array, stderr: Uint8Array)
 }
 
 export { GitCommandError } from './git-runner.ts'
-export { MIN_OPERATION_MAX_INDEX_BYTES } from './git-mutation.ts'
+export { MIN_OPERATION_MAX_INDEX_BYTES } from './operation-state.ts'
 export { sanitizeRemote } from './inspection.ts'
 export { sakiHostExecutionDomainSpec } from './operation-state.ts'
 export type { LocalHostOperationRecord } from './operation-state.ts'

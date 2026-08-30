@@ -27,6 +27,7 @@ import {
   inheritedChangeBaselineIdentityMaterial,
   inheritedChangeBaselineSchema,
   isAbsoluteHostPath,
+  isGitObjectId,
   MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES,
   MAX_HOST_OPERATION_SELECTED_CHANGES,
   MAX_TRUSTED_PATH_CHARS,
@@ -436,14 +437,26 @@ export const gitMutationExpectationSchema: z.ZodType<GitMutationExpectation> = z
   expectedHead: projectGitHeadSchema,
   expectedIndex: z.object({
     kind: z.literal('tree'),
-    treeId: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u),
+    treeId: z.string().refine(value => isGitObjectId(value)),
   }).strict(),
   expectedWorktree: projectGitWorktreeFingerprintSchema,
-}).strict()
+}).strict().superRefine((value, context) => {
+  if (value.expectedHead.kind === 'commit'
+    && value.expectedHead.objectId.length !== value.expectedIndex.treeId.length) {
+    context.addIssue({
+      code: 'custom',
+      message: 'expected HEAD and index use different object formats',
+      path: ['expectedIndex', 'treeId'],
+    })
+  }
+})
 
-const selectedGitChangesSchema = z.array(selectedProjectGitChangeSchema)
+const selectedGitChangesSchema = boundedArrayPreflight(
+  MAX_HOST_OPERATION_SELECTED_CHANGES,
+  'structured Git selection exceeds the protocol row limit',
+).pipe(z.array(selectedProjectGitChangeSchema)
   .min(1)
-  .max(MAX_HOST_OPERATION_SELECTED_CHANGES)
+  .max(MAX_HOST_OPERATION_SELECTED_CHANGES))
   .superRefine((changes, context) => {
     if (new Set(changes.map(change => change.id)).size !== changes.length) {
       context.addIssue({ code: 'custom', message: 'structured Git selection repeats a change id' })
@@ -466,22 +479,13 @@ export const unstageFilesIntentSchema = z.object({
   changes: selectedGitChangesSchema,
 }).strict() satisfies z.ZodType<UnstageFilesIntent>
 
-function hasUnpairedSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1)
-      if (next < 0xdc00 || next > 0xdfff) return true
-      index += 1
-    } else if (code >= 0xdc00 && code <= 0xdfff) return true
-  }
-  return false
-}
-
-const commitMessageSchema = z.string().min(1)
-  .refine(value => !value.includes('\0'))
-  .refine(value => !hasUnpairedSurrogate(value))
-  .refine(value => new TextEncoder().encode(value).byteLength <= MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES)
+const commitMessageSchema = z.string()
+  .min(1)
+  .max(MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES)
+  .pipe(z.string()
+    .refine(value => !value.includes('\0'))
+    .refine(value => value.isWellFormed())
+    .refine(value => new TextEncoder().encode(value).byteLength <= MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES))
 
 /** Strict deterministic CreateCommit Control Intent without identity or ref inputs. */
 export const createCommitIntentSchema = z.object({

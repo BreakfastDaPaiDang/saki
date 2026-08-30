@@ -71,6 +71,24 @@ async function closeResources(
   }
 }
 
+async function materializeHostExecutionAndSeal(
+  facility: DomainFacility,
+  identity: NewSakiGenerationIdentity,
+  signal: AbortSignal,
+): Promise<void> {
+  const hostExecution = sakiStateCapability.writable.hostExecution
+  await facility.materialize(
+    hostExecution,
+    emptySnapshot(hostExecution),
+    { targetBackend: 'candidate', signal },
+  )
+  await facility.materialize(
+    sakiStorageGenerationDomainSpec,
+    sealSnapshot(identity),
+    { targetBackend: 'candidate', signal },
+  )
+}
+
 /**
  * Materialize empty current control state and its required seal in a missing SQLite database.
  * @param databasePath - missing candidate `state.sqlite` path.
@@ -96,17 +114,7 @@ export async function materializeFreshSakiGeneration(
       emptySnapshot(controlPlane),
       { targetBackend: 'candidate', signal },
     )
-    const hostExecution = sakiStateCapability.writable.hostExecution
-    await facility.materialize(
-      hostExecution,
-      emptySnapshot(hostExecution),
-      { targetBackend: 'candidate', signal },
-    )
-    await facility.materialize(
-      sakiStorageGenerationDomainSpec,
-      sealSnapshot(identity),
-      { targetBackend: 'candidate', signal },
-    )
+    await materializeHostExecutionAndSeal(facility, identity, signal)
   } catch (error) {
     operationFailure = error
   }
@@ -143,17 +151,7 @@ export async function migrateSakiGeneration(
       targetBackend: 'candidate',
       signal,
     })
-    const hostExecution = sakiStateCapability.writable.hostExecution
-    await facility.materialize(
-      hostExecution,
-      emptySnapshot(hostExecution),
-      { targetBackend: 'candidate', signal },
-    )
-    await facility.materialize(
-      sakiStorageGenerationDomainSpec,
-      sealSnapshot(identity),
-      { targetBackend: 'candidate', signal },
-    )
+    await materializeHostExecutionAndSeal(facility, identity, signal)
   } catch (error) {
     operationFailure = error
   }

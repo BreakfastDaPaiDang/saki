@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import {
+  MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES,
+  MAX_HOST_OPERATION_SELECTED_CHANGES,
+} from '@breakfastdapaidang/saki-execution'
+import { describe, expect, it, vi } from 'vitest'
 import {
   sakiCreateCommitIntentSchema,
   sakiCreateCommitResultSchema,
@@ -41,6 +45,49 @@ describe('Saki structured Git operation wire schemas', () => {
       ...intent,
       changes: [{ ...intent.changes[0], path: 'src/private.ts' }],
     }).success).toBe(false)
+  })
+
+  it('rejects an oversized raw wire selection before reading an element', () => {
+    const changes: unknown[] = []
+    changes.length = MAX_HOST_OPERATION_SELECTED_CHANGES + 1
+    let elementReads = 0
+    Object.defineProperty(changes, '0', {
+      configurable: true,
+      get() {
+        elementReads += 1
+        throw new Error('wire selection limit read an element')
+      },
+    })
+
+    const result = sakiStageFilesIntentSchema.safeParse({
+      type: 'stage-files',
+      intentId: INTENT_ID,
+      expected,
+      changes,
+    })
+
+    expect(elementReads).toBe(0)
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects all-zero expected index object ids in either Git object format', () => {
+    const intent = {
+      type: 'stage-files',
+      intentId: INTENT_ID,
+      expected,
+      changes: [{ id: CHANGE_ID, fingerprint: { version: 1, digest: '9'.repeat(64) } }],
+    } as const
+
+    for (const width of [40, 64] as const) {
+      expect(sakiStageFilesIntentSchema.safeParse({
+        ...intent,
+        expected: {
+          ...expected,
+          expectedHead: { ...expected.expectedHead, objectId: '6'.repeat(width) },
+          expectedIndex: { kind: 'tree', treeId: '0'.repeat(width) },
+        },
+      }).success).toBe(false)
+    }
   })
 
   it('rejects every browser-supplied authority and Host execution sentinel', () => {
@@ -126,6 +173,42 @@ describe('Saki structured Git operation wire schemas', () => {
     }
     expect(sakiCreateCommitIntentSchema.safeParse({ ...intent, message: '' }).success).toBe(false)
     expect(sakiCreateCommitIntentSchema.safeParse({ ...intent, message: 'subject\0body' }).success).toBe(false)
+    expect(sakiCreateCommitIntentSchema.safeParse({
+      ...intent,
+      expected: { ...intent.expected, expectedIndex: { kind: 'tree', treeId: '7'.repeat(64) } },
+    }).success).toBe(false)
+    for (const message of ['bad\uD800', '\uDC00bad']) {
+      expect(sakiCreateCommitIntentSchema.safeParse({ ...intent, message }).success).toBe(false)
+    }
+  })
+
+  it('rejects an oversized raw wire Commit message before UTF-8 encoding', () => {
+    const intent = {
+      type: 'create-commit',
+      intentId: INTENT_ID,
+      expected,
+      message: 'subject',
+    } as const
+    const message = 'a'.repeat(MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES + 1)
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode')
+    try {
+      const result = sakiCreateCommitIntentSchema.safeParse({ ...intent, message })
+
+      expect(encode.mock.calls.some(([value]) => value === message)).toBe(false)
+      expect(result.success).toBe(false)
+
+      const multibyteMessage = '\u0800'.repeat(
+        Math.floor(MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES / 3) + 1,
+      )
+      const multibyteResult = sakiCreateCommitIntentSchema.safeParse({
+        ...intent,
+        message: multibyteMessage,
+      })
+      expect(encode.mock.calls.some(([value]) => value === multibyteMessage)).toBe(true)
+      expect(multibyteResult.success).toBe(false)
+    } finally {
+      encode.mockRestore()
+    }
   })
 
   it('exposes repository-level eligibility and only a safe current operation reference', () => {
@@ -244,6 +327,11 @@ describe('Saki structured Git operation wire schemas', () => {
     for (const projection of valid) {
       expect(sakiCurrentGitOperationProjectionSchema.parse(projection)).toEqual(projection)
     }
+    expect(sakiCurrentGitOperationProjectionSchema.parse({
+      intentId: INTENT_ID,
+      type: 'stage-files',
+      state: 'admission-reserved',
+    })).toEqual({ intentId: INTENT_ID, type: 'stage-files', state: 'admission-reserved' })
     expect(sakiCurrentGitOperationProjectionSchema.safeParse({
       ...valid[0],
       operation: { ...valid[0].operation, type: 'commit' },
@@ -458,6 +546,11 @@ describe('Saki structured Git operation wire schemas', () => {
           operation: { ...operation, state: 'prepared' },
         },
       },
+      {
+        ok: false,
+        reason: 'conflict',
+        receipt: { ...identity, state: 'conflict', reason: 'expected-evidence' },
+      },
       { ok: false, reason: 'failure', receipt: { ...identity, state: 'failed', reason: 'binding-stale', operation } },
       { ok: false, reason: 'failure', receipt: { ...identity, state: 'failed', reason: 'invalid-selection', operation } },
       {
@@ -469,6 +562,11 @@ describe('Saki structured Git operation wire schemas', () => {
           reason: 'source-canceled',
           operation: { ...operation, state: 'canceled' },
         },
+      },
+      {
+        ok: false,
+        reason: 'canceled',
+        receipt: { ...identity, state: 'canceled', reason: 'source-canceled' },
       },
       {
         ok: false,
@@ -497,6 +595,16 @@ describe('Saki structured Git operation wire schemas', () => {
       ok: false,
       reason: 'conflict',
       receipt: { ...identity, state: 'failed', reason: 'binding-stale', operation },
+    }).success).toBe(false)
+    expect(sakiStageFilesResultSchema.safeParse({
+      ok: false,
+      reason: 'conflict',
+      receipt: {
+        ...identity,
+        id: 'receipt-22222222-2222-4222-8222-222222222222',
+        state: 'conflict',
+        reason: 'expected-evidence',
+      },
     }).success).toBe(false)
     for (const receipt of [
       { ...identity, state: 'host-prepared', operation: { ...operation, state: 'accepted' } },

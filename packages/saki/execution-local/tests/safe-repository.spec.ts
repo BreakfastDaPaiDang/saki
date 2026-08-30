@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat as nativeLstat, mkdir, mkdtemp, realpath, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, normalize, relative } from 'node:path'
 import { promisify } from 'node:util'
@@ -608,6 +608,73 @@ describe('safe repository admission', () => {
     )
     expect(packedOpened.kind).toBe('repository')
     if (packedOpened.kind === 'repository') await packedOpened.view[Symbol.asyncDispose]()
+  })
+
+  it('backdates the private index before repository-aware Git reads it', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    const sourceIndex = await nativeLstat(join(canonicalRoot, '.git', 'index'), { bigint: true })
+    const harness = await localHarness()
+    let privateIndexMtimeNs: bigint | undefined
+    const observingGit = {
+      run: async (...args: Parameters<GitRunner['run']>) => {
+        const [cwd, gitArgs] = args
+        if (privateIndexMtimeNs === undefined && gitArgs[0] === `--git-dir=${cwd}`) {
+          privateIndexMtimeNs = (await nativeLstat(join(cwd, 'index'), { bigint: true })).mtimeNs
+        }
+        return await harness.git.run(...args)
+      },
+    } as GitRunner
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      observingGit,
+      canonicalRoot,
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    expect(opened.kind).toBe('repository')
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    expect(privateIndexMtimeNs).toBeDefined()
+    expect(privateIndexMtimeNs as bigint).toBeLessThan(sourceIndex.mtimeNs)
+  })
+
+  it('rejects an index changed after its native timestamp capture', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    const index = join(canonicalRoot, '.git', 'index')
+    const harness = await localHarness()
+    const opened = await openSafeRepositoryView(
+      withLstatHook(harness.fs, index, 3, 'before', async () => {
+        await writeFile(index, 'raced index control file')
+      }),
+      harness.git,
+      canonicalRoot,
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    expect(opened.kind).toBe('unavailable')
+  })
+
+  it('clamps a private index timestamp at the Unix epoch', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    await utimes(join(canonicalRoot, '.git', 'index'), 0.5, 0.5)
+    const harness = await localHarness()
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      harness.git,
+      canonicalRoot,
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    expect(opened.kind).toBe('repository')
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
   })
 
   it('rejects a HEAD without its required line ending', async () => {

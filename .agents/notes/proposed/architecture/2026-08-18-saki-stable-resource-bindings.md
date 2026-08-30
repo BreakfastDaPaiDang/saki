@@ -18,7 +18,7 @@ Version 0.1.0 registers, rebinds, and retires Projects but does not physically c
 
 The proposed [domain KV storage and Workspace](2026-07-24-domain-kv-storage-and-workspace.md) note owns DSH Workspace `fs.realpath` uniqueness and immutable records; this proposal owns Saki's higher-level binding identity, Git observation, rebind, and lease semantics. The proposed [Installation maintenance](2026-08-18-saki-forward-migrations-and-installation-maintenance.md) note owns replacement-Host restore and links `needs-rebind` into this lifecycle.
 
-The implemented [existing-directory Project registration](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.md) establishes the first stable Project and Resource Binding ids, duplicate worktree identity checks, and startup revalidation. This note remains proposed because rebind, retirement, repair, Execution Leases, successor Sessions, and physical worktree lifecycle are not implemented.
+The implemented [existing-directory Project registration](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.md) establishes the first stable Project and Resource Binding ids, duplicate worktree identity checks, and startup revalidation. The implemented [structured-Git decision](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.md) revalidates an exact active Binding and its revision for bound status, Diff, and direct mutation, and gives each Binding one durable write-admission owner. This note remains proposed because rebind, retirement, repair, Execution Leases, successor Sessions, and physical worktree lifecycle are not implemented.
 
 ## Alternatives considered
 

@@ -63,6 +63,7 @@ export class RepositoryStatusError extends Error {
  * @param inventory - raw HEAD, index-stage, untracked, and current-byte evidence.
  * @param bounds - maximum retained entry and path totals.
  * @param signal - observation lifetime.
+ * @param assumeUnchangedPaths - exact CE_VALID paths whose ordinary rows may be rebuilt from raw evidence.
  * @returns canonical status facts without decoding any path.
  */
 export async function captureVerifiedRepositoryStatus(
@@ -73,6 +74,7 @@ export async function captureVerifiedRepositoryStatus(
   inventory: CapturedRepositoryInventory,
   bounds: RepositoryStatusBounds,
   signal: AbortSignal,
+  assumeUnchangedPaths: readonly Uint8Array[] = [],
 ): Promise<VerifiedRepositoryStatus> {
   signal.throwIfAborted()
   const output = await git.run(cwd, projectStatusQueryArguments(), signal)
@@ -88,7 +90,7 @@ export async function captureVerifiedRepositoryStatus(
     throw new RepositoryStatusError('malformed')
   }
   validateBranch(parsed, branch)
-  const entries = mergeRawGitlinkEntries(parsed.entries, inventory)
+  const entries = mergeRawOwnedEntries(parsed.entries, inventory, assumeUnchangedPaths)
     .sort((left, right) => Buffer.compare(Buffer.from(left.path), Buffer.from(right.path)))
   const pathBytes = entries.reduce((total, entry) => total + entry.path.byteLength, 0)
   if (entries.length > bounds.maxEntries || pathBytes > bounds.maxPathBytes) {
@@ -174,23 +176,73 @@ function validateEntries(
   }
 }
 
-function mergeRawGitlinkEntries(
+function mergeRawOwnedEntries(
   statusEntries: readonly ParsedStatusEntry[],
   inventory: CapturedRepositoryInventory,
+  assumeUnchangedPaths: readonly Uint8Array[],
 ): ParsedStatusEntry[] {
   const inventoryByPath = new Map(inventory.entries.map(entry => [pathKey(entry.path), entry]))
+  const assumeUnchanged = new Map<string, CapturedRepositoryInventoryEntry & {
+    readonly index: CapturedInventoryGitObject
+  }>()
+  for (const path of assumeUnchangedPaths) {
+    const key = pathKey(path)
+    const raw = inventoryByPath.get(key)
+    if (assumeUnchanged.has(key) || raw?.index === undefined) {
+      throw new RepositoryStatusError('ambiguous')
+    }
+    assumeUnchanged.set(key, raw as CapturedRepositoryInventoryEntry & {
+      readonly index: CapturedInventoryGitObject
+    })
+  }
   const merged = statusEntries.filter((entry) => {
     const raw = inventoryByPath.get(pathKey(entry.path))
-    return raw === undefined || !capturedInventoryEntryHasGitlink(raw)
+    return raw === undefined || (!capturedInventoryEntryHasGitlink(raw)
+      && (!assumeUnchanged.has(pathKey(entry.path)) || potentialIntentToAdd(raw, inventory.objectFormat)))
   })
   for (const raw of inventory.entries) {
-    if (!capturedInventoryEntryHasGitlink(raw)) continue
-    const classification = classifyCapturedInventoryEntry(raw, inventory.comparison)
-    if (!classification.changed) continue
-    const entry = rawGitlinkStatusEntry(raw, inventory)
+    if (capturedInventoryEntryHasGitlink(raw)) {
+      if (!classifyCapturedInventoryEntry(raw, inventory.comparison).changed) continue
+      const entry = rawGitlinkStatusEntry(raw, inventory)
+      if (entry !== undefined) merged.push(entry)
+      continue
+    }
+    const assumed = assumeUnchanged.get(pathKey(raw.path))
+    if (assumed === undefined || potentialIntentToAdd(assumed, inventory.objectFormat)) continue
+    const entry = rawAssumeUnchangedStatusEntry(assumed, inventory)
     if (entry !== undefined) merged.push(entry)
   }
   return merged
+}
+
+function rawAssumeUnchangedStatusEntry(
+  raw: CapturedRepositoryInventoryEntry & { readonly index: CapturedInventoryGitObject },
+  inventory: CapturedRepositoryInventory,
+): ParsedOrdinaryStatusEntry | undefined {
+  const classification = classifyCapturedInventoryEntry(raw, inventory.comparison)
+  if (raw.current.kind !== 'captured' || classification.conversionAmbiguous) {
+    throw new RepositoryStatusError('ambiguous')
+  }
+  if (!classification.changed) return undefined
+  const observedWorktreeMode = capturedEvidenceMode(raw.current.evidence)
+  const observedWorktreeStatus = worktreeStatus(raw, inventory)
+  return {
+    kind: 'ordinary',
+    path: raw.path.slice(),
+    indexStatus: indexStatus(raw.head, raw.index),
+    worktreeStatus: observedWorktreeStatus,
+    submodule: { kind: 'not-submodule' },
+    head: statusObjectSlot(raw.head, inventory.objectFormat),
+    index: statusObjectSlot(raw.index, inventory.objectFormat),
+    worktreeMode: observedWorktreeStatus === 'unchanged' ? raw.index.mode : observedWorktreeMode,
+  }
+}
+
+function potentialIntentToAdd(
+  raw: CapturedRepositoryInventoryEntry,
+  objectFormat: CapturedRepositoryInventory['objectFormat'],
+): boolean {
+  return raw.head === undefined && raw.index?.objectId === EMPTY_BLOB_OBJECT_IDS[objectFormat]
 }
 
 function rawGitlinkStatusEntry(
@@ -267,11 +319,17 @@ function capturedWorktreeMode(raw: CapturedRepositoryInventoryEntry): ParsedGitM
   if (raw.current.kind === 'unavailable') {
     return raw.current.observedMode
   }
-  switch (raw.current.evidence.kind) {
+  return capturedEvidenceMode(raw.current.evidence)
+}
+
+function capturedEvidenceMode(
+  evidence: Extract<CapturedRepositoryInventoryEntry['current'], { readonly kind: 'captured' }>['evidence'],
+): ParsedGitMode {
+  switch (evidence.kind) {
     case 'missing': return '000000'
     case 'submodule': return '160000'
     case 'symlink': return '120000'
-    case 'regular': return raw.current.evidence.mode
+    case 'regular': return evidence.mode
   }
 }
 

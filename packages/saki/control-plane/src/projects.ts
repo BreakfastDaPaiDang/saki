@@ -359,16 +359,7 @@ export class DevelopmentProjects {
   ): ResolvedActiveProjectBinding | 'stale' | 'not-found' | 'binding-unavailable' {
     const registry = this.registry()
     if (registry.revision !== expectedRevision) return 'stale'
-    const project = registry.projects.find(candidate => candidate.id === projectId)
-    if (project === undefined) return 'not-found'
-    const resource = bindingFor(registry, project)
-    if (resource.health !== 'active') return 'binding-unavailable'
-    return {
-      registryRevision: registry.revision,
-      projectId: project.id,
-      projectRevision: project.revision,
-      binding: activeHostProjectBinding(resource),
-    }
+    return this.resolveActiveBinding(registry, projectId)
   }
 
   /**
@@ -380,7 +371,13 @@ export class DevelopmentProjects {
   currentActiveBinding(
     projectId: SakiDevelopmentProjectId,
   ): ResolvedActiveProjectBinding | 'not-found' | 'binding-unavailable' {
-    const registry = this.registry()
+    return this.resolveActiveBinding(this.registry(), projectId)
+  }
+
+  private resolveActiveBinding(
+    registry: DevelopmentProjectRegistryRecord,
+    projectId: SakiDevelopmentProjectId,
+  ): ResolvedActiveProjectBinding | 'not-found' | 'binding-unavailable' {
     const project = registry.projects.find(candidate => candidate.id === projectId)
     if (project === undefined) return 'not-found'
     const resource = bindingFor(registry, project)

@@ -45,12 +45,17 @@ import {
   type GitHubSynchronizationConfigurationIntentTable,
 } from '../src/github-sync.ts'
 import {
-  githubProjectSyncRecordSchema,
-  githubSynchronizationConfigurationIntentRecordSchema,
-  sakiGitHubScanFailureSchema,
+  githubProjectSyncRecordSchema as currentGitHubProjectSyncRecordSchema,
+  githubSynchronizationConfigurationIntentRecordSchema as currentGitHubSynchronizationConfigurationIntentRecordSchema,
+  sakiGitHubScanFailureSchema as currentSakiGitHubScanFailureSchema,
   type GitHubProjectSyncRecord,
   type RegistrationActor,
 } from '../src/spec.ts'
+import {
+  sakiGitHubScanFailureSchema as v4SakiGitHubScanFailureSchema,
+  v4GitHubConfigurationIntentRecordSchema,
+  v4GitHubProjectSyncRecordSchema,
+} from '../src/migration-v4-github.ts'
 import {
   sakiBoardWorkItemIdSchema,
   sakiGitHubScanAttemptIdSchema,
@@ -150,6 +155,46 @@ type Mutable<T> = T extends string
     : T extends object
       ? { -readonly [K in keyof T]: Mutable<T[K]> }
       : T
+
+interface SafeParser<T> {
+  parse(value: unknown): T
+  safeParse(value: unknown): ZodSafeParseResult<T>
+}
+
+function withHistoricalSchemaParity<T>(
+  current: SafeParser<T>,
+  historical: SafeParser<unknown>,
+): SafeParser<T> {
+  return {
+    parse(value) {
+      const currentValue = current.parse(value)
+      expect(historical.parse(value)).toEqual(currentValue)
+      return currentValue
+    },
+    safeParse(value) {
+      const currentResult = current.safeParse(value)
+      const historicalResult = historical.safeParse(value)
+      expect(historicalResult.success).toBe(currentResult.success)
+      if (currentResult.success) {
+        if (historicalResult.success) expect(historicalResult.data).toEqual(currentResult.data)
+      }
+      return currentResult
+    },
+  }
+}
+
+const githubProjectSyncRecordSchema = withHistoricalSchemaParity(
+  currentGitHubProjectSyncRecordSchema,
+  v4GitHubProjectSyncRecordSchema,
+)
+const githubSynchronizationConfigurationIntentRecordSchema = withHistoricalSchemaParity(
+  currentGitHubSynchronizationConfigurationIntentRecordSchema,
+  v4GitHubConfigurationIntentRecordSchema,
+)
+const sakiGitHubScanFailureSchema = withHistoricalSchemaParity(
+  currentSakiGitHubScanFailureSchema,
+  v4SakiGitHubScanFailureSchema,
+)
 
 function synchronizationHarness(
   projects: readonly SakiDevelopmentProjectId[] = [PROJECT_A],
@@ -2030,6 +2075,23 @@ describe('GitHub synchronization coordinator regressions', () => {
     }
     expect(issueMessages(githubProjectSyncRecordSchema.safeParse(unconfiguredMappingOption)))
       .toContain('current mapping failure names an unconfigured Status option')
+
+    const configuredMissingOption = mutableRecord(record)
+    configuredMissingOption.currentFailure = {
+      attemptId: sakiGitHubScanAttemptIdSchema.parse('scan-attempt-00000000-0000-4000-8000-000000000114'),
+      configurationRevision: record.active.revision,
+      failedAt: 10_001,
+      failure: {
+        kind: 'provider',
+        failure: {
+          code: 'mapping-mismatch',
+          reason: 'required-options-missing',
+          statusFieldId: record.active.configuration.statusFieldNodeId,
+          missingRequiredStatusOptionIds: [record.active.configuration.statusOptionNodeIds.ready],
+        },
+      },
+    }
+    expect(githubProjectSyncRecordSchema.safeParse(configuredMissingOption).success).toBe(true)
 
     const newerMappingFailure = mutableRecord(record)
     newerMappingFailure.revision += 1

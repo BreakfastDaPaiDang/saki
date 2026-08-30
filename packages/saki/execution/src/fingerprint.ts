@@ -89,14 +89,11 @@ export type ProjectGitStatusSeedMaterial = Omit<
   'fingerprint' | 'changes' | 'observedAt'
 > & { readonly changes: readonly ProjectGitChangeMaterial[] }
 
-/**
- * Remove change ids and the final fingerprint from one complete status.
- * @param observation - complete status material before final fingerprinting.
- * @returns canonical observation seed shared by every contained change id.
- */
-export function projectGitStatusSeedMaterial(
+type ProjectGitStatusCommonMaterial = Omit<ProjectGitStatusFingerprintMaterial, 'changes'>
+
+function projectGitStatusCommonMaterial(
   observation: Omit<ProjectGitStatusObservation, 'fingerprint'>,
-): ProjectGitStatusSeedMaterial {
+): ProjectGitStatusCommonMaterial {
   return {
     observationVersion: observation.observationVersion,
     bindingId: observation.bindingId,
@@ -109,8 +106,21 @@ export function projectGitStatusSeedMaterial(
     ...(observation.upstream === undefined ? {} : { upstream: observation.upstream }),
     index: observation.index,
     worktree: observation.worktree,
-    changes: observation.changes.map(({ id: _id, ...change }) => change),
     structuredMutation: observation.structuredMutation,
+  }
+}
+
+/**
+ * Remove change ids and the final fingerprint from one complete status.
+ * @param observation - complete status material before final fingerprinting.
+ * @returns canonical observation seed shared by every contained change id.
+ */
+export function projectGitStatusSeedMaterial(
+  observation: Omit<ProjectGitStatusObservation, 'fingerprint'>,
+): ProjectGitStatusSeedMaterial {
+  return {
+    ...projectGitStatusCommonMaterial(observation),
+    changes: observation.changes.map(({ id: _id, ...change }) => change),
   }
 }
 
@@ -156,19 +166,8 @@ export function projectGitStatusFingerprintMaterial(
   observation: Omit<ProjectGitStatusObservation, 'fingerprint'>,
 ): ProjectGitStatusFingerprintMaterial {
   return {
-    observationVersion: observation.observationVersion,
-    bindingId: observation.bindingId,
-    bindingRevision: observation.bindingRevision,
-    bindingHealth: observation.bindingHealth,
-    locked: observation.locked,
-    objectFormat: observation.objectFormat,
-    head: observation.head,
-    branch: observation.branch,
-    ...(observation.upstream === undefined ? {} : { upstream: observation.upstream }),
-    index: observation.index,
-    worktree: observation.worktree,
+    ...projectGitStatusCommonMaterial(observation),
     changes: observation.changes,
-    structuredMutation: observation.structuredMutation,
   }
 }
 

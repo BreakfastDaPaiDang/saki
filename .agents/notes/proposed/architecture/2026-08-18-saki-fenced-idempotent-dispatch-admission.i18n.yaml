@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-fenced-idempotent-dispatch-admission.md
-2026-08-18-saki-fenced-idempotent-dispatch-admission.md: e7009f381096bc55a98db05a507c4034470dc3fe
-2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md: a05a0b5a45e5ab897f843b4edd4d974fb3de883a
+2026-08-18-saki-fenced-idempotent-dispatch-admission.md: de79cba08b0f8dce30282a6838db726ab184e506
+2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md: daacd1defa24cb488ef7298b75d6a55b51b8e065

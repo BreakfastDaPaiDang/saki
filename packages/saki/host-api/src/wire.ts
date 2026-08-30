@@ -3,11 +3,12 @@
 import { z } from 'zod'
 import {
   canonicalDigest,
+  commitHostOperationRequestSchema,
   commitHostOperationResultSchema,
   hostOperationIdSchema,
   inheritedChangeBaselineSchema,
+  isGitObjectId,
   isSafeDisplayLocation,
-  MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES,
   MAX_HOST_OPERATION_SELECTED_CHANGES,
   MAX_DISPLAY_LOCATION_CHARS,
   MAX_INVENTORY_ENTRIES,
@@ -129,27 +130,11 @@ const scanAttemptId = z.string().regex(new RegExp(`^scan-attempt-${UUID_PATTERN}
   .transform(value => value as SakiGitHubScanAttemptId)
 const boardRemoteFingerprint = z.string().regex(/^remote-fingerprint-[0-9a-f]{64}$/u)
   .transform(value => value as SakiBoardRemoteFingerprint)
-const UTF8 = new TextEncoder()
-
 function boundedArray<T extends z.ZodType>(element: T, minimum: number, maximum: number) {
   return z.custom<unknown[]>(value => Array.isArray(value)
     && value.length >= minimum
     && value.length <= maximum)
     .pipe(z.array(element))
-}
-
-function hasUnpairedSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1)
-      if (next < 0xdc00 || next > 0xdfff) return true
-      index += 1
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true
-    }
-  }
-  return false
 }
 
 /** Strict body schema for endpoints with no operation fields. */
@@ -274,6 +259,8 @@ export const sakiConfigureGitHubSynchronizationIntentSchema = z.object({
 }).strict() satisfies z.ZodType<ConfigureGitHubSynchronizationIntent>
 
 /** Browser-supplied status evidence without trusted Binding or baseline authority. */
+// This browser boundary must not import the Node-facing durable Control Plane schema it independently validates.
+/* jscpd:ignore-start */
 export const sakiGitMutationExpectationSchema = z.object({
   projectId,
   expectedRegistryRevision: revision,
@@ -281,7 +268,7 @@ export const sakiGitMutationExpectationSchema = z.object({
   expectedBinding: z.object({ id: bindingId, revision }).strict(),
   expectedStatus: projectGitStatusFingerprintSchema,
   expectedHead: projectGitHeadSchema,
-  expectedIndex: z.object({ kind: z.literal('tree'), treeId: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u) }).strict(),
+  expectedIndex: z.object({ kind: z.literal('tree'), treeId: z.string().refine(value => isGitObjectId(value)) }).strict(),
   expectedWorktree: projectGitWorktreeFingerprintSchema,
 }).strict().superRefine((value, context) => {
   if (value.expectedHead.kind === 'commit'
@@ -293,10 +280,13 @@ export const sakiGitMutationExpectationSchema = z.object({
     })
   }
 }) satisfies z.ZodType<GitMutationExpectation>
+/* jscpd:ignore-end */
 
-const sakiSelectedGitChangesSchema = z.array(selectedProjectGitChangeSchema)
-  .min(1)
-  .max(MAX_HOST_OPERATION_SELECTED_CHANGES)
+const sakiSelectedGitChangesSchema = boundedArray(
+  selectedProjectGitChangeSchema,
+  1,
+  MAX_HOST_OPERATION_SELECTED_CHANGES,
+)
   .superRefine((changes, context) => {
     if (new Set(changes.map(change => change.id)).size !== changes.length) {
       context.addIssue({ code: 'custom', message: 'selected changes repeat a change id' })
@@ -319,9 +309,7 @@ export const sakiUnstageFilesIntentSchema = z.object({
   changes: sakiSelectedGitChangesSchema,
 }).strict() satisfies z.ZodType<UnstageFilesIntent>
 
-const sakiCommitMessageSchema = z.string().min(1)
-  .refine(value => !value.includes('\0') && !hasUnpairedSurrogate(value))
-  .refine(value => UTF8.encode(value).byteLength <= MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES)
+const sakiCommitMessageSchema = commitHostOperationRequestSchema.shape.message
 
 /** Strict Commit Control Intent without caller-supplied Git identity or ref authority. */
 export const sakiCreateCommitIntentSchema = z.object({

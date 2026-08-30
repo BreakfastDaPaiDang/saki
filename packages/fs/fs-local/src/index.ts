@@ -262,4 +262,5 @@ export class LocalFileSystem extends FileSystem {
   }
 }
 
+export { copyFileDaclWin32, readFileDaclWin32, replaceFileWin32 } from './win32.ts'
 export default LocalFileSystem

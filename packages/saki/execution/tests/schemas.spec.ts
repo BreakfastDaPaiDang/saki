@@ -1,7 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import Invariants from '@deepseek-ai/dsh-invariants'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { canonicalDigest } from '../src/canonical.ts'
 import {
   computeProjectGitChangeFingerprint,
@@ -29,8 +29,12 @@ import {
   hostOperationRequestSchema,
   hostOperationSnapshotSchema,
   hostOperationStartResultSchema,
+  MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES,
+  MAX_HOST_OPERATION_SELECTED_CHANGES,
   MAX_PROJECT_GIT_DIFF_CURSOR_CHARS,
   MAX_PROJECT_GIT_DIFF_LINE_UTF8_BYTES,
+  MAX_PROJECT_GIT_STATUS_CHANGES,
+  MAX_PROJECT_GIT_STATUS_PATH_BYTES,
   isGitObjectId,
   isAbsoluteHostPath,
   isNormalizedRemoteCoordinate,
@@ -44,6 +48,7 @@ import {
   MAX_REMOTE_COORDINATE_CHARS,
   MAX_SAFE_REMOTES,
   projectGitStatusObservationSchema,
+  projectGitChangeSchema,
   projectGitDiffCursorSchema,
   projectGitDiffPageSchema,
   readProjectDiffOperationRequestSchema,
@@ -53,6 +58,7 @@ import {
   projectSelectionInspectionSchema,
   safeGitRemoteObservationSchema,
   safeGitRemoteObservationKey,
+  stageFilesHostOperationResultSchema,
 } from '../src/schemas.ts'
 import type {
   ActiveHostProjectBinding,
@@ -666,10 +672,17 @@ describe('InheritedChangeBaseline schemas', () => {
       }),
       preEffectBaseline: unavailableBaseline,
     })).toBeDefined()
+    expect(inspectProjectResultSchema.safeParse({
+      ok: true,
+      observation,
+      preEffectBaseline: unavailableBaseline,
+    }).success).toBe(false)
     expect(inspectProjectResultSchema.safeParse({ ok: true, observation }).success).toBe(false)
     expect(projectGitStatusFingerprintMaterial(observation)).toEqual(observationFingerprintMaterial)
     expect(isRepositoryRelativeGitPath('line\nname.txt')).toBe(true)
     expect(compareRepositoryRelativeGitPaths('\ue000', '\u{10000}')).toBeLessThan(0)
+    expect(compareRepositoryRelativeGitPaths('a', 'aa')).toBeLessThan(0)
+    expect(compareRepositoryRelativeGitPaths('aa', 'a')).toBeGreaterThan(0)
     expect(signedStatus(statusSeed)).toEqual(observation)
     const laterObservation = { ...observation, observedAt: observation.observedAt + 1 }
     expect(projectGitStatusObservationSchema.parse(laterObservation)).toEqual(laterObservation)
@@ -818,6 +831,401 @@ describe('InheritedChangeBaseline schemas', () => {
     expect(inspectProjectRequestSchema.safeParse({ binding, argv: ['status'] }).success).toBe(false)
   })
 
+  it('cross-checks ordinary, untracked, unmerged, and gitlink change evidence', () => {
+    const { trackedChange, untrackedChange } = boundStatusFixture()
+    const { fingerprint: _trackedFingerprint, ...ordinary } = trackedChange
+    const { fingerprint: _untrackedFingerprint, ...untracked } = untrackedChange
+    const missingSlot = { mode: '000000' as const, objectId: '0'.repeat(40) }
+    const regularSlot = { mode: '100644' as const, objectId: '1'.repeat(40) }
+    const regularEvidence = {
+      kind: 'regular' as const,
+      mode: '100644' as const,
+      byteLength: 1,
+      contentDigest: '2'.repeat(64),
+    }
+
+    const validOrdinaryRows = [
+      {
+        ...ordinary,
+        path: 'staged-addition.txt',
+        indexStatus: 'added' as const,
+        worktreeStatus: 'unchanged' as const,
+        head: missingSlot,
+        index: regularSlot,
+        worktreeEvidence: regularEvidence,
+      },
+      {
+        ...ordinary,
+        path: 'staged-deletion.txt',
+        indexStatus: 'deleted' as const,
+        worktreeStatus: 'unchanged' as const,
+        index: missingSlot,
+        worktreeMode: '000000' as const,
+        worktreeEvidence: { kind: 'missing' as const },
+      },
+      {
+        ...ordinary,
+        path: 'intent-to-add.txt',
+        indexStatus: 'unchanged' as const,
+        worktreeStatus: 'added' as const,
+        head: missingSlot,
+        index: missingSlot,
+        worktreeEvidence: regularEvidence,
+      },
+      {
+        ...ordinary,
+        path: 'submodule',
+        indexStatus: 'modified' as const,
+        worktreeStatus: 'unchanged' as const,
+        submodule: { kind: 'submodule' as const, commit: 'unchanged' as const },
+        head: { mode: '160000' as const, objectId: '1'.repeat(40) },
+        index: { mode: '160000' as const, objectId: '2'.repeat(40) },
+        worktreeMode: '160000' as const,
+        worktreeEvidence: { kind: 'submodule' as const, objectId: '2'.repeat(40) },
+      },
+      {
+        ...ordinary,
+        path: 'type-change',
+        indexStatus: 'type-changed' as const,
+        worktreeStatus: 'unchanged' as const,
+        index: { mode: '120000' as const, objectId: '2'.repeat(40) },
+        worktreeMode: '120000' as const,
+        worktreeEvidence: { kind: 'symlink' as const, targetDigest: '3'.repeat(64) },
+      },
+    ]
+    for (const row of validOrdinaryRows) {
+      expect(projectGitChangeSchema.safeParse(retainedChange(row)).success).toBe(true)
+    }
+
+    const invalidOrdinaryRows = [
+      {
+        ...ordinary,
+        path: 'clean.txt',
+        indexStatus: 'unchanged' as const,
+        worktreeStatus: 'unchanged' as const,
+        index: ordinary.head,
+      },
+      { ...ordinary, path: 'wrong-deletion.txt', worktreeStatus: 'deleted' as const },
+      { ...ordinary, path: 'wrong-presence.txt', worktreeEvidence: { kind: 'missing' as const } },
+      { ...ordinary, path: 'wrong-index.txt', indexStatus: 'added' as const },
+      {
+        ...ordinary,
+        path: 'missing-modified.txt',
+        indexStatus: 'modified' as const,
+        worktreeStatus: 'added' as const,
+        head: missingSlot,
+        index: missingSlot,
+        worktreeEvidence: regularEvidence,
+      },
+      {
+        ...ordinary,
+        path: 'unreported-submodule',
+        indexStatus: 'modified' as const,
+        worktreeStatus: 'unchanged' as const,
+        head: { mode: '160000' as const, objectId: '1'.repeat(40) },
+        index: { mode: '160000' as const, objectId: '2'.repeat(40) },
+        worktreeMode: '160000' as const,
+        worktreeEvidence: { kind: 'submodule' as const, objectId: '2'.repeat(40) },
+      },
+      {
+        ...validOrdinaryRows[2]!,
+        path: 'wrong-submodule-commit',
+        submodule: { kind: 'submodule' as const, commit: 'changed' as const },
+      },
+    ]
+    for (const row of invalidOrdinaryRows) {
+      expect(projectGitChangeSchema.safeParse(retainedChange(row)).success).toBe(false)
+    }
+
+    for (const row of [
+      {
+        ...untracked,
+        path: 'link',
+        worktreeMode: '120000' as const,
+        worktreeEvidence: { kind: 'symlink' as const, targetDigest: '3'.repeat(64) },
+      },
+      {
+        ...untracked,
+        path: 'unknown',
+        worktreeMode: 'unknown' as const,
+        worktreeEvidence: { kind: 'unavailable' as const, reason: 'io-failure' as const },
+      },
+    ]) {
+      expect(projectGitChangeSchema.safeParse(retainedChange(row)).success).toBe(true)
+    }
+    expect(projectGitChangeSchema.safeParse(retainedChange({
+      ...untracked,
+      path: 'impossible-submodule',
+      worktreeMode: 'unknown',
+      worktreeEvidence: { kind: 'submodule', objectId: '4'.repeat(40) },
+    })).success).toBe(false)
+
+    const unmerged = {
+      path: 'conflict.txt',
+      kind: 'unmerged' as const,
+      indexStatus: 'unmerged' as const,
+      worktreeStatus: 'present' as const,
+      conflict: 'both-modified' as const,
+      submodule: { kind: 'not-submodule' as const },
+      stages: { base: regularSlot, ours: regularSlot, theirs: regularSlot },
+      worktreeMode: '100644' as const,
+      worktreeEvidence: regularEvidence,
+      attribution: 'unattributed' as const,
+    }
+    const addedByUs = {
+      ...unmerged,
+      path: 'added-by-us.txt',
+      conflict: 'added-by-us' as const,
+      stages: { base: missingSlot, ours: regularSlot, theirs: missingSlot },
+    }
+    const submoduleConflict = {
+      ...unmerged,
+      path: 'submodule-conflict',
+      submodule: { kind: 'submodule' as const, commit: 'unknown' as const },
+      stages: {
+        base: { mode: '160000' as const, objectId: '1'.repeat(40) },
+        ours: { mode: '160000' as const, objectId: '2'.repeat(40) },
+        theirs: { mode: '160000' as const, objectId: '3'.repeat(40) },
+      },
+      worktreeMode: '160000' as const,
+      worktreeEvidence: { kind: 'submodule' as const, objectId: '2'.repeat(40) },
+    }
+    for (const row of [unmerged, addedByUs, submoduleConflict]) {
+      expect(projectGitChangeSchema.safeParse(retainedChange(row)).success).toBe(true)
+    }
+    for (const row of [
+      { ...unmerged, path: 'wrong-mode.txt', worktreeStatus: 'absent' as const },
+      { ...unmerged, path: 'wrong-evidence.txt', worktreeEvidence: { kind: 'missing' as const } },
+      { ...unmerged, path: 'wrong-conflict.txt', conflict: 'both-added' as const },
+      {
+        ...unmerged,
+        path: 'unreported-gitlink',
+        stages: {
+          ...unmerged.stages,
+          base: { mode: '160000' as const, objectId: '1'.repeat(40) },
+        },
+      },
+      {
+        ...submoduleConflict,
+        path: 'wrong-conflict-submodule-state',
+        submodule: { kind: 'submodule' as const, commit: 'changed' as const },
+      },
+    ]) {
+      expect(projectGitChangeSchema.safeParse(retainedChange(row)).success).toBe(false)
+    }
+  })
+
+  it('rejects cross-row status contradictions and mixed object formats', () => {
+    const { statusSeed, trackedChange } = boundStatusFixture()
+    const { upstream: _upstream, ...withoutUpstream } = statusSeed
+    const { fingerprint: _fingerprint, ...ordinary } = trackedChange
+    const unmerged = signedChange({
+      path: 'conflict.txt',
+      kind: 'unmerged',
+      indexStatus: 'unmerged',
+      worktreeStatus: 'present',
+      conflict: 'both-modified',
+      submodule: { kind: 'not-submodule' },
+      stages: {
+        base: { mode: '100644', objectId: '1'.repeat(40) },
+        ours: { mode: '100644', objectId: '2'.repeat(40) },
+        theirs: { mode: '100644', objectId: '3'.repeat(40) },
+      },
+      worktreeMode: '100644',
+      worktreeEvidence: {
+        kind: 'regular', mode: '100644', byteLength: 1, contentDigest: '4'.repeat(64),
+      },
+      attribution: 'unattributed',
+    } as const)
+    const invalidStatusSeeds: readonly ProjectGitStatusSeedMaterial[] = [
+      {
+        ...statusSeed,
+        changes: [],
+        branch: { kind: 'attached', ref: 'refs/heads/other', name: 'other' },
+      },
+      {
+        ...withoutUpstream,
+        changes: [],
+        branch: { kind: 'detached' },
+      },
+      {
+        ...statusSeed,
+        changes: [],
+        head: { kind: 'commit', objectId: '1'.repeat(40) },
+        branch: { kind: 'detached' },
+      },
+      {
+        ...statusSeed,
+        changes: [],
+        objectFormat: 'sha256',
+        head: { kind: 'commit', objectId: '1'.repeat(64), symbolicRef: 'refs/heads/main' },
+      },
+      {
+        ...statusSeed,
+        changes: [],
+        index: { kind: 'unmerged', stagesDigest: { version: 1, digest: 'f'.repeat(64) } },
+        structuredMutation: { available: false, blockers: ['unmerged'] },
+      },
+      {
+        ...statusSeed,
+        changes: [unmerged],
+      },
+      {
+        ...statusSeed,
+        changes: [signedChange({ ...ordinary, index: { ...ordinary.index, objectId: '2'.repeat(64) } })],
+      },
+      {
+        ...statusSeed,
+        changes: [signedChange({
+          ...ordinary,
+          path: 'wrong-missing-slot.txt',
+          indexStatus: 'deleted',
+          worktreeStatus: 'unchanged',
+          index: { mode: '000000', objectId: '2'.repeat(40) },
+          worktreeMode: '000000',
+          worktreeEvidence: { kind: 'missing' },
+        })],
+      },
+      {
+        ...statusSeed,
+        changes: [signedChange({
+          ...ordinary,
+          path: 'wrong-submodule-width',
+          indexStatus: 'modified',
+          worktreeStatus: 'unchanged',
+          submodule: { kind: 'submodule', commit: 'unchanged' },
+          head: { mode: '160000', objectId: '1'.repeat(40) },
+          index: { mode: '160000', objectId: '2'.repeat(40) },
+          worktreeMode: '160000',
+          worktreeEvidence: { kind: 'submodule', objectId: '2'.repeat(64) },
+        })],
+      },
+    ]
+    for (const seed of invalidStatusSeeds) {
+      expect(projectGitStatusObservationSchema.safeParse(signedStatus(seed)).success).toBe(false)
+    }
+
+  })
+
+  it('rejects an oversized raw status row array before reading an element', () => {
+    const { observation } = boundStatusFixture()
+    const changes: unknown[] = []
+    changes.length = MAX_PROJECT_GIT_STATUS_CHANGES + 1
+    let elementReads = 0
+    Object.defineProperty(changes, '0', {
+      configurable: true,
+      get() {
+        elementReads += 1
+        throw new Error('status row limit read an element')
+      },
+    })
+
+    const result = projectGitStatusObservationSchema.safeParse({ ...observation, changes })
+
+    expect(elementReads).toBe(0)
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('oversized status row array passed validation')
+    expect(result.error.issues.map(({ code, path, message }) => ({ code, path, message }))).toEqual([{
+      code: 'custom',
+      path: ['changes'],
+      message: 'status changes exceed the protocol row limit',
+    }])
+  })
+
+  it('lets the exact status row limit reach path preflight', () => {
+    const { observation } = boundStatusFixture()
+    const changes: unknown[] = []
+    changes.length = MAX_PROJECT_GIT_STATUS_CHANGES
+    const reachedPathPreflight = new Error('exact status row limit reached path preflight')
+    Object.defineProperty(changes, '0', {
+      configurable: true,
+      get() {
+        throw reachedPathPreflight
+      },
+    })
+
+    expect(() => projectGitStatusObservationSchema.safeParse({ ...observation, changes }))
+      .toThrow(reachedPathPreflight)
+  })
+
+  it('rejects an individually oversized raw status path before UTF-8 encoding', () => {
+    const { observation } = boundStatusFixture()
+    const path = 'a'.repeat(MAX_PROJECT_GIT_STATUS_PATH_BYTES + 1)
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode')
+    try {
+      const result = projectGitStatusObservationSchema.safeParse({
+        ...observation,
+        changes: [{ ...observation.changes[0]!, path }],
+      })
+
+      expect(encode.mock.calls.some(([value]) => value === path)).toBe(false)
+      expect(result.success).toBe(false)
+      if (result.success) throw new Error('oversized status path passed validation')
+      expect(result.error.issues.map(({ code, path: issuePath, message }) => ({
+        code, path: issuePath, message,
+      }))).toEqual([{
+        code: 'custom',
+        path: ['changes'],
+        message: 'status paths exceed the protocol byte limit',
+      }])
+    } finally {
+      encode.mockRestore()
+    }
+  }, 15_000)
+
+  it('lets an exact status path byte budget reach complete row validation', () => {
+    const { observation } = boundStatusFixture()
+    const path = 'a'.repeat(MAX_PROJECT_GIT_STATUS_PATH_BYTES)
+
+    const result = projectGitStatusObservationSchema.safeParse({
+      ...observation,
+      changes: [{ ...observation.changes[0]!, path }],
+    })
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('stale exact-budget status row passed validation')
+    const messages = result.error.issues.map(({ message }) => message)
+    expect(messages).toContain('change fingerprint disagrees with row evidence')
+    expect(messages).not.toContain('status paths exceed the protocol byte limit')
+  }, 15_000)
+
+  it('enforces the aggregate UTF-8 status-path byte limit before later rows and derived evidence', () => {
+    const { observation } = boundStatusFixture()
+    const longPath = `a${'\u0800'.repeat(Math.floor(MAX_PROJECT_GIT_STATUS_PATH_BYTES / 6) + 1)}`
+    const unreadable = { ...observation.changes[0]! }
+    let laterPathReads = 0
+    Object.defineProperty(unreadable, 'path', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        laterPathReads += 1
+        throw new Error('status path budget read past its first overflow')
+      },
+    })
+
+    const result = projectGitStatusObservationSchema.safeParse({
+      ...observation,
+      changes: [
+        { ...observation.changes[0]!, path: `${longPath}a` },
+        {
+          ...observation.changes[0]!,
+          id: `git-change-${'e'.repeat(64)}`,
+          path: `${longPath}b`,
+        },
+        unreadable,
+      ],
+    })
+
+    expect(laterPathReads).toBe(0)
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('aggregate status path budget passed validation')
+    expect(result.error.issues.map(({ code, path, message }) => ({ code, path, message }))).toEqual([{
+      code: 'custom',
+      path: ['changes'],
+      message: 'status paths exceed the protocol byte limit',
+    }])
+  }, 15_000)
+
   it('keeps paginated project Diff requests opaque and result pages internally consistent', () => {
     const { binding, observation } = boundStatusFixture()
     const changeId = observation.changes[0]!.id
@@ -881,6 +1289,14 @@ describe('InheritedChangeBaseline schemas', () => {
     expect(projectGitDiffPageSchema.safeParse({ ...page, pageUtf8Bytes: pageUtf8Bytes - 1 }).success).toBe(false)
     expect(projectGitDiffPageSchema.safeParse({
       ...page,
+      omittedBeforeLines: 1,
+      totalUtf8Bytes: pageUtf8Bytes + 1,
+      truncated: true,
+    }).success).toBe(false)
+    expect(projectGitDiffPageSchema.safeParse({ ...page, totalUtf8Bytes: pageUtf8Bytes + 1 }).success).toBe(false)
+    expect(projectGitDiffPageSchema.safeParse({ ...page, truncated: true }).success).toBe(false)
+    expect(projectGitDiffPageSchema.safeParse({
+      ...page,
       range: { startLine: 1, endLineExclusive: 2, totalLines: 3 },
       lines: [lines[1]],
       pageUtf8Bytes: diffLineBytes([lines[1]]),
@@ -913,7 +1329,7 @@ describe('InheritedChangeBaseline schemas', () => {
   })
 
   it('keeps Host Operation requests path-free and durable lifecycle evidence closed', () => {
-    const { baseline, binding, observation } = boundStatusFixture()
+    const { baseline, binding, observation, projectionWithoutFingerprint } = boundStatusFixture()
     const trackedChange = observation.changes[0]!
     const source = {
       kind: 'control-intent',
@@ -948,6 +1364,25 @@ describe('InheritedChangeBaseline schemas', () => {
     expect(hostOperationRequestSchema.safeParse({ type: 'commit', source, expected, message: 'subject' }).success)
       .toBe(true)
     expect(hostOperationRequestSchema.safeParse({ type: 'commit', source, expected, message: '' }).success).toBe(false)
+    for (const message of ['bad\uD800', '\uDC00bad']) {
+      expect(hostOperationRequestSchema.safeParse({ type: 'commit', source, expected, message }).success).toBe(false)
+    }
+    const sha256Projection = {
+      ...projectionWithoutFingerprint,
+      objectFormat: 'sha256' as const,
+      head: { kind: 'commit' as const, objectId: '1'.repeat(64), symbolicRef: 'refs/heads/main' },
+    }
+    const sha256Binding = {
+      ...binding,
+      expectedInspection: {
+        ...binding.expectedInspection,
+        projection: signedInspection(sha256Projection, binding.expectedInspection.trusted),
+      },
+    }
+    expect(hostOperationRequestSchema.safeParse({
+      ...request,
+      expected: { ...expected, binding: sha256Binding },
+    }).success).toBe(false)
 
     const operation = {
       id: 'host-operation-33333333-3333-4333-8333-333333333333',
@@ -991,6 +1426,40 @@ describe('InheritedChangeBaseline schemas', () => {
       observedAt: 11,
       reason: 'effect-unknown',
     }).success).toBe(false)
+    expect(hostOperationSnapshotSchema.safeParse({ ...snapshot, updatedAt: snapshot.preparedAt - 1 }).success).toBe(false)
+    expect(hostOperationSnapshotSchema.safeParse({
+      ...snapshot,
+      state: 'accepted',
+      admission: { kind: 'accepted', revision: 1, acceptedAt: snapshot.preparedAt - 1 },
+    }).success).toBe(false)
+    expect(hostOperationSnapshotSchema.safeParse({
+      ...snapshot,
+      state: 'publishing',
+      updatedAt: 14,
+      admission: { kind: 'accepted', revision: 1, acceptedAt: 11 },
+      plannedAt: 13,
+      effectPlannedAt: 12,
+      publishingAt: 14,
+    }).success).toBe(false)
+    for (const current of [
+      {
+        ...snapshot,
+        state: 'planning' as const,
+        updatedAt: 11,
+        admission: { kind: 'accepted' as const, revision: 1, acceptedAt: 10 },
+        plannedAt: 11,
+      },
+      {
+        ...snapshot,
+        state: 'reconciliation-required' as const,
+        updatedAt: 11,
+        admission: { kind: 'accepted' as const, revision: 1, acceptedAt: 10 },
+        observedAt: 11,
+        reason: 'effect-unknown' as const,
+      },
+    ]) {
+      expect(hostOperationSnapshotSchema.parse(current)).toEqual(current)
+    }
 
     class TestAcceptance extends HostOperationAcceptance {
       constructor(created = true) {
@@ -1010,13 +1479,185 @@ describe('InheritedChangeBaseline schemas', () => {
       committer: { name: 'Test User', email: 'a b@c', timestamp: 1, timezone: '+0800', source: 'git-config' },
     } as const
     expect(commitHostOperationResultSchema.parse(commitResult)).toEqual(commitResult)
+    expect(commitHostOperationResultSchema.parse({ ...commitResult, parent: { kind: 'none' } }))
+      .toEqual({ ...commitResult, parent: { kind: 'none' } })
     expect(commitHostOperationResultSchema.safeParse({ ...commitResult, treeId: 'b'.repeat(64) }).success).toBe(false)
     expect(commitHostOperationResultSchema.safeParse({ ...commitResult, postObservation: observation }).success).toBe(false)
     expect(commitHostOperationResultSchema.safeParse({
       ...commitResult,
       target: { kind: 'symbolic-ref', ref: 'refs/remotes/origin/main' },
     }).success).toBe(false)
+    const appliedChange = {
+      id: trackedChange.id,
+      fingerprint: trackedChange.fingerprint,
+      path: trackedChange.path,
+    }
+    const stageResult = {
+      type: 'stage-files' as const,
+      changes: [appliedChange],
+      resultingIndex: { kind: 'tree' as const, treeId: 'b'.repeat(40) },
+    }
+    expect(stageFilesHostOperationResultSchema.parse(stageResult)).toEqual(stageResult)
+    expect(stageFilesHostOperationResultSchema.safeParse({
+      ...stageResult,
+      changes: [appliedChange, { ...appliedChange, id: `git-change-${'e'.repeat(64)}` }],
+    }).success).toBe(false)
+    expect(stageFilesHostOperationResultSchema.safeParse({
+      ...stageResult,
+      changes: [appliedChange, { ...appliedChange, path: 'other.txt' }],
+    }).success).toBe(false)
+    expect(hostOperationSnapshotSchema.safeParse({
+      ...snapshot,
+      state: 'succeeded',
+      revision: 1,
+      updatedAt: 12,
+      admission: { kind: 'accepted', revision: 1, acceptedAt: 11 },
+      completedAt: 12,
+      result: { ...stageResult, type: 'unstage-files' },
+    }).success).toBe(false)
   })
+
+  it('rejects an oversized raw Host Operation selection before reading an element', () => {
+    const { baseline, binding, observation } = boundStatusFixture()
+    const changes: unknown[] = []
+    changes.length = MAX_HOST_OPERATION_SELECTED_CHANGES + 1
+    let elementReads = 0
+    Object.defineProperty(changes, '0', {
+      configurable: true,
+      get() {
+        elementReads += 1
+        throw new Error('Host Operation selection limit read an element')
+      },
+    })
+
+    const result = hostOperationRequestSchema.safeParse({
+      type: 'stage-files',
+      source: {
+        kind: 'control-intent',
+        intentId: 'intent-22222222-2222-4222-8222-222222222222',
+        intentRevision: 0,
+        payloadDigest: '7'.repeat(64),
+      },
+      expected: {
+        binding,
+        status: observation.fingerprint,
+        head: observation.head,
+        index: observation.index,
+        worktree: observation.worktree,
+        preEffectBaseline: baseline,
+      },
+      changes,
+    })
+
+    expect(elementReads).toBe(0)
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects an oversized raw Commit message before UTF-8 encoding', () => {
+    const { baseline, binding, observation } = boundStatusFixture()
+    const message = 'a'.repeat(MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES + 1)
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode')
+    try {
+      const result = hostOperationRequestSchema.safeParse({
+        type: 'commit',
+        source: {
+          kind: 'control-intent',
+          intentId: 'intent-22222222-2222-4222-8222-222222222222',
+          intentRevision: 0,
+          payloadDigest: '7'.repeat(64),
+        },
+        expected: {
+          binding,
+          status: observation.fingerprint,
+          head: observation.head,
+          index: observation.index,
+          worktree: observation.worktree,
+          preEffectBaseline: baseline,
+        },
+        message,
+      })
+
+      expect(encode.mock.calls.some(([value]) => value === message)).toBe(false)
+      expect(result.success).toBe(false)
+
+      const multibyteMessage = '\u0800'.repeat(
+        Math.floor(MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES / 3) + 1,
+      )
+      const multibyteResult = hostOperationRequestSchema.safeParse({
+        type: 'commit',
+        source: {
+          kind: 'control-intent',
+          intentId: 'intent-22222222-2222-4222-8222-222222222222',
+          intentRevision: 0,
+          payloadDigest: '7'.repeat(64),
+        },
+        expected: {
+          binding,
+          status: observation.fingerprint,
+          head: observation.head,
+          index: observation.index,
+          worktree: observation.worktree,
+          preEffectBaseline: baseline,
+        },
+        message: multibyteMessage,
+      })
+      expect(encode.mock.calls.some(([value]) => value === multibyteMessage)).toBe(true)
+      expect(multibyteResult.success).toBe(false)
+    } finally {
+      encode.mockRestore()
+    }
+  })
+
+  it('rejects an oversized raw Host Operation result before reading an element', () => {
+    const changes: unknown[] = []
+    changes.length = MAX_HOST_OPERATION_SELECTED_CHANGES + 1
+    let elementReads = 0
+    Object.defineProperty(changes, '0', {
+      configurable: true,
+      get() {
+        elementReads += 1
+        throw new Error('Host Operation result limit read an element')
+      },
+    })
+
+    const result = stageFilesHostOperationResultSchema.safeParse({
+      type: 'stage-files',
+      changes,
+      resultingIndex: { kind: 'tree', treeId: 'b'.repeat(40) },
+    })
+
+    expect(elementReads).toBe(0)
+    expect(result.success).toBe(false)
+  })
+
+  it('enforces the aggregate UTF-8 path budget across one Host Operation result', () => {
+    const { observation } = boundStatusFixture()
+    const firstPathLength = Math.floor(MAX_PROJECT_GIT_STATUS_PATH_BYTES / 2)
+    const secondPathLength = MAX_PROJECT_GIT_STATUS_PATH_BYTES - firstPathLength
+    const changes = [
+      {
+        id: observation.changes[0]!.id,
+        fingerprint: observation.changes[0]!.fingerprint,
+        path: `a${'x'.repeat(firstPathLength - 1)}`,
+      },
+      {
+        id: observation.changes[1]!.id,
+        fingerprint: observation.changes[1]!.fingerprint,
+        path: `b${'y'.repeat(secondPathLength - 1)}`,
+      },
+    ] as const
+    const result = {
+      type: 'stage-files' as const,
+      changes,
+      resultingIndex: { kind: 'tree' as const, treeId: 'b'.repeat(40) },
+    }
+
+    expect(stageFilesHostOperationResultSchema.safeParse(result).success).toBe(true)
+    expect(stageFilesHostOperationResultSchema.safeParse({
+      ...result,
+      changes: [changes[0], { ...changes[1], path: `${changes[1].path}z` }],
+    }).success).toBe(false)
+  }, 15_000)
 
   it('registers the stateless package invariant companion', async () => {
     const ctx = new Context()
@@ -1213,4 +1854,8 @@ function signedStatus(seed: ProjectGitStatusSeedMaterial): ProjectGitStatusObser
 
 function signedChange<const T extends ProjectGitChangeFingerprintMaterial>(material: T) {
   return { ...material, fingerprint: computeProjectGitChangeFingerprint(material) }
+}
+
+function retainedChange<const T extends ProjectGitChangeFingerprintMaterial>(material: T) {
+  return { id: `git-change-${'f'.repeat(64)}`, ...signedChange(material) }
 }

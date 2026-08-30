@@ -30,6 +30,7 @@ import {
 import type {
   BootstrapChallengeRecord,
   BrowserSessionRecord,
+  ControlIntentActor,
   ControlStateRecord,
   GrantRecord,
   HostRecord,
@@ -738,18 +739,9 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
               || this.requireGitOperationIntentTable().get(parsed.intentId) !== undefined) {
               return { ok: false, reason: 'conflict' }
             }
-            const foundation = this.requireFoundation()
             return await this.githubSynchronization.configure(
               parsed as ConfigureGitHubSynchronizationIntent,
-              {
-                installationId: foundation.installation.id,
-                storageGenerationId: this.installationState.storageGenerationId,
-                hostId: foundation.host.id,
-                principalId: foundation.principal.id,
-                principalRevision: foundation.principal.revision,
-                grantId: foundation.grant.id,
-                grantRevision: foundation.grant.revision,
-              },
+              this.currentControlIntentActor(),
               operationSignal,
             )
           },
@@ -800,8 +792,12 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined) {
       return { ok: false, reason: 'conflict' }
     }
+    return await this.gitOperations.submit(intent, this.currentControlIntentActor(), signal)
+  }
+
+  private currentControlIntentActor(): ControlIntentActor {
     const foundation = this.requireFoundation()
-    return await this.gitOperations.submit(intent, {
+    return {
       installationId: foundation.installation.id,
       storageGenerationId: this.installationState.storageGenerationId,
       hostId: foundation.host.id,
@@ -809,7 +805,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       principalRevision: foundation.principal.revision,
       grantId: foundation.grant.id,
       grantRevision: foundation.grant.revision,
-    }, signal)
+    }
   }
 
   private async registerDevelopmentProject(
@@ -839,16 +835,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     if (!this.authorized(authentication, 'development-project:register')) {
       return { ok: false, reason: 'denied' }
     }
-    const foundation = this.requireFoundation()
-    const actor: RegistrationActor = {
-      installationId: foundation.installation.id,
-      storageGenerationId: this.installationState.storageGenerationId,
-      hostId: foundation.host.id,
-      principalId: foundation.principal.id,
-      principalRevision: foundation.principal.revision,
-      grantId: foundation.grant.id,
-      grantRevision: foundation.grant.revision,
-    }
+    const actor = this.currentControlIntentActor()
     return await this.projects.register(intent, actor, inspected.inspection, signal)
   }
 
@@ -1503,23 +1490,13 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       || this.requirePrincipalTable().size !== 0
       || this.requireGrantTable().size !== 0
       || this.requireAccessTable().size !== 0
-      || this.requireProjectRegistryTable().size !== 0
-      || this.requireRegistrationIntentTable().size !== 0
-      || this.requireGitHubProjectSyncTable().size !== 0
-      || this.requireGitHubSynchronizationConfigurationIntentTable().size !== 0
-      || this.requireGitOperationIntentTable().size !== 0
-      || this.requireBindingWriteAdmissionTable().size !== 0) {
+      || this.hasDevelopmentProductRows()) {
       throw new Error('saki control state is missing from a non-empty domain')
     }
   }
 
   private assertProvisioningRows(control: ControlStateRecord): void {
-    if (this.requireProjectRegistryTable().size !== 0
-      || this.requireRegistrationIntentTable().size !== 0
-      || this.requireGitHubProjectSyncTable().size !== 0
-      || this.requireGitHubSynchronizationConfigurationIntentTable().size !== 0
-      || this.requireGitOperationIntentTable().size !== 0
-      || this.requireBindingWriteAdmissionTable().size !== 0) {
+    if (this.hasDevelopmentProductRows()) {
       throw new Error('saki provisioning contains Development Project product records')
     }
     this.assertOnlyProvisioningRow(this.requireInstallationTable(), control.installationId)
@@ -1527,6 +1504,15 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     this.assertOnlyProvisioningRow(this.requirePrincipalTable(), control.hostOperatorPrincipalId)
     this.assertOnlyProvisioningRow(this.requireGrantTable(), control.hostOperatorGrantId)
     this.assertOnlyProvisioningRow(this.requireAccessTable(), control.installationAccessId)
+  }
+
+  private hasDevelopmentProductRows(): boolean {
+    return this.requireProjectRegistryTable().size !== 0
+      || this.requireRegistrationIntentTable().size !== 0
+      || this.requireGitHubProjectSyncTable().size !== 0
+      || this.requireGitHubSynchronizationConfigurationIntentTable().size !== 0
+      || this.requireGitOperationIntentTable().size !== 0
+      || this.requireBindingWriteAdmissionTable().size !== 0
   }
 
   private assertOnlyProvisioningRow<K extends string, V>(table: KvTable<K, V>, key: K): void {

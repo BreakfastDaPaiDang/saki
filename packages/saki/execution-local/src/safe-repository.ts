@@ -4,7 +4,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, lstat as nativeLstat, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, normalize, relative, resolve as resolvePath, sep, win32 } from 'node:path'
 import type { FileSystem, FsVersion } from '@deepseek-ai/dsh-fs'
@@ -25,6 +25,7 @@ import {
 import { isSafeProjectStatusQuery } from './status-query.ts'
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
+const NANOSECONDS_PER_SECOND = 1_000_000_000n
 const BOOLEAN_CONFIG_KEYS = new Set(['core.autocrlf', 'core.fileMode', 'core.symlinks'])
 const SCOPED_BOOLEAN_CONFIG_KEYS = new Set(['core.fsmonitor', 'extensions.worktreeConfig'])
 
@@ -70,6 +71,10 @@ export class RepositoryControlChangedError extends Error {
 interface StableFile {
   readonly bytes: Uint8Array
   readonly version: FsVersion
+}
+
+interface StableIndexFile extends StableFile {
+  readonly mtimeNs: bigint
 }
 
 interface StableDirectory {
@@ -250,8 +255,13 @@ export async function openSafeRepositoryView(
     const branch = parseHeadBranch(head.bytes)
     await writePrivateFile(join(scratch, 'HEAD'), head.bytes)
 
-    const index = await readStableFile(fs, join(gitDirectory.path, 'index'), maxControlFileBytes, signal, false)
-    if (index !== undefined) await writePrivateFile(join(scratch, 'index'), index.bytes)
+    const index = await readStableIndexFile(
+      fs,
+      join(gitDirectory.path, 'index'),
+      maxControlFileBytes,
+      signal,
+    )
+    if (index !== undefined) await writePrivateIndex(join(scratch, 'index'), index)
     const packedRefs = await readStableFile(
       fs,
       join(commonDirectory.path, 'packed-refs'),
@@ -715,6 +725,26 @@ async function readStableFile(
   return { bytes, version: confirmed.version }
 }
 
+async function readStableIndexFile(
+  fs: FileSystem,
+  path: string,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<StableIndexFile | undefined> {
+  const file = await readStableFile(fs, path, maxBytes, signal, false)
+  if (file === undefined) return undefined
+  signal.throwIfAborted()
+  const nativeInfo = await nativeLstat(path, { bigint: true })
+  signal.throwIfAborted()
+  const confirmed = await fs.lstat(path, undefined, signal)
+  if (!nativeInfo.isFile()
+    || confirmed?.type !== 'file'
+    || confirmed.version !== file.version) {
+    throw new SafeRepositoryError('unavailable')
+  }
+  return { ...file, mtimeNs: nativeInfo.mtimeNs }
+}
+
 async function configSnapshotIsUnsafe(
   git: RepositoryInventoryGit,
   cwd: string,
@@ -1068,6 +1098,20 @@ function sameStableFile(left: StableFile | undefined, right: StableFile | undefi
 
 async function writePrivateFile(path: string, bytes: Uint8Array): Promise<void> {
   await writeFile(path, bytes, { flag: 'wx', mode: 0o600 })
+}
+
+async function writePrivateIndex(path: string, index: StableIndexFile): Promise<void> {
+  await writePrivateFile(path, index.bytes)
+  const backdatedNanoseconds = index.mtimeNs > NANOSECONDS_PER_SECOND
+    ? index.mtimeNs - NANOSECONDS_PER_SECOND
+    : 0n
+  const timestampSeconds = backdatedNanoseconds / NANOSECONDS_PER_SECOND
+  await utimes(path, Number(timestampSeconds), Number(timestampSeconds))
+  const confirmed = await nativeLstat(path, { bigint: true })
+  /* v8 ignore next -- private creation plus backdated whole-second utimes cannot yield a newer mtime; fail closed on anomalies. */
+  if (confirmed.mtimeNs > index.mtimeNs) {
+    throw new SafeRepositoryError('unavailable')
+  }
 }
 
 function splitNul(bytes: Uint8Array): Uint8Array[] {

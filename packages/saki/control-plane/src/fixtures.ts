@@ -267,9 +267,26 @@ const FIXTURE_HEAD = {
 } as const
 const DIRTY_INDEX = { kind: 'tree', treeId: '5'.repeat(40) } as const
 const DIRTY_WORKTREE = { version: 1, digest: '6'.repeat(64) } as const
+const GIT_STATUS_BASE = {
+  observationVersion: 1,
+  bindingId: BINDING_ID,
+  bindingRevision: 0,
+  bindingHealth: 'active',
+  locked: false,
+  objectFormat: 'sha1',
+  head: FIXTURE_HEAD,
+  branch: { kind: 'attached', ref: 'refs/heads/main', name: 'main' },
+} as const
 
 function signedGitChange<const T extends ProjectGitChangeFingerprintMaterial>(material: T) {
   return { ...material, fingerprint: computeProjectGitChangeFingerprint(material) }
+}
+
+function identifiedGitChange<const T extends ProjectGitStatusSeedMaterial['changes'][number]>(
+  seedDigest: string,
+  change: T,
+) {
+  return { id: computeProjectGitChangeId(seedDigest, change), ...change }
 }
 
 function signedGitStatus(seed: ProjectGitStatusSeedMaterial): ProjectGitStatusObservation {
@@ -277,20 +294,13 @@ function signedGitStatus(seed: ProjectGitStatusSeedMaterial): ProjectGitStatusOb
   const observed = {
     ...seed,
     observedAt: GIT_OBSERVED_AT,
-    changes: seed.changes.map(change => ({ id: computeProjectGitChangeId(seedDigest, change), ...change })),
+    changes: seed.changes.map(change => identifiedGitChange(seedDigest, change)),
   }
   return { ...observed, fingerprint: computeProjectGitStatusFingerprint(observed) }
 }
 
 const CLEAN_GIT_STATUS = signedGitStatus({
-  observationVersion: 1,
-  bindingId: BINDING_ID,
-  bindingRevision: 0,
-  bindingHealth: 'active',
-  locked: false,
-  objectFormat: 'sha1',
-  head: FIXTURE_HEAD,
-  branch: { kind: 'attached', ref: 'refs/heads/main', name: 'main' },
+  ...GIT_STATUS_BASE,
   upstream: { ref: 'refs/remotes/origin/main', name: 'origin/main', divergence: { ahead: 0, behind: 0 } },
   index: { kind: 'tree', treeId: '4'.repeat(40) },
   worktree: { version: 1, digest: '4'.repeat(64) },
@@ -298,72 +308,66 @@ const CLEAN_GIT_STATUS = signedGitStatus({
   structuredMutation: { available: true, blockers: [] },
 })
 
-const DIRTY_GIT_STATUS = signedGitStatus({
-  observationVersion: 1,
-  bindingId: BINDING_ID,
-  bindingRevision: 0,
-  bindingHealth: 'active',
-  locked: false,
-  objectFormat: 'sha1',
-  head: FIXTURE_HEAD,
-  branch: { kind: 'attached', ref: 'refs/heads/main', name: 'main' },
+const DIRTY_UNTRACKED_CHANGE_MATERIAL = signedGitChange({
+  kind: 'untracked',
+  path: 'new.txt',
+  indexStatus: 'absent',
+  worktreeStatus: 'untracked',
+  submodule: { kind: 'not-submodule' },
+  worktreeMode: '100644',
+  worktreeEvidence: {
+    kind: 'regular', mode: '100644', byteLength: 4, contentDigest: '7'.repeat(64),
+  },
+  attribution: 'unattributed',
+})
+const DIRTY_STAGED_CHANGE_MATERIAL = signedGitChange({
+  kind: 'ordinary',
+  path: 'staged.txt',
+  indexStatus: 'modified',
+  worktreeStatus: 'unchanged',
+  submodule: { kind: 'not-submodule' },
+  head: { mode: '100644', objectId: '1'.repeat(40) },
+  index: { mode: '100644', objectId: '2'.repeat(40) },
+  worktreeMode: '100644',
+  worktreeEvidence: {
+    kind: 'regular', mode: '100644', byteLength: 7, contentDigest: '8'.repeat(64),
+  },
+  attribution: 'not-inherited',
+})
+const DIRTY_UNSTAGED_CHANGE_MATERIAL = signedGitChange({
+  kind: 'ordinary',
+  path: 'unstaged.txt',
+  indexStatus: 'unchanged',
+  worktreeStatus: 'modified',
+  submodule: { kind: 'not-submodule' },
+  head: { mode: '100644', objectId: '1'.repeat(40) },
+  index: { mode: '100644', objectId: '1'.repeat(40) },
+  worktreeMode: '100644',
+  worktreeEvidence: {
+    kind: 'regular', mode: '100644', byteLength: 9, contentDigest: '9'.repeat(64),
+  },
+  attribution: 'inherited',
+})
+const DIRTY_GIT_STATUS_SEED = {
+  ...GIT_STATUS_BASE,
   upstream: { ref: 'refs/remotes/origin/main', name: 'origin/main', divergence: { ahead: 1, behind: 0 } },
   index: DIRTY_INDEX,
   worktree: DIRTY_WORKTREE,
   changes: [
-    signedGitChange({
-      kind: 'untracked',
-      path: 'new.txt',
-      indexStatus: 'absent',
-      worktreeStatus: 'untracked',
-      submodule: { kind: 'not-submodule' },
-      worktreeMode: '100644',
-      worktreeEvidence: {
-        kind: 'regular', mode: '100644', byteLength: 4, contentDigest: '7'.repeat(64),
-      },
-      attribution: 'unattributed',
-    }),
-    signedGitChange({
-      kind: 'ordinary',
-      path: 'staged.txt',
-      indexStatus: 'modified',
-      worktreeStatus: 'unchanged',
-      submodule: { kind: 'not-submodule' },
-      head: { mode: '100644', objectId: '1'.repeat(40) },
-      index: { mode: '100644', objectId: '2'.repeat(40) },
-      worktreeMode: '100644',
-      worktreeEvidence: {
-        kind: 'regular', mode: '100644', byteLength: 7, contentDigest: '8'.repeat(64),
-      },
-      attribution: 'not-inherited',
-    }),
-    signedGitChange({
-      kind: 'ordinary',
-      path: 'unstaged.txt',
-      indexStatus: 'unchanged',
-      worktreeStatus: 'modified',
-      submodule: { kind: 'not-submodule' },
-      head: { mode: '100644', objectId: '1'.repeat(40) },
-      index: { mode: '100644', objectId: '1'.repeat(40) },
-      worktreeMode: '100644',
-      worktreeEvidence: {
-        kind: 'regular', mode: '100644', byteLength: 9, contentDigest: '9'.repeat(64),
-      },
-      attribution: 'inherited',
-    }),
+    DIRTY_UNTRACKED_CHANGE_MATERIAL,
+    DIRTY_STAGED_CHANGE_MATERIAL,
+    DIRTY_UNSTAGED_CHANGE_MATERIAL,
   ],
   structuredMutation: { available: true, blockers: [] },
-})
+} as const satisfies ProjectGitStatusSeedMaterial
+const DIRTY_GIT_STATUS_SEED_DIGEST = computeProjectGitStatusSeedDigest(DIRTY_GIT_STATUS_SEED)
+const DIRTY_GIT_STATUS = signedGitStatus(DIRTY_GIT_STATUS_SEED)
+const DIRTY_UNTRACKED_CHANGE = identifiedGitChange(DIRTY_GIT_STATUS_SEED_DIGEST, DIRTY_UNTRACKED_CHANGE_MATERIAL)
+const DIRTY_STAGED_CHANGE = identifiedGitChange(DIRTY_GIT_STATUS_SEED_DIGEST, DIRTY_STAGED_CHANGE_MATERIAL)
+const DIRTY_UNSTAGED_CHANGE = identifiedGitChange(DIRTY_GIT_STATUS_SEED_DIGEST, DIRTY_UNSTAGED_CHANGE_MATERIAL)
 
 const CONFLICTED_GIT_STATUS = signedGitStatus({
-  observationVersion: 1,
-  bindingId: BINDING_ID,
-  bindingRevision: 0,
-  bindingHealth: 'active',
-  locked: false,
-  objectFormat: 'sha1',
-  head: FIXTURE_HEAD,
-  branch: { kind: 'attached', ref: 'refs/heads/main', name: 'main' },
+  ...GIT_STATUS_BASE,
   index: { kind: 'unmerged', stagesDigest: { version: 1, digest: 'a'.repeat(64) } },
   worktree: { version: 1, digest: 'b'.repeat(64) },
   changes: [signedGitChange({
@@ -387,15 +391,6 @@ const CONFLICTED_GIT_STATUS = signedGitStatus({
   structuredMutation: { available: false, blockers: ['unmerged'] },
 })
 
-function requireDirtyChange(path: string) {
-  const change = DIRTY_GIT_STATUS.changes.find(candidate => candidate.path === path)
-  if (change === undefined) throw new Error(`Git fixture is missing '${path}'`)
-  return change
-}
-
-const DIRTY_UNSTAGED_CHANGE = requireDirtyChange('unstaged.txt')
-const DIRTY_STAGED_CHANGE = requireDirtyChange('staged.txt')
-const DIRTY_UNTRACKED_CHANGE = requireDirtyChange('new.txt')
 const GIT_MUTATION_EXPECTATION = {
   projectId: PROJECT_ID,
   expectedRegistryRevision: 1,

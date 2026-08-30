@@ -19,6 +19,7 @@ import { SAKI_PROJECT_PROJECTION_FIXTURES } from '@breakfastdapaidang/saki-contr
 import {
   canonicalDigest,
   hostOperationRequestSchema,
+  hostOperationSnapshotSchema,
   type HostOperationId,
   type HostOperationRequest,
   type HostOperationSnapshot,
@@ -44,6 +45,9 @@ const CHANGE = {
   id: `git-change-${'1'.repeat(64)}`,
   fingerprint: { version: 1 as const, digest: '2'.repeat(64) },
 }
+const ALT_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000078' as SakiControlIntentId
+const ALT_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000078' as HostOperationId
+const ALT_BINDING_ID = 'binding-00000000-0000-4000-8000-000000000078' as SakiResourceBindingId
 const TRUSTED_INSPECTION = {
   canonicalWorktreePath: '/fixture/repository',
   canonicalGitDirectory: '/fixture/repository/.git',
@@ -63,22 +67,30 @@ interface LinkedFixture {
   readonly availableAdmission: BindingWriteAdmissionRecord
 }
 
-function linkedFixture(): LinkedFixture {
-  const browserIntent = {
-    type: 'stage-files' as const,
-    intentId: INTENT_ID,
-    expected: {
-      projectId: PROJECT_ID,
-      expectedRegistryRevision: 1,
-      expectedProjectRevision: 0,
-      expectedBinding: { id: BINDING_ID, revision: 0 },
-      expectedStatus: { version: 1 as const, digest: '5'.repeat(64) },
-      expectedHead: { kind: 'commit' as const, objectId: '6'.repeat(40), symbolicRef: 'refs/heads/main' },
-      expectedIndex: { kind: 'tree' as const, treeId: '7'.repeat(40) },
-      expectedWorktree: { version: 1 as const, digest: '8'.repeat(64) },
-    },
-    changes: [CHANGE],
+function linkedFixture(requestType: HostOperationRequest['type'] = 'stage-files'): LinkedFixture {
+  const expectation = {
+    projectId: PROJECT_ID,
+    expectedRegistryRevision: 1,
+    expectedProjectRevision: 0,
+    expectedBinding: { id: BINDING_ID, revision: 0 },
+    expectedStatus: { version: 1 as const, digest: '5'.repeat(64) },
+    expectedHead: { kind: 'commit' as const, objectId: '6'.repeat(40), symbolicRef: 'refs/heads/main' },
+    expectedIndex: { kind: 'tree' as const, treeId: '7'.repeat(40) },
+    expectedWorktree: { version: 1 as const, digest: '8'.repeat(64) },
   }
+  const browserIntent = requestType === 'commit'
+    ? {
+      type: 'create-commit' as const,
+      intentId: INTENT_ID,
+      expected: expectation,
+      message: 'subject',
+    }
+    : {
+      type: requestType,
+      intentId: INTENT_ID,
+      expected: expectation,
+      changes: [CHANGE],
+    }
   const payload = {
     intent: browserIntent,
     actor: {
@@ -92,37 +104,36 @@ function linkedFixture(): LinkedFixture {
     },
   }
   const payloadDigest = canonicalDigest('saki/git-operation-intent/v1', payload)
-  const request = hostOperationRequestSchema.parse({
-    type: 'stage-files',
-    source: { kind: 'control-intent', intentId: INTENT_ID, intentRevision: 0, payloadDigest },
-    expected: {
-      binding: {
-        id: BINDING_ID,
-        revision: 0,
-        health: 'active',
-        hostId: HOST_ID,
-        workspaceId: 'workspace-fixture',
-        expectedInspection: {
-          projection: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection,
-          trusted: TRUSTED_INSPECTION,
-        },
-        inheritedChangeBaseline: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline,
+  const source = { kind: 'control-intent' as const, intentId: INTENT_ID, intentRevision: 0, payloadDigest }
+  const expected = {
+    binding: {
+      id: BINDING_ID,
+      revision: 0,
+      health: 'active' as const,
+      hostId: HOST_ID,
+      workspaceId: 'workspace-fixture',
+      expectedInspection: {
+        projection: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection,
+        trusted: TRUSTED_INSPECTION,
       },
-      status: browserIntent.expected.expectedStatus,
-      head: browserIntent.expected.expectedHead,
-      index: browserIntent.expected.expectedIndex,
-      worktree: browserIntent.expected.expectedWorktree,
-      preEffectBaseline: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline,
+      inheritedChangeBaseline: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline,
     },
-    changes: browserIntent.changes,
-  })
+    status: browserIntent.expected.expectedStatus,
+    head: browserIntent.expected.expectedHead,
+    index: browserIntent.expected.expectedIndex,
+    worktree: browserIntent.expected.expectedWorktree,
+    preEffectBaseline: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline,
+  }
+  const request = hostOperationRequestSchema.parse(requestType === 'commit'
+    ? { type: requestType, source, expected, message: browserIntent.message }
+    : { type: requestType, source, expected, changes: browserIntent.changes })
   const requestFingerprint = {
     version: 1 as const,
     digest: canonicalDigest('saki/host-operation-request/v1', request),
   }
-  const operation = { id: OPERATION_ID, hostId: HOST_ID, type: 'stage-files' as const }
+  const operation = { id: OPERATION_ID, hostId: HOST_ID, type: requestType }
   const preparation = { operation, preparationRevision: 0, requestFingerprint }
-  const preparedSnapshot = {
+  const preparedSnapshot = hostOperationSnapshotSchema.parse({
     operation,
     revision: 0,
     source: request.source,
@@ -133,7 +144,7 @@ function linkedFixture(): LinkedFixture {
     updatedAt: 2,
     state: 'prepared' as const,
     admission: { kind: 'not-accepted' as const },
-  }
+  })
   const intent = gitOperationIntentRecordSchema.parse({
     id: INTENT_ID,
     schemaVersion: 1,
@@ -150,12 +161,12 @@ function linkedFixture(): LinkedFixture {
     createdAt: 1,
     updatedAt: 2,
   })
-  const operationRecord = {
-    schemaVersion: 1 as const,
+  const operationRecord = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    schemaVersion: 1,
     request,
     preparationRevision: 0,
     snapshot: preparedSnapshot,
-  }
+  })
   const reservedAdmission = bindingWriteAdmissionRecordSchema.parse({
     id: BINDING_ID,
     schemaVersion: 1,
@@ -164,7 +175,9 @@ function linkedFixture(): LinkedFixture {
     phase: 'reserved',
     bindingRevision: 0,
     source: request.source,
-    action: 'project-changes:stage',
+    action: requestType === 'stage-files'
+      ? 'project-changes:stage'
+      : requestType === 'unstage-files' ? 'project-changes:unstage' : 'project-commit:create',
     reservedAt: 2,
     updatedAt: 2,
   })
@@ -224,6 +237,40 @@ function preHostConflictIntent(
     operationSnapshot: undefined,
     terminalReason: reason,
     updatedAt: 1,
+  })
+}
+
+function preparedIntent(fixture: LinkedFixture): GitOperationIntentRecord {
+  return gitOperationIntentRecordSchema.parse({
+    ...fixture.intent,
+    revision: 0,
+    phase: 'prepared',
+    reservationRevision: undefined,
+    preparation: undefined,
+    operationSnapshot: undefined,
+    updatedAt: 1,
+  })
+}
+
+function canceledBeforePreparationIntent(fixture: LinkedFixture): GitOperationIntentRecord {
+  return gitOperationIntentRecordSchema.parse({
+    ...fixture.intent,
+    phase: 'canceled',
+    reservationRevision: undefined,
+    preparation: undefined,
+    operationSnapshot: undefined,
+    terminalReason: 'source-canceled',
+    updatedAt: 2,
+  })
+}
+
+function preparedProtocolConflictIntent(fixture: LinkedFixture): GitOperationIntentRecord {
+  return gitOperationIntentRecordSchema.parse({
+    ...fixture.intent,
+    revision: 3,
+    phase: 'conflict',
+    terminalReason: 'protocol',
+    updatedAt: 3,
   })
 }
 
@@ -291,16 +338,61 @@ function canceledFixture(fixture: LinkedFixture): {
   }
 }
 
+function acceptedFixture(fixture: LinkedFixture): {
+  readonly intent: GitOperationIntentRecord
+  readonly operation: LocalHostOperationRecord
+  readonly admission: BindingWriteAdmissionRecord
+} {
+  const snapshot = {
+    ...fixture.preparedSnapshot,
+    revision: 1,
+    updatedAt: 3,
+    state: 'accepted' as const,
+    admission: { kind: 'accepted' as const, revision: 2, acceptedAt: 3 },
+  }
+  return {
+    intent: gitOperationIntentRecordSchema.parse({
+      ...fixture.intent,
+      revision: 3,
+      phase: 'accepted',
+      admissionRevision: 2,
+      operationSnapshot: snapshot,
+      updatedAt: 3,
+    }),
+    operation: { ...fixture.operation, snapshot },
+    admission: bindingWriteAdmissionRecordSchema.parse({
+      ...fixture.reservedAdmission,
+      revision: 2,
+      phase: 'accepted',
+      preparation: fixture.preparation,
+      acceptedAt: 3,
+      updatedAt: 3,
+    }),
+  }
+}
+
 function domains(
   intents: readonly GitOperationIntentRecord[],
   operations: readonly LocalHostOperationRecord[],
   admissions: readonly BindingWriteAdmissionRecord[],
 ): readonly [Domain<typeof sakiControlPlaneDomainSpec>, Domain<typeof sakiHostExecutionDomainSpec>] {
+  return domainsFromEntries(
+    intents.map(intent => [intent.id, intent] as const),
+    operations.map(operation => [operation.snapshot.operation.id, operation] as const),
+    admissions.map(admission => [admission.id, admission] as const),
+  )
+}
+
+function domainsFromEntries(
+  intents: readonly (readonly [string, GitOperationIntentRecord])[],
+  operations: readonly (readonly [string, LocalHostOperationRecord])[],
+  admissions: readonly (readonly [string, BindingWriteAdmissionRecord])[],
+): readonly [Domain<typeof sakiControlPlaneDomainSpec>, Domain<typeof sakiHostExecutionDomainSpec>] {
   const controlTables = new Map<string, ReturnType<typeof readonlyTable>>([
-    ['git_operation_intents', readonlyTable(intents.map(intent => [intent.id, intent] as const))],
-    ['binding_write_admissions', readonlyTable(admissions.map(admission => [admission.id, admission] as const))],
+    ['git_operation_intents', readonlyTable(intents)],
+    ['binding_write_admissions', readonlyTable(admissions)],
   ])
-  const operationTable = readonlyTable(operations.map(operation => [operation.snapshot.operation.id, operation] as const))
+  const operationTable = readonlyTable(operations)
   const controlPlane = {
     name: sakiControlPlaneDomainSpec.name,
     table: (name: string) => controlTables.get(name),
@@ -344,6 +436,59 @@ describe('current Saki Git-operation cross-domain validation', () => {
       .toThrow('Saki Host Operation has no Control Intent')
   })
 
+  it('rejects durable identities that disagree with their table keys or source-derived id', () => {
+    const fixture = linkedFixture()
+    const operationWithAnotherId = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+      ...fixture.operation,
+      snapshot: {
+        ...fixture.operation.snapshot,
+        operation: { ...fixture.operation.snapshot.operation, id: ALT_OPERATION_ID },
+      },
+    })
+    const cases = [
+      {
+        message: 'Saki Git operation Intent id disagrees with its table key',
+        subjects: domainsFromEntries([[ALT_INTENT_ID, fixture.intent]], [], []),
+      },
+      {
+        message: 'Saki Binding write admission id disagrees with its table key',
+        subjects: domainsFromEntries([], [], [[ALT_BINDING_ID, fixture.availableAdmission]]),
+      },
+      {
+        message: 'Saki Host Operation id disagrees with its table key',
+        subjects: domainsFromEntries(
+          [[fixture.intent.id, fixture.intent]],
+          [[ALT_OPERATION_ID, fixture.operation]],
+          [[fixture.reservedAdmission.id, fixture.reservedAdmission]],
+        ),
+      },
+      {
+        message: 'Saki Host Operation id disagrees with its Control Intent source',
+        subjects: domainsFromEntries(
+          [[fixture.intent.id, fixture.intent]],
+          [[ALT_OPERATION_ID, operationWithAnotherId]],
+          [[fixture.reservedAdmission.id, fixture.reservedAdmission]],
+        ),
+      },
+    ] as const
+
+    for (const { message, subjects: [controlPlane, hostExecution] } of cases) {
+      expect(() => { validateGitOperationLinks(controlPlane, hostExecution) }).toThrow(message)
+    }
+  })
+
+  it('rejects prepared Intent evidence after its Host Operation disappears', () => {
+    const fixture = linkedFixture()
+    const [controlPlane, hostExecution] = domains(
+      [fixture.intent],
+      [],
+      [fixture.reservedAdmission],
+    )
+
+    expect(() => { validateGitOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Saki Git operation Intent preparation has no Host Operation')
+  })
+
   it('rejects a source conflict without the existing mismatched Host Operation that caused it', () => {
     const fixture = linkedFixture()
     const [controlPlane, hostExecution] = domains(
@@ -365,6 +510,18 @@ describe('current Saki Git-operation cross-domain validation', () => {
     )
 
     expect(() => { validateGitOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('rejects a source conflict that still matches its Host Operation request', () => {
+    const fixture = linkedFixture()
+    const [controlPlane, hostExecution] = domains(
+      [sourceConflictIntent(fixture)],
+      [fixture.operation],
+      [fixture.availableAdmission],
+    )
+
+    expect(() => { validateGitOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Saki source-conflicted Git Intent unexpectedly matches its Host Operation')
   })
 
   it('rejects a source conflict whose mismatched Host Operation was admitted', () => {
@@ -436,6 +593,105 @@ describe('current Saki Git-operation cross-domain validation', () => {
       .toThrow('Saki Git operation Intent disagrees with the same Host Operation revision')
   })
 
+  it('rejects mismatched preparation, future retained evidence, and lagging terminal evidence', () => {
+    const fixture = linkedFixture()
+    const preparationMismatch = {
+      ...fixture.operation,
+      preparationRevision: fixture.operation.preparationRevision + 1,
+    }
+    const futureIntent = gitOperationIntentRecordSchema.parse({
+      ...fixture.intent,
+      operationSnapshot: { ...fixture.preparedSnapshot, revision: 1 },
+    })
+    const terminal = canceledFixture(fixture)
+    const advancedTerminalOperation = {
+      ...terminal.operation,
+      snapshot: { ...terminal.operation.snapshot, revision: terminal.operation.snapshot.revision + 1 },
+    }
+    for (const [intent, operation, admission, message] of [
+      [
+        fixture.intent,
+        preparationMismatch,
+        fixture.reservedAdmission,
+        'Saki Git operation Intent preparation disagrees with its Host Operation',
+      ],
+      [
+        futureIntent,
+        fixture.operation,
+        fixture.reservedAdmission,
+        'Saki Git operation Intent retains a future Host Operation revision',
+      ],
+      [
+        terminal.intent,
+        advancedTerminalOperation,
+        fixture.availableAdmission,
+        'terminal Saki Git operation Intent lags its Host Operation',
+      ],
+    ] as const) {
+      const [controlPlane, hostExecution] = domains([intent], [operation], [admission])
+      expect(() => { validateGitOperationLinks(controlPlane, hostExecution) }).toThrow(message)
+    }
+  })
+
+  it.each(['stage-files', 'unstage-files', 'commit'] as const)(
+    'accepts one fully linked accepted %s operation',
+    (type) => {
+      const accepted = acceptedFixture(linkedFixture(type))
+      const [controlPlane, hostExecution] = domains(
+        [accepted.intent],
+        [accepted.operation],
+        [accepted.admission],
+      )
+
+      expect(() => { validateGitOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+    },
+  )
+
+  it('rejects lost or revision-mismatched current write admissions', () => {
+    const fixture = linkedFixture()
+    const accepted = acceptedFixture(fixture)
+    const acceptedFromPreparedIntent = gitOperationIntentRecordSchema.parse({
+      ...fixture.intent,
+      revision: 3,
+      phase: 'accepted',
+      admissionRevision: 1,
+      updatedAt: 3,
+    })
+    const wrongAdmissionRevision = bindingWriteAdmissionRecordSchema.parse({
+      ...accepted.admission,
+      revision: 3,
+    })
+    for (const [intent, operation, admission, message] of [
+      [
+        fixture.intent,
+        fixture.operation,
+        fixture.availableAdmission,
+        'nonterminal Saki Host Operation lost its Binding write admission',
+      ],
+      [
+        acceptedFromPreparedIntent,
+        accepted.operation,
+        accepted.admission,
+        'accepted Saki Host Operation disagrees with its Control Intent admission',
+      ],
+      [
+        accepted.intent,
+        accepted.operation,
+        wrongAdmissionRevision,
+        'accepted Saki Host Operation disagrees with its Binding write admission',
+      ],
+      [
+        accepted.intent,
+        accepted.operation,
+        fixture.reservedAdmission,
+        'nonterminal accepted Saki Host Operation lost its Binding write admission',
+      ],
+    ] as const) {
+      const [controlPlane, hostExecution] = domains([intent], [operation], [admission])
+      expect(() => { validateGitOperationLinks(controlPlane, hostExecution) }).toThrow(message)
+    }
+  })
+
   it('accepts released admission after both the Host Operation and Intent are terminal', () => {
     const fixture = linkedFixture()
     const terminal = canceledFixture(fixture)
@@ -446,6 +702,77 @@ describe('current Saki Git-operation cross-domain validation', () => {
     )
 
     expect(() => { validateGitOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('accepts a cancellation recovered before preparation and rejects other unexplained pre-preparation records', () => {
+    const fixture = linkedFixture()
+    const [canceledControl, canceledHost] = domains(
+      [canceledBeforePreparationIntent(fixture)],
+      [fixture.operation],
+      [fixture.availableAdmission],
+    )
+    expect(() => { validateGitOperationLinks(canceledControl, canceledHost) }).not.toThrow()
+
+    const failedOperation = {
+      ...fixture.operation,
+      snapshot: {
+        ...fixture.preparedSnapshot,
+        revision: 1,
+        updatedAt: 3,
+        state: 'failed' as const,
+        completedAt: 3,
+        failure: { reason: 'unsupported-state' as const },
+        effect: 'none' as const,
+      },
+    }
+    for (const [intent, operation] of [
+      [preparedIntent(fixture), fixture.operation],
+      [admissionReservedIntent(fixture), failedOperation],
+    ] as const) {
+      const [controlPlane, hostExecution] = domains([intent], [operation], [fixture.reservedAdmission])
+      expect(() => { validateGitOperationLinks(controlPlane, hostExecution) })
+        .toThrow('Saki Control Intent has an unexplained pre-preparation Host Operation')
+    }
+  })
+
+  it('rejects every broken accepted-admission back-link after operation validation', () => {
+    const fixture = linkedFixture()
+    const accepted = acceptedFixture(fixture)
+    const sourceConflict = sourceConflictIntent(fixture)
+    const protocolConflict = preparedProtocolConflictIntent(fixture)
+    const admissionForMissingIntent = bindingWriteAdmissionRecordSchema.parse({
+      ...accepted.admission,
+      source: {
+        kind: 'control-intent',
+        intentId: ALT_INTENT_ID,
+        intentRevision: fixture.request.source.intentRevision,
+        payloadDigest: fixture.request.source.payloadDigest,
+      },
+    })
+    const admissionWithNoOperationBinding = bindingWriteAdmissionRecordSchema.parse({
+      ...accepted.admission,
+      id: ALT_BINDING_ID,
+    })
+    const admissionWithWrongPreparation = bindingWriteAdmissionRecordSchema.parse({
+      ...admissionWithNoOperationBinding,
+      preparation: {
+        ...fixture.preparation,
+        preparationRevision: fixture.preparation.preparationRevision + 1,
+      },
+    })
+    const cases = [
+      domains([preHostConflictIntent(fixture)], [], [accepted.admission]),
+      domains([canceledFixture(fixture).intent], [canceledFixture(fixture).operation], [admissionForMissingIntent]),
+      domains([sourceConflict], [mismatchedOperation(fixture)], [accepted.admission]),
+      domains([admissionReservedIntent(fixture)], [fixture.operation], [accepted.admission]),
+      domains([protocolConflict], [fixture.operation], [admissionWithWrongPreparation]),
+      domains([protocolConflict], [fixture.operation], [admissionWithNoOperationBinding]),
+    ] as const
+
+    for (const [controlPlane, hostExecution] of cases) {
+      expect(() => { validateGitOperationLinks(controlPlane, hostExecution) })
+        .toThrow('Saki accepted Binding write admission has no matching Host Operation')
+    }
   })
 
   it.each(['expected-evidence', 'invalid-selection'] as const)(

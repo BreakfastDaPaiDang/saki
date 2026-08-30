@@ -307,6 +307,17 @@ export const projectGitHeadSchema: z.ZodType<ProjectGitHead> = z.discriminatedUn
   z.object({ kind: z.literal('unborn'), symbolicRef: symbolicHeadRef }).strict(),
 ]) as unknown as z.ZodType<ProjectGitHead>
 
+function refineGitHeadObjectFormat(
+  value: { readonly objectFormat: 'sha1' | 'sha256'; readonly head: ProjectGitHead },
+  context: z.RefinementCtx,
+): 40 | 64 {
+  const expectedObjectLength = value.objectFormat === 'sha1' ? 40 : 64
+  if (value.head.kind === 'commit' && value.head.objectId.length !== expectedObjectLength) {
+    context.addIssue({ code: 'custom', message: 'HEAD does not match object format', path: ['head', 'objectId'] })
+  }
+  return expectedObjectLength
+}
+
 /** One safe, normalized remote observation. */
 export const safeGitRemoteObservationSchema = z.object({
   transport: z.enum(['https', 'ssh', 'file', 'other']),
@@ -341,10 +352,7 @@ export const projectSelectionProjectionSchema = z.object({
   fingerprint: projectInspectionFingerprintSchema,
   baseline: inheritedChangeBaselineSchema,
 }).strict().superRefine((value, context) => {
-  const expectedObjectLength = value.objectFormat === 'sha1' ? 40 : 64
-  if (value.head.kind === 'commit' && value.head.objectId.length !== expectedObjectLength) {
-    context.addIssue({ code: 'custom', message: 'HEAD does not match object format', path: ['head', 'objectId'] })
-  }
+  const expectedObjectLength = refineGitHeadObjectFormat(value, context)
   if (value.upstream !== undefined && value.head.symbolicRef === undefined) {
     context.addIssue({ code: 'custom', message: 'upstream requires an attached branch', path: ['upstream'] })
   }
@@ -533,12 +541,12 @@ function ordinaryIndexStatusMatches(value: Extract<ProjectGitChange, { readonly 
     case 'added': return headMissing && !indexMissing
     case 'deleted': return !headMissing && indexMissing
     case 'modified':
-      return !headMissing && !indexMissing
-        && gitModeKind(value.head.mode) === gitModeKind(value.index.mode)
+      return gitModeKind(value.head.mode) === gitModeKind(value.index.mode)
+        && !headMissing && !indexMissing
         && (value.head.mode !== value.index.mode || value.head.objectId !== value.index.objectId)
     case 'type-changed':
-      return !headMissing && !indexMissing
-        && gitModeKind(value.head.mode) !== gitModeKind(value.index.mode)
+      return gitModeKind(value.head.mode) !== gitModeKind(value.index.mode)
+        && !headMissing && !indexMissing
   }
 }
 
@@ -672,6 +680,32 @@ export const projectGitChangeSchema = z.discriminatedUnion('kind', [
   }
 }) as unknown as z.ZodType<ProjectGitChange>
 
+function statusPathsFitUtf8Budget(changes: readonly unknown[]): boolean {
+  let remainingBytes = MAX_PROJECT_GIT_STATUS_PATH_BYTES
+  for (const change of changes) {
+    if (typeof change !== 'object' || change === null || !('path' in change)) continue
+    const path = change.path
+    if (typeof path !== 'string') continue
+    if (path.length > remainingBytes) return false
+    const pathBytes = UTF8.encode(path).byteLength
+    if (pathBytes > remainingBytes) return false
+    remainingBytes -= pathBytes
+  }
+  return true
+}
+
+const projectGitChangesSchema = z.custom<unknown[]>(
+  (value): value is unknown[] => Array.isArray(value),
+  { message: 'status changes must be an array', abort: true },
+).pipe(z.custom<unknown[]>(
+  (value): value is unknown[] => Array.isArray(value)
+    && value.length <= MAX_PROJECT_GIT_STATUS_CHANGES,
+  { message: 'status changes exceed the protocol row limit', abort: true },
+)).pipe(z.custom<unknown[]>(
+  (value): value is unknown[] => Array.isArray(value) && statusPathsFitUtf8Budget(value),
+  { message: 'status paths exceed the protocol byte limit', abort: true },
+)).pipe(z.array(projectGitChangeSchema).max(MAX_PROJECT_GIT_STATUS_CHANGES))
+
 const projectGitMutationBlockerSchema = z.enum([
   'baseline-unavailable', 'conversion-ambiguous', 'current-unavailable', 'index-flags', 'unmerged', 'locked',
 ])
@@ -721,14 +755,11 @@ export const projectGitStatusObservationSchema: z.ZodType<ProjectGitStatusObserv
   }).strict().optional(),
   index: projectGitIndexEvidenceSchema,
   worktree: projectGitWorktreeFingerprintSchema,
-  changes: z.array(projectGitChangeSchema).max(MAX_PROJECT_GIT_STATUS_CHANGES),
+  changes: projectGitChangesSchema,
   structuredMutation: projectGitMutationAvailabilitySchema,
   fingerprint: projectGitStatusFingerprintSchema,
 }).strict().superRefine((value, context) => {
-  const expectedObjectLength = value.objectFormat === 'sha1' ? 40 : 64
-  if (value.head.kind === 'commit' && value.head.objectId.length !== expectedObjectLength) {
-    context.addIssue({ code: 'custom', message: 'HEAD does not match object format', path: ['head', 'objectId'] })
-  }
+  const expectedObjectLength = refineGitHeadObjectFormat(value, context)
   if (value.branch.kind === 'attached') {
     if (value.head.symbolicRef !== value.branch.ref
       || value.branch.ref !== `refs/heads/${value.branch.name}`) {
@@ -770,12 +801,10 @@ export const projectGitStatusObservationSchema: z.ZodType<ProjectGitStatusObserv
   if (value.structuredMutation.available && unmerged) {
     context.addIssue({ code: 'custom', message: 'mutation availability ignores unknown change evidence' })
   }
-  let pathBytes = 0
   const statusSeedDigest = computeProjectGitStatusSeedDigest(
     projectGitStatusSeedMaterial(value as ProjectGitStatusObservation),
   )
   for (const [index, change] of value.changes.entries()) {
-    pathBytes += UTF8.encode(change.path).byteLength
     const previous = value.changes.at(index - 1)
     if (index > 0 && previous !== undefined && compareRepositoryRelativeGitPaths(previous.path, change.path) >= 0) {
       context.addIssue({ code: 'custom', message: 'status paths are not unique and canonical', path: ['changes', index, 'path'] })
@@ -808,9 +837,6 @@ export const projectGitStatusObservationSchema: z.ZodType<ProjectGitStatusObserv
       })
     }
   }
-  if (pathBytes > MAX_PROJECT_GIT_STATUS_PATH_BYTES) {
-    context.addIssue({ code: 'custom', message: 'status paths exceed the protocol byte limit', path: ['changes'] })
-  }
   if (computeProjectGitStatusFingerprint(value as ProjectGitStatusObservation).digest !== value.fingerprint.digest) {
     context.addIssue({ code: 'custom', message: 'status fingerprint disagrees with retained evidence', path: ['fingerprint'] })
   }
@@ -835,7 +861,7 @@ export const projectGitPatchFingerprintSchema: z.ZodType<ProjectGitPatchFingerpr
 const safeNonnegative = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 const diffLineSchema = z.string()
   .max(MAX_PROJECT_GIT_DIFF_LINE_UTF8_BYTES - 1)
-  .refine(value => !value.includes('\n') && !value.includes('\0') && !hasUnpairedSurrogate(value))
+  .refine(value => !value.includes('\n') && !value.includes('\0') && value.isWellFormed())
   .refine(value => UTF8.encode(value).byteLength + 1 <= MAX_PROJECT_GIT_DIFF_LINE_UTF8_BYTES)
 
 /** One internally consistent bounded page of LF-terminated unified Diff lines. */
@@ -944,9 +970,16 @@ export const selectedProjectGitChangeSchema: z.ZodType<SelectedProjectGitChange>
   fingerprint: projectGitChangeFingerprintSchema,
 }).strict()
 
-const selectedProjectGitChangesSchema = z.array(selectedProjectGitChangeSchema)
+const selectedProjectGitChangesSchema = z.custom<unknown[]>(
+  (value): value is unknown[] => Array.isArray(value),
+  { message: 'Host Operation selection must be an array', abort: true },
+).pipe(z.custom<unknown[]>(
+  (value): value is unknown[] => Array.isArray(value)
+    && value.length <= MAX_HOST_OPERATION_SELECTED_CHANGES,
+  { message: 'Host Operation selection exceeds the protocol row limit', abort: true },
+)).pipe(z.array(selectedProjectGitChangeSchema)
   .min(1)
-  .max(MAX_HOST_OPERATION_SELECTED_CHANGES)
+  .max(MAX_HOST_OPERATION_SELECTED_CHANGES))
   .superRefine((changes, context) => {
     if (new Set(changes.map(change => change.id)).size !== changes.length) {
       context.addIssue({ code: 'custom', message: 'Host Operation selection repeats a change id' })
@@ -972,9 +1005,12 @@ export const unstageFilesHostOperationRequestSchema = z.object({
   changes: selectedProjectGitChangesSchema,
 }).strict() satisfies z.ZodType<UnstageFilesHostOperationRequest>
 
-const commitMessageSchema = z.string().min(1)
-  .refine(value => !value.includes('\0') && !hasUnpairedSurrogate(value))
-  .refine(value => UTF8.encode(value).byteLength <= MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES)
+const commitMessageSchema = z.string()
+  .min(1)
+  .max(MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES)
+  .pipe(z.string()
+    .refine(value => !value.includes('\0') && value.isWellFormed())
+    .refine(value => UTF8.encode(value).byteLength <= MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES))
 
 /** Strict deterministic Commit request with no caller identity or ref authority. */
 export const commitHostOperationRequestSchema = z.object({
@@ -997,9 +1033,19 @@ export const appliedProjectGitChangeSchema: z.ZodType<AppliedProjectGitChange> =
   path: z.string().refine(isRepositoryRelativeGitPath),
 }).strict()
 
-const appliedProjectGitChangesSchema = z.array(appliedProjectGitChangeSchema)
+const appliedProjectGitChangesSchema = z.custom<unknown[]>(
+  (value): value is unknown[] => Array.isArray(value),
+  { message: 'Host Operation result changes must be an array', abort: true },
+).pipe(z.custom<unknown[]>(
+  (value): value is unknown[] => Array.isArray(value)
+    && value.length <= MAX_HOST_OPERATION_SELECTED_CHANGES,
+  { message: 'Host Operation result changes exceed the protocol row limit', abort: true },
+)).pipe(z.custom<unknown[]>(
+  (value): value is unknown[] => Array.isArray(value) && statusPathsFitUtf8Budget(value),
+  { message: 'Host Operation result paths exceed the protocol byte limit', abort: true },
+)).pipe(z.array(appliedProjectGitChangeSchema)
   .min(1)
-  .max(MAX_HOST_OPERATION_SELECTED_CHANGES)
+  .max(MAX_HOST_OPERATION_SELECTED_CHANGES))
   .superRefine((changes, context) => {
     if (new Set(changes.map(change => change.id)).size !== changes.length
       || new Set(changes.map(change => change.path)).size !== changes.length) {
@@ -1026,9 +1072,9 @@ export const unstageFilesHostOperationResultSchema = z.object({
 
 const commitSignatureSchema = z.object({
   name: z.string().min(1).max(1_024).refine(value => value.trim() !== ''
-    && !/[\0\r\n<>]/u.test(value) && !hasUnpairedSurrogate(value)),
+    && !/[\0\r\n<>]/u.test(value) && value.isWellFormed()),
   email: z.string().min(1).max(1_024).refine(value => value.trim() !== ''
-    && !/[\0\r\n<>]/u.test(value) && !hasUnpairedSurrogate(value)),
+    && !/[\0\r\n<>]/u.test(value) && value.isWellFormed()),
   timestamp: safeNonnegative,
   timezone: z.string().regex(/^[+-](?:0[0-9]|1[0-4])[0-5][0-9]$/u),
   source: z.literal('git-config'),
@@ -1189,8 +1235,12 @@ export const hostOperationSnapshotSchema: z.ZodType<HostOperationSnapshot> = z.d
         : value.state === 'succeeded' || value.state === 'failed' || value.state === 'canceled'
           ? [...admissionTimestamp, value.completedAt]
           : value.state === 'reconciliation-required' ? [...admissionTimestamp, value.observedAt] : []
-  if (timestamps.some(timestamp => timestamp < value.preparedAt || timestamp > value.updatedAt)
-    || timestamps.some((timestamp, index) => index > 0 && timestamp < (timestamps[index - 1] ?? 0))) {
+  let previousTimestamp = value.preparedAt
+  if (timestamps.some((timestamp) => {
+    const notMonotonic = timestamp < previousTimestamp || timestamp > value.updatedAt
+    previousTimestamp = timestamp
+    return notMonotonic
+  })) {
     context.addIssue({ code: 'custom', message: 'Host Operation lifecycle timestamps are not monotonic' })
   }
   if (value.state === 'succeeded' && value.result.type !== value.operation.type) {
@@ -1265,7 +1315,7 @@ export const inspectProjectSelectionResultSchema: z.ZodType<InspectProjectSelect
  * @returns whether the text is a bounded repository-relative Git path.
  */
 export function isRepositoryRelativeGitPath(value: string): boolean {
-  if (value === '' || value.includes('\0') || hasUnpairedSurrogate(value)
+  if (value === '' || value.includes('\0') || !value.isWellFormed()
     || UTF8.encode(value).byteLength > MAX_PROJECT_GIT_STATUS_PATH_BYTES
     || /^[A-Za-z]:/u.test(value) || value.startsWith('\\')) return false
   return value.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..')
@@ -1281,8 +1331,10 @@ export function compareRepositoryRelativeGitPaths(left: string, right: string): 
   const leftBytes = UTF8.encode(left)
   const rightBytes = UTF8.encode(right)
   const commonLength = Math.min(leftBytes.byteLength, rightBytes.byteLength)
+  const leftView = new DataView(leftBytes.buffer, leftBytes.byteOffset, leftBytes.byteLength)
+  const rightView = new DataView(rightBytes.buffer, rightBytes.byteOffset, rightBytes.byteLength)
   for (let index = 0; index < commonLength; index += 1) {
-    const difference = (leftBytes[index] ?? 0) - (rightBytes[index] ?? 0)
+    const difference = leftView.getUint8(index) - rightView.getUint8(index)
     if (difference !== 0) return difference
   }
   return leftBytes.byteLength - rightBytes.byteLength
@@ -1367,18 +1419,6 @@ export function deriveGitHubRepositoryCandidates(
     if (isNormalizedRemoteCoordinate(candidate)) candidates.add(candidate)
   }
   return [...candidates].sort()
-}
-
-function hasUnpairedSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1)
-      if (!(next >= 0xdc00 && next <= 0xdfff)) return true
-      index += 1
-    } else if (code >= 0xdc00 && code <= 0xdfff) return true
-  }
-  return false
 }
 
 /**

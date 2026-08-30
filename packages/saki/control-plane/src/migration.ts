@@ -5,32 +5,19 @@ import type { DomainMigrationSnapshot } from '@deepseek-ai/dsh-storage-domain'
 import { defineDomain, defineDomainMigrations, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import {
   canonicalDigest,
-  compareSafeGitRemoteObservations,
   computeProjectInspectionFingerprint,
-  deriveGitHubRepositoryCandidates,
-  exactBytesDigest,
-  inheritedChangeBaselineIdentityMaterial,
-  inheritedChangeBaselineSchema,
-  isAbsoluteHostPath,
-  isSafeDisplayLocation,
-  isSafeGitBranchName,
-  isSafeGitRef,
-  MAX_DISPLAY_LOCATION_CHARS,
-  MAX_GIT_REF_CHARS,
-  MAX_INVENTORY_ENTRIES,
-  MAX_REMOTE_COORDINATE_CHARS,
-  MAX_SAFE_REMOTES,
-  MAX_TRUSTED_PATH_CHARS,
   projectSelectionProjectionSchema,
-  safeGitRemoteObservationSchema,
-  safeGitRemoteObservationKey,
-  trustedProjectSelectionObservationSchema,
 } from '@breakfastdapaidang/saki-execution'
 import { recoverBootstrapCompletion } from './bootstrap-completion.ts'
+import {
+  v4CanonicalDigest,
+  v4ExactBytesDigest,
+} from './migration-v4-canonical.ts'
 import {
   v4GitHubConfigurationIntentRecordSchema,
   v4GitHubProjectSyncRecordSchema,
 } from './migration-v4-github.ts'
+import { v4Source } from './migration-v4-source.ts'
 import { sakiStorageGenerationIdSchema } from './ids.ts'
 import {
   CONTROL_STATE_KEY,
@@ -38,7 +25,6 @@ import {
   controlStateRecordSchema,
   developmentProjectRegistryRecordSchema,
   HOST_OPERATOR_ACTIONS,
-  V4_HOST_OPERATOR_ACTIONS,
   historicalGrantRecordSchema,
   historicalRegistrationActorSchema,
   historicalControlStateRecordSchema,
@@ -49,18 +35,8 @@ import {
   installationRecordSchema,
   principalRecordSchema,
   registrationIntentRecordSchema,
-  registrationActorSchema,
   sakiControlPlaneDomainSpec,
-  v4GrantRecordSchema,
 } from './spec.ts'
-import {
-  sakiControlIntentIdSchema,
-  sakiDevelopmentProjectIdSchema,
-  sakiHostIdSchema,
-  sakiIntentReceiptIdSchema,
-  sakiResourceBindingIdSchema,
-} from './ids.ts'
-import { workspaceIdSchema } from '@deepseek-ai/dsh-workspace'
 import type {
   ControlStateRecord,
   DevelopmentProjectRegistryRecord,
@@ -83,14 +59,58 @@ import type {
   SakiStorageGenerationId,
 } from './types.ts'
 
+const {
+  V4_CONTROL_STATE_KEY,
+  V4_DEVELOPMENT_PROJECT_REGISTRY_KEY,
+  V4_HOST_OPERATOR_ACTIONS,
+  V4_MAX_DISPLAY_LOCATION_CHARS: MAX_DISPLAY_LOCATION_CHARS,
+  V4_MAX_GIT_REF_CHARS: MAX_GIT_REF_CHARS,
+  V4_MAX_INVENTORY_ENTRIES: MAX_INVENTORY_ENTRIES,
+  V4_MAX_REMOTE_COORDINATE_CHARS: MAX_REMOTE_COORDINATE_CHARS,
+  V4_MAX_SAFE_REMOTES: MAX_SAFE_REMOTES,
+  V4_MAX_TRUSTED_PATH_CHARS: MAX_TRUSTED_PATH_CHARS,
+  v4CompareSafeGitRemoteObservations: compareSafeGitRemoteObservations,
+  v4ControlIntentIdSchema: sakiControlIntentIdSchema,
+  v4ControlStateRecordSchema,
+  v4DeriveGitHubRepositoryCandidates: deriveGitHubRepositoryCandidates,
+  v4DevelopmentProjectIdSchema: sakiDevelopmentProjectIdSchema,
+  v4DigestSchema,
+  v4GrantRecordSchema,
+  v4HostIdSchema: sakiHostIdSchema,
+  v4HostRecordSchema,
+  v4InheritedChangeBaselineIdentityMaterial: inheritedChangeBaselineIdentityMaterial,
+  v4InheritedChangeBaselineSchema: inheritedChangeBaselineSchema,
+  v4InstallationAccessRecordSchema,
+  v4InstallationRecordSchema,
+  v4IntentReceiptIdSchema: sakiIntentReceiptIdSchema,
+  v4IsAbsoluteHostPath: isAbsoluteHostPath,
+  v4IsSafeDisplayLocation: isSafeDisplayLocation,
+  v4IsSafeGitBranchName: isSafeGitBranchName,
+  v4IsSafeGitRef: isSafeGitRef,
+  v4PrincipalRecordSchema,
+  v4RegistrationActorSchema: registrationActorSchema,
+  v4ResourceBindingIdSchema: sakiResourceBindingIdSchema,
+  v4SafeGitRemoteObservationKey: safeGitRemoteObservationKey,
+  v4SafeGitRemoteObservationSchema: safeGitRemoteObservationSchema,
+  v4TrustedProjectSelectionObservationSchema: trustedProjectSelectionObservationSchema,
+  v4WorkspaceIdSchema: workspaceIdSchema,
+} = v4Source
+
 type HistoricalControlStateRecord = z.infer<typeof historicalControlStateRecordSchema>
 type HistoricalInstallationRecord = z.infer<typeof historicalInstallationRecordSchema>
 type HistoricalInstallationAccessRecord = z.infer<typeof historicalInstallationAccessRecordSchema>
 type HistoricalRegistrationIntentRecord = z.infer<typeof v2RegistrationIntentRecordSchema>
 type HistoricalGrantRecord = z.infer<typeof historicalGrantRecordSchema>
+type V4ControlStateRecord = z.infer<typeof v4ControlStateRecordSchema>
+type V4InstallationRecord = z.infer<typeof v4InstallationRecordSchema>
+type V4HostRecord = z.infer<typeof v4HostRecordSchema>
+type V4PrincipalRecord = z.infer<typeof v4PrincipalRecordSchema>
 type V4GrantRecord = z.infer<typeof v4GrantRecordSchema>
+type V4InstallationAccessRecord = z.infer<typeof v4InstallationAccessRecordSchema>
 
-const digest = z.string().regex(/^[0-9a-f]{64}$/u)
+/* Historical registration schemas are frozen migration inputs and cannot import mutable current-schema definitions. */
+/* jscpd:ignore-start */
+const digest = v4DigestSchema
 const revision = z.number().int().nonnegative()
 const timestamp = z.number().int().nonnegative()
 const projectTitle = z.string().min(1).max(200).refine(value => value.trim().length > 0)
@@ -177,9 +197,9 @@ function v4InspectionFingerprintMaterial(
     observationVersion: 1 as const,
     hostId: projection.hostId,
     displayLocation: projection.displayLocation,
-    worktreePathDigest: exactBytesDigest('saki/worktree-path/v1', new TextEncoder().encode(trusted.canonicalWorktreePath)),
-    gitDirectoryDigest: exactBytesDigest('saki/git-directory/v1', new TextEncoder().encode(trusted.canonicalGitDirectory)),
-    commonDirectoryDigest: exactBytesDigest('saki/common-git-directory/v1', new TextEncoder().encode(trusted.canonicalCommonGitDirectory)),
+    worktreePathDigest: v4ExactBytesDigest('saki/worktree-path/v1', new TextEncoder().encode(trusted.canonicalWorktreePath)),
+    gitDirectoryDigest: v4ExactBytesDigest('saki/git-directory/v1', new TextEncoder().encode(trusted.canonicalGitDirectory)),
+    commonDirectoryDigest: v4ExactBytesDigest('saki/common-git-directory/v1', new TextEncoder().encode(trusted.canonicalCommonGitDirectory)),
     gitDirectoryIdentity: trusted.gitDirectoryIdentity,
     commonGitDirectoryIdentity: trusted.commonGitDirectoryIdentity,
     objectFormat: projection.objectFormat,
@@ -206,7 +226,7 @@ const v4ProjectSelectionInspectionSchema = z.object({
   trusted: trustedProjectSelectionObservationSchema,
 }).strict().superRefine((value, context) => {
   const material = v4InspectionFingerprintMaterial(value.projection, value.trusted)
-  if (canonicalDigest('saki/project-inspection/v1', material) !== value.projection.fingerprint.digest) {
+  if (v4CanonicalDigest('saki/project-inspection/v1', material) !== value.projection.fingerprint.digest) {
     context.addIssue({ code: 'custom', message: 'inspection fingerprint disagrees with retained evidence' })
   }
 })
@@ -229,9 +249,9 @@ const v4ResourceBindingRecordSchema = z.object({
     || (value.currentInspection !== undefined && value.currentInspection.projection.hostId !== value.hostId)) {
     context.addIssue({ code: 'custom', message: 'binding inspection belongs to another Host' })
   }
-  if (canonicalDigest('saki/inherited-baseline/identity/v1', inheritedChangeBaselineIdentityMaterial(
+  if (v4CanonicalDigest('saki/inherited-baseline/identity/v1', inheritedChangeBaselineIdentityMaterial(
     value.registrationInspection.projection.baseline,
-  )) !== canonicalDigest('saki/inherited-baseline/identity/v1', inheritedChangeBaselineIdentityMaterial(
+  )) !== v4CanonicalDigest('saki/inherited-baseline/identity/v1', inheritedChangeBaselineIdentityMaterial(
     value.inheritedChangeBaseline,
   ))) context.addIssue({ code: 'custom', message: 'binding inherited baseline differs from registration evidence' })
   if (value.health === 'active' && value.currentInspection === undefined) {
@@ -257,7 +277,7 @@ const v4ResourceBindingRecordSchema = z.object({
   }
 })
 const v4DevelopmentProjectRegistryRecordSchema = z.object({
-  id: z.literal(DEVELOPMENT_PROJECT_REGISTRY_KEY),
+  id: z.literal(V4_DEVELOPMENT_PROJECT_REGISTRY_KEY),
   schemaVersion: z.literal(1),
   revision,
   projects: z.array(z.object({
@@ -380,9 +400,9 @@ function refineV4RegistrationIntent(
   }
   if (value.payload.actor.hostId !== value.payload.intent.hostId
     || value.payload.intent.hostId !== value.inspection.projection.hostId
-    || canonicalDigest('saki/inherited-baseline/identity/v1', inheritedChangeBaselineIdentityMaterial(
+    || v4CanonicalDigest('saki/inherited-baseline/identity/v1', inheritedChangeBaselineIdentityMaterial(
       value.payload.intent.confirmedBaseline,
-    )) !== canonicalDigest('saki/inherited-baseline/identity/v1', inheritedChangeBaselineIdentityMaterial(
+    )) !== v4CanonicalDigest('saki/inherited-baseline/identity/v1', inheritedChangeBaselineIdentityMaterial(
       value.inspection.projection.baseline,
     ))) context.addIssue({ code: 'custom', message: 'Intent confirmation disagrees with retained inspection' })
   if (value.updatedAt < value.createdAt) context.addIssue({ code: 'custom', message: 'Intent update predates creation' })
@@ -410,8 +430,8 @@ function refineV4RegistrationIntent(
       const right = v4InspectionFingerprintMaterial(value.inspection.projection, value.inspection.trusted)
       const { workspace: _leftWorkspace, ...leftIndependent } = left
       const { workspace: _rightWorkspace, ...rightIndependent } = right
-      if (canonicalDigest('saki/project-inspection/workspace-independent/v1', leftIndependent)
-        !== canonicalDigest('saki/project-inspection/workspace-independent/v1', rightIndependent)) {
+      if (v4CanonicalDigest('saki/project-inspection/workspace-independent/v1', leftIndependent)
+        !== v4CanonicalDigest('saki/project-inspection/workspace-independent/v1', rightIndependent)) {
         context.addIssue({ code: 'custom', message: 'Workspace observation changed repository evidence' })
       }
     }
@@ -447,7 +467,7 @@ function refineV4RegistrationIntent(
   if (value.phase === 'failure' && hasWorkspace) context.addIssue({ code: 'custom', message: 'authority failure contains Workspace evidence' })
   if (value.phase === 'reconciliation-required' && value.terminalReason !== 'workspace'
     && value.terminalReason !== 'observation') context.addIssue({ code: 'custom', message: 'reconciliation phase has an invalid terminal reason' })
-  if (canonicalDigest('saki/register-development-project/v1', value.payload) !== value.payloadDigest) {
+  if (v4CanonicalDigest('saki/register-development-project/v1', value.payload) !== value.payloadDigest) {
     context.addIssue({ code: 'custom', message: 'Intent payload digest is stale', path: ['payloadDigest'] })
   }
 }
@@ -498,6 +518,7 @@ const v2RegistrationIntentRecordSchema = z.object({
 }).strict().superRefine(refineV4RegistrationIntent)
 type V4DevelopmentProjectRegistryRecord = z.infer<typeof v4DevelopmentProjectRegistryRecordSchema>
 type V4RegistrationIntentRecord = z.infer<typeof v4RegistrationIntentRecordSchema>
+/* jscpd:ignore-end */
 
 /** Exact B03 control-plane schema accepted as the sole v2 migration source. */
 export const sakiControlPlaneV2DomainSpec = defineDomain({
@@ -554,14 +575,16 @@ export const sakiControlPlaneV4DomainSpec = defineDomain({
   name: 'saki_control_plane',
   version: 4,
   tables: {
-    control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
-    installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
-    hosts: domainTable<SakiHostId, HostRecord>(hostRecordSchema),
-    principals: domainTable<SakiPrincipalId, PrincipalRecord>(principalRecordSchema),
+    control_state: domainTable<typeof V4_CONTROL_STATE_KEY, V4ControlStateRecord>(v4ControlStateRecordSchema),
+    installations: domainTable<SakiInstallationId, V4InstallationRecord>(v4InstallationRecordSchema),
+    hosts: domainTable<SakiHostId, V4HostRecord>(v4HostRecordSchema),
+    principals: domainTable<SakiPrincipalId, V4PrincipalRecord>(v4PrincipalRecordSchema),
     grants: domainTable<SakiGrantId, V4GrantRecord>(v4GrantRecordSchema),
-    installation_access: domainTable<SakiInstallationAccessId, InstallationAccessRecord>(installationAccessRecordSchema),
+    installation_access: domainTable<SakiInstallationAccessId, V4InstallationAccessRecord>(
+      v4InstallationAccessRecordSchema,
+    ),
     development_project_registry: domainTable<
-      typeof DEVELOPMENT_PROJECT_REGISTRY_KEY,
+      typeof V4_DEVELOPMENT_PROJECT_REGISTRY_KEY,
       V4DevelopmentProjectRegistryRecord
     >(v4DevelopmentProjectRegistryRecordSchema),
     registration_intents: domainTable<SakiControlIntentId, V4RegistrationIntentRecord>(v4RegistrationIntentRecordSchema),
@@ -662,7 +685,7 @@ function migrateGrantsToV4(snapshot: DomainMigrationSnapshot): Record<string, Gr
 }
 
 function migrateGrantsToV5(snapshot: DomainMigrationSnapshot): Record<string, GrantRecord> {
-  const control = sourceTable<ControlStateRecord>(snapshot, 'control_state')[CONTROL_STATE_KEY]
+  const control = sourceTable<V4ControlStateRecord>(snapshot, 'control_state')[V4_CONTROL_STATE_KEY]
   return Object.fromEntries(Object.entries(sourceTable<V4GrantRecord>(snapshot, 'grants')).map(([key, value]) => {
     if (key !== control?.hostOperatorGrantId) return [key, value]
     return [key, { ...value, revision: value.revision + 1, actions: [...HOST_OPERATOR_ACTIONS] }]
@@ -732,7 +755,7 @@ function migrateV4BindingWriteAdmissions(
   const registry = sourceTable<V4DevelopmentProjectRegistryRecord>(
     snapshot,
     'development_project_registry',
-  )[DEVELOPMENT_PROJECT_REGISTRY_KEY]
+  )[V4_DEVELOPMENT_PROJECT_REGISTRY_KEY]
   if (registry === undefined) return {}
   return Object.fromEntries(registry.resourceBindings.map(binding => [binding.id, {
     id: binding.id,

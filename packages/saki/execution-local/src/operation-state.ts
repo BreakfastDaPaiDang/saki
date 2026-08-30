@@ -1,5 +1,6 @@
 /** Durable Local Host Operation records. @module @breakfastdapaidang/saki-execution-local/operation-state */
 
+import { constants as bufferConstants } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import { z } from 'zod'
@@ -8,7 +9,10 @@ import {
   commitHostOperationResultSchema,
   hostOperationRequestSchema,
   hostOperationSnapshotSchema,
+  isRepositoryRelativeGitPath,
   MAX_GIT_REF_CHARS,
+  MAX_HOST_OPERATION_SELECTED_CHANGES,
+  MAX_PROJECT_GIT_STATUS_PATH_BYTES,
   projectGitChangeFingerprintSchema,
   projectGitChangeIdSchema,
   stageFilesHostOperationResultSchema,
@@ -24,6 +28,54 @@ import {
 } from '@breakfastdapaidang/saki-execution'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 
+const UTF8 = new TextEncoder()
+const MAX_INDEX_EFFECT_PATH_BASE64_CHARS = 4 * Math.ceil(MAX_PROJECT_GIT_STATUS_PATH_BYTES / 3)
+const MAX_CANONICAL_UINT64_DECIMAL = '18446744073709551615'
+const INDEX_LOCK_MARKER_PREFIX = 'saki-host-operation-index-lock/v1\0'
+
+/**
+ * Build the exact operation-owned index marker retained by Commit plans.
+ * @param operationId - durable Host Operation identity.
+ * @param requestFingerprint - immutable request fingerprint digest.
+ * @returns exact marker bytes shared by runtime ownership and durable validation.
+ * @internal
+ */
+export function localHostOperationIndexLockMarker(operationId: string, requestFingerprint: string): Buffer {
+  return Buffer.from(`${INDEX_LOCK_MARKER_PREFIX}${operationId}\0${requestFingerprint}\0`, 'utf8')
+}
+
+/** Smallest index-byte bound that can retain every valid Commit lock marker. */
+export const MIN_OPERATION_MAX_INDEX_BYTES = localHostOperationIndexLockMarker(
+  'host-operation-00000000-0000-4000-8000-000000000000',
+  '0'.repeat(64),
+).byteLength
+
+/** Return the decoded size of non-empty canonical Base64 without allocating its bytes. */
+function canonicalBase64DecodedByteLength(value: string): number | undefined {
+  if (value.length === 0 || value.length % 4 !== 0) return undefined
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  const dataLength = value.length - padding
+  if (dataLength % 4 !== (4 - padding) % 4) return undefined
+  let lastSextet = 0
+  for (let index = 0; index < dataLength; index += 1) {
+    const sextet = base64Sextet(value.charCodeAt(index))
+    if (sextet === undefined) return undefined
+    lastSextet = sextet
+  }
+  if (padding === 2 && (lastSextet & 0x0f) !== 0) return undefined
+  if (padding === 1 && (lastSextet & 0x03) !== 0) return undefined
+  return value.length / 4 * 3 - padding
+}
+
+function base64Sextet(code: number): number | undefined {
+  if (code >= 65 && code <= 90) return code - 65
+  if (code >= 97 && code <= 122) return code - 71
+  if (code >= 48 && code <= 57) return code + 4
+  if (code === 43) return 62
+  if (code === 47) return 63
+  return undefined
+}
+
 /** Complete private record retained before any Host Operation effect. */
 export interface LocalHostOperationRecord {
   readonly schemaVersion: 1
@@ -33,16 +85,19 @@ export interface LocalHostOperationRecord {
   readonly effectPlan?: LocalHostOperationEffectPlan
 }
 
-/** One private random directory whose ownership is durably attributable. */
+/** One private random directory whose wrapper, payload, and owner-file creation identities are durable. */
 export interface LocalHostOperationScratch {
   readonly path: string
   readonly markerDigest: string
+  readonly identity: { readonly device: string; readonly inode: string }
+  readonly payloadIdentity: { readonly device: string; readonly inode: string }
+  readonly ownerIdentity: { readonly device: string; readonly inode: string }
 }
 
 /** Exact source-index file evidence used to distinguish publication outcomes. */
 export type LocalHostIndexFileEvidence =
   | { readonly kind: 'missing' }
-  | { readonly kind: 'file'; readonly digest: string; readonly byteLength: number }
+  | { readonly kind: 'file'; readonly digest: string; readonly byteLength: number; readonly mode: number }
 
 /** Exact same-directory file evidence used to acquire an operation-owned index lock. */
 export interface LocalHostIndexPinEvidence {
@@ -56,6 +111,7 @@ export interface LocalHostIndexPinEvidence {
 interface LocalHostIndexOperationPlanBase {
   readonly kind: 'index'
   readonly scratch: LocalHostOperationScratch
+  readonly indexReadLimit: number
   readonly expectedIndexFile: LocalHostIndexFileEvidence
   readonly targetIndexFile: Extract<LocalHostIndexFileEvidence, { readonly kind: 'file' }>
   readonly pin: LocalHostIndexPinEvidence
@@ -79,6 +135,8 @@ export interface LocalHostUnstageFilesPlan extends LocalHostIndexOperationPlanBa
 export interface LocalHostCommitPlan {
   readonly kind: 'commit'
   readonly scratch: LocalHostOperationScratch
+  readonly indexReadLimit: number
+  readonly reflogReadLimit: number
   readonly publication: 'not-started' | 'attempting' | 'applied-recorded'
   readonly targetRef: string
   readonly expectedOldObjectId: string
@@ -107,6 +165,128 @@ export function localHostOperationRequestFingerprint(
   }
 }
 
+/**
+ * Retain the fields shared by every Host Operation state transition.
+ * @param snapshot - current durable operation snapshot.
+ * @returns identity, timing, and admission fields shared with the next state.
+ * @internal
+ */
+export function hostOperationSnapshotCore(snapshot: HostOperationSnapshot): Pick<
+  HostOperationSnapshot,
+  | 'operation'
+  | 'revision'
+  | 'source'
+  | 'requestFingerprint'
+  | 'bindingId'
+  | 'bindingRevision'
+  | 'preparedAt'
+  | 'updatedAt'
+  | 'admission'
+> {
+  return {
+    operation: snapshot.operation,
+    revision: snapshot.revision,
+    source: snapshot.source,
+    requestFingerprint: snapshot.requestFingerprint,
+    bindingId: snapshot.bindingId,
+    bindingRevision: snapshot.bindingRevision,
+    preparedAt: snapshot.preparedAt,
+    updatedAt: snapshot.updatedAt,
+    admission: snapshot.admission,
+  }
+}
+
+const indexEffectPlanChangesSchema = z.unknown().superRefine((value, context) => {
+  if (!Array.isArray(value)) return
+  if (value.length === 0) {
+    context.addIssue({
+      code: 'custom',
+      message: 'index effect plan must contain at least one change',
+      continue: false,
+    })
+    return
+  }
+  if (value.length > MAX_HOST_OPERATION_SELECTED_CHANGES) {
+    context.addIssue({
+      code: 'custom',
+      message: 'index effect plan changes exceed the protocol row limit',
+      continue: false,
+    })
+    return
+  }
+  let remainingPathBytes = MAX_PROJECT_GIT_STATUS_PATH_BYTES
+  let remainingPathEvidenceBytes = MAX_PROJECT_GIT_STATUS_PATH_BYTES
+  for (const [index, change] of value.entries()) {
+    if (typeof change !== 'object' || change === null) continue
+    const path = (change as { readonly path?: unknown }).path
+    if (typeof path === 'string') {
+      if (path.length > remainingPathBytes) {
+        context.addIssue({
+          code: 'custom',
+          message: 'index effect plan paths exceed the protocol byte limit',
+          path: [index, 'path'],
+          continue: false,
+        })
+        return
+      }
+      const pathBytes = UTF8.encode(path).byteLength
+      if (pathBytes > remainingPathBytes) {
+        context.addIssue({
+          code: 'custom',
+          message: 'index effect plan paths exceed the protocol byte limit',
+          path: [index, 'path'],
+          continue: false,
+        })
+        return
+      }
+      remainingPathBytes -= pathBytes
+    }
+    const pathBytesBase64 = (change as { readonly pathBytesBase64?: unknown }).pathBytesBase64
+    if (typeof pathBytesBase64 !== 'string') continue
+    if (pathBytesBase64.length > MAX_INDEX_EFFECT_PATH_BASE64_CHARS) {
+      context.addIssue({
+        code: 'custom',
+        message: 'index effect plan paths exceed the protocol byte limit',
+        path: [index, 'pathBytesBase64'],
+        continue: false,
+      })
+      return
+    }
+    const decodedBytes = canonicalBase64DecodedByteLength(pathBytesBase64)
+    if (decodedBytes === undefined) {
+      context.addIssue({
+        code: 'custom',
+        message: 'index effect plan path bytes are not canonical base64',
+        path: [index, 'pathBytesBase64'],
+        continue: false,
+      })
+      return
+    }
+    if (decodedBytes > remainingPathEvidenceBytes) {
+      context.addIssue({
+        code: 'custom',
+        message: 'index effect plan paths exceed the protocol byte limit',
+        path: [index, 'pathBytesBase64'],
+        continue: false,
+      })
+      return
+    }
+    remainingPathEvidenceBytes -= decodedBytes
+  }
+}).pipe(z.array(appliedChangeSchema())
+  .min(1)
+  .max(MAX_HOST_OPERATION_SELECTED_CHANGES))
+
+const indexEffectPlanFields = {
+  scratch: scratchSchema(),
+  indexReadLimit: boundedReadLimitSchema(MIN_OPERATION_MAX_INDEX_BYTES),
+  expectedIndexFile: indexFileEvidenceSchema(),
+  targetIndexFile: indexFileEvidenceSchema().and(z.object({ kind: z.literal('file') })),
+  pin: indexPinSchema(),
+  publication: z.enum(['not-started', 'attempting', 'applied-recorded']),
+  changes: indexEffectPlanChangesSchema,
+}
+
 const localHostOperationRecordSchema = z.object({
   schemaVersion: z.literal(1),
   request: hostOperationRequestSchema,
@@ -116,28 +296,20 @@ const localHostOperationRecordSchema = z.object({
     z.object({
       kind: z.literal('index'),
       operation: z.literal('stage-files'),
-      scratch: scratchSchema(),
-      expectedIndexFile: indexFileEvidenceSchema(),
-      targetIndexFile: indexFileEvidenceSchema().and(z.object({ kind: z.literal('file') })),
-      pin: indexPinSchema(),
-      publication: z.enum(['not-started', 'attempting', 'applied-recorded']),
-      changes: z.array(appliedChangeSchema()),
+      ...indexEffectPlanFields,
       result: stageFilesHostOperationResultSchema,
     }).strict(),
     z.object({
       kind: z.literal('index'),
       operation: z.literal('unstage-files'),
-      scratch: scratchSchema(),
-      expectedIndexFile: indexFileEvidenceSchema(),
-      targetIndexFile: indexFileEvidenceSchema().and(z.object({ kind: z.literal('file') })),
-      pin: indexPinSchema(),
-      publication: z.enum(['not-started', 'attempting', 'applied-recorded']),
-      changes: z.array(appliedChangeSchema()),
+      ...indexEffectPlanFields,
       result: unstageFilesHostOperationResultSchema,
     }).strict(),
     z.object({
       kind: z.literal('commit'),
       scratch: scratchSchema(),
+      indexReadLimit: boundedReadLimitSchema(MIN_OPERATION_MAX_INDEX_BYTES),
+      reflogReadLimit: boundedReadLimitSchema(),
       publication: z.enum(['not-started', 'attempting', 'applied-recorded']),
       targetRef: z.string().min(1).max(MAX_GIT_REF_CHARS),
       expectedOldObjectId: z.string().regex(/^[0-9a-f]{40}$|^[0-9a-f]{64}$/u),
@@ -199,20 +371,22 @@ const localHostOperationRecordSchema = z.object({
     context.addIssue({ code: 'custom', message: 'Host Operation success disagrees with published effect plan' })
   }
   if (record.effectPlan?.kind === 'index') {
-    validateIndexPlan(record as LocalHostOperationRecord, context)
+    validateIndexPlan(record as LocalHostOperationRecord, record.effectPlan, context)
   }
   if (record.effectPlan?.kind === 'commit') {
-    validateCommitPlan(record as LocalHostOperationRecord, context)
+    validateCommitPlan(record as LocalHostOperationRecord, record.effectPlan, context)
   }
-  if (record.effectPlan !== undefined) validateOwnershipMarkers(record as LocalHostOperationRecord, context)
+  if (record.effectPlan !== undefined) {
+    validateOwnershipMarkers(record as LocalHostOperationRecord, record.effectPlan, context)
+  }
 }) as unknown as z.ZodType<LocalHostOperationRecord>
 
 function validateIndexPlan(
   record: LocalHostOperationRecord,
+  plan: LocalHostStageFilesPlan | LocalHostUnstageFilesPlan,
   context: z.RefinementCtx,
 ): void {
-  const plan = record.effectPlan
-  if (plan?.kind !== 'index' || record.request.type === 'commit') return
+  if (record.request.type === 'commit') return
   const publicChanges = plan.changes.map(({ pathBytesBase64: _pathBytesBase64, ...change }) => change)
   if (canonicalDigest('saki/host-operation-plan-changes/v1', publicChanges)
     !== canonicalDigest('saki/host-operation-plan-changes/v1', plan.result.changes)) {
@@ -244,18 +418,29 @@ function validateIndexPlan(
     context.addIssue({ code: 'custom', message: 'index effect plan uses a different object format' })
   }
   if (plan.pin.digest !== plan.targetIndexFile.digest
-    || plan.pin.byteLength !== plan.targetIndexFile.byteLength) {
+    || plan.pin.byteLength !== plan.targetIndexFile.byteLength
+    || plan.pin.mode !== plan.targetIndexFile.mode) {
     context.addIssue({ code: 'custom', message: 'index pin evidence disagrees with its target index' })
+  }
+  if (plan.indexReadLimit < plan.pin.byteLength
+    || plan.indexReadLimit < plan.targetIndexFile.byteLength
+    || plan.expectedIndexFile.kind === 'file' && plan.indexReadLimit < plan.expectedIndexFile.byteLength) {
+    context.addIssue({ code: 'custom', message: 'index effect plan read limit cannot retain its evidence' })
+  }
+  if (plan.expectedIndexFile.kind === 'file'
+    && plan.expectedIndexFile.digest === plan.targetIndexFile.digest
+    && plan.expectedIndexFile.byteLength === plan.targetIndexFile.byteLength) {
+    context.addIssue({ code: 'custom', message: 'index effect plan has no observable publication' })
   }
   validateIndexPinPath(record, plan.pin, context)
 }
 
 function validateCommitPlan(
   record: LocalHostOperationRecord,
+  plan: LocalHostCommitPlan,
   context: z.RefinementCtx,
 ): void {
-  const plan = record.effectPlan
-  if (plan?.kind !== 'commit' || record.request.type !== 'commit') return
+  if (record.request.type !== 'commit') return
   const expectedHead = record.request.expected.head
   const objectWidth = record.request.expected.binding.expectedInspection.projection.objectFormat === 'sha1' ? 40 : 64
   const zeroObjectId = '0'.repeat(objectWidth)
@@ -267,9 +452,15 @@ function validateCommitPlan(
   if (plan.result.treeId !== record.request.expected.index.treeId) {
     context.addIssue({ code: 'custom', message: 'Commit effect plan tree disagrees with the expected index' })
   }
+  if (plan.result.commitId === plan.expectedOldObjectId) {
+    context.addIssue({ code: 'custom', message: 'Commit effect plan has no observable publication' })
+  }
   if (canonicalDigest('saki/host-operation-commit-signature/v1', plan.result.author)
     !== canonicalDigest('saki/host-operation-commit-signature/v1', plan.result.committer)) {
     context.addIssue({ code: 'custom', message: 'Commit effect plan uses asymmetric author and committer evidence' })
+  }
+  if (plan.indexReadLimit < plan.pin.byteLength) {
+    context.addIssue({ code: 'custom', message: 'Commit effect plan index read limit cannot retain its pin' })
   }
   if (plan.reflogMarker !== `saki host-operation ${record.snapshot.operation.id}`) {
     context.addIssue({ code: 'custom', message: 'Commit effect plan uses an unexpected reflog marker' })
@@ -297,9 +488,11 @@ function validateCommitPlan(
   }
 }
 
-function validateOwnershipMarkers(record: LocalHostOperationRecord, context: z.RefinementCtx): void {
-  const plan = record.effectPlan
-  if (plan === undefined) return
+function validateOwnershipMarkers(
+  record: LocalHostOperationRecord,
+  plan: LocalHostOperationEffectPlan,
+  context: z.RefinementCtx,
+): void {
   const scratchDigest = ownershipMarkerDigest(record, 'scratch')
   if (plan.scratch.markerDigest !== scratchDigest) {
     context.addIssue({ code: 'custom', message: 'effect plan scratch marker disagrees with operation identity' })
@@ -319,9 +512,14 @@ function ownershipMarkerDigest(
 }
 
 function ownershipMarker(record: LocalHostOperationRecord, kind: 'scratch' | 'index'): Buffer {
-  const label = kind === 'scratch' ? 'scratch' : `${kind}-lock`
+  if (kind === 'index') {
+    return localHostOperationIndexLockMarker(
+      record.snapshot.operation.id,
+      record.snapshot.requestFingerprint.digest,
+    )
+  }
   return Buffer.from(
-    `saki-host-operation-${label}/v1\0${record.snapshot.operation.id}\0${record.snapshot.requestFingerprint.digest}\0`,
+    `saki-host-operation-scratch/v1\0${record.snapshot.operation.id}\0${record.snapshot.requestFingerprint.digest}\0`,
     'utf8',
   )
 }
@@ -348,6 +546,9 @@ function scratchSchema() {
   return z.object({
     path: z.string().min(1).max(32_768),
     markerDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+    identity: ownershipIdentitySchema(),
+    payloadIdentity: ownershipIdentitySchema(),
+    ownerIdentity: ownershipIdentitySchema(),
   }).strict()
 }
 
@@ -358,6 +559,7 @@ function indexFileEvidenceSchema() {
       kind: z.literal('file'),
       digest: z.string().regex(/^[0-9a-f]{64}$/u),
       byteLength: z.number().int().nonnegative(),
+      mode: z.number().int().min(0).max(0o777),
     }).strict(),
   ])
 }
@@ -367,24 +569,38 @@ function indexPinSchema() {
     path: z.string().min(1).max(32_768),
     digest: z.string().regex(/^[0-9a-f]{64}$/u),
     byteLength: z.number().int().nonnegative(),
-    identity: lockIdentitySchema(),
+    identity: ownershipIdentitySchema(),
     mode: z.number().int().min(0).max(0o777),
   }).strict()
+}
+
+function boundedReadLimitSchema(minimum = 1) {
+  return z.number().int().min(minimum).max(bufferConstants.MAX_LENGTH)
 }
 
 function appliedChangeSchema() {
   return z.object({
     id: projectGitChangeIdSchema,
     fingerprint: projectGitChangeFingerprintSchema,
-    path: z.string().min(1),
-    pathBytesBase64: z.string().regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u),
+    path: z.string().refine(
+      isRepositoryRelativeGitPath,
+      'index effect plan path is not a bounded repository-relative Git path',
+    ),
+    pathBytesBase64: z.string().refine(
+      value => canonicalBase64DecodedByteLength(value) !== undefined,
+      'index effect plan path bytes are not canonical base64',
+    ),
   }).strict()
 }
 
-function lockIdentitySchema() {
+function ownershipIdentitySchema() {
+  const canonicalUnsigned64 = z.string()
+    .regex(/^(?:0|[1-9]\d{0,19})$/u)
+    .refine(value => value.length < 20
+      || value.length === 20 && value <= MAX_CANONICAL_UINT64_DECIMAL)
   return z.object({
-    device: z.string().regex(/^\d+$/u),
-    inode: z.string().regex(/^\d+$/u),
+    device: canonicalUnsigned64,
+    inode: canonicalUnsigned64,
   }).strict()
 }
 

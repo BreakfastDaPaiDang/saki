@@ -33,11 +33,13 @@ import {
   inspectStableLocalProjectSelection,
   type AdministrativeDirectoryIdentityReader,
   type InspectionConfig,
+  type StableLocalProjectSelectionFailureReason,
   type WorkspaceIndex,
 } from './inspection.ts'
 import {
   openSafeRepositoryView,
   RepositoryControlChangedError,
+  type SafeRepositoryOpenResult,
   type SafeRepositoryView,
 } from './safe-repository.ts'
 import { buildProjectGitStatusObservation, ProjectGitStatusProjectionError } from './status.ts'
@@ -55,6 +57,8 @@ export interface LocalProjectDiffDependencies {
   readonly git: GitRunner
   readonly config: InspectionConfig
   readonly identityReader: AdministrativeDirectoryIdentityReader
+  /** Trusted-composition overrides that preserve each replaced boundary's complete safety obligations. */
+  readonly internals?: LocalProjectDiffInternals
 }
 
 /** Provider-neutral request fields after the trusted Binding is separated by the Host seam. */
@@ -70,21 +74,36 @@ export type LocalProjectDiffResult =
   | { readonly ok: true; readonly page: ProjectGitDiffPage }
   | { readonly ok: false; readonly reason: ProjectGitDiffFailureReason }
 
-interface BoundProjectObservation {
+/** Complete internal evidence retained for one bound Diff observation. */
+export interface BoundProjectObservation {
   readonly inspection: ProjectSelectionInspection
   readonly inventory: CapturedRepositoryInventory
   readonly status: ProjectGitStatusObservation
 }
 
-type BoundProjectObservationResult =
+/** Closed internal result of one bound Diff observation. */
+export type BoundProjectObservationResult =
   | { readonly ok: true; readonly value: BoundProjectObservation }
   | { readonly ok: false; readonly reason: ProjectGitDiffFailureReason }
 
-type PatchReadResult =
+/** Closed internal result of one stable complete patch read. */
+export type PatchReadResult =
   | { readonly ok: true; readonly bytes: Buffer }
   | { readonly ok: false; readonly reason: ProjectGitDiffFailureReason }
 
-interface DiffCursorMaterial {
+/**
+ * Trusted-provider overrides for Local Diff boundary implementations; omitted fields use secure defaults.
+ * Every override must preserve the replaced function's validation, containment, and stability obligations.
+ * @internal
+ */
+export interface LocalProjectDiffInternals {
+  readonly inspectSelection?: typeof inspectStableLocalProjectSelection
+  readonly buildStatus?: typeof buildProjectGitStatusObservation
+  readonly openRepository?: typeof openSafeRepositoryView
+}
+
+/** Decoded identity and offset carried by one validated opaque Diff cursor. */
+export interface DiffCursorMaterial {
   readonly version: 1
   readonly observationDigest: string
   readonly changeId: string
@@ -121,36 +140,15 @@ export async function readLocalProjectDiff(
   if (!sameStatusFingerprint(initial.value.status.fingerprint, request.expectedStatus)) {
     return { ok: false, reason: 'observation-stale' }
   }
-  const matches = initial.value.status.changes.filter(change => change.id === request.changeId)
-  if (matches.length === 0) return { ok: false, reason: 'change-missing' }
-  if (matches.length !== 1) return { ok: false, reason: 'change-ambiguous' }
-  const change = matches[0]
-  if (change === undefined) return { ok: false, reason: 'change-missing' }
-  if (request.layer === 'conflict' || change.kind === 'unmerged') {
-    return { ok: false, reason: 'conflict' }
-  }
-  if (change.kind === 'untracked') return { ok: false, reason: 'untracked' }
-  if (change.submodule.kind === 'submodule') return { ok: false, reason: 'unavailable' }
-  const inventoryEntries = resolveInventoryEntries(initial.value.inventory, change)
-  if (inventoryEntries.length === 0) return { ok: false, reason: 'change-missing' }
-  if (inventoryEntries.length !== 1) return { ok: false, reason: 'change-ambiguous' }
-  const inventoryEntry = inventoryEntries[0]
-  if (inventoryEntry === undefined) return { ok: false, reason: 'change-missing' }
-  if (request.layer === 'unstaged' && inventoryEntry.conversion.executableFilter) {
-    return { ok: false, reason: 'unavailable' }
-  }
-  if (!changeHasLayer(change, request.layer)) return { ok: false, reason: 'layer-missing' }
-  const rawPath = inventoryEntry.path
-  if (!projectDiffCommandFits(rawPath, initial.value.inspection.trusted.canonicalWorktreePath)) {
-    return { ok: false, reason: 'command-length' }
-  }
+  const target = resolveProjectDiffTarget(initial.value, request)
+  if (!target.ok) return target
 
   const patch = await readStablePatch(
     dependencies,
     binding,
     initial.value,
-    rawPath,
-    request.layer,
+    target.path,
+    target.layer,
     signal,
   )
   const finalFailure = await revalidateExpectedObservation(
@@ -162,20 +160,69 @@ export async function readLocalProjectDiff(
   if (finalFailure !== undefined) return { ok: false, reason: finalFailure }
   if (!patch.ok) return patch
 
-  const patchDigest = exactBytesDigest(PATCH_DIGEST_DOMAIN, patch.bytes)
-  if (cursor !== undefined && cursor.value.patchDigest !== patchDigest) {
+  return completeProjectDiffPage(request, cursor?.value, patch.bytes)
+}
+
+/**
+ * Resolve one request to exactly one raw inventory path without performing repository I/O.
+ * @param observed - complete status and inventory evidence from one stable observation.
+ * @param request - requested observation, change identity, and layer.
+ * @returns the exact raw path or one closed target-resolution failure.
+ */
+export function resolveProjectDiffTarget(
+  observed: BoundProjectObservation,
+  request: LocalProjectDiffRequest,
+): { readonly ok: true; readonly path: Uint8Array; readonly layer: ReadableProjectGitDiffLayer }
+  | { readonly ok: false; readonly reason: ProjectGitDiffFailureReason } {
+  const [change, ...additionalChanges] = observed.status.changes
+    .filter(candidate => candidate.id === request.changeId)
+  if (change === undefined) return { ok: false, reason: 'change-missing' }
+  if (additionalChanges.length !== 0) return { ok: false, reason: 'change-ambiguous' }
+  if (request.layer === 'conflict' || change.kind === 'unmerged') {
+    return { ok: false, reason: 'conflict' }
+  }
+  if (change.kind === 'untracked') return { ok: false, reason: 'untracked' }
+  if (change.submodule.kind === 'submodule') return { ok: false, reason: 'unavailable' }
+  const [inventoryEntry, ...additionalInventoryEntries] = resolveInventoryEntries(observed.inventory, change)
+  if (inventoryEntry === undefined) return { ok: false, reason: 'change-missing' }
+  if (additionalInventoryEntries.length !== 0) return { ok: false, reason: 'change-ambiguous' }
+  if (request.layer === 'unstaged' && inventoryEntry.conversion.executableFilter) {
+    return { ok: false, reason: 'unavailable' }
+  }
+  if (!changeHasLayer(change, request.layer)) return { ok: false, reason: 'layer-missing' }
+  const rawPath = inventoryEntry.path
+  if (!projectDiffCommandFits(rawPath, observed.inspection.trusted.canonicalWorktreePath)) {
+    return { ok: false, reason: 'command-length' }
+  }
+  return { ok: true, path: rawPath, layer: request.layer }
+}
+
+/**
+ * Validate complete stable patch bytes against the cursor's patch digest and offset, then build one bounded page.
+ * @param request - observation, change identity, and requested layer.
+ * @param cursor - decoded validated cursor, when continuing an earlier page.
+ * @param bytes - complete stable patch bytes.
+ * @returns one bounded page or a closed patch/cursor failure.
+ */
+export function completeProjectDiffPage(
+  request: LocalProjectDiffRequest,
+  cursor: DiffCursorMaterial | undefined,
+  bytes: Buffer,
+): LocalProjectDiffResult {
+  const patchDigest = exactBytesDigest(PATCH_DIGEST_DOMAIN, bytes)
+  if (cursor !== undefined && cursor.patchDigest !== patchDigest) {
     return { ok: false, reason: 'cursor-stale' }
   }
-  const parsed = parsePatch(patch.bytes)
+  const parsed = parseProjectDiffPatch(bytes)
   if (!parsed.ok) return parsed
-  const startLine = cursor?.value.nextLine ?? 0
+  const startLine = cursor?.nextLine ?? 0
   if (startLine >= parsed.lines.length) return { ok: false, reason: 'invalid-cursor' }
   return {
     ok: true,
     page: buildPage(
       request,
       parsed.lines,
-      patch.bytes.byteLength,
+      bytes.byteLength,
       patchDigest,
       startLine,
     ),
@@ -208,14 +255,23 @@ export function projectDiffCommandFits(
   return worstCaseChars < WINDOWS_COMMAND_LINE_CHARS
 }
 
-async function observeBoundProject(
+/**
+ * Re-inspect one trusted Resource Binding and project its complete status evidence.
+ * @param dependencies - Local filesystem, Git, Workspace, identity, and trusted boundary implementations.
+ * @param binding - active Resource Binding whose exact repository identity must still match.
+ * @param signal - required caller lifetime.
+ * @returns complete bound evidence or a closed browser-safe failure.
+ * @internal
+ */
+export async function observeBoundProject(
   dependencies: LocalProjectDiffDependencies,
   binding: ActiveHostProjectBinding,
   signal: AbortSignal,
 ): Promise<BoundProjectObservationResult> {
   let selected
   try {
-    selected = await inspectStableLocalProjectSelection(
+    const inspectSelection = dependencies.internals?.inspectSelection ?? inspectStableLocalProjectSelection
+    selected = await inspectSelection(
       dependencies.fs,
       dependencies.workspaces,
       dependencies.git,
@@ -227,8 +283,10 @@ async function observeBoundProject(
       signal,
       dependencies.identityReader,
       {
-        workspaceId: binding.workspaceId,
-        trusted: binding.expectedInspection.trusted,
+        boundResource: {
+          workspaceId: binding.workspaceId,
+          trusted: binding.expectedInspection.trusted,
+        },
       },
     )
   } catch (error) {
@@ -237,14 +295,14 @@ async function observeBoundProject(
     }
     throw error
   }
-  if (!selected.ok) return { ok: false, reason: selectionFailureReason(selected.reason) }
+  if (!selected.ok) return { ok: false, reason: projectDiffSelectionFailureReason(selected.reason) }
   try {
     return {
       ok: true,
       value: {
         inspection: selected.inspection,
         inventory: selected.inventory,
-        status: buildProjectGitStatusObservation(
+        status: (dependencies.internals?.buildStatus ?? buildProjectGitStatusObservation)(
           selected.inventory,
           selected.inspection,
           binding,
@@ -266,7 +324,18 @@ async function observeBoundProject(
   }
 }
 
-async function readStablePatch(
+/**
+ * Capture two equal file-scoped patch passes from one admitted private repository view.
+ * @param dependencies - Local repository capabilities and trusted admission overrides.
+ * @param binding - active Resource Binding revalidated between patch commands.
+ * @param observed - complete initial observation that pins repository and status identity.
+ * @param path - exact raw inventory path selected by the request.
+ * @param layer - staged or unstaged comparison layer.
+ * @param signal - required caller lifetime.
+ * @returns complete stable patch bytes or a closed browser-safe failure.
+ * @internal
+ */
+export async function readStablePatch(
   dependencies: LocalProjectDiffDependencies,
   binding: ActiveHostProjectBinding,
   observed: BoundProjectObservation,
@@ -276,7 +345,8 @@ async function readStablePatch(
 ): Promise<PatchReadResult> {
   const pathText = decodePath(path)
   if (pathText === undefined) return { ok: false, reason: 'malformed' }
-  const opened = await openSafeRepositoryView(
+  const openRepository = dependencies.internals?.openRepository ?? openSafeRepositoryView
+  const opened = await openRepository(
     dependencies.fs,
     dependencies.git,
     observed.inspection.trusted.canonicalWorktreePath,
@@ -284,7 +354,7 @@ async function readStablePatch(
     signal,
   )
   if (opened.kind !== 'repository') {
-    return { ok: false, reason: repositoryOpenFailureReason(opened.kind) }
+    return { ok: false, reason: projectDiffRepositoryOpenFailureReason(opened.kind) }
   }
   await using repository = opened.view
   try {
@@ -306,7 +376,7 @@ async function readStablePatch(
     if (preflightCheckpointFailure !== undefined) {
       return { ok: false, reason: preflightCheckpointFailure }
     }
-    const firstKind = parseBinaryPreflight(firstPreflight, path)
+    const firstKind = parseProjectDiffBinaryPreflight(firstPreflight, path)
     if (firstKind === 'malformed') return { ok: false, reason: 'malformed' }
     const firstPatch = firstKind === 'text'
       ? await runDiffQuery(
@@ -332,7 +402,7 @@ async function readStablePatch(
       signal,
       MAX_PROJECT_GIT_DIFF_TOTAL_UTF8_BYTES,
     )
-    const secondKind = parseBinaryPreflight(secondPreflight, path)
+    const secondKind = parseProjectDiffBinaryPreflight(secondPreflight, path)
     if (!firstPreflight.equals(secondPreflight) || firstKind !== secondKind) {
       return { ok: false, reason: 'ambiguous' }
     }
@@ -340,10 +410,11 @@ async function readStablePatch(
       await repository.assertSourceControlUnchanged(signal)
       return { ok: false, reason: 'binary' }
     }
-    if (secondKind === 'missing' || firstPatch === undefined) {
+    if (secondKind === 'missing') {
       await repository.assertSourceControlUnchanged(signal)
       return { ok: false, reason: 'layer-missing' }
     }
+    const stableFirstPatch = firstPatch as Buffer
     const secondPatch = await runDiffQuery(
       repository,
       projectDiffQueryArguments('patch', pathText, layer, observed.status.head),
@@ -351,9 +422,9 @@ async function readStablePatch(
       MAX_PROJECT_GIT_DIFF_TOTAL_UTF8_BYTES,
     )
     await repository.assertSourceControlUnchanged(signal)
-    if (!firstPatch.equals(secondPatch)) return { ok: false, reason: 'ambiguous' }
-    if (firstPatch.byteLength === 0) return { ok: false, reason: 'layer-missing' }
-    return { ok: true, bytes: firstPatch }
+    if (!stableFirstPatch.equals(secondPatch)) return { ok: false, reason: 'ambiguous' }
+    if (stableFirstPatch.byteLength === 0) return { ok: false, reason: 'layer-missing' }
+    return { ok: true, bytes: stableFirstPatch }
   } catch (error) {
     if (signal.aborted) throw signal.reason
     if (error instanceof RepositoryControlChangedError) return { ok: false, reason: 'ambiguous' }
@@ -439,11 +510,12 @@ async function boundViewAdmission(
   const commonIdentity = repository.commonDirectoryPath === repository.gitDirectoryPath
     ? gitIdentity
     : await dependencies.identityReader(repository.commonDirectoryPath, signal)
-  if (gitIdentity.digest !== expected.gitDirectoryIdentity.digest
-    || commonIdentity.digest !== expected.commonGitDirectoryIdentity.digest) {
-    return 'binding-stale'
-  }
-  return undefined
+  return projectDiffAdministrativeIdentityFailure(
+    gitIdentity.digest,
+    expected.gitDirectoryIdentity.digest,
+    commonIdentity.digest,
+    expected.commonGitDirectoryIdentity.digest,
+  )
 }
 
 function resolveInventoryEntries(
@@ -455,14 +527,22 @@ function resolveInventoryEntries(
     .filter(entry => Buffer.compare(Buffer.from(entry.path), expected) === 0)
 }
 
-function changeHasLayer(change: ProjectGitChange, layer: ReadableProjectGitDiffLayer): boolean {
-  if (change.kind !== 'ordinary') return false
+function changeHasLayer(
+  change: Extract<ProjectGitChange, { readonly kind: 'ordinary' }>,
+  layer: ReadableProjectGitDiffLayer,
+): boolean {
   return layer === 'staged'
     ? change.indexStatus !== 'unchanged'
     : change.worktreeStatus !== 'unchanged'
 }
 
-function parseBinaryPreflight(
+/**
+ * Parse one exact NUL-framed file `--numstat` result without decoding its path.
+ * @param bytes - complete bounded Git stdout.
+ * @param expectedPath - exact raw path selected from repository inventory.
+ * @returns the represented content kind or a closed malformed classification.
+ */
+export function parseProjectDiffBinaryPreflight(
   bytes: Uint8Array,
   expectedPath: Uint8Array,
 ): 'text' | 'binary' | 'missing' | 'malformed' {
@@ -483,12 +563,16 @@ function parseBinaryPreflight(
 }
 
 function canonicalDecimal(bytes: Uint8Array): boolean {
-  if (bytes.byteLength === 0) return false
   if (bytes.byteLength > 1 && bytes[0] === 48) return false
   return bytes.every(byte => byte >= 48 && byte <= 57)
 }
 
-function parsePatch(bytes: Buffer):
+/**
+ * Parse and bound one complete unified Diff patch.
+ * @param bytes - complete raw patch stdout.
+ * @returns decoded logical lines or one browser-safe failure.
+ */
+export function parseProjectDiffPatch(bytes: Buffer):
   | { readonly ok: true; readonly lines: readonly string[] }
   | { readonly ok: false; readonly reason: ProjectGitDiffFailureReason } {
   if (bytes.byteLength === 0 || bytes.at(-1) !== 10 || bytes.includes(0)) {
@@ -520,10 +604,7 @@ function buildPage(
 ): ProjectGitDiffPage {
   let endLineExclusive = startLine
   let pageUtf8Bytes = 0
-  while (endLineExclusive < lines.length
-    && endLineExclusive - startLine < MAX_PROJECT_GIT_DIFF_PAGE_LINES) {
-    const line = lines[endLineExclusive]
-    if (line === undefined) break
+  for (const line of lines.slice(startLine, startLine + MAX_PROJECT_GIT_DIFF_PAGE_LINES)) {
     const lineBytes = Buffer.byteLength(line, 'utf8') + 1
     if (lineBytes > MAX_PROJECT_GIT_DIFF_PAGE_UTF8_BYTES - pageUtf8Bytes) break
     pageUtf8Bytes += lineBytes
@@ -621,29 +702,71 @@ function decodePath(path: Uint8Array): string | undefined {
   }
 }
 
-function selectionFailureReason(reason: string): ProjectGitDiffFailureReason {
-  switch (reason) {
-    case 'malformed': return 'malformed'
-    case 'ambiguous': return 'ambiguous'
-    case 'unavailable': return 'unavailable'
-    case 'limit': return 'unavailable'
-    case 'missing':
-    case 'not-directory':
-    case 'not-git':
-    case 'bare':
-    case 'prunable': return 'binding-stale'
-    default: return 'unavailable'
-  }
+/**
+ * Compare the two admitted Git administrative-directory identities with their Binding evidence.
+ * @param gitDirectoryDigest - Current Git directory identity digest.
+ * @param expectedGitDirectoryDigest - Git directory identity digest retained by the Binding.
+ * @param commonDirectoryDigest - Current common Git directory identity digest.
+ * @param expectedCommonDirectoryDigest - Common Git directory identity digest retained by the Binding.
+ * @returns `binding-stale` when either identity changed; otherwise `undefined`.
+ * @internal
+ */
+export function projectDiffAdministrativeIdentityFailure(
+  gitDirectoryDigest: string,
+  expectedGitDirectoryDigest: string,
+  commonDirectoryDigest: string,
+  expectedCommonDirectoryDigest: string,
+): 'binding-stale' | undefined {
+  return gitDirectoryDigest === expectedGitDirectoryDigest
+    && commonDirectoryDigest === expectedCommonDirectoryDigest
+    ? undefined
+    : 'binding-stale'
 }
 
-function repositoryOpenFailureReason(reason: string): ProjectGitDiffFailureReason {
-  switch (reason) {
-    case 'malformed': return 'malformed'
-    case 'ambiguous': return 'ambiguous'
-    case 'unavailable': return 'unavailable'
-    case 'not-git':
-    case 'bare':
-    case 'prunable': return 'binding-stale'
-    default: return 'unavailable'
-  }
+/**
+ * Project a stable-selection failure onto the public Diff failure vocabulary.
+ * @param reason - Local selection failure category.
+ * @returns browser-safe Diff failure category.
+ * @internal
+ */
+export function projectDiffSelectionFailureReason(
+  reason: StableLocalProjectSelectionFailureReason,
+): ProjectGitDiffFailureReason {
+  return PROJECT_DIFF_SELECTION_FAILURE_REASONS[reason]
 }
+
+const PROJECT_DIFF_SELECTION_FAILURE_REASONS = {
+  malformed: 'malformed',
+  ambiguous: 'ambiguous',
+  unavailable: 'unavailable',
+  limit: 'unavailable',
+  'unsupported-index-state': 'unavailable',
+  missing: 'binding-stale',
+  'not-directory': 'binding-stale',
+  'not-git': 'binding-stale',
+  bare: 'binding-stale',
+  prunable: 'binding-stale',
+} as const satisfies Readonly<Record<StableLocalProjectSelectionFailureReason, ProjectGitDiffFailureReason>>
+
+/**
+ * Project a private repository-view failure onto the public Diff failure vocabulary.
+ * @param reason - Local repository-view failure category.
+ * @returns browser-safe Diff failure category.
+ * @internal
+ */
+export function projectDiffRepositoryOpenFailureReason(
+  reason: Exclude<SafeRepositoryOpenResult['kind'], 'repository'>,
+): ProjectGitDiffFailureReason {
+  return PROJECT_DIFF_REPOSITORY_OPEN_FAILURE_REASONS[reason]
+}
+
+const PROJECT_DIFF_REPOSITORY_OPEN_FAILURE_REASONS = {
+  malformed: 'malformed',
+  ambiguous: 'ambiguous',
+  unavailable: 'unavailable',
+  'not-git': 'binding-stale',
+  bare: 'binding-stale',
+  prunable: 'binding-stale',
+} as const satisfies Readonly<
+  Record<Exclude<SafeRepositoryOpenResult['kind'], 'repository'>, ProjectGitDiffFailureReason>
+>

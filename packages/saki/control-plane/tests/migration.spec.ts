@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalDigest, exactBytesDigest, inheritedChangeBaselineIdentityMaterial } from '@breakfastdapaidang/saki-execution'
+import {
+  canonicalDigest,
+  compareSafeGitRemoteObservations,
+  deriveGitHubRepositoryCandidates,
+  exactBytesDigest,
+  inheritedChangeBaselineIdentityMaterial,
+  sakiControlIntentIdSchema,
+} from '@breakfastdapaidang/saki-execution'
+import { workspaceIdSchema } from '@deepseek-ai/dsh-workspace'
 import {
   SAKI_PROJECT_PROJECTION_FIXTURES,
   SAKI_PROJECT_REQUEST_FIXTURES,
@@ -14,7 +22,8 @@ import {
   v4GitHubConfigurationIntentRecordSchema,
   v4GitHubProjectSyncRecordSchema,
 } from '../src/migration-v4-github.ts'
-import { sakiControlPlaneDomainSpec } from '../src/spec.ts'
+import { sakiHostIdSchema, sakiIntentReceiptIdSchema } from '../src/ids.ts'
+import { DEVELOPMENT_PROJECT_REGISTRY_KEY, sakiControlPlaneDomainSpec } from '../src/spec.ts'
 
 const UUID = '00000000-0000-4000-8000-000000000009'
 const INSTALLATION_GENERATION_ID = `installation-generation-${UUID}`
@@ -247,6 +256,70 @@ function parsedHistoricalTables(source: ReturnType<typeof historicalSnapshot>) {
       )),
     ],
   ))
+}
+
+function migratedV4Snapshot(detached = false) {
+  const source = historicalSnapshot(detached)
+  const v3 = sakiControlPlaneMigrationPlan.steps[0]!.migrate({
+    global: null,
+    tables: parsedHistoricalTables(source),
+  })
+  return sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3)
+}
+
+function parsedV4Records(detached = false) {
+  const snapshot = migratedV4Snapshot(detached)
+  const registry = sakiControlPlaneV4DomainSpec.tables.development_project_registry.valueSchema.parse(
+    snapshot.tables['development_project_registry']!['development-project-registry'],
+  )
+  const intent = sakiControlPlaneV4DomainSpec.tables.registration_intents.valueSchema.parse(
+    snapshot.tables['registration_intents']![INTENT_ID],
+  )
+  return { intent, registry, snapshot }
+}
+
+type V4Intent = ReturnType<
+  typeof sakiControlPlaneV4DomainSpec.tables.registration_intents.valueSchema.parse
+>
+type V4Projection = V4Intent['inspection']['projection']
+type V4CompleteBaseline = Extract<V4Projection['baseline'], { readonly kind: 'complete' }>
+type V4UnmergedStages = Extract<
+  V4CompleteBaseline['entries'][number],
+  { readonly statusKind: 'unmerged' }
+>['stages']
+
+function withInspectionProjection(intent: V4Intent, projection: V4Projection): V4Intent {
+  return { ...intent, inspection: { ...intent.inspection, projection } }
+}
+
+function signedEntry<T extends object>(material: T): T & { readonly digest: string } {
+  return { ...material, digest: canonicalDigest('saki/inherited-entry/v1', material) }
+}
+
+function signedBaseline<T extends {
+  readonly formatVersion: 1
+  readonly bounds: object
+  readonly observed: { readonly elapsedMs: number }
+  readonly entries: readonly object[]
+}>(material: T): T & { readonly digest: string } {
+  return {
+    ...material,
+    digest: canonicalDigest('saki/inherited-baseline/v1', {
+      formatVersion: material.formatVersion,
+      bounds: material.bounds,
+      observed: { ...material.observed, elapsedMs: 0 },
+      entries: material.entries,
+    }),
+  }
+}
+
+type SchemaParseResult =
+  | { readonly success: true }
+  | { readonly success: false; readonly error: { readonly issues: readonly { readonly message: string }[] } }
+
+function expectSchemaIssue(result: SchemaParseResult, message: string, variant: string): void {
+  if (result.success) throw new Error(`${variant} unexpectedly passed the frozen v4 schema`)
+  expect(result.error.issues.map(issue => issue.message), variant).toContain(message)
 }
 
 describe('Saki control-plane retained migrations', () => {
@@ -619,6 +692,660 @@ describe('Saki control-plane retained migrations', () => {
       kind: 'commit', objectId: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.head.kind === 'commit'
         ? SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.head.objectId : 'unreachable',
     })
+  })
+
+  it('rejects inconsistent frozen v4 Project selection evidence', () => {
+    const { intent } = parsedV4Records()
+    const base = intent.inspection.projection
+    if (base.baseline.kind !== 'complete') throw new Error('v4 fixture requires a complete inherited baseline')
+    const regular = {
+      kind: 'regular' as const,
+      mode: '100644' as const,
+      byteLength: 1,
+      contentDigest: '2'.repeat(64),
+    }
+    const tracked = signedEntry({
+      formatVersion: 1 as const,
+      pathDigest: '7'.repeat(64),
+      statusKind: 'tracked' as const,
+      head: { kind: 'object' as const, mode: '100644' as const, objectId: '4'.repeat(40) },
+      index: { kind: 'missing' as const },
+      worktree: regular,
+    })
+    const unmerged = signedEntry({
+      formatVersion: 1 as const,
+      pathDigest: '8'.repeat(64),
+      statusKind: 'unmerged' as const,
+      head: { kind: 'missing' as const },
+      stages: [
+        { kind: 'object' as const, mode: '160000' as const, objectId: '5'.repeat(40) },
+        { kind: 'missing' as const },
+        { kind: 'missing' as const },
+      ] satisfies V4UnmergedStages,
+      worktree: { kind: 'submodule' as const, objectId: '6'.repeat(40) },
+    })
+    const untracked = signedEntry({
+      formatVersion: 1 as const,
+      pathDigest: '9'.repeat(64),
+      statusKind: 'untracked' as const,
+      worktree: regular,
+    })
+    const populatedBaseline = signedBaseline({
+      ...base.baseline,
+      observed: { ...base.baseline.observed, entries: 3, pathBytes: 3, hashedBytes: 2 },
+      entries: [tracked, unmerged, untracked],
+    })
+    const unavailableBaseline = {
+      kind: 'unavailable' as const,
+      reason: 'io-failure' as const,
+      observed: { ...base.baseline.observed, entries: 0 },
+    }
+    const remoteType = base.remotes[0]
+    if (remoteType === undefined) throw new Error('v4 fixture requires a remote observation')
+    const orderedRemotes = [
+      remoteType,
+      { transport: 'https' as const, coordinate: 'github.com/example/saki' },
+    ].sort(compareSafeGitRemoteObservations)
+    const githubRemotes = [{ transport: 'https' as const, coordinate: 'github.com/example/saki' }]
+    const githubCandidates = deriveGitHubRepositoryCandidates(githubRemotes)
+    if (githubCandidates.length !== 1) throw new Error('GitHub fixture did not produce one repository candidate')
+
+    const projectionVariants: readonly {
+      readonly name: string
+      readonly projection: V4Projection
+      readonly issue: string
+    }[] = [
+      {
+        name: 'attached projection without a branch',
+        projection: { ...base, branch: undefined, detached: false },
+        issue: 'branch and detached state disagree',
+      },
+      {
+        name: 'detached projection with an upstream',
+        projection: { ...base, branch: undefined, detached: true, upstream: 'refs/remotes/origin/main' },
+        issue: 'upstream requires an attached branch',
+      },
+      {
+        name: 'SHA-256 projection with a SHA-1 HEAD',
+        projection: { ...base, objectFormat: 'sha256', head: '3'.repeat(40) },
+        issue: 'HEAD does not match object format',
+      },
+      {
+        name: 'projection count that differs from its baseline',
+        projection: { ...base, inheritedChangeEntryCount: 1 },
+        issue: 'inherited-change count disagrees with baseline observations',
+      },
+      {
+        name: 'SHA-256 projection with SHA-1 baseline objects',
+        projection: {
+          ...base,
+          objectFormat: 'sha256',
+          head: '3'.repeat(64),
+          baseline: populatedBaseline,
+          inheritedChangeEntryCount: 3,
+          automaticMutationEligible: false,
+          blockingReasons: ['dirty'],
+        },
+        issue: 'baseline object does not match object format',
+      },
+      {
+        name: 'projection baseline that differs from the confirmed baseline',
+        projection: {
+          ...base,
+          baseline: unavailableBaseline,
+          automaticMutationEligible: false,
+          blockingReasons: ['baseline-unavailable'],
+        },
+        issue: 'Intent confirmation disagrees with retained inspection',
+      },
+      {
+        name: 'coherent conversion evidence with a stale fingerprint',
+        projection: {
+          ...base,
+          conversionAmbiguous: true,
+          automaticMutationEligible: false,
+          blockingReasons: ['conversion-ambiguous'],
+        },
+        issue: 'inspection fingerprint disagrees with retained evidence',
+      },
+      {
+        name: 'eligible locked projection',
+        projection: { ...base, locked: true, automaticMutationEligible: true, blockingReasons: ['locked'] },
+        issue: 'automatic mutation eligibility disagrees with blocking evidence',
+      },
+      {
+        name: 'locked projection without a blocker',
+        projection: { ...base, locked: true, automaticMutationEligible: false, blockingReasons: [] },
+        issue: 'automatic mutation eligibility disagrees with blocking evidence',
+      },
+      {
+        name: 'locked projection with the wrong blocker',
+        projection: {
+          ...base,
+          locked: true,
+          automaticMutationEligible: false,
+          blockingReasons: ['conversion-ambiguous'],
+        },
+        issue: 'automatic mutation eligibility disagrees with blocking evidence',
+      },
+      {
+        name: 'projection with duplicate remotes',
+        projection: { ...base, remotes: [remoteType, remoteType] },
+        issue: 'remote observations are not unique and canonical',
+      },
+      {
+        name: 'projection with noncanonical remote order',
+        projection: { ...base, remotes: [...orderedRemotes].reverse() },
+        issue: 'remote observations are not unique and canonical',
+      },
+      {
+        name: 'empty GitHub candidates without GitHub remotes',
+        projection: { ...base, githubRepositoryCandidates: [] },
+        issue: 'GitHub repository candidates disagree with remote observations',
+      },
+      {
+        name: 'absent GitHub candidates for a GitHub remote',
+        projection: { ...base, remotes: githubRemotes, githubRepositoryCandidates: undefined },
+        issue: 'GitHub repository candidates disagree with remote observations',
+      },
+      {
+        name: 'empty GitHub candidates for a GitHub remote',
+        projection: { ...base, remotes: githubRemotes, githubRepositoryCandidates: [] },
+        issue: 'GitHub repository candidates disagree with remote observations',
+      },
+      {
+        name: 'wrong GitHub candidate for a GitHub remote',
+        projection: { ...base, remotes: githubRemotes, githubRepositoryCandidates: ['example/other'] },
+        issue: 'GitHub repository candidates disagree with remote observations',
+      },
+      {
+        name: 'coherent GitHub evidence with a stale fingerprint',
+        projection: { ...base, remotes: githubRemotes, githubRepositoryCandidates: githubCandidates },
+        issue: 'inspection fingerprint disagrees with retained evidence',
+      },
+    ]
+    for (const variant of projectionVariants) {
+      expectSchemaIssue(sakiControlPlaneV4DomainSpec.tables.registration_intents.valueSchema.safeParse(
+        withInspectionProjection(intent, variant.projection),
+      ), variant.issue, variant.name)
+    }
+  })
+
+  it('rejects inconsistent frozen v4 Project Registry evidence', () => {
+    const { registry } = parsedV4Records()
+    const binding = registry.resourceBindings[0]
+    const project = registry.projects[0]
+    const mapping = registry.intentMappings[0]
+    if (binding === undefined || project === undefined || mapping === undefined) {
+      throw new Error('v4 fixture requires one complete Project mapping')
+    }
+    if (binding.inheritedChangeBaseline.kind !== 'complete') {
+      throw new Error('v4 fixture requires a complete inherited baseline')
+    }
+    const unavailableBaseline = {
+      kind: 'unavailable' as const,
+      reason: 'io-failure' as const,
+      observed: { ...binding.inheritedChangeBaseline.observed, entries: 0 },
+    }
+    const otherHostId = 'host-00000000-0000-4000-8000-000000000102'
+    const otherBindingId = 'binding-00000000-0000-4000-8000-000000000107'
+    const otherProjectId = 'project-00000000-0000-4000-8000-000000000106'
+    const currentInspection = binding.currentInspection
+    if (currentInspection === undefined) throw new Error('v4 fixture requires a current inspection')
+
+    const bindingVariants = [
+      {
+        name: 'binding observation before creation',
+        candidate: { ...binding, observedAt: binding.createdAt - 1 },
+        issue: 'binding observation predates creation',
+      },
+      {
+        name: 'registration inspection from another Host',
+        candidate: {
+          ...binding,
+          registrationInspection: {
+            ...binding.registrationInspection,
+            projection: { ...binding.registrationInspection.projection, hostId: otherHostId },
+          },
+        },
+        issue: 'binding inspection belongs to another Host',
+      },
+      {
+        name: 'binding baseline that differs from registration',
+        candidate: { ...binding, inheritedChangeBaseline: unavailableBaseline },
+        issue: 'binding inherited baseline differs from registration evidence',
+      },
+      {
+        name: 'active binding without a current inspection',
+        candidate: { ...binding, currentInspection: undefined },
+        issue: 'active binding has no current inspection',
+      },
+      {
+        name: 'missing binding with a current inspection',
+        candidate: { ...binding, health: 'missing' as const },
+        issue: 'missing binding retains a current inspection',
+      },
+      {
+        name: 'current inspection for another Workspace',
+        candidate: {
+          ...binding,
+          currentInspection: {
+            ...currentInspection,
+            projection: {
+              ...currentInspection.projection,
+              workspaceId: 'workspace-00000000-0000-4000-8000-000000000108',
+            },
+          },
+        },
+        issue: 'binding current inspection disagrees with Workspace identity',
+      },
+      {
+        name: 'current inspection with changed resource identity',
+        candidate: {
+          ...binding,
+          currentInspection: {
+            ...currentInspection,
+            trusted: { ...currentInspection.trusted, canonicalWorktreePath: '/fixture/other-repository' },
+          },
+        },
+        issue: 'binding current inspection changed resource identity',
+      },
+    ] as const
+    for (const variant of bindingVariants) {
+      expectSchemaIssue(sakiControlPlaneV4DomainSpec.tables.development_project_registry.valueSchema.safeParse({
+        ...registry,
+        resourceBindings: [variant.candidate],
+      }), variant.issue, variant.name)
+    }
+
+    const registryVariants = [
+      {
+        name: 'duplicate Project identity',
+        candidate: { ...registry, projects: [project, project] },
+        issue: 'Project Registry repeats an owned identity',
+      },
+      {
+        name: 'missing worktree index entry',
+        candidate: { ...registry, canonicalWorktreeIndex: [] },
+        issue: 'Project Registry child and index cardinalities disagree',
+      },
+      {
+        name: 'Project pointing at an absent Resource Binding',
+        candidate: { ...registry, projects: [{ ...project, resourceBindingId: otherBindingId }] },
+        issue: 'Project has an inconsistent Resource Binding',
+      },
+      {
+        name: 'worktree index with the wrong path',
+        candidate: {
+          ...registry,
+          canonicalWorktreeIndex: [{ ...registry.canonicalWorktreeIndex[0]!, path: '/fixture/elsewhere' }],
+        },
+        issue: 'Resource Binding has inconsistent path indices',
+      },
+      {
+        name: 'Intent mapping to an absent Project',
+        candidate: { ...registry, intentMappings: [{ ...mapping, projectId: otherProjectId }] },
+        issue: 'registration Intent maps to inconsistent children',
+      },
+      {
+        name: 'Intent mapping beyond the Registry revision',
+        candidate: { ...registry, intentMappings: [{ ...mapping, registryRevision: registry.revision + 1 }] },
+        issue: 'registration Intent maps to inconsistent children',
+      },
+    ] as const
+    for (const variant of registryVariants) {
+      expectSchemaIssue(
+        sakiControlPlaneV4DomainSpec.tables.development_project_registry.valueSchema.safeParse(variant.candidate),
+        variant.issue,
+        variant.name,
+      )
+    }
+  })
+
+  it('rejects inconsistent frozen v4 registration Intent evidence', () => {
+    const { intent } = parsedV4Records()
+    const detachedWorkspaceInspection = parsedV4Records(true).intent.workspaceInspection
+    if (intent.workspaceInspection === undefined || detachedWorkspaceInspection === undefined) {
+      throw new Error('v4 fixture requires retained Workspace inspections')
+    }
+    const otherWorkspaceId = workspaceIdSchema.parse('workspace-00000000-0000-4000-8000-000000000108')
+    const otherHostId = sakiHostIdSchema.parse('host-00000000-0000-4000-8000-000000000102')
+    const otherIntentId = sakiControlIntentIdSchema.parse('intent-00000000-0000-4000-8000-000000000109')
+    const otherReceiptId = sakiIntentReceiptIdSchema.parse('receipt-00000000-0000-4000-8000-000000000109')
+    const unavailableBaseline = intent.payload.intent.confirmedBaseline.kind === 'complete'
+      ? {
+        kind: 'unavailable' as const,
+        reason: 'io-failure' as const,
+        observed: { ...intent.payload.intent.confirmedBaseline.observed, entries: 0 },
+      }
+      : intent.payload.intent.confirmedBaseline
+    const { workspaceId: _workspaceId, ...withoutWorkspaceId } = intent
+    const { resourceBindingId: _resourceBindingId, ...partialCommit } = intent
+    const {
+      workspaceId: _observedWorkspaceId,
+      workspaceInspection: _observedWorkspaceInspection,
+      projectId: _observedProjectId,
+      resourceBindingId: _observedBindingId,
+      registryRevision: _observedRegistryRevision,
+      ...withoutWorkspaceEvidence
+    } = intent
+    const { workspaceInspection: _committedInspection, ...committedWithoutInspection } = intent
+    const {
+      workspaceId: _conflictWorkspaceId,
+      workspaceInspection: _conflictWorkspaceInspection,
+      projectId: _conflictProjectId,
+      resourceBindingId: _conflictBindingId,
+      registryRevision: _conflictRegistryRevision,
+      ...terminalWithoutWorkspace
+    } = intent
+
+    const variants: readonly {
+      readonly name: string
+      readonly candidate: V4Intent
+      readonly issue: string
+    }[] = [
+      {
+        name: 'Intent and receipt identities that differ from the payload',
+        candidate: { ...intent, id: otherIntentId, receiptId: otherReceiptId },
+        issue: 'Intent identity disagrees with immutable payload',
+      },
+      {
+        name: 'receipt identity that differs from the Intent',
+        candidate: { ...intent, receiptId: otherReceiptId },
+        issue: 'Intent identity disagrees with immutable payload',
+      },
+      {
+        name: 'confirmed fingerprint that differs from the retained inspection',
+        candidate: {
+          ...intent,
+          payload: {
+            ...intent.payload,
+            intent: {
+              ...intent.payload.intent,
+              confirmedFingerprint: { ...intent.payload.intent.confirmedFingerprint, digest: '0'.repeat(64) },
+            },
+          },
+        },
+        issue: 'Intent confirmation disagrees with retained inspection',
+      },
+      {
+        name: 'Actor Host that differs from the confirmed Host',
+        candidate: {
+          ...intent,
+          payload: {
+            ...intent.payload,
+            actor: { ...intent.payload.actor, hostId: otherHostId },
+          },
+        },
+        issue: 'Intent confirmation disagrees with retained inspection',
+      },
+      {
+        name: 'confirmed baseline that differs from the retained inspection',
+        candidate: {
+          ...intent,
+          payload: {
+            ...intent.payload,
+            intent: { ...intent.payload.intent, confirmedBaseline: unavailableBaseline },
+          },
+        },
+        issue: 'Intent confirmation disagrees with retained inspection',
+      },
+      {
+        name: 'Intent update before creation',
+        candidate: { ...intent, updatedAt: intent.createdAt - 1 },
+        issue: 'Intent update predates creation',
+      },
+      {
+        name: 'terminal phase without a terminal reason',
+        candidate: { ...intent, phase: 'conflict', terminalReason: undefined },
+        issue: 'Intent terminal reason disagrees with phase',
+      },
+      {
+        name: 'nonterminal phase with a terminal reason',
+        candidate: { ...intent, phase: 'prepared', terminalReason: 'authority' },
+        issue: 'Intent terminal reason disagrees with phase',
+      },
+      {
+        name: 'Workspace inspection without a Workspace identity',
+        candidate: withoutWorkspaceId,
+        issue: 'Workspace inspection has no retained identity',
+      },
+      {
+        name: 'Workspace observation from another Host',
+        candidate: {
+          ...intent,
+          workspaceInspection: {
+            ...intent.workspaceInspection,
+            projection: { ...intent.workspaceInspection.projection, hostId: otherHostId },
+          },
+        },
+        issue: 'Workspace observation disagrees with retained identity',
+      },
+      {
+        name: 'workspace-dispatching phase with later evidence',
+        candidate: { ...intent, phase: 'workspace-dispatching' },
+        issue: 'early Intent phase contains later-phase evidence',
+      },
+      {
+        name: 'Workspace observation with another Workspace identity',
+        candidate: {
+          ...intent,
+          workspaceInspection: {
+            ...intent.workspaceInspection,
+            projection: { ...intent.workspaceInspection.projection, workspaceId: otherWorkspaceId },
+          },
+        },
+        issue: 'Workspace observation disagrees with retained identity',
+      },
+      {
+        name: 'registration observation with another Workspace identity',
+        candidate: {
+          ...intent,
+          inspection: {
+            ...intent.inspection,
+            projection: { ...intent.inspection.projection, workspaceId: otherWorkspaceId },
+          },
+        },
+        issue: 'Workspace observation disagrees with retained identity',
+      },
+      {
+        name: 'Workspace observation with changed repository evidence',
+        candidate: { ...intent, workspaceInspection: detachedWorkspaceInspection },
+        issue: 'Workspace observation changed repository evidence',
+      },
+      {
+        name: 'partial Registry commit evidence',
+        candidate: partialCommit,
+        issue: 'registry commit fields must appear together',
+      },
+      {
+        name: 'prepared phase with complete later evidence',
+        candidate: { ...intent, phase: 'prepared' },
+        issue: 'early Intent phase contains later-phase evidence',
+      },
+      {
+        name: 'prepared phase with Registry evidence but no Workspace identity',
+        candidate: { ...withoutWorkspaceId, phase: 'prepared' },
+        issue: 'early Intent phase contains later-phase evidence',
+      },
+      {
+        name: 'workspace-observed phase without Workspace evidence',
+        candidate: { ...withoutWorkspaceEvidence, phase: 'workspace-observed' },
+        issue: 'workspace-observed phase evidence is incomplete',
+      },
+      {
+        name: 'workspace-observed phase with Registry commit evidence',
+        candidate: { ...intent, phase: 'workspace-observed' },
+        issue: 'workspace-observed phase evidence is incomplete',
+      },
+      {
+        name: 'registry-committed phase without a Workspace inspection',
+        candidate: { ...committedWithoutInspection, phase: 'registry-committed' },
+        issue: 'committed Intent phase evidence is incomplete',
+      },
+      {
+        name: 'expected-revision conflict with Registry commit evidence',
+        candidate: { ...intent, phase: 'conflict', terminalReason: 'expected-revision' },
+        issue: 'terminal Intent contains registry commit evidence',
+      },
+      {
+        name: 'Registry commit revision beyond the expected successor',
+        candidate: { ...intent, registryRevision: intent.payload.intent.expectedRegistryRevision + 2 },
+        issue: 'Intent commit revision disagrees with expected revision',
+      },
+      {
+        name: 'conflict with an observation terminal reason',
+        candidate: { ...intent, phase: 'conflict', terminalReason: 'observation' },
+        issue: 'conflict phase has an invalid terminal reason',
+      },
+      {
+        name: 'duplicate-binding conflict with Registry commit evidence',
+        candidate: { ...intent, phase: 'conflict', terminalReason: 'duplicate-binding' },
+        issue: 'terminal Intent contains registry commit evidence',
+      },
+      {
+        name: 'conflict without Workspace evidence',
+        candidate: { ...terminalWithoutWorkspace, phase: 'conflict', terminalReason: 'expected-revision' },
+        issue: 'conflict phase has no Workspace evidence',
+      },
+      {
+        name: 'failure with an expected-revision terminal reason',
+        candidate: { ...intent, phase: 'failure', terminalReason: 'expected-revision' },
+        issue: 'failure phase has an invalid terminal reason',
+      },
+      {
+        name: 'authority failure that retains Workspace evidence',
+        candidate: { ...intent, phase: 'failure', terminalReason: 'authority' },
+        issue: 'authority failure contains Workspace evidence',
+      },
+      {
+        name: 'reconciliation with an authority terminal reason',
+        candidate: { ...intent, phase: 'reconciliation-required', terminalReason: 'authority' },
+        issue: 'reconciliation phase has an invalid terminal reason',
+      },
+      {
+        name: 'stale payload digest',
+        candidate: { ...intent, payloadDigest: '0'.repeat(64) },
+        issue: 'Intent payload digest is stale',
+      },
+    ]
+    for (const variant of variants) {
+      expectSchemaIssue(
+        sakiControlPlaneV4DomainSpec.tables.registration_intents.valueSchema.safeParse(variant.candidate),
+        variant.issue,
+        variant.name,
+      )
+    }
+  })
+
+  it.each(['workspace', 'observation'] as const)(
+    'accepts %s reconciliation as a frozen v4 terminal reason',
+    (terminalReason) => {
+      const { intent } = parsedV4Records()
+      const {
+        workspaceId: _workspaceId,
+        workspaceInspection: _workspaceInspection,
+        projectId: _projectId,
+        resourceBindingId: _resourceBindingId,
+        registryRevision: _registryRevision,
+        ...terminal
+      } = intent
+      expect(sakiControlPlaneV4DomainSpec.tables.registration_intents.valueSchema.safeParse({
+        ...terminal,
+        phase: 'reconciliation-required',
+        terminalReason,
+      }).success).toBe(true)
+    },
+  )
+
+  it('retains optional v4 remote evidence and omits absent Workspace observations during migration', () => {
+    const { intent, registry, snapshot } = parsedV4Records()
+    const binding = registry.resourceBindings[0]
+    if (binding === undefined || binding.currentInspection === undefined || intent.workspaceInspection === undefined) {
+      throw new Error('v4 fixture requires complete Project observations')
+    }
+    const remotes = [
+      { transport: 'https' as const, coordinate: 'github.com/example/saki' },
+      { transport: 'other' as const },
+    ].sort(compareSafeGitRemoteObservations)
+    const candidates = deriveGitHubRepositoryCandidates(remotes)
+    const withRemoteEvidence = <T extends V4Intent['inspection']>(inspection: T): T => ({
+      ...inspection,
+      projection: {
+        ...inspection.projection,
+        upstream: 'refs/remotes/origin/main',
+        remotes,
+        githubRepositoryCandidates: candidates,
+      },
+    })
+    const migratedRegistry = {
+      ...registry,
+      resourceBindings: [{
+        ...binding,
+        registrationInspection: withRemoteEvidence(binding.registrationInspection),
+        currentInspection: withRemoteEvidence(binding.currentInspection),
+      }],
+    }
+    const migratedIntent = {
+      ...intent,
+      inspection: withRemoteEvidence(intent.inspection),
+      workspaceInspection: withRemoteEvidence(intent.workspaceInspection),
+    }
+    const migrated = sakiControlPlaneMigrationPlan.steps[2]!.migrate({
+      ...snapshot,
+      tables: {
+        ...snapshot.tables,
+        development_project_registry: { [DEVELOPMENT_PROJECT_REGISTRY_KEY]: migratedRegistry },
+        registration_intents: { [INTENT_ID]: migratedIntent },
+      },
+    })
+    const currentRegistry = sakiControlPlaneDomainSpec.tables.development_project_registry.valueSchema.parse(
+      migrated.tables['development_project_registry']![DEVELOPMENT_PROJECT_REGISTRY_KEY],
+    )
+    expect(currentRegistry.resourceBindings[0]?.currentInspection?.projection).toMatchObject({
+      upstream: 'refs/remotes/origin/main',
+      githubRepositoryCandidates: candidates,
+    })
+
+    const missingSnapshot = migratedV4Snapshot()
+    const missingRegistry = sakiControlPlaneV4DomainSpec.tables.development_project_registry.valueSchema.parse(
+      missingSnapshot.tables['development_project_registry']![DEVELOPMENT_PROJECT_REGISTRY_KEY],
+    )
+    const missingIntent = sakiControlPlaneV4DomainSpec.tables.registration_intents.valueSchema.parse(
+      missingSnapshot.tables['registration_intents']![INTENT_ID],
+    )
+    const missingBinding = missingRegistry.resourceBindings[0]
+    if (missingBinding === undefined) throw new Error('v4 fixture requires a Resource Binding')
+    const { workspaceId: _missingWorkspaceId, workspaceInspection: _missingWorkspaceInspection,
+      projectId: _missingProjectId, resourceBindingId: _missingBindingId,
+      registryRevision: _missingRegistryRevision, ...preparedIntent } = missingIntent
+    const migratedMissing = sakiControlPlaneMigrationPlan.steps[2]!.migrate({
+      ...missingSnapshot,
+      tables: {
+        ...missingSnapshot.tables,
+        development_project_registry: {
+          [DEVELOPMENT_PROJECT_REGISTRY_KEY]: {
+            ...missingRegistry,
+            resourceBindings: [{ ...missingBinding, health: 'missing', currentInspection: undefined }],
+          },
+        },
+        registration_intents: { [INTENT_ID]: { ...preparedIntent, phase: 'prepared' } },
+      },
+    })
+    const currentMissingRegistry = sakiControlPlaneDomainSpec.tables.development_project_registry.valueSchema.parse(
+      migratedMissing.tables['development_project_registry']![DEVELOPMENT_PROJECT_REGISTRY_KEY],
+    )
+    const currentMissingIntent = sakiControlPlaneDomainSpec.tables.registration_intents.valueSchema.parse(
+      migratedMissing.tables['registration_intents']![INTENT_ID],
+    )
+    expect(currentMissingRegistry.resourceBindings[0]?.currentInspection).toBeUndefined()
+    expect(currentMissingIntent.workspaceInspection).toBeUndefined()
+
+    const withoutRegistry = sakiControlPlaneMigrationPlan.steps[2]!.migrate({
+      ...missingSnapshot,
+      tables: { ...missingSnapshot.tables, development_project_registry: {} },
+    })
+    expect(withoutRegistry.tables['binding_write_admissions']).toEqual({})
   })
 
   it('keeps every v4 aggregate descriptor closed against future current fields', () => {

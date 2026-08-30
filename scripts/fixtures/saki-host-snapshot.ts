@@ -51,6 +51,27 @@ export interface SnapshotRepositoryGitState {
   readonly unstagedPaths: readonly string[]
 }
 
+interface SnapshotProjectSelection {
+  readonly displayLocation: string
+  readonly objectFormat: 'sha1' | 'sha256'
+  readonly head: ProjectGitHead
+  readonly inheritedChangeEntryCount: number
+  readonly automaticMutationEligible: boolean
+  readonly workspaceId?: string
+  readonly baseline: { readonly kind: string }
+  readonly fingerprint: unknown
+}
+
+interface SnapshotProjectInspection {
+  readonly ok: true
+  readonly projection: {
+    readonly result: {
+      readonly ok: true
+      readonly selection: SnapshotProjectSelection
+    }
+  }
+}
+
 /**
  * Return a Git process environment isolated from ambient user configuration and credentials.
  * @returns scrubbed Git subprocess environment.
@@ -440,34 +461,8 @@ export async function registerSnapshotProject(
     readonly ok: true
     readonly projection: { readonly revision: number; readonly hosts: [{ readonly id: string }]; readonly projects: [] }
   }
-  readonly inspection: {
-    readonly ok: true
-    readonly projection: {
-      readonly result: {
-        readonly ok: true
-        readonly selection: {
-          readonly displayLocation: string
-          readonly objectFormat: 'sha1' | 'sha256'
-          readonly head: ProjectGitHead
-          readonly inheritedChangeEntryCount: number
-          readonly automaticMutationEligible: boolean
-          readonly workspaceId?: string
-          readonly baseline: { readonly kind: string }
-          readonly fingerprint: unknown
-        }
-      }
-    }
-  }
-  readonly selection: {
-    readonly displayLocation: string
-    readonly objectFormat: 'sha1' | 'sha256'
-    readonly head: ProjectGitHead
-    readonly inheritedChangeEntryCount: number
-    readonly automaticMutationEligible: boolean
-    readonly workspaceId?: string
-    readonly baseline: { readonly kind: string }
-    readonly fingerprint: unknown
-  }
+  readonly inspection: SnapshotProjectInspection
+  readonly selection: SnapshotProjectSelection
   readonly registrationIntent: {
     readonly type: 'register-development-project'
     readonly intentId: 'intent-11111111-1111-4111-8111-111111111111'
@@ -509,24 +504,7 @@ export async function registerSnapshotProject(
     hostId,
     directoryLocator: repository,
   }, { cookie })
-  const inspection = inspected.value as {
-    readonly ok: true
-    readonly projection: {
-      readonly result: {
-        readonly ok: true
-        readonly selection: {
-          readonly displayLocation: string
-          readonly objectFormat: 'sha1' | 'sha256'
-          readonly head: ProjectGitHead
-          readonly inheritedChangeEntryCount: number
-          readonly automaticMutationEligible: boolean
-          readonly workspaceId?: string
-          readonly baseline: { readonly kind: string }
-          readonly fingerprint: unknown
-        }
-      }
-    }
-  }
+  const inspection = inspected.value as SnapshotProjectInspection
   const selection = inspection.projection.result.selection
   const registrationIntent = {
     type: 'register-development-project',

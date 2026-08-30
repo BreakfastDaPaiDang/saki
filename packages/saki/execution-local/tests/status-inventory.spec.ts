@@ -23,7 +23,11 @@ import {
   type VerifiedRepositoryStatus,
 } from '../src/status-evidence.ts'
 import { projectStatusQueryArguments } from '../src/status-query.ts'
-import { hasUnsupportedIndexState, type RepositoryInventoryGit } from '../src/inventory.ts'
+import {
+  captureRepositoryIndexFlagEvidence,
+  RepositoryInventoryError,
+  type RepositoryInventoryGit,
+} from '../src/inventory.ts'
 import type { ParsedStatusEntry } from '../src/status-porcelain-v2.ts'
 
 const HOST_ID = 'host-11111111-1111-4111-8111-111111111111' as SakiHostId
@@ -626,26 +630,259 @@ describe('project Git status inventory projection', () => {
 
   it('fails closed when the index-flag query omits known stage-zero membership', async () => {
     const inventory = capturedInventory([tracked('tracked.txt', object(HEAD), object(INDEX), RAW)])
-    const git: RepositoryInventoryGit = {
-      async run() {
-        return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }
-      },
-    }
+    await expect(captureIndexFlagEvidence(inventory, Buffer.alloc(0)))
+      .resolves.toMatchObject({ mutationBlocked: true, assumeUnchangedPaths: [] })
+  })
 
-    await expect(hasUnsupportedIndexState(
-      git,
-      'repository',
-      new AbortController().signal,
+  it('accepts an empty flag listing when inventory has no index entries', async () => {
+    const inventory = capturedInventory([untracked('untracked.txt')])
+    await expect(captureIndexFlagEvidence(inventory, Buffer.alloc(0))).resolves.toMatchObject({
+      mutationBlocked: false,
+      assumeUnchangedPaths: [],
+    })
+  })
+
+  it('blocks a lowercase Gitlink flag without granting ordinary-file reconstruction authority', async () => {
+    const entry = rawEntry(gitlink(HEAD), gitlink(HEAD), {
+      kind: 'captured',
+      evidence: { kind: 'submodule', objectId: HEAD },
+      rawObjectId: HEAD,
+      rawByteLength: 0,
+      gitEvidenceBytes: 40,
+    })
+    const inventory = capturedInventory([entry])
+
+    await expect(captureIndexFlagEvidence(inventory, Buffer.from('h module\0'))).resolves.toMatchObject({
+      mutationBlocked: true,
+      assumeUnchangedPaths: [],
+    })
+  })
+
+  it('retains only exact ordinary assume-unchanged paths from complete index-flag membership', async () => {
+    const assumed = tracked('assumed.txt', object(HEAD), object(HEAD), RAW)
+    const ordinary = tracked('ordinary.txt', object(HEAD), object(HEAD), HEAD)
+    const skipped = { ...tracked('skipped.txt', object(HEAD), object(HEAD), HEAD), skipWorktree: true }
+    const conflict = conflicted('conflict.txt')
+    const inventory = capturedInventory([ordinary, conflict, skipped, assumed])
+    const stdout = Buffer.from([
+      'h assumed.txt\0',
+      'M conflict.txt\0', 'M conflict.txt\0', 'M conflict.txt\0',
+      'H ordinary.txt\0',
+      'S skipped.txt\0',
+    ].join(''))
+    const evidence = await captureIndexFlagEvidence(inventory, stdout)
+
+    expect(evidence.mutationBlocked).toBe(true)
+    expect(evidence.assumeUnchangedPaths.map(path => Buffer.from(path).toString())).toEqual(['assumed.txt'])
+    expect(evidence.identity).toMatch(/^[0-9a-f]{64}$/u)
+  })
+
+  it('keeps lowercase skip and conflicted flags out of the assume-unchanged allowlist', async () => {
+    const skipped = { ...tracked('skipped.txt', object(HEAD), object(HEAD), HEAD), skipWorktree: true }
+    const conflict = conflicted('conflict.txt')
+    const inventory = capturedInventory([skipped, conflict])
+    await expect(captureIndexFlagEvidence(
       inventory,
-      false,
-    )).resolves.toBe(true)
+      Buffer.from('s skipped.txt\0m conflict.txt\0M conflict.txt\0M conflict.txt\0'),
+    )).resolves.toMatchObject({ mutationBlocked: true, assumeUnchangedPaths: [] })
+  })
+
+  it('clears partial assume-unchanged authority when index-flag membership is anomalous', async () => {
+    const inventory = capturedInventory([
+      tracked('assumed.txt', object(HEAD), object(HEAD), RAW),
+      tracked('missing.txt', object(HEAD), object(HEAD), HEAD),
+    ])
+    await expect(captureIndexFlagEvidence(inventory, Buffer.from('h assumed.txt\0')))
+      .resolves.toMatchObject({ mutationBlocked: true, assumeUnchangedPaths: [] })
+  })
+
+  it.each([
+    ['duplicates stage-zero membership', Buffer.from('H tracked.txt\0H tracked.txt\0')],
+    ['reports an extra path', Buffer.from('H tracked.txt\0H extra.txt\0')],
+    ['uses a stage-zero tag that disagrees with inventory', Buffer.from('S tracked.txt\0')],
+  ])('blocks mutation and clears partial authority when Git %s', async (_name, stdout) => {
+    const inventory = capturedInventory([tracked('tracked.txt', object(HEAD), object(HEAD), HEAD)])
+    await expect(captureIndexFlagEvidence(inventory, stdout))
+      .resolves.toMatchObject({ mutationBlocked: true, assumeUnchangedPaths: [] })
+  })
+
+  it('retains exact non-UTF-8 assume paths in byte order and identities every flag change', async () => {
+    const firstPath = Uint8Array.of(0xff)
+    const secondPath = new TextEncoder().encode('a')
+    const first = { ...tracked('unused', object(HEAD), object(HEAD), RAW), path: firstPath }
+    const second = { ...tracked('unused', object(HEAD), object(HEAD), RAW), path: secondPath }
+    const inventory = capturedInventory([first, second])
+    const lowercase = Buffer.concat([
+      Buffer.from('h '), Buffer.from(firstPath), Buffer.from([0]),
+      Buffer.from('h '), Buffer.from(secondPath), Buffer.from([0]),
+    ])
+    const evidence = await captureIndexFlagEvidence(inventory, lowercase)
+    const uppercase = await captureIndexFlagEvidence(
+      inventory,
+      Buffer.concat([
+        Buffer.from('H '), Buffer.from(firstPath), Buffer.from([0]),
+        Buffer.from('H '), Buffer.from(secondPath), Buffer.from([0]),
+      ]),
+    )
+    const sparse = await captureIndexFlagEvidence(inventory, lowercase, { sparseIndexEnabled: true })
+
+    expect(evidence.assumeUnchangedPaths.map(path => [...path])).toEqual([[...secondPath], [...firstPath]])
+    expect(new Set([evidence.identity, uppercase.identity, sparse.identity]).size).toBe(3)
+  })
+
+  it.each([
+    ['diagnostics', Buffer.from('H tracked.txt\0'), Buffer.from('private diagnostic'), 'unavailable'],
+    ['unterminated output', Buffer.from('H tracked.txt'), Buffer.alloc(0), 'malformed'],
+    ['a short record', Buffer.from('H\0'), Buffer.alloc(0), 'malformed'],
+    ['a missing tag separator', Buffer.from('H!tracked.txt\0'), Buffer.alloc(0), 'malformed'],
+    ['an unknown tag', Buffer.from('X tracked.txt\0'), Buffer.alloc(0), 'malformed'],
+  ] as const)('rejects %s from the index-flag query', async (_name, stdout, stderr, kind) => {
+    const inventory = capturedInventory([tracked('tracked.txt', object(HEAD), object(HEAD), HEAD)])
+    await expect(captureIndexFlagEvidence(inventory, stdout, { stderr }))
+      .rejects.toEqual(new RepositoryInventoryError(kind))
+  })
+
+  it('reconstructs an exact hidden ordinary row without forgiving another missing status row', async () => {
+    const assumed = tracked('assumed.txt', object(HEAD), object(HEAD), RAW)
+    const unflagged = tracked('unflagged.txt', object(HEAD), object(HEAD), RAW)
+    const assumePath = new TextEncoder().encode('assumed.txt')
+    const { status } = await captureStatusEvidence(
+      capturedInventory([assumed]),
+      '',
+      {},
+      [assumePath],
+    )
+    expect(status.entries).toMatchObject([{
+      kind: 'ordinary',
+      indexStatus: 'unchanged',
+      worktreeStatus: 'modified',
+    }])
+
+    await expect(captureStatusEvidence(
+      capturedInventory([assumed, unflagged]),
+      '',
+      {},
+      [assumePath],
+    )).rejects.toEqual(new RepositoryStatusError('ambiguous'))
+  })
+
+  it('reconstructs both staged and hidden worktree changes for one assume-unchanged path', async () => {
+    const entry = tracked('assumed.txt', object(HEAD), object(INDEX), RAW)
+    const { status } = await captureStatusEvidence(
+      capturedInventory([entry]),
+      '',
+      {},
+      [new TextEncoder().encode('assumed.txt')],
+    )
+
+    expect(status.entries).toMatchObject([{
+      kind: 'ordinary',
+      indexStatus: 'modified',
+      worktreeStatus: 'modified',
+      head: object(HEAD),
+      index: object(INDEX),
+    }])
+  })
+
+  it('omits a clean assumed path and retains the index mode for a staged-only path', async () => {
+    const clean = tracked('clean.txt', object(HEAD), object(HEAD), HEAD)
+    const staged = tracked('staged.txt', object(HEAD), object(INDEX), INDEX)
+    const inventory = capturedInventory([clean, staged])
+    const { status } = await captureStatusEvidence(
+      inventory,
+      '',
+      {},
+      [new TextEncoder().encode('clean.txt'), new TextEncoder().encode('staged.txt')],
+    )
+
+    expect(status.entries).toMatchObject([{
+      kind: 'ordinary',
+      path: new TextEncoder().encode('staged.txt'),
+      indexStatus: 'modified',
+      worktreeStatus: 'unchanged',
+      worktreeMode: '100644',
+    }])
+  })
+
+  it.each([
+    ['an unknown path', [new TextEncoder().encode('unknown.txt')]],
+    ['a duplicate path', [
+      new TextEncoder().encode('tracked.txt'),
+      new TextEncoder().encode('tracked.txt'),
+    ]],
+  ])('rejects %s in assume-unchanged reconstruction authority', async (_name, paths) => {
+    const inventory = capturedInventory([tracked('tracked.txt', object(HEAD), object(HEAD), HEAD)])
+    await expect(captureStatusEvidence(inventory, '', {}, paths))
+      .rejects.toEqual(new RepositoryStatusError('ambiguous'))
+  })
+
+  it.each([
+    ['unavailable current evidence', {
+      ...tracked('tracked.txt', object(HEAD), object(HEAD), RAW),
+      current: { kind: 'unavailable' as const, reason: 'io-failure' as const },
+    }],
+    ['ambiguous conversion evidence', {
+      ...tracked('tracked.txt', object(HEAD), object(HEAD), RAW),
+      conversion: { executableFilter: true, unmodeled: false, lineEnding: false },
+    }],
+  ])('rejects hidden ordinary status with %s', async (_name, entry) => {
+    await expect(captureStatusEvidence(
+      capturedInventory([entry]),
+      '',
+      {},
+      [new TextEncoder().encode('tracked.txt')],
+    )).rejects.toEqual(new RepositoryStatusError('ambiguous'))
+  })
+
+  it('keeps a verified potential intent-to-add row instead of guessing from its empty-blob index', async () => {
+    const emptyBlob = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391'
+    const { head: _head, ...withoutHead } = tracked('intent.txt', object(HEAD), object(HEAD), RAW)
+    const entry: CapturedRepositoryInventoryEntry = {
+      ...withoutHead,
+      index: object(emptyBlob),
+    }
+    const zero = '0'.repeat(40)
+    const row = `1 .A N... 000000 000000 100644 ${zero} ${zero} intent.txt\0`
+    const { status } = await captureStatusEvidence(
+      capturedInventory([entry]),
+      row,
+      {},
+      [new TextEncoder().encode('intent.txt')],
+    )
+
+    expect(status.entries).toMatchObject([{
+      kind: 'ordinary',
+      indexStatus: 'unchanged',
+      worktreeStatus: 'added',
+    }])
   })
 })
+
+async function captureIndexFlagEvidence(
+  inventory: CapturedRepositoryInventory,
+  stdout: Buffer,
+  options: {
+    readonly stderr?: Buffer
+    readonly sparseIndexEnabled?: boolean
+  } = {},
+) {
+  const git: RepositoryInventoryGit = {
+    async run() { return { stdout, stderr: options.stderr ?? Buffer.alloc(0) } },
+  }
+  return await captureRepositoryIndexFlagEvidence(
+    git,
+    'repository',
+    new AbortController().signal,
+    inventory,
+    options.sparseIndexEnabled ?? false,
+  )
+}
 
 async function captureStatusEvidence(
   inventory: CapturedRepositoryInventory,
   statusRow = '',
   diagnostics: Readonly<{ status?: Buffer; writeTree?: Buffer }> = {},
+  assumeUnchangedPaths: readonly Uint8Array[] = [],
 ): Promise<{ readonly status: VerifiedRepositoryStatus; readonly commands: readonly (readonly string[])[] }> {
   const width = inventory.objectFormat === 'sha1' ? 40 : 64
   const head = 'a'.repeat(width)
@@ -677,6 +914,7 @@ async function captureStatusEvidence(
     inventory,
     { maxEntries: 100, maxPathBytes: 10_000 },
     new AbortController().signal,
+    assumeUnchangedPaths,
   )
   return { status, commands }
 }

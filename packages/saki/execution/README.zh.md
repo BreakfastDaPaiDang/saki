@@ -16,7 +16,7 @@ baseline schema 区分完整捕获与不可用捕获；前者包括干净的零�
 
 `inspectProject` 接受 `ActiveHostProjectBinding`，其中包含稳定 id 与 revision、字面量 active health、Host 与 Workspace 身份、已接受的登记检查和登记时继承变更 baseline。严格 schema 要求 Host 和 baseline 身份与该登记证据一致。登记检查可能早于 Workspace 创建，因此 Service Provider 会重新验证当前 repository 与 Workspace 关系后再返回状态；保留的路径和指纹绝不授权读取。
 
-成功的 `ProjectGitStatusObservation` 包含 branch、HEAD、upstream、规范 index 与 worktree 摘要，以及按 UTF-8 字节排序的完整 repository 相对变更路径列表。每项变更都有一个不透明且仅属于本次观察的 `ProjectGitChangeId`，并区分 tracked、untracked 或 conflicted 状态、staged 与 unstaged 事实，以及 inherited、subsequent、mixed 或 unknown 的登记来源关系。严格 schema 会重建不含 id 的完整状态 seed、每个 change id 和最终带版本指纹；它还会拒绝路径穿越、NUL、无效 Unicode、重复或非规范路径顺序、不可能的 untracked 标记、不一致的 Git object 宽度和不匹配的指纹。失败是以下闭合且不含路径的原因之一：`binding-stale`、`missing`、`malformed`、`limit`、`invalid-path`、`ambiguous` 或 `unavailable`；调用方取消会通过必需的 `AbortSignal` 拒绝，而不会返回部分状态。
+成功的 `ProjectGitStatusObservation` 包含 branch、HEAD、upstream、规范 index 与 worktree 摘要，以及按 UTF-8 字节排序的完整 repository 相对变更路径列表。每项变更都有一个不透明且仅属于本次观察的 `ProjectGitChangeId`，并区分 tracked、untracked 或 conflicted 状态、staged 与 unstaged 事实，以及 inherited、subsequent、mixed 或 unknown 的登记来源关系。在完整解析 row 或校验 fingerprint 前，严格 status schema 会拒绝超过协议 row 上限的原始 changes array，并且最多扫描已准入的 row 数，提前拒绝聚合 UTF-8 path 字节预算超限。随后，严格 schema 会重建不含 id 的完整状态 seed、每个 change id 和最终带版本指纹；它还会拒绝路径穿越、NUL、无效 Unicode、重复或非规范路径顺序、不可能的 untracked 标记、不一致的 Git object 宽度和不匹配的指纹。失败是以下闭合且不含路径的原因之一：`binding-stale`、`missing`、`malformed`、`limit`、`invalid-path`、`ambiguous` 或 `unavailable`；调用方取消会通过必需的 `AbortSignal` 拒绝，而不会返回部分状态。
 
 ## 已绑定 Project Diff
 
@@ -26,7 +26,7 @@ baseline schema 区分完整捕获与不可用捕获；前者包括干净的零�
 
 `prepareOperation` 会在任何副作用前把一个不可变 Host request 持久绑定到其 Control Intent source，并返回无法跨越 JSON 的 provider-owned acceptance。`startOperation` 会在 planning 或 publication 前检查该 acceptance 与当前同进程 Binding Write Admission。`inspectOperation` 根据持久 evidence 推进恢复，而不会重复含糊副作用；`cancelOperation` 只记录闭合的持久 cancellation reason；`onChanged` 提供 post-commit 唤醒，而 snapshot 保持权威。调用方 `AbortSignal` 只限制单次调用，并非持久取消。
 
-StageFiles 与 UnstageFiles 携带 observation-scoped change id 和 fingerprint，绝不携带路径。Commit 携带精确 status、HEAD、index tree、worktree、继承变更 baseline 与 message；Host 派生 Git identity 和 publication target。Commit 接受 attached 与 unborn HEAD；detached HEAD 仍可用于 inspection、Diff、stage 与 unstage，但 Commit 会在 effect 前失败。成功结果会记录 Host 解析的路径，或 commit id、tree、parent、target、author 与 committer。生命周期区分 prepared、accepted、planning、publishing、succeeded、已证明无副作用的 failure 或 cancellation，以及 publication evidence 未知或矛盾时的 `reconciliation-required`。
+StageFiles 与 UnstageFiles 携带 observation-scoped change id 和 fingerprint，绝不携带路径。Commit 携带精确 status、HEAD、index tree、worktree、继承变更 baseline 与 message；Host 派生 Git identity 和 publication target。Commit 接受 attached 与 unborn HEAD；detached HEAD 仍可用于 inspection、Diff、stage 与 unstage，但 Commit 会在 effect 前失败。成功结果会记录 Host 解析的路径，或 commit id、tree、parent、target、author 与 committer；每份 Commit signature 都是在应用执行环境规范化后，Service Provider 创建该 object 时实际使用的精确 identity，而非未经规范化的配置输入。生命周期区分 prepared、accepted、planning、publishing、succeeded、已证明无副作用的 failure 或 cancellation，以及 publication evidence 未知或矛盾时的 `reconciliation-required`。
 
 Service Definition 没有配置。每个 Service Provider 拥有其执行环境机制与必需的资源限制。
 

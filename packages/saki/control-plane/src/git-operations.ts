@@ -11,6 +11,7 @@ import type {
   HostOperationAdmissionDecision,
   HostOperationAdmissionExpectation,
   HostOperationChange,
+  HostOperationKind,
   HostOperationPreparation,
   HostOperationSnapshot,
   InspectProjectResult,
@@ -38,7 +39,6 @@ import type {
   SakiGitOperationIntent,
   SakiGitOperationIntentReceipt,
   SakiGitOperationReceipt,
-  SakiGitOperationReferenceProjection,
   SakiGitOperationReferenceProjectionFor,
   SakiGitOperationsProjection,
   SakiResourceBindingId,
@@ -80,7 +80,7 @@ interface GitOperationsOptions {
   readonly lifetime: AbortSignal
 }
 
-/** Fully cross-validated Git Intent state safe for startup recovery. */
+/** Fully cross-validated Git Intent state in owner-first startup recovery order. */
 export interface ValidatedGitOperationsState {
   readonly intents: readonly GitOperationIntentRecord[]
 }
@@ -91,6 +91,14 @@ class AdmissionUnavailable extends Error {}
 
 type ReadonlyTable<K extends string, V> = Pick<KvTable<K, V>, 'entries' | 'get' | 'size'>
 
+function readAdmission(
+  table: BindingWriteAdmissionTable,
+  bindingId: SakiResourceBindingId,
+): BindingWriteAdmissionRecord | undefined {
+  const value = table.get(bindingId)
+  return value === undefined ? undefined : bindingWriteAdmissionRecordSchema.parse(value)
+}
+
 /**
  * Validate the complete Git Intent/write-admission relation without writes or Host calls.
  * @param intentTable - opened unified Git Intent table.
@@ -99,7 +107,7 @@ type ReadonlyTable<K extends string, V> = Pick<KvTable<K, V>, 'entries' | 'get' 
  * @param otherIntentIds - ids retained by every other Control Intent table.
  * @param recoverableMissingBindingIds - Registry children whose registration admission handoff is incomplete.
  * @param validateActorReference - Foundation relationship validator for immutable attribution.
- * @returns deterministic recovery order after every cross-record invariant passes.
+ * @returns current manual owners first, then remaining Intents by creation time and id.
  */
 export function validateGitOperationsDurableState(
   intentTable: ReadonlyTable<SakiControlIntentId, GitOperationIntentRecord>,
@@ -126,6 +134,7 @@ export function validateGitOperationsDurableState(
     return { intents: [] }
   }
   const bindingById = new Map(registry.resourceBindings.map(binding => [binding.id, binding]))
+  const manualOwnerIds = new Set<SakiControlIntentId>()
   for (const binding of registry.resourceBindings) {
     if (admissionTable.get(binding.id) === undefined && !recoverableMissingBindingIds.has(binding.id)) {
       throw new Error('Saki Resource Binding has no write admission')
@@ -140,6 +149,7 @@ export function validateGitOperationsDurableState(
     const intent = byId.get(admission.source.intentId)
     if (intent === undefined) throw new Error('Saki manual write admission has no Git operation Intent')
     assertAdmissionMatchesIntent(admission, intent)
+    manualOwnerIds.add(intent.id)
     if (admission.bindingRevision > binding.revision) {
       throw new Error('Saki manual write admission targets a future Binding revision')
     }
@@ -178,8 +188,10 @@ export function validateGitOperationsDurableState(
     }
   }
   return {
-    intents: intents.toSorted((left, right) =>
-      left.createdAt - right.createdAt || String(left.id).localeCompare(String(right.id))),
+    intents: intents.toSorted((left, right) => {
+      const ownerOrder = Number(manualOwnerIds.has(right.id)) - Number(manualOwnerIds.has(left.id))
+      return ownerOrder || left.createdAt - right.createdAt || String(left.id).localeCompare(String(right.id))
+    }),
   }
 }
 
@@ -196,7 +208,7 @@ export class GitOperations {
    * @param otherIntentIds - ids retained by every other Control Intent table.
    * @param registry - validated Project Registry, or absence in a new provisioning generation.
    * @param recoverableMissingBindingIds - Registry children whose registration admission handoff is incomplete.
-   * @returns deterministic recovery order after every cross-record invariant passes.
+   * @returns current manual owners first, then remaining Intents by creation time and id.
    */
   validateDurableState(
     otherIntentIds: ReadonlySet<SakiControlIntentId>,
@@ -214,16 +226,15 @@ export class GitOperations {
   }
 
   /**
-   * Resume every nonterminal Intent after complete current-state validation.
+   * Reconcile every retained Intent once after complete current-state validation.
    * @param state - fully validated durable state from the same opened generation.
    */
   async initializeValidated(state: ValidatedGitOperationsState): Promise<void> {
     for (const intent of state.intents) {
       this.options.lifetime.throwIfAborted()
-      if (!terminal(intent.phase)) await this.enqueueIntent(intent.id, () => this.resume(intent.id, this.options.lifetime))
-      else if (intent.phase !== 'reconciliation-required' && intent.hostRequest !== undefined) {
-        await this.releaseIfStillOwned(intent)
-      }
+      await this.enqueueIntent(intent.id, () => terminal(intent.phase)
+        ? this.replayTerminal(intent, this.options.lifetime)
+        : this.resume(intent.id, this.options.lifetime))
     }
   }
 
@@ -319,10 +330,9 @@ export class GitOperations {
       }
       const payload = { intent, actor }
       const payloadDigest = canonicalDigest('saki/git-operation-intent/v1', payload)
-      const hostRequest = hostOperationRequestSchema.parse({
-        type: intent.type === 'create-commit' ? 'commit' : intent.type,
+      const hostRequestBase = {
         source: {
-          kind: 'control-intent',
+          kind: 'control-intent' as const,
           intentId: intent.intentId,
           intentRevision: 0,
           payloadDigest,
@@ -335,8 +345,19 @@ export class GitOperations {
           worktree: inspected.observation.worktree,
           preEffectBaseline: inspected.preEffectBaseline,
         },
-        ...(intent.type === 'create-commit' ? { message: intent.message } : { changes: intent.changes }),
-      })
+      }
+      const hostRequest = (() => {
+        switch (intent.type) {
+          case 'stage-files':
+            return hostOperationRequestSchema.parse({ ...hostRequestBase, type: 'stage-files', changes: intent.changes })
+          case 'unstage-files':
+            return hostOperationRequestSchema.parse({ ...hostRequestBase, type: 'unstage-files', changes: intent.changes })
+          case 'create-commit':
+            return hostOperationRequestSchema.parse({ ...hostRequestBase, type: 'commit', message: intent.message })
+          /* v8 ignore next -- closed-union exhaustiveness guard */
+          default: return assertNever(intent)
+        }
+      })()
       const now = Date.now()
       const record = gitOperationIntentRecordSchema.parse({
         id: intent.intentId,
@@ -471,10 +492,7 @@ export class GitOperations {
       signal.throwIfAborted()
       let record = this.requireIntent(intentId)
       if (terminal(record.phase)) {
-        if (record.phase !== 'reconciliation-required' && record.hostRequest !== undefined) {
-          await this.releaseIfStillOwned(record)
-        }
-        return resultFor(record)
+        return await this.replayTerminal(record, signal)
       }
       const hostRequest = requireHostRequest(record)
       const action = actionFor(record.payload.intent.type)
@@ -534,10 +552,7 @@ export class GitOperations {
         continue
       }
       if (record.phase === 'host-prepared') {
-        const snapshot = record.operationSnapshot
-        const preparation = record.preparation
-        if (snapshot === undefined || preparation === undefined) throw new Error('Host-prepared Git Intent lost evidence')
-        if (snapshot.state !== 'prepared') return await this.finishSnapshot(record, snapshot)
+        const preparation = requirePreparation(record)
         let admission: Extract<BindingWriteAdmissionRecord, {
           readonly state: 'manual-host-operation'
           readonly phase: 'accepted'
@@ -559,8 +574,7 @@ export class GitOperations {
   }
 
   private async driveAccepted(record: GitOperationIntentRecord, signal: AbortSignal): Promise<GitIntentResult> {
-    const preparation = record.preparation
-    if (preparation === undefined) throw new Error('accepted Git Intent lost preparation evidence')
+    const preparation = requirePreparation(record)
     const hostRequest = requireHostRequest(record)
     const inspected = await this.options.execution.inspectOperation(preparation.operation, signal)
     signal.throwIfAborted()
@@ -635,11 +649,29 @@ export class GitOperations {
       this.options.notifyChanged()
       return resultFor(record)
     } else {
-      record = await this.updateIntent(record, { phase: 'accepted', operationSnapshot: snapshot })
-      return unavailable(record)
+      throw new Error(`Nonterminal Host snapshot cannot finish Saki Git operation '${record.id}'`)
     }
     await this.release(record)
     this.options.notifyChanged()
+    return resultFor(record)
+  }
+
+  /** Retry Host cleanup and require exact durable evidence before owner-sensitive release. */
+  private async replayTerminal(
+    record: GitOperationIntentRecord,
+    signal: AbortSignal,
+  ): Promise<GitIntentResult> {
+    if (record.preparation !== undefined) {
+      const inspected = await this.options.execution.inspectOperation(record.preparation.operation, signal)
+      signal.throwIfAborted()
+      assertSnapshotMatches(record, inspected)
+      if (!isDeepStrictEqual(inspected, record.operationSnapshot)) {
+        throw new Error(`Host terminal snapshot disagrees with Saki Git operation '${record.id}'`)
+      }
+    }
+    if (record.phase !== 'reconciliation-required' && record.hostRequest !== undefined) {
+      await this.releaseIfStillOwned(record)
+    }
     return resultFor(record)
   }
 
@@ -713,11 +745,10 @@ export class GitOperations {
       return next
     } catch (error) {
       if (error instanceof AdmissionBusy || error instanceof AdmissionUnavailable) throw error
-      const replay = this.options.admissionTable.get(bindingId)
-      if (replay !== undefined) {
-        const parsed = bindingWriteAdmissionRecordSchema.parse(replay)
-        if (parsed.state === 'manual-host-operation' && parsed.source.intentId === record.id
-          && parsed.source.payloadDigest === record.payloadDigest) return parsed
+      const replay = readAdmission(this.options.admissionTable, bindingId)
+      if (replay?.state === 'manual-host-operation' && replay.source.intentId === record.id
+        && replay.source.payloadDigest === record.payloadDigest) {
+        return replay
       }
       throw error
     }
@@ -734,7 +765,6 @@ export class GitOperations {
         if (current.state !== 'manual-host-operation') throw new AdmissionUnavailable()
         assertAdmissionMatchesIntent(current, record)
         if (current.phase === 'accepted') {
-          if (!isDeepStrictEqual(current.preparation, preparation)) throw new AdmissionBusy()
           return current
         }
         const now = Math.max(current.updatedAt, Date.now())
@@ -751,13 +781,10 @@ export class GitOperations {
       return next
     } catch (error) {
       if (error instanceof AdmissionBusy || error instanceof AdmissionUnavailable) throw error
-      const replay = this.options.admissionTable.get(bindingId)
-      if (replay !== undefined) {
-        const parsed = bindingWriteAdmissionRecordSchema.parse(replay)
-        if (parsed.state === 'manual-host-operation' && parsed.phase === 'accepted') {
-          assertAdmissionMatchesIntent(parsed, record)
-          if (isDeepStrictEqual(parsed.preparation, preparation)) return parsed
-        }
+      const replay = readAdmission(this.options.admissionTable, bindingId)
+      if (replay?.state === 'manual-host-operation' && replay.phase === 'accepted') {
+        assertAdmissionMatchesIntent(replay, record)
+        return replay
       }
       throw error
     }
@@ -849,12 +876,18 @@ export class GitOperations {
     if (record.phase === 'canceled' || record.phase === 'conflict') {
       return { kind: 'denied', reason: 'source-canceled' }
     }
-    if (record.phase !== 'accepted' || record.preparation === undefined || record.hostRequest === undefined
-      || record.admissionRevision === undefined
-      || !isDeepStrictEqual(record.hostRequest.source, expectation.source)
-      || !isDeepStrictEqual(record.preparation, expectation.preparation)
-      || expectation.bindingId !== record.hostRequest.expected.binding.id
-      || expectation.bindingRevision !== record.hostRequest.expected.binding.revision) {
+    if (record.phase !== 'accepted') return { kind: 'denied', reason: 'not-current' }
+    const preparation = record.preparation
+    const hostRequest = record.hostRequest
+    const admissionRevision = record.admissionRevision
+    /* v8 ignore next 3 -- The durable schema requires all accepted-phase evidence fields. */
+    if (preparation === undefined || hostRequest === undefined || admissionRevision === undefined) {
+      return { kind: 'denied', reason: 'not-current' }
+    }
+    if (!isDeepStrictEqual(hostRequest.source, expectation.source)
+      || !isDeepStrictEqual(preparation, expectation.preparation)
+      || expectation.bindingId !== hostRequest.expected.binding.id
+      || expectation.bindingRevision !== hostRequest.expected.binding.revision) {
       return { kind: 'denied', reason: 'not-current' }
     }
     const admissionValue = this.options.admissionTable.get(expectation.bindingId)
@@ -862,7 +895,7 @@ export class GitOperations {
     const admission = bindingWriteAdmissionRecordSchema.safeParse(admissionValue)
     if (!admission.success) return { kind: 'unavailable' }
     if (admission.data.state !== 'manual-host-operation' || admission.data.phase !== 'accepted'
-      || admission.data.revision !== record.admissionRevision) {
+      || admission.data.revision !== admissionRevision) {
       return { kind: 'denied', reason: 'not-current' }
     }
     try {
@@ -872,7 +905,7 @@ export class GitOperations {
     }
     const current = this.options.projects.currentActiveBinding(record.payload.intent.expected.projectId)
     if (typeof current === 'string' || current.projectRevision !== record.payload.intent.expected.expectedProjectRevision
-      || !isDeepStrictEqual(current.binding, record.hostRequest.expected.binding)
+      || !isDeepStrictEqual(current.binding, hostRequest.expected.binding)
       || current.binding.hostId !== expectation.preparation.operation.hostId) {
       return { kind: 'denied', reason: 'not-current' }
     }
@@ -900,6 +933,8 @@ export class GitOperations {
           return { ...base, type: 'unstage-files', operation: projected.operation, state: 'reconciliation-required' }
         case 'create-commit':
           return { ...base, type: 'create-commit', operation: projected.operation, state: 'reconciliation-required' }
+        /* v8 ignore next -- closed-union exhaustiveness guard */
+        default: return assertNever(projected)
       }
     }
     if (snapshot?.state === 'prepared') {
@@ -911,6 +946,8 @@ export class GitOperations {
           return { ...base, type: 'unstage-files', operation: projected.operation, state: 'host-prepared' }
         case 'create-commit':
           return { ...base, type: 'create-commit', operation: projected.operation, state: 'host-prepared' }
+        /* v8 ignore next -- closed-union exhaustiveness guard */
+        default: return assertNever(projected)
       }
     }
     if (snapshot?.state === 'accepted' || snapshot?.state === 'planning' || snapshot?.state === 'publishing') {
@@ -922,6 +959,8 @@ export class GitOperations {
           return { ...base, type: 'unstage-files', operation: projected.operation, state: 'accepted' }
         case 'create-commit':
           return { ...base, type: 'create-commit', operation: projected.operation, state: 'accepted' }
+        /* v8 ignore next -- closed-union exhaustiveness guard */
+        default: return assertNever(projected)
       }
     }
     return { ...base, type: record.data.payload.intent.type, state: 'admission-reserved' }
@@ -959,18 +998,8 @@ export class GitOperations {
           revision: stored.revision + 1,
           updatedAt: Math.max(stored.updatedAt, Date.now()),
         }
-        if ('reservationRevision' in values && values.reservationRevision === undefined) {
-          delete candidate.reservationRevision
-        }
-        if ('preparation' in values && values.preparation === undefined) delete candidate.preparation
         if ('admissionRevision' in values && values.admissionRevision === undefined) {
           delete candidate.admissionRevision
-        }
-        if ('operationSnapshot' in values && values.operationSnapshot === undefined) {
-          delete candidate.operationSnapshot
-        }
-        if ('terminalReason' in values && values.terminalReason === undefined) {
-          delete candidate.terminalReason
         }
         return gitOperationIntentRecordSchema.parse(candidate)
       })
@@ -1013,13 +1042,20 @@ function selectionMatches(
   intent: SakiGitOperationIntent,
   inspected: Extract<InspectProjectResult, { readonly ok: true }>,
 ): boolean {
-  if (intent.type === 'create-commit') return true
-  const byId = new Map(inspected.observation.changes.map(change => [change.id, change]))
-  return intent.changes.every((selected) => {
-    const change = byId.get(selected.id)
-    if (change === undefined || !isDeepStrictEqual(change.fingerprint, selected.fingerprint)) return false
-    return intent.type === 'stage-files' ? stageable(change) : unstageable(change)
-  })
+  switch (intent.type) {
+    case 'create-commit': return true
+    case 'stage-files':
+    case 'unstage-files': {
+      const byId = new Map(inspected.observation.changes.map(change => [change.id, change]))
+      return intent.changes.every((selected) => {
+        const change = byId.get(selected.id)
+        if (change === undefined || !isDeepStrictEqual(change.fingerprint, selected.fingerprint)) return false
+        return intent.type === 'stage-files' ? stageable(change) : unstageable(change)
+      })
+    }
+    /* v8 ignore next -- closed-union exhaustiveness guard */
+    default: return assertNever(intent)
+  }
 }
 
 function stageable(change: ProjectGitChange): boolean {
@@ -1031,9 +1067,12 @@ function unstageable(change: ProjectGitChange): boolean {
 }
 
 function actionFor(type: GitIntentType): GitAction {
-  return type === 'stage-files'
-    ? 'project-changes:stage'
-    : type === 'unstage-files' ? 'project-changes:unstage' : 'project-commit:create'
+  switch (type) {
+    case 'stage-files': return 'project-changes:stage'
+    case 'unstage-files': return 'project-changes:unstage'
+    case 'create-commit': return 'project-commit:create'
+    default: return assertNever(type)
+  }
 }
 
 function assertPreparedReceipt(
@@ -1087,33 +1126,68 @@ function assertAdmissionMatchesIntent(
 function requireHostRequest(
   record: GitOperationIntentRecord,
 ): NonNullable<GitOperationIntentRecord['hostRequest']> {
+  /* v8 ignore next 1 -- The durable phase schema requires a Host request at every call site. */
   if (record.hostRequest === undefined) throw new Error(`Saki Git operation '${record.id}' has no Host request`)
   return record.hostRequest
 }
 
-function operationProjection(snapshot: HostOperationSnapshot): SakiGitOperationReferenceProjection {
-  return {
-    id: snapshot.operation.id,
-    type: snapshot.operation.type,
-    revision: snapshot.revision,
-    state: snapshot.state,
-  }
+function requirePreparation(record: GitOperationIntentRecord): HostOperationPreparation {
+  /* v8 ignore next 1 -- The durable phase schema requires preparation at every call site. */
+  if (record.preparation === undefined) throw new Error(`Saki Git operation '${record.id}' has no Host preparation`)
+  return record.preparation
 }
 
 function operationProjectionForIntent<S extends HostOperationSnapshot['state']>(
   record: GitOperationIntentRecord,
   snapshot: HostOperationSnapshot & { readonly state: S },
 ): CorrelatedOperationProjection<S> {
-  const intentType = record.payload.intent.type
-  const expectedOperationType = intentType === 'create-commit' ? 'commit' : intentType
-  if (snapshot.operation.type !== expectedOperationType) {
-    throw new Error('Host snapshot kind disagrees with its Git operation Intent')
+  const operation = {
+    id: snapshot.operation.id,
+    revision: snapshot.revision,
+    state: snapshot.state,
   }
-  return {
-    type: intentType,
-    operation: operationProjection(snapshot),
-    snapshot,
-  } as CorrelatedOperationProjection<S>
+  const intent = record.payload.intent
+  switch (intent.type) {
+    case 'stage-files': {
+      /* v8 ignore next 3 -- The durable schema rejects Intent, request, and snapshot kind disagreement. */
+      if (!snapshotHasOperationType(snapshot, 'stage-files')) {
+        throw new Error('Host snapshot kind disagrees with its Git operation Intent')
+      }
+      return { type: 'stage-files', operation: { ...operation, type: 'stage-files' }, snapshot }
+    }
+    case 'unstage-files': {
+      /* v8 ignore next 3 -- The durable schema rejects Intent, request, and snapshot kind disagreement. */
+      if (!snapshotHasOperationType(snapshot, 'unstage-files')) {
+        throw new Error('Host snapshot kind disagrees with its Git operation Intent')
+      }
+      return { type: 'unstage-files', operation: { ...operation, type: 'unstage-files' }, snapshot }
+    }
+    case 'create-commit': {
+      /* v8 ignore next 3 -- The durable schema rejects Intent, request, and snapshot kind disagreement. */
+      if (!snapshotHasOperationType(snapshot, 'commit')) {
+        throw new Error('Host snapshot kind disagrees with its Git operation Intent')
+      }
+      return { type: 'create-commit', operation: { ...operation, type: 'commit' }, snapshot }
+    }
+    /* v8 ignore next -- closed-union exhaustiveness guard */
+    default: return assertNever(intent)
+  }
+}
+
+function snapshotHasOperationType(
+  snapshot: HostOperationSnapshot,
+  type: 'stage-files',
+): snapshot is HostOperationSnapshot<'stage-files'>
+function snapshotHasOperationType(
+  snapshot: HostOperationSnapshot,
+  type: 'unstage-files',
+): snapshot is HostOperationSnapshot<'unstage-files'>
+function snapshotHasOperationType(
+  snapshot: HostOperationSnapshot,
+  type: 'commit',
+): snapshot is HostOperationSnapshot<'commit'>
+function snapshotHasOperationType(snapshot: HostOperationSnapshot, type: HostOperationKind): boolean {
+  return snapshot.operation.type === type
 }
 
 function resultFor(record: GitOperationIntentRecord): GitIntentResult {
@@ -1124,7 +1198,12 @@ function resultFor(record: GitOperationIntentRecord): GitIntentResult {
     case 'failed': return { ok: false, reason: 'failure', receipt }
     case 'canceled': return { ok: false, reason: 'canceled', receipt }
     case 'reconciliation-required': return { ok: false, reason: 'reconciliation-required', receipt }
-    default: return { ok: false, reason: 'unavailable', receipt }
+    case 'prepared':
+    case 'admission-reserved':
+    case 'host-prepared':
+    case 'accepted': return { ok: false, reason: 'unavailable', receipt }
+    /* v8 ignore next -- closed receipt union exhaustiveness guard */
+    default: return assertNever(receipt)
   }
 }
 
@@ -1137,11 +1216,44 @@ function resultMatchesIntentType<T extends GitIntentType>(
 
 function unavailable(record: GitOperationIntentRecord): GitIntentResult {
   const receipt = receiptFor(record)
-  if (receipt.state === 'prepared' || receipt.state === 'admission-reserved'
-    || receipt.state === 'host-prepared' || receipt.state === 'accepted') {
-    return { ok: false, reason: 'unavailable', receipt }
+  switch (receipt.state) {
+    case 'prepared':
+    case 'admission-reserved':
+    case 'host-prepared':
+    case 'accepted': return { ok: false, reason: 'unavailable', receipt }
+    case 'succeeded':
+    case 'conflict':
+    case 'failed':
+    case 'canceled':
+    case 'reconciliation-required': {
+      /* v8 ignore next -- Durable phase routing excludes terminal receipts at every call site. */
+      throw new Error(`Terminal Git operation '${record.id}' cannot be returned as unavailable`)
+    }
+    /* v8 ignore next -- closed receipt union exhaustiveness guard */
+    default: return assertNever(receipt)
   }
-  throw new Error(`Terminal Git operation '${record.id}' cannot be returned as unavailable`)
+}
+
+function hostPreparedReceipt(
+  record: GitOperationIntentRecord,
+  snapshot: HostOperationSnapshot & { readonly state: 'prepared' },
+): Extract<SakiGitOperationReceipt, { readonly state: 'host-prepared' }> {
+  const base = {
+    id: record.receiptId,
+    intentId: record.id,
+    projectId: record.payload.intent.expected.projectId,
+  }
+  const projected = operationProjectionForIntent(record, snapshot)
+  switch (projected.type) {
+    case 'stage-files':
+      return { ...base, type: 'stage-files', state: 'host-prepared', operation: projected.operation }
+    case 'unstage-files':
+      return { ...base, type: 'unstage-files', state: 'host-prepared', operation: projected.operation }
+    case 'create-commit':
+      return { ...base, type: 'create-commit', state: 'host-prepared', operation: projected.operation }
+    /* v8 ignore next -- closed-union exhaustiveness guard */
+    default: return assertNever(projected)
+  }
 }
 
 function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
@@ -1151,42 +1263,38 @@ function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
     projectId: record.payload.intent.expected.projectId,
   }
   const snapshot = record.operationSnapshot
-  switch (record.phase) {
+  const phase = record.phase
+  switch (phase) {
     case 'prepared': {
-      if (snapshot !== undefined) throw new Error(`Prepared Git operation '${record.id}' retains Host evidence`)
+      /* v8 ignore next 3 -- The durable schema rejects prepared records with Host evidence. */
+      if (snapshot !== undefined) {
+        throw new Error(`Prepared Git operation '${record.id}' retains Host evidence`)
+      }
       return { ...base, type: record.payload.intent.type, state: 'prepared' }
     }
     case 'admission-reserved': {
-      if (snapshot !== undefined) throw new Error(`Reserved Git operation '${record.id}' retains Host evidence`)
+      /* v8 ignore next 3 -- The durable schema rejects reserved records with Host evidence. */
+      if (snapshot !== undefined) {
+        throw new Error(`Reserved Git operation '${record.id}' retains Host evidence`)
+      }
       return { ...base, type: record.payload.intent.type, state: 'admission-reserved' }
     }
     case 'host-prepared': {
+      /* v8 ignore next 3 -- The durable schema requires prepared Host evidence in this phase. */
       if (snapshot?.state !== 'prepared') {
         throw new Error(`Host-prepared Git operation '${record.id}' lacks prepared Host evidence`)
       }
-      const projected = operationProjectionForIntent(record, snapshot)
-      switch (projected.type) {
-        case 'stage-files':
-          return { ...base, type: 'stage-files', state: 'host-prepared', operation: projected.operation }
-        case 'unstage-files':
-          return { ...base, type: 'unstage-files', state: 'host-prepared', operation: projected.operation }
-        case 'create-commit':
-          return { ...base, type: 'create-commit', state: 'host-prepared', operation: projected.operation }
-      }
+      return hostPreparedReceipt(record, snapshot)
     }
     case 'accepted': {
-      if (snapshot === undefined) throw new Error(`Accepted Git operation '${record.id}' lacks Host evidence`)
-      if (snapshot.state === 'prepared') {
-        const projected = operationProjectionForIntent(record, snapshot)
-        switch (projected.type) {
-          case 'stage-files':
-            return { ...base, type: 'stage-files', state: 'host-prepared', operation: projected.operation }
-          case 'unstage-files':
-            return { ...base, type: 'unstage-files', state: 'host-prepared', operation: projected.operation }
-          case 'create-commit':
-            return { ...base, type: 'create-commit', state: 'host-prepared', operation: projected.operation }
-        }
+      /* v8 ignore next 3 -- The durable schema requires Host evidence throughout this phase. */
+      if (snapshot === undefined) {
+        throw new Error(`Accepted Git operation '${record.id}' lacks Host evidence`)
       }
+      if (snapshot.state === 'prepared') {
+        return hostPreparedReceipt(record, snapshot)
+      }
+      /* v8 ignore next 4 -- The durable schema rejects terminal Host evidence in this phase. */
       if (snapshot.state !== 'accepted' && snapshot.state !== 'planning' && snapshot.state !== 'publishing') {
         throw new Error(`Accepted Git operation '${record.id}' retains terminal Host evidence`)
       }
@@ -1198,9 +1306,12 @@ function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
           return { ...base, type: 'unstage-files', state: 'accepted', operation: projected.operation }
         case 'create-commit':
           return { ...base, type: 'create-commit', state: 'accepted', operation: projected.operation }
+        /* v8 ignore next -- closed-union exhaustiveness guard */
+        default: return assertNever(projected)
       }
     }
     case 'succeeded': {
+      /* v8 ignore next 3 -- The durable schema requires succeeded Host evidence in this phase. */
       if (snapshot?.state !== 'succeeded') {
         throw new Error(`Succeeded Git operation '${record.id}' lacks succeeded Host evidence`)
       }
@@ -1230,6 +1341,8 @@ function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
             operation: projected.operation,
             result: projected.snapshot.result,
           }
+        /* v8 ignore next -- closed-union exhaustiveness guard */
+        default: return assertNever(projected)
       }
     }
     case 'conflict': {
@@ -1237,6 +1350,7 @@ function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
       if (snapshot === undefined) {
         return { ...base, type: record.payload.intent.type, state: 'conflict', reason }
       }
+      /* v8 ignore next 3 -- The durable schema permits only prepared no-effect Host evidence here. */
       if (snapshot.state !== 'prepared') {
         throw new Error(`Conflicted Git operation '${record.id}' retains possible-effect Host evidence`)
       }
@@ -1248,9 +1362,12 @@ function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
           return { ...base, type: 'unstage-files', state: 'conflict', reason, operation: projected.operation }
         case 'create-commit':
           return { ...base, type: 'create-commit', state: 'conflict', reason, operation: projected.operation }
+        /* v8 ignore next -- closed-union exhaustiveness guard */
+        default: return assertNever(projected)
       }
     }
     case 'failed': {
+      /* v8 ignore next 4 -- The durable schema requires matching failed Host evidence here. */
       if (snapshot?.state !== 'failed' || record.terminalReason !== snapshot.failure.reason) {
         throw new Error(`Failed Git operation '${record.id}' lacks matching failed Host evidence`)
       }
@@ -1280,6 +1397,8 @@ function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
             reason: projected.snapshot.failure.reason,
             operation: projected.operation,
           }
+        /* v8 ignore next -- closed-union exhaustiveness guard */
+        default: return assertNever(projected)
       }
     }
     case 'canceled': {
@@ -1287,6 +1406,7 @@ function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
       if (snapshot === undefined) {
         return { ...base, type: record.payload.intent.type, state: 'canceled', reason }
       }
+      /* v8 ignore next 3 -- The durable schema requires matching canceled Host evidence here. */
       if (snapshot.state !== 'canceled' || reason !== snapshot.reason) {
         throw new Error(`Canceled Git operation '${record.id}' lacks matching canceled Host evidence`)
       }
@@ -1298,9 +1418,12 @@ function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
           return { ...base, type: 'unstage-files', state: 'canceled', reason, operation: projected.operation }
         case 'create-commit':
           return { ...base, type: 'create-commit', state: 'canceled', reason, operation: projected.operation }
+        /* v8 ignore next -- closed-union exhaustiveness guard */
+        default: return assertNever(projected)
       }
     }
     case 'reconciliation-required': {
+      /* v8 ignore next 4 -- The durable schema requires matching reconciliation Host evidence here. */
       if (snapshot?.state !== 'reconciliation-required' || record.terminalReason !== snapshot.reason) {
         throw new Error(`Reconciling Git operation '${record.id}' lacks matching Host evidence`)
       }
@@ -1330,8 +1453,12 @@ function receiptFor(record: GitOperationIntentRecord): SakiGitOperationReceipt {
             reason: projected.snapshot.reason,
             operation: projected.operation,
           }
+        /* v8 ignore next -- closed-union exhaustiveness guard */
+        default: return assertNever(projected)
       }
     }
+    /* v8 ignore next -- closed lifecycle union exhaustiveness guard */
+    default: return assertNever(phase)
   }
 }
 
@@ -1348,10 +1475,11 @@ function conflictReason(
 }
 
 function cancellationReason(record: GitOperationIntentRecord): 'source-canceled' | 'authority-revoked' {
-  if (record.terminalReason === 'source-canceled' || record.terminalReason === 'authority-revoked') {
-    return record.terminalReason
+  switch (record.terminalReason) {
+    case 'source-canceled':
+    case 'authority-revoked': return record.terminalReason
+    default: throw new Error(`Canceled Git operation '${record.id}' has an invalid reason`)
   }
-  throw new Error(`Canceled Git operation '${record.id}' has an invalid reason`)
 }
 
 function hasStagedOrdinaryChange(changes: readonly ProjectGitChange[]): boolean {
@@ -1359,15 +1487,40 @@ function hasStagedOrdinaryChange(changes: readonly ProjectGitChange[]): boolean 
 }
 
 function terminal(phase: GitOperationIntentRecord['phase']): boolean {
-  return phase === 'succeeded' || phase === 'conflict' || phase === 'failed'
-    || phase === 'canceled' || phase === 'reconciliation-required'
+  switch (phase) {
+    case 'prepared':
+    case 'admission-reserved':
+    case 'host-prepared':
+    case 'accepted': return false
+    case 'succeeded':
+    case 'conflict':
+    case 'failed':
+    case 'canceled':
+    case 'reconciliation-required': return true
+    /* v8 ignore next -- closed lifecycle union exhaustiveness guard */
+    default: return assertNever(phase)
+  }
 }
 
 function terminalHost(state: HostOperationSnapshot['state']): boolean {
-  return state === 'succeeded' || state === 'failed' || state === 'canceled'
-    || state === 'reconciliation-required'
+  switch (state) {
+    case 'prepared':
+    case 'accepted':
+    case 'planning':
+    case 'publishing': return false
+    case 'succeeded':
+    case 'failed':
+    case 'canceled':
+    case 'reconciliation-required': return true
+    /* v8 ignore next -- closed lifecycle union exhaustiveness guard */
+    default: return assertNever(state)
+  }
 }
 
 function receiptId(intentId: SakiControlIntentId): `receipt-${string}` {
   return intentId.replace(/^intent-/u, 'receipt-') as `receipt-${string}`
+}
+
+function assertNever(value: never): never {
+  throw new TypeError(`unexpected Saki Git operation discriminant: ${JSON.stringify(value)}`)
 }

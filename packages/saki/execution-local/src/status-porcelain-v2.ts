@@ -4,6 +4,8 @@
  * @module @breakfastdapaidang/saki-execution-local/status-porcelain-v2
  */
 
+import { iterateNulFields, startsWithAscii } from './raw-git-output.ts'
+
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u
 const MODE = /^(?:000000|040000|100644|100755|120000|160000)$/u
@@ -115,7 +117,7 @@ export function parseStatusPorcelainV2(bytes: Uint8Array): ParsedStatusPorcelain
   const entries: ParsedStatusEntry[] = []
   const paths = new Set<string>()
 
-  for (const field of iterateNulFields(bytes)) {
+  for (const field of iterateNulFields(bytes, 'Git status porcelain v2')) {
     if (field.length === 0) throw new Error('Git status porcelain v2 contains an empty record')
     if (startsWithAscii(field, '# ')) {
       if (pathsStarted) throw new Error('Git status porcelain v2 header follows path entries')
@@ -376,22 +378,4 @@ function decodeAscii(bytes: Uint8Array): string {
     throw new Error('Git status porcelain v2 fixed fields are not ASCII')
   }
   return String.fromCharCode(...bytes)
-}
-
-function* iterateNulFields(bytes: Uint8Array): Generator<Uint8Array> {
-  let start = 0
-  for (let index = 0; index < bytes.length; index += 1) {
-    if (bytes[index] !== 0) continue
-    yield bytes.subarray(start, index)
-    start = index + 1
-  }
-  if (start !== bytes.length) throw new Error('Git status porcelain v2 is not NUL terminated')
-}
-
-function startsWithAscii(bytes: Uint8Array, value: string): boolean {
-  if (bytes.length < value.length) return false
-  for (let index = 0; index < value.length; index += 1) {
-    if (bytes[index] !== value.charCodeAt(index)) return false
-  }
-  return true
 }

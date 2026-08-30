@@ -287,6 +287,8 @@ export class GitRunner {
         '-c', `core.hooksPath=${operation.hooksDirectory}`,
         '-c', 'commit.gpgSign=false',
         '-c', 'i18n.commitEncoding=UTF-8',
+        '-c', 'core.fsyncMethod=fsync',
+        '-c', 'core.fsync=loose-object,index,reference',
         ...args,
       ],
       cwd,

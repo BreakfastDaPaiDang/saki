@@ -640,4 +640,191 @@ describe('bounded raw command runner', () => {
       'check-attr',
     ])
   })
+
+  it('spawns structured mutations with fixed Git isolation and operation-owned state', async () => {
+    const ambient = {
+      GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT,
+      GIT_CONFIG_KEY_0: process.env.GIT_CONFIG_KEY_0,
+      GIT_CONFIG_VALUE_0: process.env.GIT_CONFIG_VALUE_0,
+      GIT_CONFIG_KEY_1: process.env.GIT_CONFIG_KEY_1,
+      GIT_CONFIG_VALUE_1: process.env.GIT_CONFIG_VALUE_1,
+      GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM,
+      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+      GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+      GIT_INDEX_FILE: process.env.GIT_INDEX_FILE,
+      GIT_OBJECT_DIRECTORY: process.env.GIT_OBJECT_DIRECTORY,
+      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME,
+      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL,
+      GIT_AUTHOR_DATE: process.env.GIT_AUTHOR_DATE,
+      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME,
+      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL,
+      GIT_COMMITTER_DATE: process.env.GIT_COMMITTER_DATE,
+      GIT_PAGER: process.env.GIT_PAGER,
+      GIT_EDITOR: process.env.GIT_EDITOR,
+      GIT_ASKPASS: process.env.GIT_ASKPASS,
+      SSH_ASKPASS: process.env.SSH_ASKPASS,
+    }
+    Object.assign(process.env, {
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: 'core.hooksPath',
+      GIT_CONFIG_VALUE_0: 'caller-hooks',
+      GIT_CONFIG_KEY_1: 'commit.gpgSign',
+      GIT_CONFIG_VALUE_1: 'true',
+      GIT_CONFIG_SYSTEM: 'caller-system-config',
+      GIT_CONFIG_GLOBAL: 'caller-global-config',
+      GIT_CONFIG_NOSYSTEM: '0',
+      GIT_INDEX_FILE: 'caller-index',
+      GIT_OBJECT_DIRECTORY: 'caller-objects',
+      GIT_AUTHOR_NAME: 'Caller Author',
+      GIT_AUTHOR_EMAIL: 'caller-author@example.invalid',
+      GIT_AUTHOR_DATE: 'caller-author-date',
+      GIT_COMMITTER_NAME: 'Caller Committer',
+      GIT_COMMITTER_EMAIL: 'caller-committer@example.invalid',
+      GIT_COMMITTER_DATE: 'caller-committer-date',
+      GIT_PAGER: 'caller-pager',
+      GIT_EDITOR: 'caller-editor',
+      GIT_ASKPASS: 'caller-askpass',
+      SSH_ASKPASS: 'caller-ssh-askpass',
+    })
+    try {
+      const spawn = vi.fn((_spec: Parameters<SubprocessRuntime['spawn']>[0]) => ({
+        stdout: Readable.from([]),
+        stderr: Readable.from([]),
+        done: Promise.resolve({ exitCode: 0, signal: null }),
+        terminate: vi.fn(),
+        waitForExit: () => Promise.resolve(true),
+      }))
+      const runner = new GitRunner({ spawn } as unknown as SubprocessRuntime, 'git', {
+        maxStdoutBytes: 2,
+        maxStderrBytes: 3,
+        timeoutMs: 5_000,
+        terminationGraceMs: 100,
+      })
+      const operation = {
+        hooksDirectory: 'owned-hooks',
+        indexFile: 'owned-index',
+        objectDirectory: 'owned-objects',
+        author: {
+          name: 'Owned Author',
+          email: 'owned-author@example.invalid',
+          date: '1700000000 +0000',
+        },
+        committer: {
+          name: 'Owned Committer',
+          email: 'owned-committer@example.invalid',
+          date: '1700000001 +0000',
+        },
+      }
+
+      await runner.runMutation(
+        'owned-worktree',
+        ['write-tree'],
+        new AbortController().signal,
+        operation,
+      )
+
+      expect(spawn).toHaveBeenCalledOnce()
+      const firstCall = spawn.mock.calls[0]
+      if (firstCall === undefined) throw new Error('Git mutation did not spawn')
+      const spec = firstCall[0]
+      const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null'
+      expect(spec).toEqual({
+        argv: [
+          'git',
+          '--no-pager',
+          '--no-lazy-fetch',
+          '--no-replace-objects',
+          '-c', 'core.fsmonitor=false',
+          '-c', 'advice.sparseIndexExpanded=false',
+          '-c', 'core.pager=cat',
+          '-c', 'credential.helper=',
+          '-c', 'diff.external=',
+          '-c', 'core.hooksPath=',
+          '-c', `core.excludesFile=${nullDevice}`,
+          '-c', `core.attributesFile=${nullDevice}`,
+          '--no-optional-locks',
+          '-c', 'core.hooksPath=owned-hooks',
+          '-c', 'commit.gpgSign=false',
+          '-c', 'i18n.commitEncoding=UTF-8',
+          '-c', 'core.fsyncMethod=fsync',
+          '-c', 'core.fsync=loose-object,index,reference',
+          'write-tree',
+        ],
+        cwd: 'owned-worktree',
+        env: {
+          ...gitInspectionEnvironment(),
+          GIT_INDEX_FILE: 'owned-index',
+          GIT_OBJECT_DIRECTORY: 'owned-objects',
+          GIT_AUTHOR_NAME: 'Owned Author',
+          GIT_AUTHOR_EMAIL: 'owned-author@example.invalid',
+          GIT_AUTHOR_DATE: '1700000000 +0000',
+          GIT_COMMITTER_NAME: 'Owned Committer',
+          GIT_COMMITTER_EMAIL: 'owned-committer@example.invalid',
+          GIT_COMMITTER_DATE: '1700000001 +0000',
+        },
+        stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
+        graceMs: 100,
+        signal: spec.signal,
+      })
+      const environment = spec.env
+      expect(environment).toBeDefined()
+      if (environment === undefined) throw new Error('Git mutation spawn has no environment')
+      expect(environment).toMatchObject({
+        LC_ALL: 'C',
+        LANG: 'C',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: nullDevice,
+        GIT_ATTR_NOSYSTEM: '1',
+        GIT_NO_LAZY_FETCH: '1',
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_PAGER: 'cat',
+        GIT_EDITOR: 'true',
+        GIT_ASKPASS: '',
+        SSH_ASKPASS: '',
+      })
+      for (const key of [
+        'GIT_CONFIG_COUNT',
+        'GIT_CONFIG_KEY_0',
+        'GIT_CONFIG_VALUE_0',
+        'GIT_CONFIG_KEY_1',
+        'GIT_CONFIG_VALUE_1',
+        'GIT_CONFIG_SYSTEM',
+      ]) {
+        expect(environment[key]).toBeUndefined()
+      }
+
+      await runner.runMutation(
+        'owned-worktree',
+        ['write-tree'],
+        new AbortController().signal,
+        { hooksDirectory: 'owned-hooks' },
+      )
+
+      expect(spawn).toHaveBeenCalledTimes(2)
+      const secondCall = spawn.mock.calls[1]
+      if (secondCall === undefined) throw new Error('second Git mutation did not spawn')
+      const withoutOwnedState = secondCall[0]
+      expect(withoutOwnedState.argv).toEqual(spec.argv)
+      const cleanEnvironment = withoutOwnedState.env
+      expect(cleanEnvironment).toBeDefined()
+      if (cleanEnvironment === undefined) throw new Error('second Git mutation spawn has no environment')
+      for (const key of [
+        'GIT_INDEX_FILE',
+        'GIT_OBJECT_DIRECTORY',
+        'GIT_AUTHOR_NAME',
+        'GIT_AUTHOR_EMAIL',
+        'GIT_AUTHOR_DATE',
+        'GIT_COMMITTER_NAME',
+        'GIT_COMMITTER_EMAIL',
+        'GIT_COMMITTER_DATE',
+      ]) {
+        expect(cleanEnvironment[key]).toBeUndefined()
+      }
+    } finally {
+      for (const [key, value] of Object.entries(ambient)) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key)
+        else process.env[key] = value
+      }
+    }
+  })
 })
