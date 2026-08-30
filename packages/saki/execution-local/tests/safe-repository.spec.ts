@@ -7,7 +7,11 @@ import { Context } from '@deepseek-ai/cordis'
 import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import { canonicalDigest, type SakiHostId } from '@breakfastdapaidang/saki-execution'
+import {
+  canonicalDigest,
+  MAX_GIT_REF_CHARS,
+  type SakiHostId,
+} from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Config } from '../src/index.ts'
 import { GitCommandError, GitRunner } from '../src/git-runner.ts'
@@ -728,6 +732,72 @@ describe('safe repository admission', () => {
     expect(opened.kind).toBe('repository')
     if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
   })
+
+  it('rejects malformed or overlong configured upstream evidence', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    const harness = await localHarness()
+    const branch = 'refs/heads/main'
+    for (const testCase of [
+      {
+        name: 'overlong upstream ref',
+        stdout: `${branch}\0refs/remotes/origin/${'a'.repeat(MAX_GIT_REF_CHARS)}\0origin/main\0\n`,
+        expected: 'unavailable',
+      },
+      {
+        name: 'overlong upstream short name',
+        stdout: `${branch}\0refs/remotes/origin/main\0origin/${'a'.repeat(MAX_GIT_REF_CHARS)}\0\n`,
+        expected: 'unavailable',
+      },
+      {
+        name: 'upstream without a full ref',
+        stdout: `${branch}\0origin/main\0origin/main\0\n`,
+        expected: 'malformed',
+      },
+      {
+        name: 'invalid full upstream ref',
+        stdout: `${branch}\0refs/remotes/origin/bad.lock\0origin/bad.lock\0\n`,
+        expected: 'malformed',
+      },
+      {
+        name: 'control character in upstream short name',
+        stdout: `${branch}\0refs/remotes/origin/main\0origin/\tmain\0\n`,
+        expected: 'malformed',
+      },
+      {
+        name: 'mismatched branch frame',
+        stdout: 'refs/heads/other\0refs/remotes/origin/main\0origin/main\0\n',
+        expected: 'malformed',
+      },
+      {
+        name: 'incomplete frame',
+        stdout: `${branch}\0refs/remotes/origin/main\0origin/main\0`,
+        expected: 'malformed',
+      },
+      {
+        name: 'upstream ref without a short name',
+        stdout: `${branch}\0refs/remotes/origin/main\0\0\n`,
+        expected: 'malformed',
+      },
+    ] as const) {
+      const injected = {
+        run: async (...args: Parameters<GitRunner['run']>) => args[1].includes('for-each-ref')
+          ? { stdout: Buffer.from(testCase.stdout), stderr: Buffer.alloc(0) }
+          : await harness.git.run(...args),
+      } as GitRunner
+
+      const opened = await openSafeRepositoryView(
+        harness.fs,
+        injected,
+        canonicalRoot,
+        MAX_CONTROL_FILE_BYTES,
+        new AbortController().signal,
+      )
+
+      if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+      expect(opened.kind, testCase.name).toBe(testCase.expected)
+    }
+  }, 30_000)
 
   it('rejects Windows-unsafe upstream paths before probing their loose refs', async () => {
     const root = await repository()
@@ -1455,7 +1525,8 @@ describe('safe repository admission', () => {
       (args: readonly string[]) => args[0] === 'config' && args.includes('--file') && args.includes('--name-only'),
       (args: readonly string[]) => args[0] === 'config' && args.includes('--file') && args.includes('--get-all'),
       (args: readonly string[]) => args[0] === 'config' && args.includes('--file') && args.includes('--get-regexp'),
-      (args: readonly string[]) => args[0] === 'config' && args.includes('--file') && args.includes('--list'),
+      (args: readonly string[]) => args[0] === 'config' && args.includes('--file')
+        && args.includes('--list') && !args.includes('--name-only'),
       (args: readonly string[]) => args[0]?.startsWith('--git-dir=') === true
         && args.includes('--shared-index-path'),
       (args: readonly string[]) => args[0]?.startsWith('--git-dir=') === true
