@@ -41,6 +41,7 @@ import {
   readExactWorktreeBytes,
   readExactWorktreeSymlinkBytes,
   rejectStableSelectionFailure,
+  resolveBoundedReadOpenFlags,
   requireOwnedLooseObjectManifestObservation,
   requirePreparedMutationActive,
   resolveCommitRefPath,
@@ -323,6 +324,21 @@ function selectionModeKind(mode: ProjectGitFileMode): 'missing' | 'regular' | 's
 }
 
 describe('Git mutation decisions', () => {
+  it.each([
+    {
+      name: 'retains every supported POSIX safety flag',
+      constants: { O_RDONLY: 0, O_NOFOLLOW: 0x20_000, O_NONBLOCK: 0x800 },
+      expected: 0x20_800,
+    },
+    {
+      name: 'uses only O_RDONLY when optional flags are absent',
+      constants: { O_RDONLY: 0 },
+      expected: 0,
+    },
+  ])('$name', ({ constants, expected }) => {
+    expect(resolveBoundedReadOpenFlags(constants)).toBe(expected)
+  })
+
   it.each([
     {
       name: 'preserves caller cancellation above a readlink failure',

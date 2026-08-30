@@ -39,7 +39,12 @@ import {
 import { GitCommandError, GitRunner, gitInspectionEnvironment } from '../src/git-runner.ts'
 import {
   inspectLocalProjectSelection as inspectSelection,
+  inspectRemotes,
+  inspectStableLocalProjectSelection,
+  parseObservedUpstream,
   projectDisplayLocation,
+  projectSelectionRejectionReason,
+  worktreeHeadMatches,
   type AdministrativeDirectoryIdentityReader,
 } from '../src/inspection.ts'
 import { openSafeRepositoryView } from '../src/safe-repository.ts'
@@ -267,6 +272,64 @@ function syntheticFileSystem(
 }
 
 describe('LocalSakiHostExecution', () => {
+  it.each([
+    ['limit', 'unavailable'],
+    ['unsupported-index-state', 'unavailable'],
+    ['malformed', 'malformed'],
+  ] as const)('maps private inspection failure %s to %s', (reason, expected) => {
+    expect(projectSelectionRejectionReason(reason)).toBe(expected)
+  })
+
+  it.each([
+    {
+      name: 'rejects an absent worktree-list HEAD',
+      record: {},
+      head: { kind: 'commit' as const, objectId: '1'.repeat(40) },
+      objectFormat: 'sha1' as const,
+      expected: false,
+    },
+    {
+      name: 'accepts the same commit',
+      record: { head: '1'.repeat(40) },
+      head: { kind: 'commit' as const, objectId: '1'.repeat(40) },
+      objectFormat: 'sha1' as const,
+      expected: true,
+    },
+    ...(['sha1', 'sha256'] as const).map(objectFormat => ({
+      name: `accepts an unborn ${objectFormat} zero id`,
+      record: { head: '0'.repeat(objectFormat === 'sha1' ? 40 : 64) },
+      head: { kind: 'unborn' as const, symbolicRef: 'refs/heads/main' },
+      objectFormat,
+      expected: true,
+    })),
+    {
+      name: 'rejects a nonzero unborn id',
+      record: { head: '1'.repeat(40) },
+      head: { kind: 'unborn' as const, symbolicRef: 'refs/heads/main' },
+      objectFormat: 'sha1' as const,
+      expected: false,
+    },
+  ])('$name', ({ record, head, objectFormat, expected }) => {
+    expect(worktreeHeadMatches(record, head, objectFormat)).toBe(expected)
+  })
+
+  it('parses only an exact complete upstream frame', () => {
+    const branch = 'refs/heads/main'
+    for (const malformed of [
+      Buffer.from([0xff]),
+      Buffer.from(`${branch}\0\0\0`),
+      Buffer.from('refs/heads/other\0\0\0\n'),
+      Buffer.from(`${branch}\0refs/remotes/origin/main\0\0\n`),
+    ]) expect(() => parseObservedUpstream(malformed, branch)).toThrow()
+
+    expect(parseObservedUpstream(Buffer.alloc(0), branch)).toBeUndefined()
+    expect(parseObservedUpstream(Buffer.from(`${branch}\0\0\0\n`), branch)).toBeUndefined()
+    expect(parseObservedUpstream(
+      Buffer.from(`${branch}\0refs/remotes/origin/main\0origin/main\0\n`),
+      branch,
+    )).toEqual({ ref: 'refs/remotes/origin/main', short: 'origin/main' })
+  })
+
   it('rejects unsafe timer and byte bounds while parsing plugin Config', () => {
     expect(() => LocalSakiHostExecution.Config({ gitCommandTimeoutMs: MAX_TIMER_DELAY_MS + 1 })).toThrow()
     expect(() => LocalSakiHostExecution.Config({ gitTerminationGraceMs: MAX_TIMER_DELAY_MS + 1 })).toThrow()
@@ -1117,6 +1180,69 @@ describe('LocalSakiHostExecution', () => {
     expect(result).toEqual({ ok: false, reason: 'unavailable' })
   })
 
+  it.each([
+    { flag: 'S', bound: false, expected: 'unavailable' },
+    { flag: 'h', bound: true, expected: 'unsupported-index-state' },
+  ] as const)('rejects a final-observation $flag index flag with bound=$bound', async ({
+    flag,
+    bound,
+    expected,
+  }) => {
+    const root = await repository()
+    const harness = await localInspectionHarness()
+    const workspaceId = WorkspaceId('workspace-final-index-state')
+    const workspaces = { list: () => [{ id: workspaceId, path: root }] }
+    const selected = await inspectLocalProjectSelection(
+      harness.fs,
+      workspaces,
+      harness.git,
+      CONFIG,
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+    )
+    expect(selected.ok).toBe(true)
+    if (!selected.ok) return
+
+    let indexReads = 0
+    const injected = {
+      run: async (...args: Parameters<GitRunner['run']>) => {
+        const output = await harness.git.run(...args)
+        const command = gitSubcommand(args[1])
+        const targetCommand = command[0] === 'ls-files' && (flag === 'S'
+          ? command.includes('--stage') && command.includes('-t')
+          : command.includes('-v'))
+        if (!targetCommand || ++indexReads !== 2) return output
+        return {
+          ...output,
+          stdout: Buffer.from(output.stdout.toString('utf8').replace(/^H /mu, `${flag} `)),
+        }
+      },
+    } as GitRunner
+    const requirements = bound
+      ? {
+        boundResource: {
+          workspaceId,
+          trusted: selected.inspection.trusted,
+        },
+        rejectUnsupportedIndexState: true,
+      }
+      : undefined
+
+    const result = await inspectStableLocalProjectSelection(
+      harness.fs,
+      workspaces,
+      injected,
+      CONFIG,
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+      deterministicAdministrativeDirectoryIdentity,
+      requirements,
+    )
+
+    expect(indexReads).toBe(2)
+    expect(result).toEqual({ ok: false, reason: expected })
+  }, 30_000)
+
   it('retains all real conflict stages in a complete inherited baseline', async () => {
     const root = await repository()
     const main = await gitText(root, 'branch', '--show-current')
@@ -1289,6 +1415,21 @@ describe('LocalSakiHostExecution', () => {
       { transport: 'other' },
     ])
     expect(JSON.stringify(result.inspection.projection)).not.toContain('LEAKED_REMOTE_SECRET')
+  })
+
+  it.each([
+    { name: 'accepts Git exit 1 when no remote URL configuration exists', error: new GitCommandError('nonzero', 1) },
+    { name: 'contains a failed remote URL inspection', error: new GitCommandError('timeout') },
+  ])('$name', async ({ error }) => {
+    const failing = {
+      run: async () => { throw error },
+    } as unknown as GitRunner
+    const inspected = inspectRemotes(failing, 'repository', new AbortController().signal)
+    if (error.code === 'nonzero') {
+      await expect(inspected).resolves.toEqual([])
+    } else {
+      await expect(inspected).rejects.toBe(error)
+    }
   })
 
   it('projects canonical public-GitHub candidates from admitted remotes', async () => {
@@ -1519,7 +1660,7 @@ describe('LocalSakiHostExecution', () => {
         },
       },
     })
-  })
+  }, 15_000)
 
   it('accepts an explicitly disabled repository fsmonitor', async () => {
     const root = await repository()
@@ -2586,10 +2727,14 @@ describe('LocalSakiHostExecution', () => {
     for (const [corrupt, expected] of [
       ['branch', 'malformed'],
       ['upstream', 'malformed'],
+      ['upstream-prefix', 'malformed'],
+      ['upstream-short-control', 'malformed'],
       ['overlong-branch', 'unavailable'],
       ['overlong-upstream', 'unavailable'],
+      ['overlong-upstream-short', 'unavailable'],
       ['zero-head', 'malformed'],
     ] as const) {
+      let upstreamQueries = 0
       const malformed = {
         run: async (
           cwd: string,
@@ -2607,15 +2752,26 @@ describe('LocalSakiHostExecution', () => {
             const ref = corrupt === 'branch' ? 'refs/heads/bad.lock' : `refs/heads/${'a'.repeat(MAX_GIT_REF_CHARS)}`
             return { ...output, stdout: Buffer.from(`${ref}\n`) }
           }
-          if ((corrupt === 'upstream' || corrupt === 'overlong-upstream') && command[0] === 'for-each-ref') {
+          if ((corrupt === 'upstream' || corrupt === 'upstream-prefix'
+            || corrupt === 'upstream-short-control' || corrupt === 'overlong-upstream'
+            || corrupt === 'overlong-upstream-short') && command[0] === 'for-each-ref') {
+            if (++upstreamQueries !== 2) return output
             const ref = command.at(-1)
             if (ref === undefined) throw new Error('missing exact branch ref')
             const upstream = corrupt === 'upstream'
               ? 'refs/remotes/origin/bad.lock'
-              : `refs/remotes/origin/${'a'.repeat(MAX_GIT_REF_CHARS)}`
+              : corrupt === 'upstream-prefix'
+                ? 'origin/main'
+                : corrupt === 'overlong-upstream'
+                  ? `refs/remotes/origin/${'a'.repeat(MAX_GIT_REF_CHARS)}`
+                  : 'refs/remotes/origin/main'
             const upstreamShort = corrupt === 'upstream'
               ? 'origin/bad.lock'
-              : `origin/${'a'.repeat(MAX_GIT_REF_CHARS)}`
+              : corrupt === 'upstream-short-control'
+                ? 'origin/\tmain'
+                : corrupt === 'overlong-upstream' || corrupt === 'overlong-upstream-short'
+                  ? `origin/${'a'.repeat(MAX_GIT_REF_CHARS)}`
+                  : 'origin/main'
             return { ...output, stdout: Buffer.from(`${ref}\0${upstream}\0${upstreamShort}\0\n`) }
           }
           return output
@@ -2631,7 +2787,7 @@ describe('LocalSakiHostExecution', () => {
         new AbortController().signal,
       ), corrupt).resolves.toEqual({ ok: false, reason: expected })
     }
-  })
+  }, 30_000)
 
   it('rejects a valid Git branch that disagrees with either admitted source-control snapshot', async () => {
     for (const mismatchAt of [1, 2]) {
@@ -2864,10 +3020,15 @@ describe('LocalSakiHostExecution', () => {
     for (const [corrupt, expected] of [
       ['object-format', 'malformed'],
       ['head-width', 'malformed'],
+      ['head-timeout', 'unavailable'],
+      ['detached-unborn', 'malformed'],
       ['branch-timeout', 'unavailable'],
       ['branch-namespace', 'malformed'],
       ['upstream-utf8', 'malformed'],
       ['upstream-mismatch', 'malformed'],
+      ['upstream-frame', 'malformed'],
+      ['upstream-partial', 'malformed'],
+      ['status-malformed', 'malformed'],
       ['remote-record', 'malformed'],
       ['remote-empty', 'malformed'],
       ['remote-partial', 'malformed'],
@@ -2876,6 +3037,7 @@ describe('LocalSakiHostExecution', () => {
       ['text-no-newline', 'malformed'],
       ['text-multiline', 'malformed'],
     ] as const) {
+      let upstreamQueries = 0
       const injected = {
         run: async (
           cwd: string,
@@ -2887,6 +3049,18 @@ describe('LocalSakiHostExecution', () => {
           const command = gitSubcommand(args)
           if (corrupt === 'branch-timeout' && command[0] === 'symbolic-ref') {
             throw new GitCommandError('timeout')
+          }
+          if (corrupt === 'head-timeout' && command[0] === 'rev-parse' && command.at(-1) === 'HEAD') {
+            throw new GitCommandError('timeout')
+          }
+          if (corrupt === 'detached-unborn' && command[0] === 'symbolic-ref') {
+            throw new GitCommandError('nonzero', 1)
+          }
+          if (corrupt === 'detached-unborn' && command[0] === 'rev-parse' && command.at(-1) === 'HEAD') {
+            throw new GitCommandError('nonzero', 128)
+          }
+          if (corrupt === 'status-malformed' && args.includes('status')) {
+            return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }
           }
           if (command[0] === 'config' && command.includes('--get-regexp')) {
             if (corrupt === 'remote-record') return { stdout: Buffer.from('remote.origin.url\0'), stderr: Buffer.alloc(0) }
@@ -2917,9 +3091,16 @@ describe('LocalSakiHostExecution', () => {
             return { ...output, stdout: Buffer.from('refs/tags/main\n') }
           }
           if (command[0] === 'for-each-ref') {
+            if (++upstreamQueries !== 2) return output
             if (corrupt === 'upstream-utf8') return { ...output, stdout: Buffer.from([0xff]) }
             if (corrupt === 'upstream-mismatch') {
               return { ...output, stdout: Buffer.from('refs/heads/other\0\0\0\n') }
+            }
+            if (corrupt === 'upstream-frame') {
+              return { ...output, stdout: Buffer.from('refs/heads/main\0\0\0') }
+            }
+            if (corrupt === 'upstream-partial') {
+              return { ...output, stdout: Buffer.from('refs/heads/main\0refs/remotes/origin/main\0\0\n') }
             }
           }
           return output

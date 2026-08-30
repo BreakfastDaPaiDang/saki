@@ -292,6 +292,7 @@ describe('Git status porcelain v2 observation', () => {
     for (const record of [
       `1 M N... 100644 100644 100644 ${OBJECT} ${OBJECT} bad-xy\0`,
       `1 R. N... 100644 100644 100644 ${OBJECT} ${OBJECT} rename-code\0`,
+      `1 .R N... 100644 100644 100644 ${OBJECT} ${OBJECT} worktree-code\0`,
       `1 .M X... 100644 100644 100644 ${OBJECT} ${OBJECT} bad-submodule\0`,
       `1 .M N... 100664 100644 100644 ${OBJECT} ${OBJECT} bad-mode\0`,
       `1 .M N... 100644 100644 100644 ${OBJECT.slice(1)} ${OBJECT} short-object\0`,

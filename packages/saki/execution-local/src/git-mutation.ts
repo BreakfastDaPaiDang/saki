@@ -65,13 +65,25 @@ import {
 } from './operation-state.ts'
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
-const OPTIONAL_BOUNDED_READ_OPEN_FLAGS: {
+interface BoundedReadOpenConstants {
+  readonly O_RDONLY: number
   readonly O_NOFOLLOW?: number
   readonly O_NONBLOCK?: number
-} = fsConstants
-const BOUNDED_READ_OPEN_FLAGS = fsConstants.O_RDONLY
-  | (OPTIONAL_BOUNDED_READ_OPEN_FLAGS.O_NOFOLLOW ?? 0)
-  | (OPTIONAL_BOUNDED_READ_OPEN_FLAGS.O_NONBLOCK ?? 0)
+}
+
+/**
+ * Resolve the platform-supported flags for one bounded, non-following read.
+ * @param constants - required read flag plus optional POSIX safety flags.
+ * @returns the bitmask accepted by Node's `open` primitive.
+ * @internal
+ */
+export function resolveBoundedReadOpenFlags(constants: BoundedReadOpenConstants): number {
+  return constants.O_RDONLY
+    | (constants.O_NOFOLLOW ?? 0)
+    | (constants.O_NONBLOCK ?? 0)
+}
+
+const BOUNDED_READ_OPEN_FLAGS = resolveBoundedReadOpenFlags(fsConstants)
 
 /**
  * Largest valid `git update-index --index-info` stdin for one bounded selection.

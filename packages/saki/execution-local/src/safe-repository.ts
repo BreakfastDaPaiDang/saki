@@ -967,16 +967,14 @@ async function writeMinimalRepositoryConfig(
       if (entry !== undefined) entries.push(entry)
     }
   }
-  for (const [name, value] of [
-    ['core.bare', 'false'],
-    ['core.fsmonitor', 'false'],
-    ['core.ignoreStat', 'false'],
-    ['core.trustCtime', 'true'],
-    ['core.checkStat', 'default'],
+  for (const [variable, value] of [
+    ['bare', 'false'],
+    ['fsmonitor', 'false'],
+    ['ignorestat', 'false'],
+    ['trustctime', 'true'],
+    ['checkstat', 'default'],
   ] as const) {
-    const entry = privateConfigEntry(name, value, 'common')
-    if (entry === undefined) throw new SafeRepositoryError('malformed')
-    entries.push(entry)
+    entries.push({ section: 'core', variable, value })
   }
   await writePrivateFile(destination, Buffer.from(serializePrivateConfig(entries), 'utf8'))
 }

@@ -2121,6 +2121,16 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
 
     const firstChange = durable.effectPlan.changes[0]
     if (firstChange === undefined) throw new Error('test durable index plan retained no change')
+    for (const structurallyInvalidChange of [
+      null,
+      { ...firstChange, path: 1 },
+      { ...firstChange, pathBytesBase64: 1 },
+    ]) {
+      expect(operationRecordIssueDetails({
+        ...durable,
+        effectPlan: { ...durable.effectPlan, changes: [structurallyInvalidChange] },
+      })).not.toBe('')
+    }
     const exactPath = 'a'.repeat(MAX_PROJECT_GIT_STATUS_PATH_BYTES)
     const oversizedPath = `${exactPath}a`
     let pathEvidenceReads = 0
@@ -2264,7 +2274,7 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
         },
       })).toContain('index effect plan path bytes are not canonical base64')
     }
-    for (const canonicalBase64 of ['AQ==', 'AAE=']) {
+    for (const canonicalBase64 of ['AQ==', 'AAE=', '+w==', '/w==']) {
       expect(operationRecordIssueDetails({
         ...durable,
         effectPlan: {
@@ -9516,13 +9526,32 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
       'rejects a symbolic-link target drift after the final stable observation',
       async () => {
         const root = await repository()
-        const execution = await provider(root, { node: scratchRootTrackingNodeAdapter() })
+        const targetA = Buffer.from('target-A')
+        const targetB = Buffer.from('target-B')
+        const trackedNode = scratchRootTrackingNodeAdapter()
+        let durableArmed = false
+        const materialization = { path: undefined as string | undefined }
+        let materializationReads = 0
+        let driftInjected = false
+        const execution = await provider(root, {
+          node: {
+            ...trackedNode,
+            async readlink(path) {
+              if (durableArmed && !driftInjected && path === materialization.path) {
+                materializationReads += 1
+                await unlink(path)
+                await symlink(targetB.toString('utf8'), path)
+                driftInjected = true
+              }
+              return await trackedNode.readlink(path)
+            },
+          },
+        })
         const signal = new AbortController().signal
         const binding = await activeBinding(execution, root, signal)
         const worktreeRoot = binding.expectedInspection.trusted.canonicalWorktreePath
         const linkPath = join(worktreeRoot, 'link.txt')
-        const targetA = Buffer.from('target-A')
-        const targetB = Buffer.from('target-B')
+        materialization.path = linkPath
         await symlink(targetA.toString('utf8'), linkPath)
         const inspected = await execution.inspectProject({ binding }, signal)
         if (!inspected.ok) throw new Error(`test symbolic link was not inspectable: ${inspected.reason}`)
@@ -9562,11 +9591,8 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
 
         const persistence = operationPersistence(execution)
         const runner = mutationRunner(execution)
-        let durableArmed = false
         let durable: LocalHostOperationRecord | undefined
         let registeredScratchPath: string | undefined
-        const finalStatusViews: string[] = []
-        let driftInjected = false
         let postDurableObjectWrites = 0
         persistence.replace(async (record) => {
           if (registeredScratchPath === undefined && record.effectPlan?.kind === 'index') {
@@ -9586,29 +9612,6 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
             durable = record
             durableArmed = true
           }
-        })
-        runner.replaceRun(async (...args) => {
-          const [cwd, command] = args
-          const exactFinalStatusWrite = durableArmed
-            && command.length === 3
-            && command[0] === `--git-dir=${cwd}`
-            && command[1] === `--work-tree=${worktreeRoot}`
-            && command[2] === 'write-tree'
-          if (!exactFinalStatusWrite) return await runner.originalRun(...args)
-          expect(dirname(cwd)).toBe(tmpdir())
-          expect(basename(cwd)).toMatch(/^saki-git-view-/u)
-          if (!roots.includes(cwd)) roots.push(cwd)
-          const output = await runner.originalRun(...args)
-          expect(output.stderr.byteLength).toBe(0)
-          expect(output.stdout.toString('utf8')).toMatch(new RegExp(`^${indexTree}\\r?\\n$`, 'u'))
-          expect(finalStatusViews).not.toContain(cwd)
-          finalStatusViews.push(cwd)
-          if (finalStatusViews.length === 2) {
-            await unlink(linkPath)
-            await symlink(targetB.toString('utf8'), linkPath)
-            driftInjected = true
-          }
-          return output
         })
         runner.replace(async (...args) => {
           const [cwd, command, , environment] = args
@@ -9634,8 +9637,7 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
           runner.restore()
         }
 
-        expect(finalStatusViews).toHaveLength(2)
-        expect(new Set(finalStatusViews).size).toBe(2)
+        expect(materializationReads).toBe(1)
         expect(driftInjected).toBe(true)
         expect(postDurableObjectWrites).toBe(0)
         expect(started).toMatchObject({
@@ -9675,9 +9677,6 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
         const quarantinePath = `${plan.scratch.path}.cleanup-${plan.scratch.markerDigest.slice(0, 32)}`
         const witnessPath = `${quarantinePath}.owner`
         for (const path of [lockPath, plan.pin.path, plan.scratch.path, quarantinePath, witnessPath]) {
-          await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' })
-        }
-        for (const path of finalStatusViews) {
           await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' })
         }
       },

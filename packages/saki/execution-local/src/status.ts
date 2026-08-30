@@ -59,6 +59,20 @@ export class ProjectGitStatusProjectionError extends Error {
 }
 
 /**
+ * Require one next status row to stay inside the public projection bounds.
+ * @param retainedChanges - rows already retained before the candidate.
+ * @param nextPathBytes - aggregate path bytes including the candidate.
+ * @throws A bounded projection failure when either aggregate limit is exceeded.
+ * @internal
+ */
+export function assertProjectGitStatusChangeFits(retainedChanges: number, nextPathBytes: number): void {
+  if (retainedChanges >= MAX_PROJECT_GIT_STATUS_CHANGES
+    || nextPathBytes > MAX_PROJECT_GIT_STATUS_PATH_BYTES) {
+    throw new ProjectGitStatusProjectionError('limit')
+  }
+}
+
+/**
  * Project one confirmed raw inventory into browser-safe structured Git status.
  * @param inventory - final stable inventory from the same inspection observation.
  * @param inspection - confirmed safe and trusted selected-project evidence.
@@ -137,10 +151,7 @@ export function buildProjectGitStatusObservation(
     const pathDigest = capturedInventoryPathDigest(entry.path)
     const path = decodeInventoryPath(status.path)
     changePathBytes += status.path.byteLength
-    if (changeMaterials.length >= MAX_PROJECT_GIT_STATUS_CHANGES
-      || changePathBytes > MAX_PROJECT_GIT_STATUS_PATH_BYTES) {
-      throw new ProjectGitStatusProjectionError('limit')
-    }
+    assertProjectGitStatusChangeFits(changeMaterials.length, changePathBytes)
     const retained = entry.current.kind === 'captured'
       ? projectCapturedBaselineEntry({ ...entry, current: entry.current }, pathDigest)
       : undefined

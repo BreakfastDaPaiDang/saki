@@ -5,7 +5,11 @@ import type {
   SakiHostId,
   SakiResourceBindingId,
 } from '@breakfastdapaidang/saki-execution'
-import { projectGitStatusObservationSchema } from '@breakfastdapaidang/saki-execution'
+import {
+  MAX_PROJECT_GIT_STATUS_CHANGES,
+  MAX_PROJECT_GIT_STATUS_PATH_BYTES,
+  projectGitStatusObservationSchema,
+} from '@breakfastdapaidang/saki-execution'
 import { describe, expect, it } from 'vitest'
 import {
   buildInheritedChangeBaseline,
@@ -15,11 +19,14 @@ import {
 } from '../src/baseline.ts'
 import {
   buildProjectGitStatusObservation,
+  assertProjectGitStatusChangeFits,
   ProjectGitStatusProjectionError,
 } from '../src/status.ts'
 import {
   captureVerifiedRepositoryStatus,
   RepositoryStatusError,
+  type RepositoryStatusBounds,
+  type RepositoryStatusBranchExpectation,
   type VerifiedRepositoryStatus,
 } from '../src/status-evidence.ts'
 import { projectStatusQueryArguments } from '../src/status-query.ts'
@@ -194,6 +201,228 @@ describe('project Git status inventory projection', () => {
       verifiedStatus(inventory),
       BASELINE,
     )).toThrow(new ProjectGitStatusProjectionError('invalid-path'))
+  })
+
+  it.each(([
+    {
+      name: 'inventory comparison drift',
+      reason: 'unavailable',
+      arrange: () => {
+        const original = capturedInventory([untracked('new.txt')])
+        return {
+          inventory: { ...original, objectFormat: 'sha256' as const },
+          inspection: selectedInspection(BASELINE),
+          status: verifiedStatus(original),
+        }
+      },
+    },
+    {
+      name: 'a status path absent from raw inventory',
+      reason: 'unavailable',
+      arrange: () => ({
+        inventory: capturedInventory([]),
+        inspection: selectedInspection(BASELINE),
+        status: verifiedStatus(capturedInventory([untracked('missing.txt')])),
+      }),
+    },
+    {
+      name: 'a directory mode in an ordinary status row',
+      reason: 'unavailable',
+      arrange: () => {
+        const inventory = capturedInventory([tracked('tracked.txt', object(HEAD), object(INDEX), RAW)])
+        const status = verifiedStatus(inventory)
+        const row = status.entries[0]
+        if (row?.kind !== 'ordinary') throw new Error('test inventory produced no ordinary status row')
+        return {
+          inventory,
+          inspection: selectedInspection(BASELINE),
+          status: { ...status, entries: [{ ...row, worktreeMode: '040000' as const }] },
+        }
+      },
+    },
+    ...(['missing', 'submodule'] as const).map(kind => ({
+      name: `an untracked ${kind} worktree`,
+      reason: 'unavailable' as const,
+      arrange: () => {
+        const entry = untracked(`${kind}.txt`)
+        const current = kind === 'missing'
+          ? {
+            kind: 'captured' as const,
+            evidence: { kind: 'missing' as const },
+            rawByteLength: 0,
+            gitEvidenceBytes: 0,
+          }
+          : {
+            kind: 'captured' as const,
+            evidence: { kind: 'submodule' as const, objectId: RAW },
+            rawObjectId: RAW,
+            rawByteLength: 0,
+            gitEvidenceBytes: 0,
+          }
+        const inventory = capturedInventory([{
+          ...entry,
+          current,
+        }])
+        return {
+          inventory,
+          inspection: selectedInspection(BASELINE),
+          status: verifiedStatus(inventory),
+        }
+      },
+    })),
+    {
+      name: 'an attached status without a projected symbolic ref',
+      reason: 'unavailable',
+      arrange: () => {
+        const inventory = capturedInventory([untracked('new.txt')])
+        const inspection = selectedInspection(BASELINE)
+        return {
+          inventory,
+          inspection: {
+            ...inspection,
+            projection: {
+              ...inspection.projection,
+              head: { kind: 'commit' as const, objectId: HEAD },
+            },
+          },
+          status: verifiedStatus(inventory),
+        }
+      },
+    },
+    {
+      name: 'an upstream status without a projected upstream ref',
+      reason: 'unavailable',
+      arrange: () => {
+        const inventory = capturedInventory([untracked('new.txt')])
+        const status = verifiedStatus(inventory)
+        return {
+          inventory,
+          inspection: selectedInspection(BASELINE),
+          status: {
+            ...status,
+            branch: { ...status.branch, upstream: { name: 'origin/main', ahead: 1 } },
+          },
+        }
+      },
+    },
+    {
+      name: 'a repository-escaping decoded path',
+      reason: 'invalid-path',
+      arrange: () => {
+        const inventory = capturedInventory([untracked('../outside.txt')])
+        return {
+          inventory,
+          inspection: selectedInspection(BASELINE),
+          status: verifiedStatus(inventory),
+        }
+      },
+    },
+  ] as const))('rejects $name', ({ reason, arrange }) => {
+    const { inventory, inspection, status } = arrange()
+    expect(() => buildProjectGitStatusObservation(
+      inventory,
+      inspection,
+      { id: BINDING_ID, revision: 3, health: 'active', inheritedChangeBaseline: BASELINE },
+      new AbortController().signal,
+      status,
+      BASELINE,
+    )).toThrow(new ProjectGitStatusProjectionError(reason))
+  })
+
+  it('accepts an upstream without divergence counts when its ref is projected', () => {
+    const inventory = capturedInventory([untracked('new.txt')])
+    const inspection = selectedInspection(BASELINE)
+    const status = verifiedStatus(inventory)
+    const observation = buildProjectGitStatusObservation(
+      inventory,
+      { ...inspection, projection: { ...inspection.projection, upstream: 'refs/remotes/origin/main' } },
+      { id: BINDING_ID, revision: 3, health: 'active', inheritedChangeBaseline: BASELINE },
+      new AbortController().signal,
+      { ...status, branch: { ...status.branch, upstream: { name: 'origin/main', ahead: 1 } } },
+      BASELINE,
+    )
+
+    expect(observation.upstream).toEqual({
+      ref: 'refs/remotes/origin/main', name: 'origin/main',
+    })
+  })
+
+  it('projects unavailable untracked worktree evidence with an unknown mode', () => {
+    const entry = untracked('unavailable.txt')
+    const inventory = capturedInventory([{
+      ...entry,
+      current: { kind: 'unavailable', reason: 'io-failure' },
+    }])
+
+    expect(observe(inventory).changes[0]).toMatchObject({
+      kind: 'untracked',
+      worktreeMode: 'unknown',
+      worktreeEvidence: { kind: 'unavailable', reason: 'io-failure' },
+    })
+  })
+
+  it('rejects duplicate inherited baseline identities and attributes an unavailable baseline', () => {
+    const entry = tracked('tracked.txt', object(HEAD), object(INDEX), RAW)
+    const inventory = capturedInventory([entry])
+    const built = buildInheritedChangeBaseline(
+      inventory,
+      BASELINE.bounds,
+      1,
+      new AbortController().signal,
+    )
+    if (built.baseline.kind !== 'complete') throw new Error('test retained no complete baseline')
+    const first = built.baseline.entries[0]
+    if (first === undefined) throw new Error('test retained no baseline entry')
+    const duplicate = { ...built.baseline, entries: [first, first] }
+
+    expect(() => buildProjectGitStatusObservation(
+      inventory,
+      selectedInspection(duplicate),
+      { id: BINDING_ID, revision: 3, health: 'active', inheritedChangeBaseline: duplicate },
+      new AbortController().signal,
+      verifiedStatus(inventory),
+      BASELINE,
+    )).toThrow(new ProjectGitStatusProjectionError('unavailable'))
+
+    const unavailable: InheritedChangeBaseline = {
+      kind: 'unavailable',
+      reason: 'io-failure',
+      observed: BASELINE.observed,
+    }
+    const observation = buildProjectGitStatusObservation(
+      inventory,
+      selectedInspection(BASELINE),
+      { id: BINDING_ID, revision: 3, health: 'active', inheritedChangeBaseline: unavailable },
+      new AbortController().signal,
+      verifiedStatus(inventory),
+      BASELINE,
+    )
+    expect(observation.changes[0]?.attribution).toBe('unattributed')
+  })
+
+  it.each([
+    {
+      name: 'accepts both exact bounds',
+      retainedChanges: MAX_PROJECT_GIT_STATUS_CHANGES - 1,
+      nextPathBytes: MAX_PROJECT_GIT_STATUS_PATH_BYTES,
+      expected: true,
+    },
+    {
+      name: 'rejects the next row after the row bound',
+      retainedChanges: MAX_PROJECT_GIT_STATUS_CHANGES,
+      nextPathBytes: 1,
+      expected: false,
+    },
+    {
+      name: 'rejects aggregate path-byte overflow',
+      retainedChanges: 0,
+      nextPathBytes: MAX_PROJECT_GIT_STATUS_PATH_BYTES + 1,
+      expected: false,
+    },
+  ])('$name', ({ retainedChanges, nextPathBytes, expected }) => {
+    const assertion = () => { assertProjectGitStatusChangeFits(retainedChanges, nextPathBytes) }
+    if (expected) expect(assertion).not.toThrow()
+    else expect(assertion).toThrow(new ProjectGitStatusProjectionError('limit'))
   })
 
   it('keeps conversion and current-evidence uncertainty visible while blocking mutation', () => {
@@ -628,6 +857,445 @@ describe('project Git status inventory projection', () => {
     expect(JSON.stringify(failure)).not.toContain(diagnostic)
   })
 
+  it.each([
+    {
+      name: 'malformed status framing',
+      inventory: capturedInventory([]),
+      options: { statusStdout: Buffer.from('unsupported\0') },
+      kind: 'malformed',
+    },
+    {
+      name: 'an object width that disagrees with the repository',
+      inventory: capturedInventory([], 'sha256'),
+      options: {
+        statusStdout: Buffer.from(`# branch.oid ${HEAD}\0# branch.head main\0`),
+        branch: { head: { kind: 'commit', objectId: HEAD, symbolicRef: 'refs/heads/main' } },
+      },
+      kind: 'malformed',
+    },
+    {
+      name: 'the configured entry bound',
+      inventory: capturedInventory([untracked('new.txt')]),
+      options: { statusRow: '? new.txt\0', bounds: { maxEntries: 0, maxPathBytes: 10_000 } },
+      kind: 'limit',
+    },
+    {
+      name: 'the configured path-byte bound',
+      inventory: capturedInventory([untracked('new.txt')]),
+      options: { statusRow: '? new.txt\0', bounds: { maxEntries: 100, maxPathBytes: 6 } },
+      kind: 'limit',
+    },
+    {
+      name: 'non-UTF-8 write-tree output',
+      inventory: capturedInventory([]),
+      options: { writeTreeStdout: Buffer.from([0xff, 0x0a]) },
+      kind: 'malformed',
+    },
+    {
+      name: 'write-tree output without a line ending',
+      inventory: capturedInventory([]),
+      options: { writeTreeStdout: Buffer.from('f'.repeat(40)) },
+      kind: 'malformed',
+    },
+    {
+      name: 'a malformed write-tree object id',
+      inventory: capturedInventory([]),
+      options: { writeTreeStdout: Buffer.from(`${'g'.repeat(40)}\n`) },
+      kind: 'malformed',
+    },
+    {
+      name: 'a mismatched branch object id',
+      inventory: capturedInventory([]),
+      options: {
+        statusStdout: Buffer.from(`# branch.oid ${'b'.repeat(40)}\0# branch.head main\0`),
+      },
+      kind: 'malformed',
+    },
+    {
+      name: 'a mismatched attached branch name',
+      inventory: capturedInventory([]),
+      options: {
+        statusStdout: Buffer.from(`# branch.oid ${HEAD}\0# branch.head topic\0`),
+      },
+      kind: 'malformed',
+    },
+    {
+      name: 'a mismatched upstream name',
+      inventory: capturedInventory([]),
+      options: {
+        statusStdout: Buffer.from(
+          `# branch.oid ${HEAD}\0# branch.head main\0# branch.upstream origin/main\0`,
+        ),
+      },
+      kind: 'malformed',
+    },
+  ] as const)('rejects $name from private status evidence', async ({ inventory, options, kind }) => {
+    await expect(captureStatusEvidence(inventory, options.statusRow ?? '', options))
+      .rejects.toEqual(new RepositoryStatusError(kind))
+  })
+
+  it('accepts independently matched unborn, detached, CRLF, and sorted status facts', async () => {
+    const unborn = await captureStatusEvidence(capturedInventory([]), '', {
+      statusStdout: Buffer.from('# branch.oid (initial)\0# branch.head topic\0'),
+      branch: { head: { kind: 'unborn', symbolicRef: 'refs/heads/topic' } },
+      writeTreeStdout: Buffer.from(`${'f'.repeat(40)}\r\n`),
+    })
+    const detached = await captureStatusEvidence(capturedInventory([]), '', {
+      statusStdout: Buffer.from(`# branch.oid ${HEAD}\0# branch.head (detached)\0`),
+      branch: { head: { kind: 'commit', objectId: HEAD } },
+    })
+    const inventory = capturedInventory([untracked('z.txt'), untracked('a.txt')])
+    const sorted = await captureStatusEvidence(inventory, '? z.txt\0? a.txt\0')
+
+    expect(unborn.status.branch).toEqual({
+      oid: { kind: 'initial' },
+      head: { kind: 'attached', name: 'topic' },
+    })
+    expect(detached.status.branch.head).toEqual({ kind: 'detached' })
+    expect(sorted.status.entries.map(entry => Buffer.from(entry.path).toString()))
+      .toEqual(['a.txt', 'z.txt'])
+  })
+
+  it.each([
+    {
+      name: 'a status path absent from inventory',
+      inventory: capturedInventory([]),
+      statusRow: '? absent.txt\0',
+    },
+    {
+      name: 'an omitted unavailable worktree',
+      inventory: capturedInventory([{
+        ...tracked('unavailable.txt', object(HEAD), object(HEAD), HEAD),
+        current: { kind: 'unavailable' as const, reason: 'io-failure' as const },
+      }]),
+      statusRow: '',
+    },
+    {
+      name: 'an omitted conflict',
+      inventory: capturedInventory([conflicted('conflict.txt')]),
+      statusRow: '',
+    },
+    {
+      name: 'an omitted untracked path',
+      inventory: capturedInventory([untracked('untracked.txt')]),
+      statusRow: '',
+    },
+    {
+      name: 'an omitted staged path',
+      inventory: capturedInventory([tracked('staged.txt', object(HEAD), object(INDEX), INDEX)]),
+      statusRow: '',
+    },
+  ])('rejects $name from status membership', async ({ inventory, statusRow }) => {
+    await expect(captureStatusEvidence(inventory, statusRow))
+      .rejects.toEqual(new RepositoryStatusError('ambiguous'))
+  })
+
+  it.each([
+    {
+      name: 'a non-untracked raw entry',
+      entry: rawEntry(undefined, undefined, {
+        kind: 'captured' as const,
+        evidence: { kind: 'missing' as const },
+        rawByteLength: 0,
+        gitEvidenceBytes: 0,
+      }),
+    },
+    {
+      name: 'an untracked entry with a HEAD slot',
+      entry: { ...untracked('module'), head: object(HEAD) },
+    },
+    {
+      name: 'an untracked entry with an index slot',
+      entry: { ...untracked('module'), index: object(INDEX) },
+    },
+    {
+      name: 'an untracked entry with conflict stages',
+      entry: { ...untracked('module'), stages: [object(HEAD), undefined, undefined] as const },
+    },
+  ])('rejects $name behind an untracked row', async ({ entry }) => {
+    await expect(captureStatusEvidence(capturedInventory([entry]), '? module\0'))
+      .rejects.toEqual(new RepositoryStatusError('malformed'))
+  })
+
+  it.each([
+    {
+      name: 'an untracked raw entry',
+      entry: untracked('ordinary.txt'),
+      row: ordinaryStatusRow('ordinary.txt', '.A', undefined, undefined, '100644'),
+    },
+    {
+      name: 'conflict stages',
+      entry: conflicted('ordinary.txt'),
+      row: ordinaryStatusRow('ordinary.txt', 'MM', object(HEAD), object(INDEX), '100644'),
+    },
+    {
+      name: 'a mismatched HEAD slot',
+      entry: tracked('ordinary.txt', object(HEAD), object(INDEX), RAW),
+      row: ordinaryStatusRow('ordinary.txt', 'MM', undefined, object(INDEX), '100644'),
+    },
+    {
+      name: 'a mismatched index slot',
+      entry: tracked('ordinary.txt', object(HEAD), object(INDEX), RAW),
+      row: ordinaryStatusRow('ordinary.txt', 'MM', object(HEAD), object(RAW), '100644'),
+    },
+    {
+      name: 'a mismatched index status',
+      entry: tracked('ordinary.txt', object(HEAD), object(INDEX), RAW),
+      row: ordinaryStatusRow('ordinary.txt', 'TM', object(HEAD), object(INDEX), '100644'),
+    },
+  ])('rejects $name behind an ordinary row', async ({ entry, row }) => {
+    await expect(captureStatusEvidence(capturedInventory([entry]), row))
+      .rejects.toEqual(new RepositoryStatusError('malformed'))
+  })
+
+  it.each([
+    {
+      name: 'a mismatched worktree status',
+      row: ordinaryStatusRow('ordinary.txt', 'M.', object(HEAD), object(INDEX), '100644'),
+    },
+    {
+      name: 'a mismatched worktree mode',
+      row: ordinaryStatusRow('ordinary.txt', 'MM', object(HEAD), object(INDEX), '100755'),
+    },
+  ])('rejects $name behind an otherwise matching ordinary row', async ({ row }) => {
+    const inventory = capturedInventory([tracked('ordinary.txt', object(HEAD), object(INDEX), RAW)])
+    await expect(captureStatusEvidence(inventory, row))
+      .rejects.toEqual(new RepositoryStatusError('ambiguous'))
+  })
+
+  it('derives Gitlink modes for absent, skipped, unavailable, and unmerged worktrees', async () => {
+    const absent = await captureStatusEvidence(capturedInventory([rawEntry(
+      gitlink(HEAD),
+      undefined,
+      { kind: 'captured', evidence: { kind: 'missing' }, rawByteLength: 0, gitEvidenceBytes: 0 },
+      [gitlink(HEAD), undefined, gitlink(RAW)],
+    )]))
+    const skipped = await captureStatusEvidence(capturedInventory([{
+      ...rawEntry(gitlink(HEAD), undefined, {
+        kind: 'captured',
+        evidence: { kind: 'submodule', objectId: HEAD },
+        rawObjectId: HEAD,
+        rawByteLength: 0,
+        gitEvidenceBytes: 40,
+      }),
+      skipWorktree: true,
+    }]))
+    const unavailableAdd = await captureStatusEvidence(capturedInventory([rawEntry(
+      gitlink(HEAD), undefined, { kind: 'unavailable', reason: 'io-failure', observedMode: '100644' },
+    )]))
+    const unavailableTypeChange = await captureStatusEvidence(capturedInventory([rawEntry(
+      gitlink(HEAD), gitlink(HEAD), { kind: 'unavailable', reason: 'io-failure', observedMode: '100644' },
+    )]))
+    const ordinaryConflict = await captureStatusEvidence(capturedInventory([rawEntry(
+      gitlink(HEAD),
+      undefined,
+      { kind: 'unavailable', reason: 'io-failure', observedMode: '100644' },
+      [object(HEAD), object(INDEX), object(RAW)],
+    )]))
+
+    expect(absent.status.entries).toMatchObject([{ kind: 'unmerged', worktreeStatus: 'absent' }])
+    expect(skipped.status.entries).toMatchObject([{
+      kind: 'ordinary', worktreeStatus: 'unchanged', worktreeMode: '000000',
+    }])
+    expect(unavailableAdd.status.entries).toMatchObject([{
+      kind: 'ordinary', worktreeStatus: 'added', worktreeMode: '100644',
+    }])
+    expect(unavailableTypeChange.status.entries).toMatchObject([{
+      kind: 'ordinary', worktreeStatus: 'type-changed', worktreeMode: '100644',
+    }])
+    expect(ordinaryConflict.status.entries).toMatchObject([{
+      kind: 'unmerged', submodule: { kind: 'not-submodule' },
+    }])
+  })
+
+  it('rejects an internally contradictory untracked Gitlink inventory entry', async () => {
+    const entry = {
+      ...rawEntry(gitlink(HEAD), gitlink(HEAD), {
+        kind: 'captured' as const,
+        evidence: { kind: 'submodule' as const, objectId: HEAD },
+        rawObjectId: HEAD,
+        rawByteLength: 0,
+        gitEvidenceBytes: 40,
+      }),
+      untracked: true,
+    }
+    await expect(captureStatusEvidence(capturedInventory([entry])))
+      .rejects.toEqual(new RepositoryStatusError('malformed'))
+  })
+
+  it('reconstructs assumed symlinks and validates ignored worktree mode differences', async () => {
+    const symlink = rawEntry(
+      { mode: '120000', objectId: HEAD },
+      { mode: '120000', objectId: INDEX },
+      {
+        kind: 'captured',
+        evidence: { kind: 'symlink', targetDigest: 'e'.repeat(64) },
+        rawObjectId: RAW,
+        rawByteLength: 7,
+        gitEvidenceBytes: 0,
+      },
+    )
+    const assumed = await captureStatusEvidence(
+      capturedInventory([symlink]),
+      '',
+      {},
+      [new TextEncoder().encode('module')],
+    )
+    const { index: _deletedIndex, ...deletedWithoutIndex } = tracked(
+      'deleted.txt',
+      object(HEAD),
+      object(HEAD),
+      RAW,
+    )
+    const deletedSkipWorktree = {
+      ...deletedWithoutIndex,
+      skipWorktree: true,
+    }
+    const skipped = await captureStatusEvidence(
+      capturedInventory([deletedSkipWorktree]),
+      ordinaryStatusRow('deleted.txt', 'D.', object(HEAD), undefined, '000000'),
+    )
+    const modeIgnored = tracked('mode.txt', object(HEAD), object(INDEX), RAW)
+    const ignored = await captureStatusEvidence(
+      {
+        ...capturedInventory([modeIgnored]),
+        comparison: { fileMode: false, symlinks: true, autocrlf: false },
+      },
+      ordinaryStatusRow('mode.txt', 'MM', object(HEAD), object(INDEX), '100755'),
+    )
+    const symlinkCurrent = {
+      ...tracked('link.txt', object(HEAD), object(INDEX), RAW),
+      current: {
+        kind: 'captured' as const,
+        evidence: { kind: 'symlink' as const, targetDigest: 'e'.repeat(64) },
+        rawObjectId: RAW,
+        rawByteLength: 7,
+        gitEvidenceBytes: 0,
+      },
+    }
+    const linked = await captureStatusEvidence(
+      capturedInventory([symlinkCurrent]),
+      ordinaryStatusRow('link.txt', 'MT', object(HEAD), object(INDEX), '120000'),
+    )
+
+    expect(assumed.status.entries).toMatchObject([{
+      kind: 'ordinary', worktreeStatus: 'modified', worktreeMode: '120000',
+    }])
+    expect(skipped.status.entries).toMatchObject([{
+      kind: 'ordinary', indexStatus: 'deleted', worktreeStatus: 'unchanged', worktreeMode: '000000',
+    }])
+    expect(ignored.status.entries).toHaveLength(1)
+    expect(linked.status.entries).toMatchObject([{
+      kind: 'ordinary', worktreeStatus: 'type-changed', worktreeMode: '120000',
+    }])
+  })
+
+  it.each([
+    ['both-deleted', 'DD', [object(HEAD), undefined, undefined]],
+    ['added-by-us', 'AU', [undefined, object(INDEX), undefined]],
+    ['deleted-by-them', 'UD', [object(HEAD), object(INDEX), undefined]],
+    ['added-by-them', 'UA', [undefined, undefined, object(RAW)]],
+    ['deleted-by-us', 'DU', [object(HEAD), undefined, object(RAW)]],
+    ['both-added', 'AA', [undefined, object(INDEX), object(RAW)]],
+    ['both-modified', 'UU', [object(HEAD), object(INDEX), object(RAW)]],
+  ] as const)('accepts the %s conflict mask from matching raw stages', async (conflict, xy, stages) => {
+    const entry = rawEntry(undefined, undefined, regularCurrent(RAW), stages)
+    const { status } = await captureStatusEvidence(
+      capturedInventory([entry]),
+      unmergedStatusRow('module', xy, stages, '100644'),
+    )
+    expect(status.entries).toMatchObject([{ kind: 'unmerged', conflict }])
+  })
+
+  it.each([
+    {
+      name: 'an untracked flag',
+      transform: (entry: CapturedRepositoryInventoryEntry) => ({ ...entry, untracked: true }),
+      rowStages: [object(HEAD), object(INDEX), object(RAW)] as const,
+      xy: 'UU',
+    },
+    {
+      name: 'a stage-zero index slot',
+      transform: (entry: CapturedRepositoryInventoryEntry) => ({ ...entry, index: object(INDEX) }),
+      rowStages: [object(HEAD), object(INDEX), object(RAW)] as const,
+      xy: 'UU',
+    },
+    {
+      name: 'a mismatched base slot',
+      transform: (entry: CapturedRepositoryInventoryEntry) => entry,
+      rowStages: [object('d'.repeat(40)), object(INDEX), object(RAW)] as const,
+      xy: 'UU',
+    },
+    {
+      name: 'a mismatched ours slot',
+      transform: (entry: CapturedRepositoryInventoryEntry) => entry,
+      rowStages: [object(HEAD), object('d'.repeat(40)), object(RAW)] as const,
+      xy: 'UU',
+    },
+    {
+      name: 'a mismatched theirs slot',
+      transform: (entry: CapturedRepositoryInventoryEntry) => entry,
+      rowStages: [object(HEAD), object(INDEX), object('d'.repeat(40))] as const,
+      xy: 'UU',
+    },
+    {
+      name: 'a mismatched conflict class',
+      transform: (entry: CapturedRepositoryInventoryEntry) => entry,
+      rowStages: [object(HEAD), object(INDEX), object(RAW)] as const,
+      xy: 'AA',
+    },
+  ])('rejects $name behind an unmerged row', async ({ transform, rowStages, xy }) => {
+    const rawStages = [object(HEAD), object(INDEX), object(RAW)] as const
+    const entry = transform(rawEntry(undefined, undefined, regularCurrent(RAW), rawStages))
+    await expect(captureStatusEvidence(
+      capturedInventory([entry]),
+      unmergedStatusRow('module', xy, rowStages, '100644'),
+    )).rejects.toEqual(new RepositoryStatusError('malformed'))
+  })
+
+  it.each([
+    {
+      name: 'a present row for a missing worktree',
+      current: {
+        kind: 'captured' as const,
+        evidence: { kind: 'missing' as const },
+        rawByteLength: 0,
+        gitEvidenceBytes: 0,
+      },
+      worktreeMode: '100644' as const,
+    },
+    {
+      name: 'an absent row for a present worktree',
+      current: regularCurrent(RAW),
+      worktreeMode: '000000' as const,
+    },
+  ])('rejects $name behind an unmerged row', async ({ current, worktreeMode }) => {
+    const stages = [object(HEAD), object(INDEX), object(RAW)] as const
+    const entry = rawEntry(undefined, undefined, current, stages)
+    await expect(captureStatusEvidence(
+      capturedInventory([entry]),
+      unmergedStatusRow('module', 'UU', stages, worktreeMode),
+    )).rejects.toEqual(new RepositoryStatusError('ambiguous'))
+  })
+
+  it('rejects an unmerged submodule declaration without raw Gitlink evidence', async () => {
+    const stages = [object(HEAD), object(INDEX), object(RAW)] as const
+    const entry = rawEntry(undefined, undefined, regularCurrent(RAW), stages)
+    await expect(captureStatusEvidence(
+      capturedInventory([entry]),
+      unmergedStatusRow('module', 'UU', stages, '100644', 'S...'),
+    )).rejects.toEqual(new RepositoryStatusError('malformed'))
+  })
+
+  it('rejects an unmerged row when raw inventory has no conflict stages', async () => {
+    const stages = [undefined, undefined, undefined] as const
+    const entry = rawEntry(undefined, undefined, regularCurrent(RAW), stages)
+    await expect(captureStatusEvidence(
+      capturedInventory([entry]),
+      unmergedStatusRow('module', 'DD', stages, '100644'),
+    )).rejects.toEqual(new RepositoryStatusError('malformed'))
+  })
+
   it('fails closed when the index-flag query omits known stage-zero membership', async () => {
     const inventory = capturedInventory([tracked('tracked.txt', object(HEAD), object(INDEX), RAW)])
     await expect(captureIndexFlagEvidence(inventory, Buffer.alloc(0)))
@@ -881,7 +1549,15 @@ async function captureIndexFlagEvidence(
 async function captureStatusEvidence(
   inventory: CapturedRepositoryInventory,
   statusRow = '',
-  diagnostics: Readonly<{ status?: Buffer; writeTree?: Buffer }> = {},
+  options: Readonly<{
+    status?: Buffer
+    writeTree?: Buffer
+    statusStdout?: Buffer
+    writeTreeStdout?: Buffer
+    branch?: RepositoryStatusBranchExpectation
+    bounds?: RepositoryStatusBounds
+    signal?: AbortSignal
+  }> = {},
   assumeUnchangedPaths: readonly Uint8Array[] = [],
 ): Promise<{ readonly status: VerifiedRepositoryStatus; readonly commands: readonly (readonly string[])[] }> {
   const width = inventory.objectFormat === 'sha1' ? 40 : 64
@@ -893,14 +1569,14 @@ async function captureStatusEvidence(
       if (args.length === projectStatusQueryArguments().length
         && args.every((value, index) => value === projectStatusQueryArguments()[index])) {
         return {
-          stdout: Buffer.from(`# branch.oid ${head}\0# branch.head main\0${statusRow}`),
-          stderr: diagnostics.status ?? Buffer.alloc(0),
+          stdout: options.statusStdout ?? Buffer.from(`# branch.oid ${head}\0# branch.head main\0${statusRow}`),
+          stderr: options.status ?? Buffer.alloc(0),
         }
       }
       if (args.length === 1 && args[0] === 'write-tree') {
         return {
-          stdout: Buffer.from(`${'f'.repeat(width)}\n`),
-          stderr: diagnostics.writeTree ?? Buffer.alloc(0),
+          stdout: options.writeTreeStdout ?? Buffer.from(`${'f'.repeat(width)}\n`),
+          stderr: options.writeTree ?? Buffer.alloc(0),
         }
       }
       throw new Error(`unexpected Git status evidence command: ${args.join(' ')}`)
@@ -910,13 +1586,57 @@ async function captureStatusEvidence(
     git,
     'repository',
     inventory.objectFormat,
-    { head: { kind: 'commit', objectId: head, symbolicRef: 'refs/heads/main' } },
+    options.branch ?? { head: { kind: 'commit', objectId: head, symbolicRef: 'refs/heads/main' } },
     inventory,
-    { maxEntries: 100, maxPathBytes: 10_000 },
-    new AbortController().signal,
+    options.bounds ?? { maxEntries: 100, maxPathBytes: 10_000 },
+    options.signal ?? new AbortController().signal,
     assumeUnchangedPaths,
   )
   return { status, commands }
+}
+
+function ordinaryStatusRow(
+  path: string,
+  xy: string,
+  head: CapturedInventoryGitObject | undefined,
+  index: CapturedInventoryGitObject | undefined,
+  worktreeMode: '000000' | '100644' | '100755' | '120000' | '160000',
+  submodule = 'N...',
+): string {
+  const zero = '0'.repeat(40)
+  return `1 ${xy} ${submodule} ${head?.mode ?? '000000'} ${index?.mode ?? '000000'} ${worktreeMode} ${head?.objectId ?? zero} ${index?.objectId ?? zero} ${path}\0`
+}
+
+function unmergedStatusRow(
+  path: string,
+  xy: string,
+  stages: readonly [
+    CapturedInventoryGitObject | undefined,
+    CapturedInventoryGitObject | undefined,
+    CapturedInventoryGitObject | undefined,
+  ],
+  worktreeMode: '000000' | '100644' | '100755' | '120000' | '160000',
+  submodule = 'N...',
+): string {
+  const zero = '0'.repeat(40)
+  const slots = stages.map(stage => ({
+    mode: stage?.mode ?? '000000',
+    objectId: stage?.objectId ?? zero,
+  }))
+  return `u ${xy} ${submodule} ${slots[0]!.mode} ${slots[1]!.mode} ${slots[2]!.mode} ${worktreeMode} ${slots[0]!.objectId} ${slots[1]!.objectId} ${slots[2]!.objectId} ${path}\0`
+}
+
+function regularCurrent(rawObjectId: string): Extract<
+  CapturedRepositoryInventoryEntry['current'],
+  { readonly kind: 'captured' }
+> {
+  return {
+    kind: 'captured',
+    evidence: { kind: 'regular', mode: '100644', byteLength: 7, contentDigest: 'e'.repeat(64) },
+    rawObjectId,
+    rawByteLength: 7,
+    gitEvidenceBytes: 0,
+  }
 }
 
 function rawEntry(

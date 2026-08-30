@@ -55,7 +55,6 @@ function canonicalBase64DecodedByteLength(value: string): number | undefined {
   if (value.length === 0 || value.length % 4 !== 0) return undefined
   const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
   const dataLength = value.length - padding
-  if (dataLength % 4 !== (4 - padding) % 4) return undefined
   let lastSextet = 0
   for (let index = 0; index < dataLength; index += 1) {
     const sextet = base64Sextet(value.charCodeAt(index))

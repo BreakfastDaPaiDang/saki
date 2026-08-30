@@ -13,13 +13,15 @@ import {
   type SakiHostId,
   type SakiResourceBindingId,
 } from '@breakfastdapaidang/saki-execution'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GitRunner, gitInspectionEnvironment } from '../src/git-runner.ts'
-import { LocalSakiHostExecution, type Config } from '../src/index.ts'
+import LocalSakiHostExecution, { type Config } from '../src/index.ts'
+import { completeBoundProjectInspection, projectInspectionFailure } from '../src/inspection-result.ts'
 import {
   BoundProjectResourceMismatchError,
   inspectStableLocalProjectSelection,
 } from '../src/inspection.ts'
+import { ProjectGitStatusProjectionError } from '../src/status.ts'
 import { mountLocalHostOperationStorage } from './storage.ts'
 
 const run = promisify(execFile)
@@ -59,6 +61,63 @@ afterEach(async () => {
 })
 
 describe('LocalSakiHostExecution project status', () => {
+  it.each([
+    ['missing', 'missing'],
+    ['malformed', 'malformed'],
+    ['ambiguous', 'ambiguous'],
+    ['unavailable', 'unavailable'],
+    ['limit', 'limit'],
+    ['unsupported-index-state', 'unavailable'],
+    ['not-directory', 'binding-stale'],
+    ['not-git', 'binding-stale'],
+    ['bare', 'binding-stale'],
+    ['prunable', 'binding-stale'],
+  ] as const)('projects stable selection failure %s as %s', (reason, expected) => {
+    expect(projectInspectionFailure(reason)).toEqual({ ok: false, reason: expected })
+  })
+
+  it('completes one stable bound projection and contains only its bounded failures', async () => {
+    const root = await repository()
+    const execution = await provider(root)
+    const signal = new AbortController().signal
+    const selected = await execution.inspectProjectSelection({ hostId: HOST_ID, directoryLocator: root }, signal)
+    expect(selected.ok, JSON.stringify(selected)).toBe(true)
+    if (!selected.ok) return
+    const binding = {
+      id: BINDING_ID,
+      revision: 0,
+      health: 'active' as const,
+      hostId: HOST_ID,
+      workspaceId: WORKSPACE_ID,
+      expectedInspection: selected.inspection,
+      inheritedChangeBaseline: selected.inspection.projection.baseline,
+    }
+    const inspected = await execution.inspectProject({ binding }, signal)
+    expect(inspected.ok, JSON.stringify(inspected)).toBe(true)
+    if (!inspected.ok) return
+    const material = {
+      observation: inspected.observation,
+      preEffectBaseline: inspected.preEffectBaseline,
+    }
+
+    expect(completeBoundProjectInspection(binding, selected.inspection, () => material)).toEqual(inspected)
+    const skippedBuild = vi.fn(() => material)
+    expect(completeBoundProjectInspection({
+      ...binding,
+      hostId: 'host-22222222-2222-4222-8222-222222222222' as SakiHostId,
+    }, selected.inspection, skippedBuild)).toEqual({ ok: false, reason: 'binding-stale' })
+    expect(skippedBuild).not.toHaveBeenCalled()
+
+    for (const reason of ['invalid-path', 'limit', 'unavailable'] as const) {
+      expect(completeBoundProjectInspection(binding, selected.inspection, () => {
+        throw new ProjectGitStatusProjectionError(reason)
+      })).toEqual({ ok: false, reason })
+    }
+    const unknown = new Error('unknown projection failure')
+    expect(() => completeBoundProjectInspection(binding, selected.inspection, () => { throw unknown }))
+      .toThrow(unknown)
+  }, 30_000)
+
   it('returns staged, unstaged, and untracked changes through the bound Host interface', async () => {
     const root = await repository()
     const execution = await provider(root)

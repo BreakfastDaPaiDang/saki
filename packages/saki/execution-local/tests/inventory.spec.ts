@@ -1422,6 +1422,51 @@ describe('closed repository inventory', () => {
     })
   })
 
+  it.each([
+    {
+      name: 'before the first nested object is available',
+      reader: async () => undefined,
+    },
+    {
+      name: 'before the nested object confirmation is available',
+      reader: (() => {
+        let reads = 0
+        return async () => ++reads === 1
+          ? { objectId: '2'.repeat(40), semanticGitOutputBytes: 1 }
+          : undefined
+      })(),
+    },
+  ])('rejects submodule identity drift $name', async ({ reader }) => {
+    const root = await mkdtemp(join(tmpdir(), 'saki-inventory-'))
+    roots.push(root)
+    const modulePath = join(root, 'module')
+    await mkdir(modulePath)
+    const object = '1'.repeat(40)
+    let moduleStats = 0
+    const inventory = await captureRepositoryInventory(
+      root,
+      { run: inventoryCommands({
+        tree: `160000 commit ${object}\tmodule\0`,
+        index: `H 160000 ${object} 0\tmodule\0`,
+      }) },
+      'sha1',
+      inventoryBounds(),
+      new AbortController().signal,
+      reader,
+      nodeFacts({
+        async lstat(path) {
+          const value = await lstat(path, { bigint: true })
+          if (path !== modulePath || ++moduleStats !== 2) return value
+          return changedStat(value, 'ino')
+        },
+      }),
+    )
+
+    expect(inventory.entries[0]?.current).toEqual({
+      kind: 'unavailable', reason: 'unstable-content',
+    })
+  })
+
   it('retains missing evidence when the deleted path parent is also absent', async () => {
     const root = await mkdtemp(join(tmpdir(), 'saki-inventory-'))
     roots.push(root)

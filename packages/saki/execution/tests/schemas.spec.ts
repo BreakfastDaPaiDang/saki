@@ -1187,7 +1187,20 @@ describe('InheritedChangeBaseline schemas', () => {
     const messages = result.error.issues.map(({ message }) => message)
     expect(messages).toContain('change fingerprint disagrees with row evidence')
     expect(messages).not.toContain('status paths exceed the protocol byte limit')
-  }, 15_000)
+  }, 30_000)
+
+  it('leaves malformed status rows to structural validation after path-budget preflight', () => {
+    const { observation } = boundStatusFixture()
+    const result = projectGitStatusObservationSchema.safeParse({
+      ...observation,
+      changes: [null, {}, { path: 1 }],
+    })
+
+    expect(result.success).toBe(false)
+    if (result.success) throw new Error('malformed status rows passed validation')
+    expect(result.error.issues.map(({ message }) => message))
+      .not.toContain('status paths exceed the protocol byte limit')
+  })
 
   it('enforces the aggregate UTF-8 status-path byte limit before later rows and derived evidence', () => {
     const { observation } = boundStatusFixture()

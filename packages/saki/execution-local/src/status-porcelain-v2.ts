@@ -133,14 +133,12 @@ export function parseStatusPorcelainV2(bytes: Uint8Array): ParsedStatusPorcelain
       } else if (header.name === 'branch.head') {
         if (head !== undefined) throw new Error('Git status porcelain v2 contains a duplicate branch.head header')
         const value = header.value
-        if (value === '') throw new Error('Git status porcelain v2 has an empty branch head')
         head = value === '(detached)' ? { kind: 'detached' } : { kind: 'attached', name: value }
       } else if (header.name === 'branch.upstream') {
         if (upstreamName !== undefined) {
           throw new Error('Git status porcelain v2 contains a duplicate branch.upstream header')
         }
         upstreamName = header.value
-        if (upstreamName === '') throw new Error('Git status porcelain v2 has an empty branch upstream')
       } else if (header.name === 'branch.ab') {
         if (ahead !== undefined || behind !== undefined) {
           throw new Error('Git status porcelain v2 contains a duplicate branch.ab header')

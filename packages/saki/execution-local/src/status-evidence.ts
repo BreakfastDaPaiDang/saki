@@ -418,6 +418,7 @@ function worktreeStatus(
   raw: CapturedRepositoryInventoryEntry,
   inventory: CapturedRepositoryInventory,
 ): ParsedOrdinaryStatusEntry['worktreeStatus'] {
+  /* v8 ignore next -- every private caller proves current evidence is captured before delegating here. */
   if (raw.current.kind !== 'captured') throw new RepositoryStatusError('ambiguous')
   const classification = classifyCapturedInventoryEntry(raw, inventory.comparison)
   if (!classification.unstaged) return 'unchanged'
@@ -434,10 +435,12 @@ function worktreeModeMatches(
   raw: CapturedRepositoryInventoryEntry,
   inventory: CapturedRepositoryInventory,
 ): boolean {
+  /* v8 ignore next -- validateOrdinary calls this helper only inside its captured-current guard. */
   if (raw.current.kind !== 'captured') return true
   if (raw.skipWorktree === true) return mode === (raw.index?.mode ?? '000000')
   switch (raw.current.evidence.kind) {
     case 'missing': return mode === '000000'
+    /* v8 ignore next -- captured submodules are conversion-ambiguous, so validateOrdinary skips mode matching. */
     case 'submodule': return mode === '160000'
     case 'symlink': return mode === '120000'
     case 'regular':
@@ -454,11 +457,13 @@ function validateSubmodule(
 ): void {
   if ((status.kind === 'submodule') !== gitlink) throw new RepositoryStatusError('malformed')
   if (status.kind === 'submodule') {
+    /* v8 ignore next -- raw Gitlink reconstruction always clears both dirtiness flags before validation. */
     if (status.trackedChanges || status.untrackedChanges) throw new RepositoryStatusError('malformed')
     const commitChanged = raw.index?.mode === '160000' && raw.current.kind === 'captured'
       && raw.current.evidence.kind === 'submodule'
       ? raw.index.objectId !== raw.current.evidence.objectId
       : 'unknown'
+    /* v8 ignore next -- raw Gitlink reconstruction derives commitChanged from these same inventory fields. */
     if (status.commitChanged !== commitChanged) {
       throw new RepositoryStatusError('ambiguous')
     }
@@ -489,6 +494,7 @@ function sameObjectSlot(
 }
 
 function modeKind(mode: ParsedGitMode): 'missing' | 'regular' | 'symlink' | 'submodule' {
+  /* v8 ignore next -- private callers pass present inventory slots or unavailable observed modes, never 000000. */
   if (mode === '000000') return 'missing'
   if (mode === '120000') return 'symlink'
   if (mode === '160000') return 'submodule'

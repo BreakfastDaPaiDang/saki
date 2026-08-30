@@ -38,6 +38,8 @@ function framedDigest(domain: string, payload: Uint8Array): string {
     .digest('hex')
 }
 
+/* Historical v4 canonical encoding must remain independent from the mutable current implementation. */
+/* jscpd:ignore-start */
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
   if (typeof value === 'number') {
@@ -48,8 +50,13 @@ function canonicalJson(value: unknown): string {
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([, member]) => member !== undefined)
-      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .sort(([left], [right]) => {
+        /* v8 ignore next -- Object.entries keys are unique; equality cannot change the encoded order. */
+        if (left === right) return 0
+        return left < right ? -1 : 1
+      })
     return `{${entries.map(([key, member]) => `${JSON.stringify(key)}:${canonicalJson(member)}`).join(',')}}`
   }
   throw new Error(`canonical JSON rejects ${typeof value}`)
 }
+/* jscpd:ignore-end */

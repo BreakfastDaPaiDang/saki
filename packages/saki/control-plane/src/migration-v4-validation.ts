@@ -271,7 +271,11 @@ function validateBootstrapCompletion(
   if (completion === undefined) {
     if (record.sessions.length !== 0
       || record.challenges.some(challenge =>
-        challenge.purpose !== 'initial-bootstrap' || challenge.state === 'consumed')) {
+        challenge.purpose !== 'initial-bootstrap'
+        /* v8 ignore start -- A consumed challenge must reference a Session, rejected above when this list is empty. */
+        || challenge.state === 'consumed',
+        /* v8 ignore stop */
+      )) {
       throw new Error('Saki Installation Access contains reauthentication state before bootstrap completion')
     }
     return
@@ -368,6 +372,7 @@ function validateHistoricalProjectMappings(
   registries: readonly HistoricalProjectRegistryState[],
   intents: readonly HistoricalProjectIntentState[],
 ): void {
+  /* v8 ignore next -- The frozen caller passes the singleton Registry already required and extracted above. */
   if (registries.length !== 1) throw new Error('historical Saki Project Registry has an invalid singleton key')
   const registry = registries[0] as HistoricalProjectRegistryState
   const byId = new Map(intents.map(intent => [intent.id, intent] as const))

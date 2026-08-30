@@ -33,7 +33,6 @@ import type {
   InspectProjectResult,
   InspectProjectSelectionRequest,
   InspectProjectSelectionResult,
-  ProjectSelectionInspection,
   ReadProjectDiffRequest,
   ReadProjectDiffResult,
 } from '@breakfastdapaidang/saki-execution'
@@ -46,10 +45,10 @@ import {
   BoundProjectResourceMismatchError,
   inspectLocalProjectSelection,
   inspectStableLocalProjectSelection,
-  type StableLocalProjectSelectionFailureReason,
 } from './inspection.ts'
+import { completeBoundProjectInspection, projectInspectionFailure } from './inspection-result.ts'
 import { readLocalAdministrativeDirectoryIdentity } from './identity.ts'
-import { buildProjectGitStatusObservation, ProjectGitStatusProjectionError } from './status.ts'
+import { buildProjectGitStatusObservation } from './status.ts'
 import {
   hostOperationSnapshotCore,
   localHostOperationRequestFingerprint,
@@ -272,6 +271,8 @@ export class LocalSakiHostExecution extends SakiHostExecution {
         const advanced = await advanceLocalGitMutation(
           this.gitMutationDependencies(),
           record,
+          /* v8 ignore next -- terminal advance only cleans private artifacts;
+           * its persistence sink is unreachable. */
           next => this.persistOperation(next),
           fused,
         )
@@ -340,7 +341,12 @@ export class LocalSakiHostExecution extends SakiHostExecution {
           snapshot: advanced.record.snapshot as HostOperationSnapshot<K>,
         }
       }
-      if (isTerminalHostOperation(advanced.record.snapshot)) this.liveOperations.delete(operation.id)
+      /* v8 ignore next -- every non-retryable mutation advance carries a terminal record;
+       * fail loud if that engine contract regresses. */
+      if (!isTerminalHostOperation(advanced.record.snapshot)) {
+        throw new Error('Saki Local Git mutation advanced without a terminal snapshot')
+      }
+      this.liveOperations.delete(operation.id)
       return { ok: true, snapshot: advanced.record.snapshot as HostOperationSnapshot<K> }
     }))
   }
@@ -443,13 +449,9 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       throw error
     }
     if (!selected.ok) return projectInspectionFailure(selected.reason)
-    if (!bindingResourceMatches(binding, selected.inspection)) {
-      return { ok: false, reason: 'binding-stale' }
-    }
-    try {
+    return completeBoundProjectInspection(binding, selected.inspection, () => {
       const preEffectBaseline = selected.inspection.projection.baseline
       return {
-        ok: true,
         observation: buildProjectGitStatusObservation(
           selected.inventory,
           selected.inspection,
@@ -461,10 +463,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
         ),
         preEffectBaseline,
       }
-    } catch (error) {
-      if (error instanceof ProjectGitStatusProjectionError) return { ok: false, reason: error.reason }
-      throw error
-    }
+    })
   }
 
   private async track<T>(operation: Promise<T>): Promise<T> {
@@ -593,36 +592,6 @@ function isTerminalHostOperation(snapshot: HostOperationSnapshot): boolean {
     || snapshot.state === 'failed'
     || snapshot.state === 'canceled'
     || snapshot.state === 'reconciliation-required'
-}
-
-function bindingResourceMatches(
-  binding: ActiveHostProjectBinding,
-  current: ProjectSelectionInspection,
-): boolean {
-  const expected = binding.expectedInspection.trusted
-  const actual = current.trusted
-  return current.projection.hostId === binding.hostId
-    && current.projection.workspaceId === binding.workspaceId
-    && actual.canonicalWorktreePath === expected.canonicalWorktreePath
-    && actual.canonicalGitDirectory === expected.canonicalGitDirectory
-    && actual.canonicalCommonGitDirectory === expected.canonicalCommonGitDirectory
-    && actual.gitDirectoryIdentity.digest === expected.gitDirectoryIdentity.digest
-    && actual.commonGitDirectoryIdentity.digest === expected.commonGitDirectoryIdentity.digest
-}
-
-function projectInspectionFailure(reason: StableLocalProjectSelectionFailureReason): InspectProjectResult {
-  switch (reason) {
-    case 'missing': return { ok: false, reason: 'missing' }
-    case 'malformed': return { ok: false, reason: 'malformed' }
-    case 'ambiguous': return { ok: false, reason: 'ambiguous' }
-    case 'unavailable': return { ok: false, reason: 'unavailable' }
-    case 'limit': return { ok: false, reason: 'limit' }
-    case 'unsupported-index-state': return { ok: false, reason: 'unavailable' }
-    case 'not-directory':
-    case 'not-git':
-    case 'bare':
-    case 'prunable': return { ok: false, reason: 'binding-stale' }
-  }
 }
 
 /**

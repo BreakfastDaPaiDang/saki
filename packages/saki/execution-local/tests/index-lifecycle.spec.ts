@@ -10,6 +10,7 @@ import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
 import * as StorageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
+import { HostOperationAcceptance } from '@breakfastdapaidang/saki-execution'
 import type {
   ActiveHostProjectBinding,
   HostOperationAdmissionSource,
@@ -52,6 +53,12 @@ const BOUNDED_ADMISSIONS: readonly (readonly [string, HostOperationAdmissionSour
   ['denied', async () => ({ kind: 'denied', reason: 'source-canceled' })],
   ['unavailable', async () => ({ kind: 'unavailable' })],
 ]
+
+class ForeignHostOperationAcceptance extends HostOperationAcceptance {
+  static create(): ForeignHostOperationAcceptance {
+    return new ForeignHostOperationAcceptance()
+  }
+}
 
 afterEach(async () => {
   vi.restoreAllMocks()
@@ -178,6 +185,59 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
     expect(warning).toHaveBeenCalledWith('[saki-execution-local] Host Operation change listener failed')
     expect(JSON.stringify(warning.mock.calls)).not.toContain('listener secret')
   }, 30_000)
+
+  it('rejects a foreign acceptance and replays terminal cancellation idempotently', async () => {
+    const root = await repository()
+    const { execution } = await provider(root)
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const request = await stageRequest(execution, root, binding, signal, '9')
+    const prepared = await execution.prepareOperation(request, accepted(9), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) return
+
+    await expect(execution.startOperation(
+      prepared.preparation.operation,
+      ForeignHostOperationAcceptance.create(),
+      signal,
+    )).resolves.toMatchObject({
+      ok: false,
+      reason: 'acceptance-mismatch',
+      snapshot: { state: 'prepared', revision: 0 },
+    })
+
+    const canceled = await execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )
+    expect(canceled).toMatchObject({ state: 'canceled', revision: 1, effect: 'none' })
+    await expect(execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )).resolves.toEqual(canceled)
+    await expect(execution.startOperation(
+      prepared.preparation.operation,
+      prepared.acceptance,
+      signal,
+    )).resolves.toEqual({ ok: true, snapshot: canceled })
+    expect(await gitText(root, 'diff', '--cached', '--name-only')).toBe('')
+  }, 30_000)
+
+  it('fails loud when operation storage has not started', async () => {
+    const context = new Context()
+    contexts.push(context)
+    const execution = new LocalSakiHostExecution(context, CONFIG)
+    const reference = {
+      id: 'host-operation-99999999-9999-4999-8999-999999999999',
+      hostId: HOST_ID,
+      type: 'stage-files',
+    } as HostOperationReference<'stage-files'>
+
+    await expect(execution.inspectOperation(reference, new AbortController().signal))
+      .rejects.toThrow('Saki Local Host Operation storage is not started')
+  })
 
   it.each([
     ['sha1', '7'],

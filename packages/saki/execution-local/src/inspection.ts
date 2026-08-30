@@ -122,6 +122,18 @@ export type StableLocalProjectSelectionResult =
   | { readonly ok: false; readonly reason: StableLocalProjectSelectionFailureReason }
 
 /**
+ * Map provider-private inspection limits onto the public rejection vocabulary.
+ * @param reason - stable inspection failure before public projection.
+ * @returns the browser-safe selection rejection reason.
+ * @internal
+ */
+export function projectSelectionRejectionReason(
+  reason: StableLocalProjectSelectionFailureReason,
+): ProjectSelectionRejectionReason {
+  return reason === 'limit' || reason === 'unsupported-index-state' ? 'unavailable' : reason
+}
+
+/**
  * Derive the fixed browser label for one canonical Local Host worktree path.
  * @param path - canonical worktree path from an admitted repository view.
  * @returns safe basename, filesystem-root label, or generic repository label.
@@ -164,10 +176,7 @@ export async function inspectLocalProjectSelection(
     identityReader,
   )
   if (result.ok) return { ok: true, inspection: result.inspection }
-  if (result.reason === 'limit' || result.reason === 'unsupported-index-state') {
-    return { ok: false, reason: 'unavailable' }
-  }
-  return { ok: false, reason: result.reason }
+  return { ok: false, reason: projectSelectionRejectionReason(result.reason) }
 }
 
 /**
@@ -540,10 +549,9 @@ interface BoundProjectResourceObservation {
 }
 
 function assertBoundProjectResource(
-  expectation: BoundProjectResourceExpectation | undefined,
+  expectation: BoundProjectResourceExpectation,
   actual: BoundProjectResourceObservation,
 ): void {
-  if (expectation === undefined) return
   const expected = expectation.trusted
   if (actual.workspaceId !== expectation.workspaceId
     || actual.canonicalWorktreePath !== expected.canonicalWorktreePath
@@ -680,9 +688,23 @@ async function inspectUpstream(
   const { stdout } = await git.run(cwd, [
     'for-each-ref', '--count=2', '--format=%(refname)%00%(upstream)%00%(upstream:short)%00', ref,
   ], signal)
+  return parseObservedUpstream(stdout, ref)
+}
+
+/**
+ * Parse the bounded upstream frame returned for one exact branch ref.
+ * @param bytes - complete `for-each-ref` stdout frame.
+ * @param ref - exact branch ref requested from Git.
+ * @returns the configured upstream, or `undefined` when no upstream exists.
+ * @internal
+ */
+export function parseObservedUpstream(
+  bytes: Uint8Array,
+  ref: string,
+): { readonly ref: string; readonly short: string } | undefined {
   let text: string
   try {
-    text = UTF8.decode(stdout)
+    text = UTF8.decode(bytes)
   } catch {
     throw new MalformedObservationError()
   }
@@ -701,8 +723,16 @@ function worktreeBranchMatches(
   return record.branch !== undefined && record.branch === branch.ref
 }
 
-function worktreeHeadMatches(
-  record: ParsedWorktreeRecord,
+/**
+ * Compare one admitted worktree-list HEAD slot with the independently inspected HEAD.
+ * @param record - worktree-list record carrying an optional object id.
+ * @param head - independently inspected commit or unborn branch.
+ * @param objectFormat - repository object-id format.
+ * @returns whether both views name the same HEAD state.
+ * @internal
+ */
+export function worktreeHeadMatches(
+  record: Pick<ParsedWorktreeRecord, 'head'>,
   head: ProjectGitHead,
   objectFormat: 'sha1' | 'sha256',
 ): boolean {
@@ -808,7 +838,15 @@ async function gitTextWithBytes(
   return { text: value, bytes: stdout.byteLength }
 }
 
-async function inspectRemotes(
+/**
+ * Inspect the bounded remote URL view exposed by an admitted repository.
+ * @param git - admitted repository query face.
+ * @param cwd - canonical worktree directory.
+ * @param signal - observation lifetime.
+ * @returns deterministic credential-free remote observations.
+ * @internal
+ */
+export async function inspectRemotes(
   git: RepositoryInventoryGit,
   cwd: string,
   signal: AbortSignal,

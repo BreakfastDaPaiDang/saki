@@ -918,6 +918,13 @@ describe('Saki structured Git operations', () => {
       )
 
       expect(result).toMatchObject({ ok: false, reason, receipt: { type, state } })
+      if (state === 'reconciliation-required') {
+        expect(test.operations.project(BINDING_ID, statusFixture().result, {
+          'project-changes:stage': true,
+          'project-changes:unstage': true,
+          'project-commit:create': true,
+        })).toMatchObject({ current: { type, state } })
+      }
     },
   )
 
@@ -1385,6 +1392,48 @@ describe('Saki structured Git operations', () => {
     )).rejects.toThrow('injected update failure')
   })
 
+  it('keeps a prepared Intent retryable when reservation storage acknowledges a different admission state', async () => {
+    const test = harness()
+    const update = test.admissions.update.bind(test.admissions)
+    test.admissions.update = async (key, operation) => {
+      const committed = await update(key, operation)
+      return availableAdmission(committed.revision)
+    }
+    await expect(test.operations.submit(
+      intent('stage-files', 'intent-00000000-0000-4000-8000-000000000390' as SakiControlIntentId),
+      actor(),
+      new AbortController().signal,
+    )).resolves.toMatchObject({
+      ok: false,
+      reason: 'unavailable',
+      receipt: { state: 'prepared' },
+    })
+  })
+
+  it.each(['available', 'reserved'] as const)(
+    'keeps a Host-prepared Intent retryable when acceptance storage acknowledges %s',
+    async (acknowledged) => {
+      const test = harness()
+      const submitted = intent(
+        'stage-files',
+        `intent-00000000-0000-4000-8000-00000000039${acknowledged === 'available' ? '1' : '2'}` as SakiControlIntentId,
+      )
+      await stopAfterPhase(test, submitted, 'host-prepared')
+      const update = test.admissions.update.bind(test.admissions)
+      test.admissions.update = async (key, operation) => {
+        const before = bindingWriteAdmissionRecordSchema.parse(test.admissions.get(key))
+        const committed = await update(key, operation)
+        return acknowledged === 'available' ? availableAdmission(committed.revision) : before
+      }
+      await expect(test.operations.submit(submitted, actor(), new AbortController().signal))
+        .resolves.toMatchObject({
+          ok: false,
+          reason: 'unavailable',
+          receipt: { state: 'host-prepared' },
+        })
+    },
+  )
+
   it('recovers a committed available-row write before registration confirmation', async () => {
     const test = harness()
     const binding = test.registry.resourceBindings[0]
@@ -1451,6 +1500,76 @@ describe('Saki structured Git operations', () => {
       actor(),
       new AbortController().signal,
     )).rejects.toThrow('injected divergent put race')
+  })
+
+  it.each([
+    ['prepared', 'prepared', 'intent-00000000-0000-4000-8000-000000000385'],
+    ['admission-reserved', 'admission-reserved', 'intent-00000000-0000-4000-8000-000000000386'],
+    ['host-prepared', 'host-prepared', 'intent-00000000-0000-4000-8000-000000000387'],
+    ['accepted', 'accepted', 'intent-00000000-0000-4000-8000-000000000388'],
+  ] as const)(
+    'returns the durable %s winner when a pre-Host conflict loses its put race',
+    async (phase, receiptState, rawId) => {
+      const submitted = intent('stage-files', rawId as SakiControlIntentId)
+      const winner = harness()
+      let record: GitOperationIntentRecord
+      if (phase === 'prepared') {
+        winner.admissions.records.delete(BINDING_ID)
+        await expect(winner.operations.submit(submitted, actor(), new AbortController().signal))
+          .resolves.toMatchObject({ ok: false, reason: 'unavailable' })
+        record = gitOperationIntentRecordSchema.parse(winner.intents.get(submitted.intentId))
+      } else if (phase === 'accepted') {
+        winner.execution.startMode = 'busy-then-succeed-notification'
+        await expect(winner.operations.submit(submitted, actor(), new AbortController().signal))
+          .resolves.toMatchObject({ ok: false, reason: 'unavailable' })
+        record = gitOperationIntentRecordSchema.parse(winner.intents.get(submitted.intentId))
+      } else {
+        record = await stopAfterPhase(winner, submitted, phase)
+      }
+      expect(record.phase).toBe(phase)
+
+      const contender = harness()
+      const inspected = statusFixture().result
+      if (!inspected.ok) throw new Error('test status is unavailable')
+      contender.execution.inspectResult = {
+        ...inspected,
+        observation: {
+          ...inspected.observation,
+          fingerprint: { version: 1, digest: 'f'.repeat(64) },
+        },
+      }
+      contender.intents.put = async (key) => {
+        contender.intents.records.set(key, record)
+        throw new Error('injected competing put acknowledgement loss')
+      }
+
+      await expect(contender.operations.submit(submitted, actor(), new AbortController().signal))
+        .resolves.toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: receiptState } })
+    },
+  )
+
+  it('rejects a durable receipt whose operation kind changes between correlated reads', async () => {
+    const rawId = 'intent-00000000-0000-4000-8000-000000000389' as SakiControlIntentId
+    const stale = (type: 'stage-files' | 'unstage-files') => {
+      const submitted = intent(type, rawId)
+      return {
+        ...submitted,
+        expected: { ...submitted.expected, expectedProjectRevision: submitted.expected.expectedProjectRevision + 1 },
+      }
+    }
+    const submitted = stale('stage-files') as StageFilesIntent
+    const stage = harness()
+    await stage.operations.submit(submitted, actor(), new AbortController().signal)
+    const stageRecord = gitOperationIntentRecordSchema.parse(stage.intents.get(rawId))
+    const unstage = harness()
+    await unstage.operations.submit(stale('unstage-files') as UnstageFilesIntent, actor(), new AbortController().signal)
+    const unstageRecord = gitOperationIntentRecordSchema.parse(unstage.intents.get(rawId))
+
+    const changed = harness()
+    let reads = 0
+    changed.intents.get = () => reads++ === 0 ? stageRecord : unstageRecord
+    await expect(changed.operations.submit(submitted, actor(), new AbortController().signal))
+      .rejects.toThrow(`Git operation result kind disagrees with Intent '${rawId}'`)
   })
 
   it('validates only a prepared Intent across a recoverable registration admission gap', async () => {
@@ -2601,18 +2720,27 @@ describe('Saki structured Git operations', () => {
     }
   })
 
-  it('returns an accepted unavailable receipt while the Host operation is still planning', async () => {
+  it.each([
+    ['stage-files', 'intent-00000000-0000-4000-8000-000000000278'],
+    ['unstage-files', 'intent-00000000-0000-4000-8000-000000000381'],
+    ['create-commit', 'intent-00000000-0000-4000-8000-000000000382'],
+  ] as const)('returns an accepted unavailable %s receipt while the Host operation is still planning', async (type, rawId) => {
     const test = harness()
     test.execution.startMode = 'busy-then-succeed-notification'
     await expect(test.operations.submit(
-      intent('stage-files', 'intent-00000000-0000-4000-8000-000000000278' as SakiControlIntentId),
+      intent(type, rawId as SakiControlIntentId),
       actor(),
       new AbortController().signal,
     )).resolves.toMatchObject({
       ok: false,
       reason: 'unavailable',
-      receipt: { state: 'accepted', operation: { state: 'planning' } },
+      receipt: { type, state: 'accepted', operation: { state: 'planning' } },
     })
+    expect(test.operations.project(BINDING_ID, statusFixture().result, {
+      'project-changes:stage': true,
+      'project-changes:unstage': true,
+      'project-commit:create': true,
+    })).toMatchObject({ current: { type, state: 'accepted', operation: { state: 'planning' } } })
   })
 
   it('retains nonterminal cancellation evidence after Host admission denial and Grant revocation', async () => {
@@ -2793,20 +2921,25 @@ describe('Saki structured Git operations', () => {
   })
 
   it('projects a conflict with retained Host evidence and rejects a mismatched operation kind', async () => {
-    const conflict = harness()
-    const conflictIntent = intent(
-      'stage-files',
-      'intent-00000000-0000-4000-8000-000000000266' as SakiControlIntentId,
-    )
-    const prepared = await stopAfterPhase(conflict, conflictIntent, 'host-prepared')
-    conflict.intents.records.set(prepared.id, gitOperationIntentRecordSchema.parse({
-      ...prepared,
-      revision: prepared.revision + 1,
-      phase: 'conflict',
-      terminalReason: 'source-conflict',
-    }))
-    await expect(conflict.operations.submit(conflictIntent, actor(), new AbortController().signal))
-      .resolves.toMatchObject({ receipt: { state: 'conflict', operation: { type: 'stage-files' } } })
+    for (const [type, rawId] of [
+      ['stage-files', 'intent-00000000-0000-4000-8000-000000000266'],
+      ['unstage-files', 'intent-00000000-0000-4000-8000-000000000383'],
+      ['create-commit', 'intent-00000000-0000-4000-8000-000000000384'],
+    ] as const) {
+      const conflict = harness()
+      const conflictIntent = intent(type, rawId as SakiControlIntentId)
+      const prepared = await stopAfterPhase(conflict, conflictIntent, 'host-prepared')
+      conflict.intents.records.set(prepared.id, gitOperationIntentRecordSchema.parse({
+        ...prepared,
+        revision: prepared.revision + 1,
+        phase: 'conflict',
+        terminalReason: 'source-conflict',
+      }))
+      await expect(conflict.operations.submit(conflictIntent, actor(), new AbortController().signal))
+        .resolves.toMatchObject({
+          receipt: { type, state: 'conflict', operation: { type: type === 'create-commit' ? 'commit' : type } },
+        })
+    }
 
     const mismatched = harness()
     const mismatchedIntent = intent(

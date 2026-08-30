@@ -30,4 +30,22 @@ describe('frozen v4 canonical hashing', () => {
     expect(v4ExactBytesDigest('', new Uint8Array())).toBe(EMPTY_BYTES_GOLDEN)
     expect(exactBytesDigest('', new Uint8Array())).toBe(EMPTY_BYTES_GOLDEN)
   })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'rejects the historical non-finite number %s',
+    (value) => {
+      expect(() => v4CanonicalDigest('saki/v4-canonical-invalid/v1', value))
+        .toThrow('canonical JSON rejects non-finite numbers')
+    },
+  )
+
+  it.each([
+    ['undefined', undefined],
+    ['bigint', 1n],
+    ['symbol', Symbol('historical-v4')],
+    ['function', () => undefined],
+  ] as const)('rejects the historical unsupported %s value', (type, value) => {
+    expect(() => v4CanonicalDigest('saki/v4-canonical-invalid/v1', value))
+      .toThrow(`canonical JSON rejects ${type}`)
+  })
 })

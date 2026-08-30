@@ -1221,14 +1221,15 @@ function unavailable(record: GitOperationIntentRecord): GitIntentResult {
     case 'admission-reserved':
     case 'host-prepared':
     case 'accepted': return { ok: false, reason: 'unavailable', receipt }
+    /* v8 ignore start -- Durable phase routing excludes terminal receipts at every unavailable() call site. */
     case 'succeeded':
     case 'conflict':
     case 'failed':
     case 'canceled':
     case 'reconciliation-required': {
-      /* v8 ignore next -- Durable phase routing excludes terminal receipts at every call site. */
       throw new Error(`Terminal Git operation '${record.id}' cannot be returned as unavailable`)
     }
+    /* v8 ignore stop */
     /* v8 ignore next -- closed receipt union exhaustiveness guard */
     default: return assertNever(receipt)
   }
@@ -1470,6 +1471,7 @@ function conflictReason(
     case 'invalid-selection':
     case 'source-conflict':
     case 'protocol': return record.terminalReason
+    /* v8 ignore next -- The durable phase schema permits only conflict reasons in a conflict record. */
     default: throw new Error(`Conflicted Git operation '${record.id}' has an invalid reason`)
   }
 }
@@ -1478,6 +1480,7 @@ function cancellationReason(record: GitOperationIntentRecord): 'source-canceled'
   switch (record.terminalReason) {
     case 'source-canceled':
     case 'authority-revoked': return record.terminalReason
+    /* v8 ignore next -- The durable phase schema permits only cancellation reasons in a canceled record. */
     default: throw new Error(`Canceled Git operation '${record.id}' has an invalid reason`)
   }
 }
