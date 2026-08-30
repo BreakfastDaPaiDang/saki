@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { projectSelectionProjectionSchema } from '@breakfastdapaidang/saki-execution'
+import {
+  projectGitStatusObservationSchema,
+  projectSelectionProjectionSchema,
+  readProjectDiffResultSchema,
+} from '@breakfastdapaidang/saki-execution'
 import type { SakiControlPlaneModule } from '../src/index.ts'
 import { SakiAuthenticationContext } from '../src/authentication.ts'
 import {
@@ -9,6 +13,11 @@ import {
   SAKI_BOARD_PROJECTION_FIXTURES,
   SAKI_CONTROL_RESULT_FIXTURES,
   SAKI_EMPTY_PROJECT_INDEX_FIXTURE,
+  SAKI_GIT_CHANGES_PROJECTION_FIXTURES,
+  SAKI_GIT_DIFF_PROJECTION_FIXTURES,
+  SAKI_GIT_OPERATION_RESULT_FIXTURES,
+  SAKI_GIT_QUERY_RESULT_FIXTURES,
+  SAKI_GIT_REQUEST_FIXTURES,
   SAKI_PROJECT_PROJECTION_FIXTURES,
   SAKI_PROJECT_RECEIPT_FIXTURES,
   SAKI_PROJECT_REQUEST_FIXTURES,
@@ -26,7 +35,10 @@ import {
 } from '../src/secrets.ts'
 import {
   principalRecordSchema,
+  createCommitIntentSchema,
   registerDevelopmentProjectIntentSchema,
+  stageFilesIntentSchema,
+  unstageFilesIntentSchema,
 } from '../src/spec.ts'
 import type {
   SakiBootstrapChallengeId,
@@ -89,9 +101,22 @@ describe('Saki control-plane public contracts', () => {
     expect(registerDevelopmentProjectIntentSchema.parse(
       SAKI_PROJECT_REQUEST_FIXTURES.registration,
     ).projectTitle).toBe('Fixture project')
+    expect(SAKI_PROJECT_REQUEST_FIXTURES.registration.confirmedFingerprint.version).toBe(2)
+    expect(registerDevelopmentProjectIntentSchema.safeParse({
+      ...SAKI_PROJECT_REQUEST_FIXTURES.registration,
+      confirmedFingerprint: {
+        version: 1,
+        digest: SAKI_PROJECT_REQUEST_FIXTURES.registration.confirmedFingerprint.digest,
+      },
+    }).success).toBe(false)
     expect(projectSelectionProjectionSchema.parse(
       SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection,
     ).automaticMutationEligible).toBe(true)
+    expect(SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection).toMatchObject({
+      observationVersion: 2,
+      head: { kind: 'commit', symbolicRef: 'refs/heads/main' },
+      fingerprint: { version: 2 },
+    })
     expect(projectSelectionProjectionSchema.parse(
       SAKI_PROJECT_PROJECTION_FIXTURES.dirtySelection,
     ).blockingReasons).toEqual(['dirty'])
@@ -103,6 +128,12 @@ describe('Saki control-plane public contracts', () => {
       .toMatchObject({ ok: false, reason: 'conflict', receipt: { reason: 'duplicate-binding' } })
     expect(SAKI_PROJECT_PROJECTION_FIXTURES.developmentWorkspace.recovery)
       .toEqual({ state: 'ready', reasons: [] })
+    expect(SAKI_PROJECT_PROJECTION_FIXTURES.projectIndex.projects[0]?.binding).toMatchObject({
+      objectFormat: 'sha1',
+      head: { kind: 'commit', symbolicRef: 'refs/heads/main' },
+    })
+    expect(SAKI_PROJECT_PROJECTION_FIXTURES.projectIndex.projects[0]?.binding).not.toHaveProperty('branch')
+    expect(SAKI_PROJECT_PROJECTION_FIXTURES.projectIndex.projects[0]?.binding).not.toHaveProperty('detached')
     expect(SAKI_ACCESS_LIFECYCLE_FIXTURES.challenges).toContain('revoked')
     expect(SAKI_SECURITY_RECORD_FIXTURES.sessions.active.verifier.redacted).toBe(true)
     const serialized = JSON.stringify([
@@ -110,6 +141,11 @@ describe('Saki control-plane public contracts', () => {
       SAKI_ACCESS_RESULT_FIXTURES,
       SAKI_BOARD_PROJECTION_FIXTURES,
       SAKI_CONTROL_RESULT_FIXTURES,
+      SAKI_GIT_CHANGES_PROJECTION_FIXTURES,
+      SAKI_GIT_DIFF_PROJECTION_FIXTURES,
+      SAKI_GIT_OPERATION_RESULT_FIXTURES,
+      SAKI_GIT_QUERY_RESULT_FIXTURES,
+      SAKI_GIT_REQUEST_FIXTURES,
       SAKI_PROJECT_REQUEST_FIXTURES,
       SAKI_PROJECT_PROJECTION_FIXTURES,
       SAKI_PROJECT_RECEIPT_FIXTURES,
@@ -121,6 +157,71 @@ describe('Saki control-plane public contracts', () => {
     expect(serialized).not.toMatch(/privateKey|installationToken|accessToken|-----BEGIN [A-Z ]*PRIVATE KEY-----/)
     expect(serialized).not.toMatch(/canonicalWorktreePath|canonicalGitDirectory|canonicalCommonGitDirectory/)
     expect(serialized).not.toContain('/fixture/repository')
+  })
+
+  it('publishes typed Changes, bounded Diff, and terminal operation fixtures for every B07 state', () => {
+    const { clean, dirty, conflict } = SAKI_GIT_CHANGES_PROJECTION_FIXTURES
+    if (!clean.result.ok || !dirty.result.ok || !conflict.result.ok) {
+      throw new Error('Changes fixtures must carry complete observations')
+    }
+    expect(projectGitStatusObservationSchema.parse(clean.result.observation).changes).toEqual([])
+    expect(clean.gitOperations.createCommit).toEqual({
+      available: false,
+      reasons: ['no-staged-changes'],
+    })
+    const dirtyObservation = projectGitStatusObservationSchema.parse(dirty.result.observation)
+    expect(dirtyObservation).toMatchObject({
+      head: { kind: 'commit', symbolicRef: 'refs/heads/main' },
+      branch: { kind: 'attached', name: 'main' },
+      upstream: { name: 'origin/main', divergence: { ahead: 1, behind: 0 } },
+    })
+    expect(dirtyObservation.changes.map(change => [change.path, change.indexStatus, change.worktreeStatus]))
+      .toEqual([
+        ['new.txt', 'absent', 'untracked'],
+        ['staged.txt', 'modified', 'unchanged'],
+        ['unstaged.txt', 'unchanged', 'modified'],
+      ])
+    expect(dirtyObservation.changes.map(change => change.attribution))
+      .toEqual(['unattributed', 'not-inherited', 'inherited'])
+    expect(projectGitStatusObservationSchema.parse(conflict.result.observation)).toMatchObject({
+      index: { kind: 'unmerged' },
+      changes: [{ kind: 'unmerged', conflict: 'both-modified' }],
+      structuredMutation: { available: false, blockers: ['unmerged'] },
+    })
+
+    expect(readProjectDiffResultSchema.parse(SAKI_GIT_DIFF_PROJECTION_FIXTURES.success.result))
+      .toEqual(SAKI_GIT_DIFF_PROJECTION_FIXTURES.success.result)
+    expect(SAKI_GIT_DIFF_PROJECTION_FIXTURES.success.result.page).toMatchObject({
+      layer: 'unstaged',
+      range: { startLine: 0, totalLines: 6 },
+      truncated: false,
+    })
+    expect(readProjectDiffResultSchema.parse(SAKI_GIT_DIFF_PROJECTION_FIXTURES.stale.result))
+      .toEqual({ ok: false, reason: 'observation-stale' })
+
+    expect(stageFilesIntentSchema.parse(SAKI_GIT_REQUEST_FIXTURES.stage))
+      .toEqual(SAKI_GIT_REQUEST_FIXTURES.stage)
+    expect(unstageFilesIntentSchema.parse(SAKI_GIT_REQUEST_FIXTURES.unstage))
+      .toEqual(SAKI_GIT_REQUEST_FIXTURES.unstage)
+    expect(createCommitIntentSchema.parse(SAKI_GIT_REQUEST_FIXTURES.commit))
+      .toEqual(SAKI_GIT_REQUEST_FIXTURES.commit)
+    expect(JSON.stringify(SAKI_GIT_REQUEST_FIXTURES))
+      .not.toMatch(/"(?:path|argv|cwd|env|canonicalWorktreePath|canonicalGitDirectory)"/u)
+
+    expect(SAKI_GIT_QUERY_RESULT_FIXTURES.stale).toEqual({ ok: false, reason: 'stale' })
+    expect(Object.values(SAKI_GIT_OPERATION_RESULT_FIXTURES).map(result =>
+      result.ok ? result.receipt.state : `${result.reason}:${result.receipt.state}`))
+      .toEqual([
+        'succeeded',
+        'succeeded',
+        'succeeded',
+        'conflict:conflict',
+        'failure:failed',
+        'canceled:canceled',
+        'reconciliation-required:reconciliation-required',
+      ])
+    expect(SAKI_GIT_OPERATION_RESULT_FIXTURES.failure.receipt.reason).toBe('invalid-selection')
+    expect(SAKI_GIT_OPERATION_RESULT_FIXTURES.unknownOutcome.receipt.reason).toBe('effect-unknown')
   })
 
   it('publishes relational Board and Project Settings synchronization fixtures', () => {

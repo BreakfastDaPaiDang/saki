@@ -91,6 +91,7 @@ async function startControlPlane(
   await provideSakiInstallationState(ctx, state)
   ctx.provide('sakiHostExecution', {
     inspectProjectSelection: () => Promise.resolve({ ok: false, reason: 'unavailable' }),
+    onChanged: () => () => {},
   } as never)
   ctx.provide('workspaceRegistry', {
     list: () => [],
@@ -735,7 +736,7 @@ describe('Saki Installation access', () => {
         hostId,
         directoryLocator: '.',
         expectedRegistryRevision: 0,
-        confirmedFingerprint: { version: 1, digest: '0'.repeat(64) },
+        confirmedFingerprint: { version: 2, digest: '0'.repeat(64) },
         confirmedBaseline: {
           kind: 'unavailable',
           reason: 'io-failure',
@@ -857,7 +858,7 @@ describe('Saki Installation access', () => {
     }))
 
     await running.close()
-    expect(observed).toEqual([['access', 'project-index', 'development-workspace']])
+    expect(observed).toEqual([['access', 'project-index', 'development-workspace', 'project-changes']])
     expect(diagnostic).toHaveBeenCalledTimes(1)
     expect(diagnostic).toHaveBeenCalledWith('[saki-control-plane] Projection listener failed')
     expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('listener-secret-sentinel')

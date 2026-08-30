@@ -3,8 +3,15 @@
 import type { Domain, KvTable, TableValueOf } from '@deepseek-ai/dsh-storage-domain'
 import { recoverBootstrapCompletion } from './bootstrap-completion.ts'
 import { validateGitHubSynchronizationDurableState } from './github-sync.ts'
-import { sakiControlPlaneV2DomainSpec, sakiControlPlaneV3DomainSpec } from './migration.ts'
-import { validateDevelopmentProjectsDurableState } from './projects.ts'
+import { validateGitOperationsDurableState } from './git-operations.ts'
+import {
+  sakiControlPlaneV2DomainSpec,
+  sakiControlPlaneV3DomainSpec,
+} from './migration.ts'
+import {
+  recoverableRegistrationAdmissionBindingIds,
+  validateDevelopmentProjectsDurableState,
+} from './projects.ts'
 import {
   CONTROL_STATE_KEY,
   sakiControlPlaneDomainSpec,
@@ -36,6 +43,8 @@ import type {
   SakiPrincipalId,
   SakiStorageGenerationId,
 } from './types.ts'
+
+export { validateSakiV4SourceState } from './migration-v4-validation.ts'
 
 type ControlPlaneDomain = Domain<typeof sakiControlPlaneDomainSpec>
 type StorageGenerationDomain = Domain<typeof sakiStorageGenerationDomainSpec>
@@ -86,8 +95,8 @@ interface HistoricalFoundationSnapshot {
  * The operation performs synchronous reads only: it never writes, invokes Host or Workspace
  * capabilities, or changes the active Installation. The caller must exclusively own both
  * domains with no concurrent writers because cross-table reads are not internally serialized.
- * @param controlPlane - opened `saki_control_plane@4` candidate domain.
- * @param storageGeneration - opened `saki_storage_generation@2` candidate domain.
+ * @param controlPlane - opened `saki_control_plane@5` candidate domain.
+ * @param storageGeneration - opened `saki_storage_generation@3` candidate domain.
  * @param expectedInstallationId - Installation identity selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation identity selected by maintenance metadata.
  * @param expectedCreatedByBuildId - generation.json provenance that the seal must repeat.
@@ -149,11 +158,13 @@ export function validateSakiV3SourceState(
     controlPlane.table('control_state'), controlPlane.table('installations'), controlPlane.table('hosts'),
     controlPlane.table('principals'), controlPlane.table('grants'), controlPlane.table('installation_access'),
   ), expectedInstallationId)
-  validateDevelopmentProjectsDurableState(
-    controlPlane.table('development_project_registry'),
-    controlPlane.table('registration_intents'),
-    value => value,
-    (actor) => { validateRegistrationActorReference(actor, foundation) },
+  for (const [key, value] of controlPlane.table('registration_intents').entries()) {
+    if (key !== value.id) throw new Error('Saki registration Intent id disagrees with its table key')
+    validateRegistrationActorReference(value.payload.actor, foundation)
+  }
+  validateHistoricalProjectMappings(
+    [...controlPlane.table('development_project_registry').entries()].map(([, value]) => value),
+    [...controlPlane.table('registration_intents').entries()].map(([, value]) => value),
   )
 }
 
@@ -322,27 +333,78 @@ function validateHistoricalProjects(
   domain: HistoricalControlPlaneDomain,
   foundation: HistoricalFoundationSnapshot,
 ): void {
-  validateDevelopmentProjectsDurableState(
-    domain.table('development_project_registry'),
-    domain.table('registration_intents'),
-    value => value,
-    (actor) => {
-      validateHistoricalGeneration(actor.installationGenerationId, foundation, 'registration Intent actor')
-      const installation = requiredHistoricalRecord(foundation.installations, actor.installationId, 'Installation')
-      const host = requiredHistoricalRecord(foundation.hosts, actor.hostId, 'Host')
-      const principal = requiredHistoricalRecord(foundation.principals, actor.principalId, 'Principal')
-      const grant = requiredHistoricalRecord(foundation.grants, actor.grantId, 'Grant')
-      assertRegistrationActorReference(
-        actor,
-        foundation.control.installationId,
-        installation,
-        host,
-        principal,
-        grant,
-        'historical Saki',
-      )
-    },
+  for (const [key, value] of domain.table('registration_intents').entries()) {
+    if (key !== value.id) throw new Error('historical Saki registration Intent id disagrees with its table key')
+    const actor = value.payload.actor
+    validateHistoricalGeneration(actor.installationGenerationId, foundation, 'registration Intent actor')
+    const installation = requiredHistoricalRecord(foundation.installations, actor.installationId, 'Installation')
+    const host = requiredHistoricalRecord(foundation.hosts, actor.hostId, 'Host')
+    const principal = requiredHistoricalRecord(foundation.principals, actor.principalId, 'Principal')
+    const grant = requiredHistoricalRecord(foundation.grants, actor.grantId, 'Grant')
+    assertRegistrationActorReference(
+      actor,
+      foundation.control.installationId,
+      installation,
+      host,
+      principal,
+      grant,
+      'historical Saki',
+    )
+  }
+  validateHistoricalProjectMappings(
+    [...domain.table('development_project_registry').entries()].map(([, value]) => value),
+    [...domain.table('registration_intents').entries()].map(([, value]) => value),
   )
+}
+
+interface HistoricalProjectMappingState {
+  readonly registryRevision: number
+  readonly intentId: string
+  readonly projectId: string
+  readonly resourceBindingId: string
+}
+
+interface HistoricalProjectRegistryState {
+  readonly revision: number
+  readonly intentMappings: readonly HistoricalProjectMappingState[]
+}
+
+interface HistoricalProjectIntentState {
+  readonly id: string
+  readonly phase: string
+  readonly projectId?: string | undefined
+  readonly resourceBindingId?: string | undefined
+  readonly registryRevision?: number | undefined
+  readonly payload: { readonly intent: { readonly expectedRegistryRevision: number } }
+}
+
+function validateHistoricalProjectMappings(
+  registries: readonly HistoricalProjectRegistryState[],
+  intents: readonly HistoricalProjectIntentState[],
+): void {
+  if (registries.length !== 1) throw new Error('historical Saki Project Registry has an invalid singleton key')
+  const registry = registries[0] as HistoricalProjectRegistryState
+  const byId = new Map(intents.map(intent => [intent.id, intent] as const))
+  for (const mapping of registry.intentMappings) {
+    const intent = byId.get(mapping.intentId)
+    if (intent === undefined || (intent.phase !== 'workspace-observed'
+      && intent.phase !== 'registry-committed' && intent.phase !== 'confirmed')) {
+      throw new Error(`historical registration mapping '${mapping.intentId}' has no committed Intent`)
+    }
+    if (mapping.registryRevision !== intent.payload.intent.expectedRegistryRevision + 1
+      || mapping.registryRevision > registry.revision
+      || (intent.phase !== 'workspace-observed' && (intent.projectId !== mapping.projectId
+        || intent.resourceBindingId !== mapping.resourceBindingId
+        || intent.registryRevision !== mapping.registryRevision))) {
+      throw new Error(`historical registration Intent '${intent.id}' disagrees with its mapping`)
+    }
+  }
+  for (const intent of intents) {
+    if ((intent.phase === 'registry-committed' || intent.phase === 'confirmed')
+      && !registry.intentMappings.some(mapping => mapping.intentId === intent.id)) {
+      throw new Error(`historical committed registration Intent '${intent.id}' has no mapping`)
+    }
+  }
 }
 
 function validateHistoricalGeneration(
@@ -612,11 +674,27 @@ function validateProjects(domain: ControlPlaneDomain, foundation: FoundationSnap
     value => value,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
-  validateGitHubSynchronizationDurableState(
+  const github = validateGitHubSynchronizationDurableState(
     domain.table('github_project_sync'),
     domain.table('github_sync_configuration_intents'),
     foundation.control.installationId,
     projectId => state.registry?.projects.some(project => project.id === projectId) ?? false,
+    (actor) => { validateRegistrationActorReference(actor, foundation) },
+  )
+  const otherIntentIds = new Set([
+    ...state.intents.map(intent => intent.id),
+    ...github.intents.map(intent => intent.id),
+  ])
+  const recoverableMissingBindingIds = recoverableRegistrationAdmissionBindingIds(
+    state.registry,
+    state.intents,
+  )
+  validateGitOperationsDurableState(
+    domain.table('git_operation_intents'),
+    domain.table('binding_write_admissions'),
+    state.registry,
+    otherIntentIds,
+    recoverableMissingBindingIds,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
 }

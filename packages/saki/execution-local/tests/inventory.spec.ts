@@ -111,7 +111,7 @@ describe('closed repository inventory', () => {
       if (command === 'ls-tree -r --full-tree -z HEAD') {
         return output(`100644 blob ${objectId}\tfile.txt\0`)
       }
-      if (command === 'ls-files -t --stage --full-name -z') {
+      if (command === 'ls-files --no-sparse -t --stage --full-name -z') {
         return output(`H 100644 ${objectId} 0\tfile.txt\0`)
       }
       if (command === 'ls-files --others --exclude-standard --full-name -z') return output('')
@@ -284,7 +284,6 @@ describe('closed repository inventory', () => {
       }, { maxEntries: 1 }, 'unavailable'],
       ['malformed tree record', { tree: 'broken\0', index: '' }, {}, 'malformed'],
       ['directory-shaped path', { tree: `100644 blob ${object}\tdir/\0`, index: '' }, {}, 'unavailable'],
-      ['sparse index entry', { tree: '', index: `S 100644 ${object} 0\tfile\0` }, {}, 'unavailable'],
       ['index directory mode', { tree: '', index: `H 040000 ${object} 0\tfile\0` }, {}, 'unavailable'],
       ['index and untracked collision', {
         tree: '', index: `H 100644 ${object} 0\tfile\0`, untracked: 'file\0',
@@ -313,6 +312,25 @@ describe('closed repository inventory', () => {
         new AbortController().signal,
       ), name).rejects.toMatchObject({ kind })
     }
+  })
+
+  it('retains a skip-worktree entry after expanding a sparse index', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'saki-inventory-'))
+    roots.push(root)
+    const object = '1'.repeat(40)
+    const inventory = await captureRepositoryInventory(
+      root,
+      { run: inventoryCommands({ tree: '', index: `S 100644 ${object} 0\tfile\0` }) },
+      'sha1',
+      inventoryBounds(),
+      new AbortController().signal,
+    )
+
+    expect(inventory.entries).toMatchObject([{
+      index: { mode: '100644', objectId: object },
+      skipWorktree: true,
+      current: { kind: 'captured', evidence: { kind: 'missing' } },
+    }])
   })
 
   it('retains every non-zero conflict stage in its exact slot', async () => {
@@ -496,7 +514,7 @@ describe('closed repository inventory', () => {
       if (command === 'ls-tree -r --full-tree -z HEAD') {
         return output(`160000 commit ${gitlinkObject}\tmodule\0`)
       }
-      if (command === 'ls-files -t --stage --full-name -z') {
+      if (command === 'ls-files --no-sparse -t --stage --full-name -z') {
         return output(`H 160000 ${gitlinkObject} 0\tmodule\0`)
       }
       if (command === 'ls-files --others --exclude-standard --full-name -z') return output('')
@@ -639,7 +657,7 @@ describe('closed repository inventory', () => {
       const run = async (_cwd: string, args: readonly string[]) => {
         const command = args.join(' ')
         if (command === 'ls-tree -r --full-tree -z HEAD'
-          || command === 'ls-files -t --stage --full-name -z'
+          || command === 'ls-files --no-sparse -t --stage --full-name -z'
           || command === 'ls-files --others --exclude-standard --full-name -z'
           || command === 'config --no-includes --null --name-only --list'
           || command === 'check-attr --all -z --stdin') return output('')
@@ -672,7 +690,7 @@ describe('closed repository inventory', () => {
     const run = async (_cwd: string, args: readonly string[]) => {
       const command = args.join(' ')
       if (command === 'ls-tree -r --full-tree -z HEAD'
-        || command === 'ls-files -t --stage --full-name -z'
+        || command === 'ls-files --no-sparse -t --stage --full-name -z'
         || command === 'ls-files --others --exclude-standard --full-name -z'
         || command === 'config --no-includes --null --name-only --list') return output('')
       if (command === 'config --no-includes --null --type=bool --get-all core.fileMode') return output('false\0')
@@ -1404,6 +1422,51 @@ describe('closed repository inventory', () => {
     })
   })
 
+  it.each([
+    {
+      name: 'before the first nested object is available',
+      reader: async () => undefined,
+    },
+    {
+      name: 'before the nested object confirmation is available',
+      reader: (() => {
+        let reads = 0
+        return async () => ++reads === 1
+          ? { objectId: '2'.repeat(40), semanticGitOutputBytes: 1 }
+          : undefined
+      })(),
+    },
+  ])('rejects submodule identity drift $name', async ({ reader }) => {
+    const root = await mkdtemp(join(tmpdir(), 'saki-inventory-'))
+    roots.push(root)
+    const modulePath = join(root, 'module')
+    await mkdir(modulePath)
+    const object = '1'.repeat(40)
+    let moduleStats = 0
+    const inventory = await captureRepositoryInventory(
+      root,
+      { run: inventoryCommands({
+        tree: `160000 commit ${object}\tmodule\0`,
+        index: `H 160000 ${object} 0\tmodule\0`,
+      }) },
+      'sha1',
+      inventoryBounds(),
+      new AbortController().signal,
+      reader,
+      nodeFacts({
+        async lstat(path) {
+          const value = await lstat(path, { bigint: true })
+          if (path !== modulePath || ++moduleStats !== 2) return value
+          return changedStat(value, 'ino')
+        },
+      }),
+    )
+
+    expect(inventory.entries[0]?.current).toEqual({
+      kind: 'unavailable', reason: 'unstable-content',
+    })
+  })
+
   it('retains missing evidence when the deleted path parent is also absent', async () => {
     const root = await mkdtemp(join(tmpdir(), 'saki-inventory-'))
     roots.push(root)
@@ -1587,7 +1650,7 @@ function inventoryCommands(values: {
   return async (_cwd: string, args: readonly string[]) => {
     const command = args.join(' ')
     if (command === 'ls-tree -r --full-tree -z HEAD') return output(values.tree)
-    if (command === 'ls-files -t --stage --full-name -z') return output(values.index)
+    if (command === 'ls-files --no-sparse -t --stage --full-name -z') return output(values.index)
     if (command === 'ls-files --others --exclude-standard --full-name -z') return output(values.untracked ?? '')
     if (command === 'config --no-includes --null --name-only --list') return output(values.configNames ?? '')
     if (command === 'config --no-includes --null --type=bool --get-all core.fileMode') return output('false\0')

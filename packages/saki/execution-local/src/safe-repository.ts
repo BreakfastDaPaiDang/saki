@@ -4,24 +4,28 @@
  */
 
 import { createHash } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, lstat as nativeLstat, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, normalize, relative, resolve as resolvePath, sep, win32 } from 'node:path'
 import type { FileSystem, FsVersion } from '@deepseek-ai/dsh-fs'
 import {
   canonicalDigest,
+  isGitObjectId,
   isSafeGitBranchName,
   isSafeGitRef,
   MAX_GIT_REF_CHARS,
   MAX_TRUSTED_PATH_CHARS,
 } from '@breakfastdapaidang/saki-execution'
+import { isSafeProjectDiffQuery } from './diff-query.ts'
 import { GitCommandError } from './git-runner.ts'
 import {
   isGitConfigIncludeName,
   type RepositoryInventoryGit,
 } from './inventory.ts'
+import { isSafeProjectStatusQuery } from './status-query.ts'
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
+const NANOSECONDS_PER_SECOND = 1_000_000_000n
 const BOOLEAN_CONFIG_KEYS = new Set(['core.autocrlf', 'core.fileMode', 'core.symlinks'])
 const SCOPED_BOOLEAN_CONFIG_KEYS = new Set(['core.fsmonitor', 'extensions.worktreeConfig'])
 
@@ -31,6 +35,8 @@ export interface SafeRepositoryView extends AsyncDisposable {
   readonly gitDirectoryPath: string
   readonly commonDirectoryPath: string
   readonly locked: boolean
+  /** Whether admitted repository-local configuration enables sparse index semantics. */
+  readonly sparseIndexEnabled: boolean
   readonly git: RepositoryInventoryGit
   /** Reject if this round's source control files or administrative identities changed. */
   assertSourceControlUnchanged(signal: AbortSignal): Promise<void>
@@ -65,6 +71,10 @@ export class RepositoryControlChangedError extends Error {
 interface StableFile {
   readonly bytes: Uint8Array
   readonly version: FsVersion
+}
+
+interface StableIndexFile extends StableFile {
+  readonly mtimeNs: bigint
 }
 
 interface StableDirectory {
@@ -119,7 +129,7 @@ export async function openSafeRepositoryView(
 
     scratch = await mkdtemp(join(tmpdir(), 'saki-git-view-'))
     await chmod(scratch, 0o700)
-    const configSnapshot = join(scratch, 'config')
+    const configSnapshot = join(scratch, 'source.config')
     await writePrivateFile(configSnapshot, config.bytes)
     if (await configSnapshotIsUnsafe(rawGit, scratch, configSnapshot, signal)) {
       throw new SafeRepositoryError('unavailable')
@@ -147,6 +157,16 @@ export async function openSafeRepositoryView(
       signal,
     ))?.at(-1)
     if (refStorage !== undefined && refStorage !== 'files') throw new SafeRepositoryError('unavailable')
+    const configuredObjectFormat = (await explicitConfigValues(
+      rawGit,
+      scratch,
+      configSnapshot,
+      'extensions.objectFormat',
+      signal,
+    ))?.at(-1) ?? 'sha1'
+    if (configuredObjectFormat !== 'sha1' && configuredObjectFormat !== 'sha256') {
+      throw new SafeRepositoryError('malformed')
+    }
     const worktreeConfigValues = await explicitConfigBooleans(
       rawGit,
       scratch,
@@ -156,6 +176,7 @@ export async function openSafeRepositoryView(
     )
     const worktreeConfigEnabled = worktreeConfigValues?.at(-1)
     let worktreeConfig: StableFile | undefined
+    let worktreeConfigSnapshot: string | undefined
     let activeBare: boolean | undefined
     let activeWorktree: string | undefined
     if (worktreeConfigEnabled === true) {
@@ -167,11 +188,13 @@ export async function openSafeRepositoryView(
         false,
       )
       if (worktreeConfig !== undefined) {
-        const snapshot = join(scratch, 'config.worktree')
+        const snapshot = join(scratch, 'source.config.worktree')
+        worktreeConfigSnapshot = snapshot
         await writePrivateFile(snapshot, worktreeConfig.bytes)
         if (await configSnapshotIsUnsafe(rawGit, scratch, snapshot, signal)) {
           throw new SafeRepositoryError('unavailable')
         }
+        await rejectWorktreeRepositoryIdentityOverrides(rawGit, scratch, snapshot, signal)
         activeBare = (await explicitConfigBooleans(
           rawGit,
           scratch,
@@ -189,6 +212,36 @@ export async function openSafeRepositoryView(
         if (activeWorktree === '') throw new SafeRepositoryError('malformed')
       }
     }
+    const sparseCheckout = await effectiveSnapshotBoolean(
+      rawGit,
+      scratch,
+      configSnapshot,
+      worktreeConfigSnapshot,
+      'core.sparseCheckout',
+      signal,
+    )
+    const sparseIndex = await effectiveSnapshotBoolean(
+      rawGit,
+      scratch,
+      configSnapshot,
+      worktreeConfigSnapshot,
+      'index.sparse',
+      signal,
+    )
+    const sparseIndexEnabled = sparseCheckout === true || sparseIndex === true
+    await writeMinimalRepositoryConfig(
+      rawGit,
+      scratch,
+      configSnapshot,
+      worktreeConfigSnapshot,
+      signal,
+    )
+    const remoteUrlOutput = await readRemoteUrlConfig(
+      rawGit,
+      scratch,
+      [configSnapshot, ...(worktreeConfigSnapshot === undefined ? [] : [worktreeConfigSnapshot])],
+      signal,
+    )
     const ignoresCommonMainWorktreeValues = discovered.topology.layout === 'linked'
       && worktreeConfigEnabled !== true
     const effectiveBare = ignoresCommonMainWorktreeValues ? undefined : activeBare ?? commonBare
@@ -202,8 +255,13 @@ export async function openSafeRepositoryView(
     const branch = parseHeadBranch(head.bytes)
     await writePrivateFile(join(scratch, 'HEAD'), head.bytes)
 
-    const index = await readStableFile(fs, join(gitDirectory.path, 'index'), maxControlFileBytes, signal, false)
-    if (index !== undefined) await writePrivateFile(join(scratch, 'index'), index.bytes)
+    const index = await readStableIndexFile(
+      fs,
+      join(gitDirectory.path, 'index'),
+      maxControlFileBytes,
+      signal,
+    )
+    if (index !== undefined) await writePrivateIndex(join(scratch, 'index'), index)
     const packedRefs = await readStableFile(
       fs,
       join(commonDirectory.path, 'packed-refs'),
@@ -249,6 +307,9 @@ export async function openSafeRepositoryView(
       join(privateObjectInfo, 'alternates'),
       Buffer.from(`${gitAlternatePath(objects.path)}\n`, 'utf8'),
     )
+    if (index !== undefined && await hasSplitIndex(rawGit, scratch, topLevel.path, signal)) {
+      throw new SafeRepositoryError('unavailable')
+    }
     const exclude = await copyOptionalControlFile(
       fs,
       join(commonDirectory.path, 'info', 'exclude'),
@@ -260,6 +321,17 @@ export async function openSafeRepositoryView(
       fs,
       join(commonDirectory.path, 'info', 'attributes'),
       join(scratch, 'info', 'attributes'),
+      maxControlFileBytes,
+      signal,
+    )
+    const upstream = await pinConfiguredUpstream(
+      fs,
+      rawGit,
+      scratch,
+      topLevel.path,
+      commonDirectory.path,
+      branch,
+      configuredObjectFormat,
       maxControlFileBytes,
       signal,
     )
@@ -283,10 +355,13 @@ export async function openSafeRepositoryView(
       index: sourceFileStamp(index),
       packedRefs: sourceFileStamp(packedRefs),
       looseRef: sourceFileStamp(looseRef),
+      upstreamRef: upstream?.ref,
+      upstreamLooseRef: sourceFileStamp(upstream?.looseRef),
       objects,
       sourceObjectAlternatesAbsent: true,
       exclude: sourceFileStamp(exclude),
       attributes: sourceFileStamp(attributes),
+      sparseIndexEnabled,
     })
 
     const privateGitDirectory = scratch
@@ -297,6 +372,11 @@ export async function openSafeRepositoryView(
         if (argsEqual(args, ['rev-parse', '--path-format=absolute', '--show-toplevel'])) return textOutput(topLevel.path)
         if (argsEqual(args, ['rev-parse', '--path-format=absolute', '--absolute-git-dir'])) return textOutput(gitDirectory.path)
         if (argsEqual(args, ['rev-parse', '--path-format=absolute', '--git-common-dir'])) return textOutput(commonDirectory.path)
+        if (argsEqual(args, [
+          'config', '--no-includes', '--null', '--get-regexp', '^remote\\..*\\.url$',
+        ])) {
+          return { stdout: Buffer.from(remoteUrlOutput), stderr: Buffer.alloc(0) }
+        }
         if (argsEqual(args, [
           '--bare', `--git-dir=${commonDirectory.path}`, 'worktree', 'list', '--porcelain', '-z',
         ])) {
@@ -312,16 +392,28 @@ export async function openSafeRepositoryView(
             stderr: Buffer.alloc(0),
           }
         }
-        if (!repositoryQueryIsAllowed(args, stdin !== undefined)) {
+        if (!repositoryQueryIsAllowed(args, stdin !== undefined, configuredObjectFormat)) {
           throw new SafeRepositoryError('unavailable')
         }
-        const output = await rawGit.run(
-          privateGitDirectory,
-          [`--git-dir=${privateGitDirectory}`, `--work-tree=${topLevel.path}`, ...args],
-          commandSignal,
-          stdin,
-          outputBudget,
-        )
+        let output: Awaited<ReturnType<RepositoryInventoryGit['run']>>
+        try {
+          output = await rawGit.run(
+            privateGitDirectory,
+            [`--git-dir=${privateGitDirectory}`, `--work-tree=${topLevel.path}`, ...args],
+            commandSignal,
+            stdin,
+            outputBudget,
+          )
+        } catch (error) {
+          if (argsEqual(args, ['rev-parse', '--verify', 'HEAD'])
+            && error instanceof GitCommandError
+            && error.code === 'nonzero'
+            && error.exitCode === 128
+            && branch !== undefined) {
+            observedHead = '0'.repeat(configuredObjectFormat === 'sha1' ? 40 : 64)
+          }
+          throw error
+        }
         if (args[0] === 'rev-parse' && args.at(-1) === 'HEAD') {
           observedHead = oneLine(output.stdout)
         }
@@ -337,6 +429,7 @@ export async function openSafeRepositoryView(
         gitDirectoryPath: gitDirectory.path,
         commonDirectoryPath: commonDirectory.path,
         locked,
+        sparseIndexEnabled,
         git,
         sourceControlIdentity,
         async assertSourceControlUnchanged(assertSignal) {
@@ -632,6 +725,26 @@ async function readStableFile(
   return { bytes, version: confirmed.version }
 }
 
+async function readStableIndexFile(
+  fs: FileSystem,
+  path: string,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<StableIndexFile | undefined> {
+  const file = await readStableFile(fs, path, maxBytes, signal, false)
+  if (file === undefined) return undefined
+  signal.throwIfAborted()
+  const nativeInfo = await nativeLstat(path, { bigint: true })
+  signal.throwIfAborted()
+  const confirmed = await fs.lstat(path, undefined, signal)
+  if (!nativeInfo.isFile()
+    || confirmed?.type !== 'file'
+    || confirmed.version !== file.version) {
+    throw new SafeRepositoryError('unavailable')
+  }
+  return { ...file, mtimeNs: nativeInfo.mtimeNs }
+}
+
 async function configSnapshotIsUnsafe(
   git: RepositoryInventoryGit,
   cwd: string,
@@ -661,6 +774,19 @@ async function explicitConfigBooleans(
   return values.map(value => value === 'true')
 }
 
+async function effectiveSnapshotBoolean(
+  git: RepositoryInventoryGit,
+  cwd: string,
+  commonSnapshot: string,
+  worktreeSnapshot: string | undefined,
+  key: string,
+  signal: AbortSignal,
+): Promise<boolean | undefined> {
+  const common = (await explicitConfigBooleans(git, cwd, commonSnapshot, key, signal))?.at(-1)
+  if (worktreeSnapshot === undefined) return common
+  return (await explicitConfigBooleans(git, cwd, worktreeSnapshot, key, signal))?.at(-1) ?? common
+}
+
 async function explicitConfigValues(
   git: RepositoryInventoryGit,
   cwd: string,
@@ -682,6 +808,243 @@ async function explicitConfigValues(
   }
   if (output.stderr.byteLength !== 0) throw new SafeRepositoryError('unavailable')
   return splitNul(output.stdout).map(raw => decode(raw))
+}
+
+async function rejectWorktreeRepositoryIdentityOverrides(
+  git: RepositoryInventoryGit,
+  cwd: string,
+  snapshot: string,
+  signal: AbortSignal,
+): Promise<void> {
+  for (const key of ['core.repositoryFormatVersion', 'extensions.objectFormat', 'extensions.refStorage']) {
+    if (await explicitConfigValues(git, cwd, snapshot, key, signal) !== undefined) {
+      throw new SafeRepositoryError('unavailable')
+    }
+  }
+}
+
+async function readRemoteUrlConfig(
+  git: RepositoryInventoryGit,
+  cwd: string,
+  snapshots: readonly string[],
+  signal: AbortSignal,
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = []
+  for (const snapshot of snapshots) {
+    try {
+      const output = await git.run(cwd, [
+        'config', '--no-includes', '--file', snapshot, '--null', '--get-regexp', '^remote\\..*\\.url$',
+      ], signal)
+      if (output.stderr.byteLength !== 0) throw new SafeRepositoryError('unavailable')
+      chunks.push(output.stdout)
+    } catch (error) {
+      if (error instanceof GitCommandError && error.code === 'nonzero' && error.exitCode === 1) continue
+      if (error instanceof SafeRepositoryError) throw error
+      throw new SafeRepositoryError('unavailable')
+    }
+  }
+  return Buffer.concat(chunks)
+}
+
+async function hasSplitIndex(
+  git: RepositoryInventoryGit,
+  privateGitDirectory: string,
+  worktree: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const output = await git.run(privateGitDirectory, [
+    `--git-dir=${privateGitDirectory}`,
+    `--work-tree=${worktree}`,
+    'rev-parse', '--shared-index-path',
+  ], signal)
+  if (output.stderr.byteLength !== 0) throw new SafeRepositoryError('unavailable')
+  return output.stdout.byteLength !== 0 && oneLine(output.stdout) !== ''
+}
+
+interface PinnedUpstream {
+  readonly ref: string
+  readonly looseRef?: StableFile
+}
+
+async function pinConfiguredUpstream(
+  fs: FileSystem,
+  git: RepositoryInventoryGit,
+  privateGitDirectory: string,
+  worktree: string,
+  commonGitDirectory: string,
+  branch: string | undefined,
+  objectFormat: 'sha1' | 'sha256',
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<PinnedUpstream | undefined> {
+  if (branch === undefined) return undefined
+  const output = await git.run(privateGitDirectory, [
+    `--git-dir=${privateGitDirectory}`,
+    `--work-tree=${worktree}`,
+    'for-each-ref', '--count=2', '--format=%(refname)%00%(upstream)%00%(upstream:short)%00', branch,
+  ], signal)
+  if (output.stderr.byteLength !== 0) throw new SafeRepositoryError('unavailable')
+  const upstream = parseConfiguredUpstream(output.stdout, branch)
+  if (upstream === undefined) return undefined
+  if (upstream.ref.length > MAX_GIT_REF_CHARS || upstream.short.length > MAX_GIT_REF_CHARS) {
+    throw new SafeRepositoryError('unavailable')
+  }
+  if (!upstream.ref.startsWith('refs/') || !isSafeGitRef(upstream.ref)
+    || /[\u0000-\u0020\u007f]/u.test(upstream.short)) {
+    throw new SafeRepositoryError('malformed')
+  }
+  if (upstream.ref === branch) return { ref: upstream.ref }
+  const components = upstream.ref.split('/')
+  const source = join(commonGitDirectory, ...components)
+  const destination = join(privateGitDirectory, ...components)
+  if (!isSafeLocalRepositoryPath(source) || source.length > MAX_TRUSTED_PATH_CHARS
+    || !isSafeLocalRepositoryPath(destination) || destination.length > MAX_TRUSTED_PATH_CHARS) {
+    throw new SafeRepositoryError('unavailable')
+  }
+  const looseRef = await readStableFile(fs, source, maxBytes, signal, false)
+  if (looseRef === undefined) return { ref: upstream.ref }
+  const objectId = oneLine(looseRef.bytes)
+  if (!isGitObjectId(objectId, objectFormat)) throw new SafeRepositoryError('unavailable')
+  await mkdir(dirname(destination), { recursive: true, mode: 0o700 })
+  await writePrivateFile(destination, looseRef.bytes)
+  return { ref: upstream.ref, looseRef }
+}
+
+function parseConfiguredUpstream(
+  bytes: Uint8Array,
+  branch: string,
+): { readonly ref: string; readonly short: string } | undefined {
+  const text = decode(bytes)
+  if (text === '') return undefined
+  const match = /^([^\0\r\n]+)\0([^\0\r\n]*)\0([^\0\r\n]*)\0\n$/u.exec(text)
+  if (match === null || match[1] !== branch || (match[2] === '') !== (match[3] === '')) {
+    throw new SafeRepositoryError('malformed')
+  }
+  return match[2] === '' ? undefined : { ref: match[2] as string, short: match[3] as string }
+}
+
+const PRIVATE_CONFIG_KEYS = new Set([
+  'core.repositoryformatversion',
+  'core.filemode',
+  'core.symlinks',
+  'core.ignorecase',
+  'core.precomposeunicode',
+  'core.autocrlf',
+  'core.eol',
+  'core.bare',
+  'core.fsmonitor',
+  'core.ignorestat',
+  'core.trustctime',
+  'core.checkstat',
+  'extensions.objectformat',
+  'extensions.refstorage',
+])
+
+async function writeMinimalRepositoryConfig(
+  git: RepositoryInventoryGit,
+  cwd: string,
+  commonSnapshot: string,
+  worktreeSnapshot: string | undefined,
+  signal: AbortSignal,
+): Promise<void> {
+  const destination = join(cwd, 'config')
+  const entries: PrivateConfigEntry[] = []
+  const snapshots: ReadonlyArray<readonly [string, 'common' | 'worktree']> = [
+    [commonSnapshot, 'common'],
+    ...(worktreeSnapshot === undefined ? [] : [[worktreeSnapshot, 'worktree'] as const]),
+  ]
+  for (const [snapshot, scope] of snapshots) {
+    const output = await git.run(cwd, [
+      'config', '--no-includes', '--file', snapshot, '--null', '--list',
+    ], signal)
+    if (output.stderr.byteLength !== 0) throw new SafeRepositoryError('unavailable')
+    for (const record of splitNul(output.stdout)) {
+      const separator = record.indexOf(0x0a)
+      if (separator <= 0) throw new SafeRepositoryError('malformed')
+      const name = decode(record.subarray(0, separator))
+      const value = decode(record.subarray(separator + 1))
+      const entry = privateConfigEntry(name, value, scope)
+      if (entry !== undefined) entries.push(entry)
+    }
+  }
+  for (const [variable, value] of [
+    ['bare', 'false'],
+    ['fsmonitor', 'false'],
+    ['ignorestat', 'false'],
+    ['trustctime', 'true'],
+    ['checkstat', 'default'],
+  ] as const) {
+    entries.push({ section: 'core', variable, value })
+  }
+  await writePrivateFile(destination, Buffer.from(serializePrivateConfig(entries), 'utf8'))
+}
+
+interface PrivateConfigEntry {
+  readonly section: 'core' | 'extensions' | 'branch' | 'remote'
+  readonly subsection?: string
+  readonly variable: string
+  readonly value: string
+}
+
+function privateConfigEntry(
+  name: string,
+  value: string,
+  scope: 'common' | 'worktree',
+): PrivateConfigEntry | undefined {
+  const normalized = name.toLowerCase()
+  if (PRIVATE_CONFIG_KEYS.has(normalized)) {
+    if (scope === 'worktree' && (normalized === 'core.repositoryformatversion'
+      || normalized === 'extensions.objectformat'
+      || normalized === 'extensions.refstorage')) return undefined
+    const separator = normalized.indexOf('.')
+    const section = normalized.slice(0, separator) as 'core' | 'extensions'
+    return { section, variable: normalized.slice(separator + 1), value }
+  }
+  if (/[\u0000-\u001f\u007f]/u.test(name)) return undefined
+  return subsectionConfigEntry(name, normalized, value, 'branch.', ['remote', 'merge'])
+    ?? subsectionConfigEntry(name, normalized, value, 'remote.', ['fetch'])
+}
+
+function subsectionConfigEntry(
+  name: string,
+  normalized: string,
+  value: string,
+  prefix: 'branch.' | 'remote.',
+  variables: readonly string[],
+): PrivateConfigEntry | undefined {
+  if (!normalized.startsWith(prefix)) return undefined
+  for (const variable of variables) {
+    const suffix = `.${variable}`
+    if (!normalized.endsWith(suffix) || normalized.length <= prefix.length + suffix.length) continue
+    return {
+      section: prefix === 'branch.' ? 'branch' : 'remote',
+      subsection: name.slice(prefix.length, -suffix.length),
+      variable,
+      value,
+    }
+  }
+  return undefined
+}
+
+function serializePrivateConfig(entries: readonly PrivateConfigEntry[]): string {
+  let output = ''
+  for (const entry of entries) {
+    const subsection = entry.subsection === undefined ? '' : ` ${quoteConfig(entry.subsection)}`
+    output += `[${entry.section}${subsection}]\n\t${entry.variable} = ${quoteConfig(entry.value)}\n`
+  }
+  return output
+}
+
+function quoteConfig(value: string): string {
+  if (/[\u0000\u0001-\u0007\u000b-\u001f\u007f]/u.test(value)) {
+    throw new SafeRepositoryError('unavailable')
+  }
+  return `"${value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll('\b', '\\b')
+    .replaceAll('\t', '\\t')
+    .replaceAll('\n', '\\n')}"`
 }
 
 function parseHeadBranch(bytes: Uint8Array): string | undefined {
@@ -735,6 +1098,20 @@ async function writePrivateFile(path: string, bytes: Uint8Array): Promise<void> 
   await writeFile(path, bytes, { flag: 'wx', mode: 0o600 })
 }
 
+async function writePrivateIndex(path: string, index: StableIndexFile): Promise<void> {
+  await writePrivateFile(path, index.bytes)
+  const backdatedNanoseconds = index.mtimeNs > NANOSECONDS_PER_SECOND
+    ? index.mtimeNs - NANOSECONDS_PER_SECOND
+    : 0n
+  const timestampSeconds = backdatedNanoseconds / NANOSECONDS_PER_SECOND
+  await utimes(path, Number(timestampSeconds), Number(timestampSeconds))
+  const confirmed = await nativeLstat(path, { bigint: true })
+  /* v8 ignore next -- private creation plus backdated whole-second utimes cannot yield a newer mtime; fail closed on anomalies. */
+  if (confirmed.mtimeNs > index.mtimeNs) {
+    throw new SafeRepositoryError('unavailable')
+  }
+}
+
 function splitNul(bytes: Uint8Array): Uint8Array[] {
   if (bytes.byteLength === 0) return []
   if (bytes[bytes.byteLength - 1] !== 0) throw new SafeRepositoryError('malformed')
@@ -763,26 +1140,39 @@ function oneLine(bytes: Uint8Array): string {
   return value
 }
 
-function repositoryQueryIsAllowed(args: readonly string[], hasStdin: boolean): boolean {
+function repositoryQueryIsAllowed(
+  args: readonly string[],
+  hasStdin: boolean,
+  objectFormat: 'sha1' | 'sha256',
+): boolean {
   if (argsEqual(args, ['check-attr', '--all', '-z', '--stdin'])) return hasStdin
   if (hasStdin) return false
-  if (argsEqual(args, ['ls-tree', '-r', '--full-tree', '-z', 'HEAD'])
-    || argsEqual(args, ['ls-files', '-t', '--stage', '--full-name', '-z'])
+  if (isSafeProjectDiffQuery(args, objectFormat)) return true
+  if (isSafeProjectStatusQuery(args)) return true
+  if (argsEqual(args, ['ls-files', '--no-sparse', '-t', '--stage', '--full-name', '-z'])
+    || argsEqual(args, ['ls-files', '-v', '-z', '--'])
     || argsEqual(args, ['ls-files', '--others', '--exclude-standard', '--full-name', '-z'])
     || argsEqual(args, ['rev-parse', '--show-object-format'])
     || argsEqual(args, ['rev-parse', '--verify', 'HEAD'])
     || argsEqual(args, ['rev-parse', '--verify', 'HEAD^{commit}'])
+    || argsEqual(args, ['write-tree'])
     || argsEqual(args, ['symbolic-ref', '--quiet', 'HEAD'])
     || argsEqual(args, ['config', '--no-includes', '--null', '--name-only', '--list'])
     || argsEqual(args, ['config', '--no-includes', '--local', '--null', '--name-only', '--list'])
     || argsEqual(args, ['config', '--no-includes', '--worktree', '--null', '--name-only', '--list'])
-    || argsEqual(args, ['config', '--no-includes', '--null', '--get-regexp', '^remote\\..*\\.url$'])) {
+  ) {
+    return true
+  }
+  if (args.length === 5
+    && argsEqual(args.slice(0, 4), ['ls-tree', '-r', '--full-tree', '-z'])
+    && args[4] !== undefined
+    && (args[4] === 'HEAD' || isGitObjectId(args[4]))) {
     return true
   }
   if (args.length === 4
     && args[0] === 'for-each-ref'
     && args[1] === '--count=2'
-    && args[2] === '--format=%(refname)%00%(upstream)%00'
+    && args[2] === '--format=%(refname)%00%(upstream)%00%(upstream:short)%00'
     && args[3] !== undefined
     && args[3].length <= MAX_GIT_REF_CHARS
     && args[3].startsWith('refs/heads/')

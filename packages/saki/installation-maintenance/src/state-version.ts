@@ -1,0 +1,107 @@
+/** Complete Saki product-state versions assembled by Installation maintenance. */
+
+import {
+  sakiControlPlaneDomainSpec,
+  sakiControlPlaneMigrationPlan,
+  sakiControlPlaneV2DomainSpec,
+  sakiControlPlaneV3DomainSpec,
+  sakiControlPlaneV4DomainSpec,
+  sakiStorageGenerationDomainSpec,
+  sakiStorageGenerationV1DomainSpec,
+  sakiStorageGenerationV2DomainSpec,
+} from '@breakfastdapaidang/saki-control-plane'
+import { sakiHostExecutionDomainSpec } from '@breakfastdapaidang/saki-execution-local'
+
+/** One complete readable Saki product-state format. */
+export type SakiStateVersionSpec =
+  | Readonly<{
+    version: 2
+    domains: readonly [typeof sakiControlPlaneV2DomainSpec]
+    controlPlane: typeof sakiControlPlaneV2DomainSpec
+  }>
+  | Readonly<{
+    version: 3
+    domains: readonly [typeof sakiControlPlaneV3DomainSpec, typeof sakiStorageGenerationV1DomainSpec]
+    controlPlane: typeof sakiControlPlaneV3DomainSpec
+    storageGeneration: typeof sakiStorageGenerationV1DomainSpec
+  }>
+  | Readonly<{
+    version: 4
+    domains: readonly [typeof sakiControlPlaneV4DomainSpec, typeof sakiStorageGenerationV2DomainSpec]
+    controlPlane: typeof sakiControlPlaneV4DomainSpec
+    storageGeneration: typeof sakiStorageGenerationV2DomainSpec
+  }>
+  | Readonly<{
+    version: 5
+    domains: readonly [
+      typeof sakiControlPlaneDomainSpec,
+      typeof sakiHostExecutionDomainSpec,
+      typeof sakiStorageGenerationDomainSpec,
+    ]
+    controlPlane: typeof sakiControlPlaneDomainSpec
+    hostExecution: typeof sakiHostExecutionDomainSpec
+    storageGeneration: typeof sakiStorageGenerationDomainSpec
+  }>
+
+/** State-format support owned by code, independently of artifact build provenance. */
+export interface SakiStateCapability {
+  /** Every product-state version this build can inspect or migrate. */
+  readonly readable: readonly SakiStateVersionSpec[]
+  /** The sole product-state version this build may create or publish. */
+  readonly writable: Extract<SakiStateVersionSpec, { readonly version: 5 }>
+  /**
+   * Resolve one readable product-state format.
+   * @param version - untrusted manifest or backup state version.
+   * @returns the exact readable format, or `undefined` when this build cannot read it.
+   */
+  resolveReadable(version: number): SakiStateVersionSpec | undefined
+}
+
+const V2_STATE_SPEC = Object.freeze({
+  version: 2,
+  domains: Object.freeze([sakiControlPlaneV2DomainSpec] as const),
+  controlPlane: sakiControlPlaneV2DomainSpec,
+}) satisfies SakiStateVersionSpec
+
+const V3_STATE_SPEC = Object.freeze({
+  version: 3,
+  domains: Object.freeze([sakiControlPlaneV3DomainSpec, sakiStorageGenerationV1DomainSpec] as const),
+  controlPlane: sakiControlPlaneV3DomainSpec,
+  storageGeneration: sakiStorageGenerationV1DomainSpec,
+}) satisfies SakiStateVersionSpec
+
+const V4_STATE_SPEC = Object.freeze({
+  version: 4,
+  domains: Object.freeze([sakiControlPlaneV4DomainSpec, sakiStorageGenerationV2DomainSpec] as const),
+  controlPlane: sakiControlPlaneV4DomainSpec,
+  storageGeneration: sakiStorageGenerationV2DomainSpec,
+}) satisfies SakiStateVersionSpec
+
+const V5_STATE_SPEC = Object.freeze({
+  version: 5,
+  domains: Object.freeze([
+    sakiControlPlaneDomainSpec,
+    sakiHostExecutionDomainSpec,
+    sakiStorageGenerationDomainSpec,
+  ] as const),
+  controlPlane: sakiControlPlaneDomainSpec,
+  hostExecution: sakiHostExecutionDomainSpec,
+  storageGeneration: sakiStorageGenerationDomainSpec,
+}) satisfies SakiStateVersionSpec
+
+/** Current Saki state-format capability; build ids are deliberately absent. */
+export const sakiStateCapability: SakiStateCapability = Object.freeze({
+  readable: Object.freeze([V2_STATE_SPEC, V3_STATE_SPEC, V4_STATE_SPEC, V5_STATE_SPEC]),
+  writable: V5_STATE_SPEC,
+  resolveReadable: (version: number) => {
+    if (version === V2_STATE_SPEC.version) return V2_STATE_SPEC
+    if (version === V3_STATE_SPEC.version) return V3_STATE_SPEC
+    if (version === V4_STATE_SPEC.version) return V4_STATE_SPEC
+    if (version === V5_STATE_SPEC.version) return V5_STATE_SPEC
+    return undefined
+  },
+})
+
+/** Control-plane migration chain used when any retained v2-v4 format advances to writable v5. */
+export const sakiStateControlPlaneMigrationPlan: typeof sakiControlPlaneMigrationPlan =
+  sakiControlPlaneMigrationPlan

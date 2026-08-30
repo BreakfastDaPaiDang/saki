@@ -2,7 +2,6 @@
 
 import { lstat, rmdir } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { sakiStateCapability } from '@breakfastdapaidang/saki-control-plane'
 import type {
   SakiBuildId,
   SakiInstallationId,
@@ -12,8 +11,10 @@ import {
   readClosedCurrentSakiState,
   readClosedProvisioningSakiState,
   readClosedSakiV3State,
+  readClosedSakiV4State,
 } from './closed-state.ts'
 import { SakiMaintenanceError } from './error.ts'
+import { sakiStateCapability } from './state-version.ts'
 import { discardDurableFileTemporary } from './durable-files.ts'
 import type { ActiveOperation } from './journal.ts'
 import { readActiveOperation } from './journal.ts'
@@ -223,7 +224,7 @@ function requireUpgradeBackupSource(
 
 function requireRetainedUpgradeSource(
   journal: Extract<SakiOperationJournal, { readonly kind: 'upgrade' }>,
-  stateVersion: 2 | 3,
+  stateVersion: 2 | 3 | 4,
   storageGenerationId: SakiStorageGenerationId,
   sourceBuildId: SakiBuildId,
 ): void {
@@ -268,7 +269,7 @@ async function recoverUpgrade(
   }
 
   let oldStorageGenerationId: SakiStorageGenerationId
-  let oldStateVersion: 2 | 3
+  let oldStateVersion: 2 | 3 | 4
   let oldSourceBuildId: SakiBuildId
   if (manifest === undefined) {
     const legacy = await validateClosedSakiV2Source(
@@ -283,7 +284,9 @@ async function recoverUpgrade(
   } else {
     if (manifest.value.phase !== 'ready'
       || manifest.value.installationId !== journal.installationId
-      || (manifest.value.stateVersion !== 2 && manifest.value.stateVersion !== 3)
+      || (manifest.value.stateVersion !== 2
+        && manifest.value.stateVersion !== 3
+        && manifest.value.stateVersion !== 4)
       || manifest.value.storageGenerationId === journal.candidateStorageGenerationId) {
       throw new SakiMaintenanceError(
         'recovery-required',
@@ -298,8 +301,18 @@ async function recoverUpgrade(
         old.installation.storageGenerationId,
         signal,
       )
-    } else {
+    } else if (manifest.value.stateVersion === 3) {
       await readClosedSakiV3State(
+        old.databasePath,
+        {
+          installationId: old.installation.installationId,
+          storageGenerationId: old.installation.storageGenerationId,
+          createdByBuildId: old.generation.createdByBuildId,
+        },
+        signal,
+      )
+    } else {
+      await readClosedSakiV4State(
         old.databasePath,
         {
           installationId: old.installation.installationId,

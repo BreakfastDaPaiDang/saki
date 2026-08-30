@@ -29,14 +29,26 @@ import {
   type SakiHostId,
 } from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { assertSupportedGitVersion, LocalSakiHostExecution, sanitizeRemote, type Config } from '../src/index.ts'
+import {
+  assertSupportedGitVersion,
+  LocalSakiHostExecution,
+  MIN_OPERATION_MAX_INDEX_BYTES,
+  sanitizeRemote,
+  type Config,
+} from '../src/index.ts'
 import { GitCommandError, GitRunner, gitInspectionEnvironment } from '../src/git-runner.ts'
 import {
   inspectLocalProjectSelection as inspectSelection,
+  inspectRemotes,
+  inspectStableLocalProjectSelection,
+  parseObservedUpstream,
   projectDisplayLocation,
+  projectSelectionRejectionReason,
+  worktreeHeadMatches,
   type AdministrativeDirectoryIdentityReader,
 } from '../src/inspection.ts'
 import { openSafeRepositoryView } from '../src/safe-repository.ts'
+import { mountLocalHostOperationStorage } from './storage.ts'
 
 const run = promisify(execFile)
 const roots: string[] = []
@@ -59,6 +71,8 @@ const CONFIG: Required<Config> = {
   baselineMaxFileBytes: 1024 * 1024,
   baselineMaxTotalFileBytes: 4 * 1024 * 1024,
   baselineMaxCaptureMs: 10_000,
+  operationMaxIndexBytes: 8 * 1024 * 1024,
+  operationMaxReflogBytes: 1024 * 1024,
 }
 
 const deterministicAdministrativeDirectoryIdentity: AdministrativeDirectoryIdentityReader = async (path, signal) => {
@@ -85,7 +99,9 @@ afterEach(async () => {
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
   await Promise.all(contexts.splice(0).map(async (context) => { await context.fiber.dispose() }))
-  await Promise.all(roots.splice(0).map(async (root) => { await rm(root, { recursive: true, force: true }) }))
+  await Promise.all(roots.splice(0).map(async (root) => {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  }))
 })
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
@@ -132,9 +148,31 @@ async function repository(
   return root
 }
 
+async function unbornRepository(prefix = 'saki-unborn-'): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), prefix))
+  roots.push(root)
+  await git(root, 'init')
+  await git(root, 'config', 'user.name', 'Saki Test')
+  await git(root, 'config', 'user.email', 'saki@example.invalid')
+  await git(root, 'config', 'core.autocrlf', 'false')
+  await git(root, 'config', 'commit.gpgSign', 'false')
+  return root
+}
+
+/** Add an initialized Gitlink while making VS Code's derived branch-base cache read-only during tests. */
+async function addSubmodule(root: string, source: string, path = 'module'): Promise<void> {
+  await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, path)
+  const module = join(root, path)
+  const branch = await gitText(module, 'branch', '--show-current')
+  if (branch !== '') {
+    await git(module, 'config', `branch.${branch}.vscode-merge-base`, `origin/${branch}`)
+  }
+}
+
 async function provider(workspaces: readonly { id: string; path: string }[] = []): Promise<LocalSakiHostExecution> {
   const ctx = new Context()
   contexts.push(ctx)
+  await mountLocalHostOperationStorage(ctx, roots)
   await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
   await ctx.plugin(LocalSubprocessRuntime)
   ctx.provide('workspaceRegistry', { list: () => [...workspaces] })
@@ -234,6 +272,64 @@ function syntheticFileSystem(
 }
 
 describe('LocalSakiHostExecution', () => {
+  it.each([
+    ['limit', 'unavailable'],
+    ['unsupported-index-state', 'unavailable'],
+    ['malformed', 'malformed'],
+  ] as const)('maps private inspection failure %s to %s', (reason, expected) => {
+    expect(projectSelectionRejectionReason(reason)).toBe(expected)
+  })
+
+  it.each([
+    {
+      name: 'rejects an absent worktree-list HEAD',
+      record: {},
+      head: { kind: 'commit' as const, objectId: '1'.repeat(40) },
+      objectFormat: 'sha1' as const,
+      expected: false,
+    },
+    {
+      name: 'accepts the same commit',
+      record: { head: '1'.repeat(40) },
+      head: { kind: 'commit' as const, objectId: '1'.repeat(40) },
+      objectFormat: 'sha1' as const,
+      expected: true,
+    },
+    ...(['sha1', 'sha256'] as const).map(objectFormat => ({
+      name: `accepts an unborn ${objectFormat} zero id`,
+      record: { head: '0'.repeat(objectFormat === 'sha1' ? 40 : 64) },
+      head: { kind: 'unborn' as const, symbolicRef: 'refs/heads/main' },
+      objectFormat,
+      expected: true,
+    })),
+    {
+      name: 'rejects a nonzero unborn id',
+      record: { head: '1'.repeat(40) },
+      head: { kind: 'unborn' as const, symbolicRef: 'refs/heads/main' },
+      objectFormat: 'sha1' as const,
+      expected: false,
+    },
+  ])('$name', ({ record, head, objectFormat, expected }) => {
+    expect(worktreeHeadMatches(record, head, objectFormat)).toBe(expected)
+  })
+
+  it('parses only an exact complete upstream frame', () => {
+    const branch = 'refs/heads/main'
+    for (const malformed of [
+      Buffer.from([0xff]),
+      Buffer.from(`${branch}\0\0\0`),
+      Buffer.from('refs/heads/other\0\0\0\n'),
+      Buffer.from(`${branch}\0refs/remotes/origin/main\0\0\n`),
+    ]) expect(() => parseObservedUpstream(malformed, branch)).toThrow()
+
+    expect(parseObservedUpstream(Buffer.alloc(0), branch)).toBeUndefined()
+    expect(parseObservedUpstream(Buffer.from(`${branch}\0\0\0\n`), branch)).toBeUndefined()
+    expect(parseObservedUpstream(
+      Buffer.from(`${branch}\0refs/remotes/origin/main\0origin/main\0\n`),
+      branch,
+    )).toEqual({ ref: 'refs/remotes/origin/main', short: 'origin/main' })
+  })
+
   it('rejects unsafe timer and byte bounds while parsing plugin Config', () => {
     expect(() => LocalSakiHostExecution.Config({ gitCommandTimeoutMs: MAX_TIMER_DELAY_MS + 1 })).toThrow()
     expect(() => LocalSakiHostExecution.Config({ gitTerminationGraceMs: MAX_TIMER_DELAY_MS + 1 })).toThrow()
@@ -261,6 +357,15 @@ describe('LocalSakiHostExecution', () => {
     }
   })
 
+  it('rejects the smallest index bound that cannot retain a Commit lock marker', () => {
+    expect(() => LocalSakiHostExecution.Config({
+      operationMaxIndexBytes: MIN_OPERATION_MAX_INDEX_BYTES - 1,
+    })).toThrow()
+    expect(() => LocalSakiHostExecution.Config({
+      operationMaxIndexBytes: MIN_OPERATION_MAX_INDEX_BYTES,
+    })).not.toThrow()
+  })
+
   it('rejects Git older than 2.45 at provider load validation', () => {
     for (const version of ['git version 2.44.9\n', 'git version 1.99.99\n']) {
       expect(() => { assertSupportedGitVersion(Buffer.from(version), Buffer.alloc(0)) })
@@ -281,7 +386,7 @@ describe('LocalSakiHostExecution', () => {
 
   it('inspects a real dirty repository without retaining changed filenames', async () => {
     const root = await repository()
-    await writeFile(join(root, 'tracked.txt'), 'changed\n')
+    await writeFile(join(root, 'tracked.txt'), 'changed contents\n')
     const execution = await provider([{ id: 'workspace-known', path: await realpath(root) }])
 
     const result = await execution.inspectProjectSelection({ hostId: HOST_ID, directoryLocator: root }, new AbortController().signal)
@@ -292,14 +397,41 @@ describe('LocalSakiHostExecution', () => {
     expect(result.inspection.projection).toMatchObject({
       hostId: HOST_ID,
       displayLocation: basename(root),
-      detached: false,
+      head: { kind: 'commit' },
       inheritedChangeEntryCount: 1,
       workspaceId: 'workspace-known',
       automaticMutationEligible: false,
       blockingReasons: ['dirty'],
       baseline: { kind: 'complete' },
     })
+    if (result.inspection.projection.head.kind === 'commit') {
+      expect(result.inspection.projection.head.symbolicRef).toMatch(/^refs\/heads\//u)
+    }
     expect(JSON.stringify(result.inspection.projection)).not.toContain('tracked.txt')
+  })
+
+  it('inspects an unborn attached worktree without inventing a zero commit id', async () => {
+    const root = await unbornRepository()
+    const symbolicRef = await gitText(root, 'symbolic-ref', 'HEAD')
+    const execution = await provider()
+
+    const result = await execution.inspectProjectSelection(
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+    )
+
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    if (!result.ok) return
+    expect(result.inspection.projection).toMatchObject({
+      observationVersion: 2,
+      head: { kind: 'unborn', symbolicRef },
+      inheritedChangeEntryCount: 0,
+      automaticMutationEligible: true,
+      blockingReasons: [],
+      fingerprint: { version: 2 },
+      baseline: { kind: 'complete', entries: [] },
+    })
+    expect(JSON.stringify(result.inspection.projection)).not.toMatch(/"objectId":"0+"/u)
   })
 
   it('resolves a selected repository subdirectory to its canonical Git top level', async () => {
@@ -379,7 +511,8 @@ describe('LocalSakiHostExecution', () => {
     expect(main.ok, JSON.stringify(main)).toBe(true)
     expect(other.ok, JSON.stringify(other)).toBe(true)
     if (!main.ok || !other.ok) return
-    expect(other.inspection.projection.detached).toBe(true)
+    expect(other.inspection.projection.head).toMatchObject({ kind: 'commit' })
+    expect(other.inspection.projection.head).not.toHaveProperty('symbolicRef')
     expect(main.inspection.trusted.canonicalCommonGitDirectory).toBe(other.inspection.trusted.canonicalCommonGitDirectory)
     expect(main.inspection.trusted.canonicalGitDirectory).not.toBe(other.inspection.trusted.canonicalGitDirectory)
     expect(main.inspection.projection.fingerprint).not.toEqual(other.inspection.projection.fingerprint)
@@ -521,6 +654,31 @@ describe('LocalSakiHostExecution', () => {
     if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
   })
 
+  it('rejects repository identity values from active worktree config', async () => {
+    const root = await repository()
+    const linked = `${root}-linked-worktree-identity`
+    roots.push(linked)
+    await git(root, 'worktree', 'add', '--detach', linked)
+    await git(root, 'config', 'extensions.worktreeConfig', 'true')
+    const linkedGitDirectory = await gitText(linked, 'rev-parse', '--absolute-git-dir')
+    const harness = await localInspectionHarness()
+    for (const config of [
+      '[core]\n\trepositoryFormatVersion = 1\n',
+      '[extensions]\n\tobjectFormat = sha256\n',
+      '[extensions]\n\trefStorage = reftable\n',
+    ]) {
+      await writeFile(join(linkedGitDirectory, 'config.worktree'), config)
+      const opened = await openSafeRepositoryView(
+        harness.fs,
+        harness.git,
+        await realpath(linked),
+        CONFIG.inventoryMaxFileBytes,
+        new AbortController().signal,
+      )
+      expect(opened.kind).toBe('unavailable')
+    }
+  })
+
   it('rejects a linked active worktree redirect while retaining common fallback semantics', async () => {
     const root = await repository()
     const linked = `${root}-linked-active-redirect`
@@ -605,7 +763,12 @@ describe('LocalSakiHostExecution', () => {
     expect(result.ok, JSON.stringify(result)).toBe(true)
     if (!result.ok) return
     expect(result.inspection.projection.objectFormat).toBe('sha256')
-    expect(result.inspection.projection.head).toMatch(/^[0-9a-f]{64}$/u)
+    expect(result.inspection.projection.head).toMatchObject({
+      kind: 'commit',
+    })
+    if (result.inspection.projection.head.kind === 'commit') {
+      expect(result.inspection.projection.head.objectId).toMatch(/^[0-9a-f]{64}$/u)
+    }
   })
 
   it('fails closed when a split index depends on an uncaptured shared index', async () => {
@@ -627,7 +790,7 @@ describe('LocalSakiHostExecution', () => {
     await git(source, 'add', 'tracked.txt')
     await git(source, 'commit', '-m', 'second')
     const root = await repository()
-    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+    await addSubmodule(root, source)
     await git(root, 'commit', '-am', 'submodule')
     const execution = await provider()
     const initialized = await execution.inspectProjectSelection(
@@ -663,7 +826,7 @@ describe('LocalSakiHostExecution', () => {
     expect(JSON.stringify(result.inspection.projection.baseline)).not.toContain(
       await gitText(root, 'rev-parse', 'HEAD'),
     )
-  }, 15_000)
+  }, 30_000)
 
   it.skipIf(process.platform !== 'win32')('uses the stable canonical spelling for nested gitlink admission and private --work-tree arguments', async () => {
     const source = await repository()
@@ -671,7 +834,7 @@ describe('LocalSakiHostExecution', () => {
     const indexedModule = join(root, 'ModuleCase')
     const intermediate = join(root, 'module-case-intermediate')
     const canonicalModule = join(root, 'modulecase')
-    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'ModuleCase')
+    await addSubmodule(root, source, 'ModuleCase')
     await git(root, 'commit', '-am', 'submodule')
     await rename(indexedModule, intermediate)
     await rename(intermediate, canonicalModule)
@@ -706,7 +869,7 @@ describe('LocalSakiHostExecution', () => {
   it('contains unstable nested gitlink directory resolution as unavailable evidence', async () => {
     const source = await repository()
     const root = await repository()
-    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+    await addSubmodule(root, source)
     await git(root, 'commit', '-am', 'submodule')
     const module = normalize(join(root, 'module'))
     const nestedMarker = normalize(join(module, '.git'))
@@ -812,7 +975,7 @@ describe('LocalSakiHostExecution', () => {
   it('contains a nonzero nested HEAD observation as unavailable submodule evidence', async () => {
     const source = await repository()
     const root = await repository()
-    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+    await addSubmodule(root, source)
     await git(root, 'commit', '-am', 'submodule')
     const harness = await localInspectionHarness()
     let rejected = 0
@@ -852,7 +1015,7 @@ describe('LocalSakiHostExecution', () => {
   it('blocks automatic mutation for staged, unstaged, and untracked changes inside an initialized submodule', async () => {
     const source = await repository()
     const root = await repository()
-    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+    await addSubmodule(root, source)
     await git(root, 'commit', '-am', 'submodule')
     const module = join(root, 'module')
     const execution = await provider()
@@ -889,7 +1052,7 @@ describe('LocalSakiHostExecution', () => {
       await git(module, 'reset', '--hard', 'HEAD')
       await git(module, 'clean', '-fd')
     }
-  }, 30_000)
+  }, 60_000)
 
   it('charges only nested HEAD output to retained gitlink baseline evidence', async () => {
     const source = await repository()
@@ -902,7 +1065,7 @@ describe('LocalSakiHostExecution', () => {
 
     const inspectDirtyGitlink = async (prefix: string): Promise<number> => {
       const root = await repository(prefix)
-      await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+      await addSubmodule(root, source)
       await git(join(root, 'module'), 'checkout', recorded)
       await git(root, 'add', '.gitmodules', 'module')
       await git(root, 'commit', '-m', 'submodule')
@@ -956,7 +1119,7 @@ describe('LocalSakiHostExecution', () => {
   it('applies the same private config admission to an initialized gitlink', async () => {
     const source = await repository()
     const root = await repository()
-    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+    await addSubmodule(root, source)
     await git(root, 'commit', '-am', 'submodule')
     const module = join(root, 'module')
     const nestedGitDirectory = await realpath(await gitText(module, 'rev-parse', '--absolute-git-dir'))
@@ -1016,6 +1179,69 @@ describe('LocalSakiHostExecution', () => {
 
     expect(result).toEqual({ ok: false, reason: 'unavailable' })
   })
+
+  it.each([
+    { flag: 'S', bound: false, expected: 'unavailable' },
+    { flag: 'h', bound: true, expected: 'unsupported-index-state' },
+  ] as const)('rejects a final-observation $flag index flag with bound=$bound', async ({
+    flag,
+    bound,
+    expected,
+  }) => {
+    const root = await repository()
+    const harness = await localInspectionHarness()
+    const workspaceId = WorkspaceId('workspace-final-index-state')
+    const workspaces = { list: () => [{ id: workspaceId, path: root }] }
+    const selected = await inspectLocalProjectSelection(
+      harness.fs,
+      workspaces,
+      harness.git,
+      CONFIG,
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+    )
+    expect(selected.ok).toBe(true)
+    if (!selected.ok) return
+
+    let indexReads = 0
+    const injected = {
+      run: async (...args: Parameters<GitRunner['run']>) => {
+        const output = await harness.git.run(...args)
+        const command = gitSubcommand(args[1])
+        const targetCommand = command[0] === 'ls-files' && (flag === 'S'
+          ? command.includes('--stage') && command.includes('-t')
+          : command.includes('-v'))
+        if (!targetCommand || ++indexReads !== 2) return output
+        return {
+          ...output,
+          stdout: Buffer.from(output.stdout.toString('utf8').replace(/^H /mu, `${flag} `)),
+        }
+      },
+    } as GitRunner
+    const requirements = bound
+      ? {
+        boundResource: {
+          workspaceId,
+          trusted: selected.inspection.trusted,
+        },
+        rejectUnsupportedIndexState: true,
+      }
+      : undefined
+
+    const result = await inspectStableLocalProjectSelection(
+      harness.fs,
+      workspaces,
+      injected,
+      CONFIG,
+      { hostId: HOST_ID, directoryLocator: root },
+      new AbortController().signal,
+      deterministicAdministrativeDirectoryIdentity,
+      requirements,
+    )
+
+    expect(indexReads).toBe(2)
+    expect(result).toEqual({ ok: false, reason: expected })
+  }, 30_000)
 
   it('retains all real conflict stages in a complete inherited baseline', async () => {
     const root = await repository()
@@ -1191,6 +1417,21 @@ describe('LocalSakiHostExecution', () => {
     expect(JSON.stringify(result.inspection.projection)).not.toContain('LEAKED_REMOTE_SECRET')
   })
 
+  it.each([
+    { name: 'accepts Git exit 1 when no remote URL configuration exists', error: new GitCommandError('nonzero', 1) },
+    { name: 'contains a failed remote URL inspection', error: new GitCommandError('timeout') },
+  ])('$name', async ({ error }) => {
+    const failing = {
+      run: async () => { throw error },
+    } as unknown as GitRunner
+    const inspected = inspectRemotes(failing, 'repository', new AbortController().signal)
+    if (error.code === 'nonzero') {
+      await expect(inspected).resolves.toEqual([])
+    } else {
+      await expect(inspected).rejects.toBe(error)
+    }
+  })
+
   it('projects canonical public-GitHub candidates from admitted remotes', async () => {
     const root = await repository()
     await git(root, 'remote', 'add', 'origin', 'https://github.com/BreakfastDaPaiDang/Saki.git')
@@ -1305,7 +1546,7 @@ describe('LocalSakiHostExecution', () => {
     await git(root, 'add', '.gitattributes', 'filter-sentinel.mjs')
     await git(root, 'commit', '-m', 'attributes')
     const command = [process.execPath, script, marker]
-      .map(value => `'${value.replaceAll("'", "'\\\"'\\\"'")}'`)
+      .map(value => `'${value.replaceAll("'", "'\"'\"'")}'`)
       .join(' ')
     await git(root, 'config', 'filter.unspecified.clean', command)
     await git(root, 'config', 'filter.unspecified.required', 'true')
@@ -1342,7 +1583,7 @@ describe('LocalSakiHostExecution', () => {
       '',
     ].join('\n'))
     const command = [process.execPath, script, marker]
-      .map(value => `'${value.replaceAll("'", "'\\\"'\\\"'")}'`)
+      .map(value => `'${value.replaceAll("'", "'\"'\"'")}'`)
       .join(' ')
     await git(root, 'config', 'core.fsmonitor', command)
     await expect(readFile(marker)).rejects.toThrow()
@@ -1370,7 +1611,7 @@ describe('LocalSakiHostExecution', () => {
       '',
     ].join('\n'))
     const command = (label: string): string => [process.execPath, script, marker, label]
-      .map(value => `'${value.replaceAll("'", "'\\\"'\\\"'")}'`)
+      .map(value => `'${value.replaceAll("'", "'\"'\"'")}'`)
       .join(' ')
     await writeFile(join(root, '.gitattributes'), 'tracked.txt diff=saki-sentinel filter=ambient-sentinel\n')
     await git(root, 'add', '.gitattributes')
@@ -1390,7 +1631,7 @@ describe('LocalSakiHostExecution', () => {
     const hook = join(sentinelRoot, 'post-index-change')
     await writeFile(hook, `#!/bin/sh\n${command('hook')}\n`)
     await chmod(hook, 0o755)
-    await writeFile(join(root, 'tracked.txt'), 'changed\n')
+    await writeFile(join(root, 'tracked.txt'), 'changed contents\n')
     vi.stubEnv('GIT_CONFIG_COUNT', '3')
     vi.stubEnv('GIT_CONFIG_KEY_0', 'core.fsmonitor')
     vi.stubEnv('GIT_CONFIG_VALUE_0', command('ambient-fsmonitor'))
@@ -1419,7 +1660,7 @@ describe('LocalSakiHostExecution', () => {
         },
       },
     })
-  })
+  }, 15_000)
 
   it('accepts an explicitly disabled repository fsmonitor', async () => {
     const root = await repository()
@@ -1449,7 +1690,7 @@ describe('LocalSakiHostExecution', () => {
         '',
       ].join('\n'))
       const command = [process.execPath, script, marker]
-        .map(value => `'${value.replaceAll("'", "'\\\"'\\\"'")}'`)
+        .map(value => `'${value.replaceAll("'", "'\"'\"'")}'`)
         .join(' ')
       await git(root, 'config', '--file', includedConfig, 'core.fsmonitor', command)
       if (scope === '--worktree') await git(root, 'config', '--local', 'extensions.worktreeConfig', 'true')
@@ -1890,7 +2131,7 @@ describe('LocalSakiHostExecution', () => {
   it('rejects a successful nested Git command that writes diagnostics', async () => {
     const source = await repository()
     const root = await repository()
-    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+    await addSubmodule(root, source)
     await git(root, 'commit', '-am', 'submodule')
     const ctx = new Context()
     contexts.push(ctx)
@@ -2159,6 +2400,7 @@ describe('LocalSakiHostExecution', () => {
   it('aborts and drains an active inspection when its provider is disposed', async () => {
     const ctx = new Context()
     contexts.push(ctx)
+    await mountLocalHostOperationStorage(ctx, roots)
     const started = Promise.withResolvers<undefined>()
     const settled = Promise.withResolvers<undefined>()
     let didSettle = false
@@ -2485,10 +2727,14 @@ describe('LocalSakiHostExecution', () => {
     for (const [corrupt, expected] of [
       ['branch', 'malformed'],
       ['upstream', 'malformed'],
+      ['upstream-prefix', 'malformed'],
+      ['upstream-short-control', 'malformed'],
       ['overlong-branch', 'unavailable'],
       ['overlong-upstream', 'unavailable'],
+      ['overlong-upstream-short', 'unavailable'],
       ['zero-head', 'malformed'],
     ] as const) {
+      let upstreamQueries = 0
       const malformed = {
         run: async (
           cwd: string,
@@ -2506,13 +2752,27 @@ describe('LocalSakiHostExecution', () => {
             const ref = corrupt === 'branch' ? 'refs/heads/bad.lock' : `refs/heads/${'a'.repeat(MAX_GIT_REF_CHARS)}`
             return { ...output, stdout: Buffer.from(`${ref}\n`) }
           }
-          if ((corrupt === 'upstream' || corrupt === 'overlong-upstream') && command[0] === 'for-each-ref') {
+          if ((corrupt === 'upstream' || corrupt === 'upstream-prefix'
+            || corrupt === 'upstream-short-control' || corrupt === 'overlong-upstream'
+            || corrupt === 'overlong-upstream-short') && command[0] === 'for-each-ref') {
+            if (++upstreamQueries !== 2) return output
             const ref = command.at(-1)
             if (ref === undefined) throw new Error('missing exact branch ref')
             const upstream = corrupt === 'upstream'
               ? 'refs/remotes/origin/bad.lock'
-              : `refs/remotes/origin/${'a'.repeat(MAX_GIT_REF_CHARS)}`
-            return { ...output, stdout: Buffer.from(`${ref}\0${upstream}\0\n`) }
+              : corrupt === 'upstream-prefix'
+                ? 'origin/main'
+                : corrupt === 'overlong-upstream'
+                  ? `refs/remotes/origin/${'a'.repeat(MAX_GIT_REF_CHARS)}`
+                  : 'refs/remotes/origin/main'
+            const upstreamShort = corrupt === 'upstream'
+              ? 'origin/bad.lock'
+              : corrupt === 'upstream-short-control'
+                ? 'origin/\tmain'
+                : corrupt === 'overlong-upstream' || corrupt === 'overlong-upstream-short'
+                  ? `origin/${'a'.repeat(MAX_GIT_REF_CHARS)}`
+                  : 'origin/main'
+            return { ...output, stdout: Buffer.from(`${ref}\0${upstream}\0${upstreamShort}\0\n`) }
           }
           return output
         },
@@ -2525,9 +2785,9 @@ describe('LocalSakiHostExecution', () => {
         CONFIG,
         { hostId: HOST_ID, directoryLocator: root },
         new AbortController().signal,
-      )).resolves.toEqual({ ok: false, reason: expected })
+      ), corrupt).resolves.toEqual({ ok: false, reason: expected })
     }
-  })
+  }, 30_000)
 
   it('rejects a valid Git branch that disagrees with either admitted source-control snapshot', async () => {
     for (const mismatchAt of [1, 2]) {
@@ -2545,7 +2805,7 @@ describe('LocalSakiHostExecution', () => {
           const output = await harness.git.run(cwd, args, signal, stdin, outputBudget)
           const command = gitSubcommand(args)
           if (command[0] === 'for-each-ref' && command.at(-1) === 'refs/heads/other') {
-            return { ...output, stdout: Buffer.from('refs/heads/other\0\0\n') }
+            return { ...output, stdout: Buffer.from('refs/heads/other\0\0\0\n') }
           }
           if (command[0] !== 'symbolic-ref' || ++branchReads !== mismatchAt) return output
           return { ...output, stdout: Buffer.from('refs/heads/other\n') }
@@ -2569,7 +2829,7 @@ describe('LocalSakiHostExecution', () => {
   it('classifies nested repository identity failures without trusting its administrative paths', async () => {
     const source = await repository()
     const root = await repository()
-    await git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', source, 'module')
+    await addSubmodule(root, source)
     await git(root, 'commit', '-am', 'submodule')
     const module = join(root, 'module')
     const ctx = new Context()
@@ -2664,7 +2924,7 @@ describe('LocalSakiHostExecution', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.inspection.projection).toMatchObject({
-      head: original,
+      head: { kind: 'commit', objectId: original },
       inheritedChangeEntryCount: 1,
       automaticMutationEligible: false,
       blockingReasons: ['dirty'],
@@ -2699,7 +2959,7 @@ describe('LocalSakiHostExecution', () => {
 
   it('rejects index objects whose width disagrees with the repository object format', async () => {
     const root = await repository()
-    await writeFile(join(root, 'tracked.txt'), 'changed\n')
+    await writeFile(join(root, 'tracked.txt'), 'changed contents\n')
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
@@ -2760,10 +3020,15 @@ describe('LocalSakiHostExecution', () => {
     for (const [corrupt, expected] of [
       ['object-format', 'malformed'],
       ['head-width', 'malformed'],
+      ['head-timeout', 'unavailable'],
+      ['detached-unborn', 'malformed'],
       ['branch-timeout', 'unavailable'],
       ['branch-namespace', 'malformed'],
       ['upstream-utf8', 'malformed'],
       ['upstream-mismatch', 'malformed'],
+      ['upstream-frame', 'malformed'],
+      ['upstream-partial', 'malformed'],
+      ['status-malformed', 'malformed'],
       ['remote-record', 'malformed'],
       ['remote-empty', 'malformed'],
       ['remote-partial', 'malformed'],
@@ -2772,6 +3037,7 @@ describe('LocalSakiHostExecution', () => {
       ['text-no-newline', 'malformed'],
       ['text-multiline', 'malformed'],
     ] as const) {
+      let upstreamQueries = 0
       const injected = {
         run: async (
           cwd: string,
@@ -2783,6 +3049,18 @@ describe('LocalSakiHostExecution', () => {
           const command = gitSubcommand(args)
           if (corrupt === 'branch-timeout' && command[0] === 'symbolic-ref') {
             throw new GitCommandError('timeout')
+          }
+          if (corrupt === 'head-timeout' && command[0] === 'rev-parse' && command.at(-1) === 'HEAD') {
+            throw new GitCommandError('timeout')
+          }
+          if (corrupt === 'detached-unborn' && command[0] === 'symbolic-ref') {
+            throw new GitCommandError('nonzero', 1)
+          }
+          if (corrupt === 'detached-unborn' && command[0] === 'rev-parse' && command.at(-1) === 'HEAD') {
+            throw new GitCommandError('nonzero', 128)
+          }
+          if (corrupt === 'status-malformed' && args.includes('status')) {
+            return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }
           }
           if (command[0] === 'config' && command.includes('--get-regexp')) {
             if (corrupt === 'remote-record') return { stdout: Buffer.from('remote.origin.url\0'), stderr: Buffer.alloc(0) }
@@ -2813,9 +3091,16 @@ describe('LocalSakiHostExecution', () => {
             return { ...output, stdout: Buffer.from('refs/tags/main\n') }
           }
           if (command[0] === 'for-each-ref') {
+            if (++upstreamQueries !== 2) return output
             if (corrupt === 'upstream-utf8') return { ...output, stdout: Buffer.from([0xff]) }
             if (corrupt === 'upstream-mismatch') {
-              return { ...output, stdout: Buffer.from('refs/heads/other\0\0\n') }
+              return { ...output, stdout: Buffer.from('refs/heads/other\0\0\0\n') }
+            }
+            if (corrupt === 'upstream-frame') {
+              return { ...output, stdout: Buffer.from('refs/heads/main\0\0\0') }
+            }
+            if (corrupt === 'upstream-partial') {
+              return { ...output, stdout: Buffer.from('refs/heads/main\0refs/remotes/origin/main\0\0\n') }
             }
           }
           return output
@@ -2958,7 +3243,7 @@ describe('LocalSakiHostExecution', () => {
 
   it('rejects a baseline completeness class that changes between observations', async () => {
     const root = await repository()
-    await writeFile(join(root, 'tracked.txt'), 'changed\n')
+    await writeFile(join(root, 'tracked.txt'), 'changed contents\n')
     const harness = await localInspectionHarness()
     let clock = 0
     vi.spyOn(performance, 'now').mockImplementation(() => clock)

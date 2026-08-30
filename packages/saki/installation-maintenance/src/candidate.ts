@@ -2,7 +2,6 @@
 
 import { lstat, mkdir } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
-import { sakiStateCapability } from '@breakfastdapaidang/saki-control-plane'
 import {
   generationManifestReference,
   generationManifestSchema,
@@ -16,6 +15,7 @@ import { publishMissingFile } from './durable-files.ts'
 import type { DurableFileResult } from './durable-files.ts'
 import { publishMissingDirectory } from './durable-directories.ts'
 import { SakiMaintenanceError } from './error.ts'
+import { sakiStateCapability } from './state-version.ts'
 import type { NewSakiGenerationIdentity } from './generation.ts'
 import {
   requireOwnedPathAncestors,

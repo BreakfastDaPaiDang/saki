@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat as nativeLstat, mkdir, mkdtemp, realpath, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, normalize, relative } from 'node:path'
 import { promisify } from 'node:util'
@@ -7,7 +7,11 @@ import { Context } from '@deepseek-ai/cordis'
 import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import { canonicalDigest, type SakiHostId } from '@breakfastdapaidang/saki-execution'
+import {
+  canonicalDigest,
+  MAX_GIT_REF_CHARS,
+  type SakiHostId,
+} from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Config } from '../src/index.ts'
 import { GitCommandError, GitRunner } from '../src/git-runner.ts'
@@ -41,6 +45,8 @@ const CONFIG: Required<Config> = {
   baselineMaxFileBytes: 1024 * 1024,
   baselineMaxTotalFileBytes: 4 * 1024 * 1024,
   baselineMaxCaptureMs: 10_000,
+  operationMaxIndexBytes: 8 * 1024 * 1024,
+  operationMaxReflogBytes: 1024 * 1024,
 }
 
 async function deterministicAdministrativeDirectoryIdentity(
@@ -57,7 +63,9 @@ async function deterministicAdministrativeDirectoryIdentity(
 afterEach(async () => {
   vi.restoreAllMocks()
   await Promise.all(contexts.splice(0).map(async (context) => { await context.fiber.dispose() }))
-  await Promise.all(roots.splice(0).map(async (root) => { await rm(root, { recursive: true, force: true }) }))
+  await Promise.all(roots.splice(0).map(async (root) => {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  }))
 })
 
 function fixtureGitEnvironment(): NodeJS.ProcessEnv {
@@ -93,7 +101,10 @@ async function gitText(cwd: string, ...args: string[]): Promise<string> {
   ], { cwd, env: fixtureGitEnvironment(), windowsHide: true })).stdout.trim()
 }
 
-async function repository(options: { readonly refFormat?: 'reftable' } = {}): Promise<string> {
+async function repository(options: {
+  readonly refFormat?: 'reftable'
+  readonly unborn?: boolean
+} = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'saki-safe-repository-'))
   roots.push(root)
   await git(root, 'init', '--initial-branch=main',
@@ -101,9 +112,11 @@ async function repository(options: { readonly refFormat?: 'reftable' } = {}): Pr
   await git(root, 'config', 'user.name', 'Saki Test')
   await git(root, 'config', 'user.email', 'saki@example.invalid')
   await git(root, 'config', 'core.autocrlf', 'false')
-  await writeFile(join(root, 'tracked.txt'), 'initial\n')
-  await git(root, 'add', 'tracked.txt')
-  await git(root, 'commit', '-m', 'initial')
+  if (options.unborn !== true) {
+    await writeFile(join(root, 'tracked.txt'), 'initial\n')
+    await git(root, 'add', 'tracked.txt')
+    await git(root, 'commit', '-m', 'initial')
+  }
   return root
 }
 
@@ -312,7 +325,8 @@ describe('safe repository admission', () => {
     for (const [args, stdin] of [
       [['check-attr', '--all', '-z', '--stdin'], emptyInput],
       [['ls-tree', '-r', '--full-tree', '-z', 'HEAD'], undefined],
-      [['ls-files', '-t', '--stage', '--full-name', '-z'], undefined],
+      [['ls-files', '--no-sparse', '-t', '--stage', '--full-name', '-z'], undefined],
+      [['ls-files', '-v', '-z', '--'], undefined],
       [['ls-files', '--others', '--exclude-standard', '--full-name', '-z'], undefined],
       [['rev-parse', '--show-object-format'], undefined],
       [['rev-parse', '--verify', 'HEAD'], undefined],
@@ -322,7 +336,12 @@ describe('safe repository admission', () => {
       [['config', '--no-includes', '--local', '--null', '--name-only', '--list'], undefined],
       [['config', '--no-includes', '--worktree', '--null', '--name-only', '--list'], undefined],
       [['config', '--no-includes', '--null', '--get-regexp', '^remote\\..*\\.url$'], undefined],
-      [['for-each-ref', '--count=2', '--format=%(refname)%00%(upstream)%00', 'refs/heads/main'], undefined],
+      [[
+        'for-each-ref',
+        '--count=2',
+        '--format=%(refname)%00%(upstream)%00%(upstream:short)%00',
+        'refs/heads/main',
+      ], undefined],
       [['config', '--no-includes', '--null', '--type=bool', '--get-all', 'core.autocrlf'], undefined],
       [['config', '--no-includes', '--null', '--type=bool', '--get-all', 'core.fileMode'], undefined],
       [['config', '--no-includes', '--null', '--type=bool', '--get-all', 'core.symlinks'], undefined],
@@ -343,7 +362,12 @@ describe('safe repository admission', () => {
       [['rev-parse', '--show-object-format'], emptyInput],
       [['symbolic-ref', 'HEAD', 'refs/heads/unsafe'], undefined],
       [['config', '--no-includes', '--null', '--get-all', 'core.hooksPath'], undefined],
-      [['for-each-ref', '--count=2', '--format=%(refname)%00%(upstream)%00', 'refs/tags/main'], undefined],
+      [[
+        'for-each-ref',
+        '--count=2',
+        '--format=%(refname)%00%(upstream)%00%(upstream:short)%00',
+        'refs/tags/main',
+      ], undefined],
     ] as const) {
       await expect(view.git.run(root, args, signal, stdin)).rejects.toThrow(/unavailable/u)
     }
@@ -351,6 +375,27 @@ describe('safe repository admission', () => {
     await view.git.run(root, ['rev-parse', '--verify', 'HEAD'], signal)
     await expect(view.git.run(root, worktreeList, signal)).resolves.toMatchObject({ stderr: Buffer.alloc(0) })
   })
+
+  it.each(['core.sparseCheckout', 'index.sparse'])(
+    'retains the effective %s fact without exposing the source config to repository queries',
+    async (key) => {
+      const root = await repository()
+      await git(root, 'config', key, 'true')
+      const harness = await localHarness()
+      const opened = await openSafeRepositoryView(
+        harness.fs,
+        harness.git,
+        await realpath(root),
+        MAX_CONTROL_FILE_BYTES,
+        new AbortController().signal,
+      )
+
+      expect(opened.kind).toBe('repository')
+      if (opened.kind !== 'repository') return
+      await using view = opened.view
+      expect(view.sparseIndexEnabled).toBe(true)
+    },
+  )
 
   it('uses common config when enabled linked-worktree config is absent', async () => {
     const root = await repository()
@@ -407,6 +452,7 @@ describe('safe repository admission', () => {
 
   it('admits the explicit files ref backend', async () => {
     const root = await repository()
+    await git(root, 'config', 'core.repositoryFormatVersion', '1')
     await git(root, 'config', 'extensions.refStorage', 'files')
     const harness = await localHarness()
 
@@ -420,6 +466,87 @@ describe('safe repository admission', () => {
 
     expect(opened.kind).toBe('repository')
     if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+  })
+
+  it('rejects split-index repositories before exposing repository queries', async () => {
+    const root = await repository()
+    await git(root, 'update-index', '--split-index')
+    const harness = await localHarness()
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      harness.git,
+      await realpath(root),
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    expect(opened.kind).toBe('unavailable')
+  })
+
+  it('rejects a non-empty shared-index path reported by the private repository', async () => {
+    const root = await repository()
+    const harness = await localHarness()
+    let queried = false
+    const splitIndex = {
+      run: async (...args: Parameters<GitRunner['run']>) => {
+        if (args[1].includes('--shared-index-path')) {
+          queried = true
+          return { stdout: Buffer.from('sharedindex.test\n'), stderr: Buffer.alloc(0) }
+        }
+        return await harness.git.run(...args)
+      },
+    } as GitRunner
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      splitIndex,
+      await realpath(root),
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    expect(queried).toBe(true)
+    expect(opened.kind).toBe('unavailable')
+  })
+
+  it.each([
+    ['sha1', 40],
+    ['sha256', 64],
+  ] as const)('records the %s zero object id after an unborn HEAD query fails', async (objectFormat, width) => {
+    const root = await repository({ unborn: true })
+    if (objectFormat === 'sha256') {
+      await git(root, 'config', 'core.repositoryFormatVersion', '1')
+      await git(root, 'config', 'extensions.objectFormat', 'sha256')
+    }
+    const harness = await localHarness()
+    const signal = new AbortController().signal
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      harness.git,
+      await realpath(root),
+      MAX_CONTROL_FILE_BYTES,
+      signal,
+    )
+
+    expect(opened.kind).toBe('repository')
+    if (opened.kind !== 'repository') return
+    await using view = opened.view
+    await expect(view.git.run(root, ['rev-parse', '--verify', 'HEAD'], signal))
+      .rejects.toMatchObject({ code: 'nonzero', exitCode: 128 })
+    await expect(view.git.run(root, [
+      '--bare', `--git-dir=${view.commonDirectoryPath}`, 'worktree', 'list', '--porcelain', '-z',
+    ], signal)).resolves.toEqual({
+      stdout: Buffer.from([
+        `worktree ${view.topLevelPath}\0`,
+        `HEAD ${'0'.repeat(width)}\0`,
+        'branch refs/heads/main\0',
+        '\0',
+      ].join('')),
+      stderr: Buffer.alloc(0),
+    })
   })
 
   it('classifies a reftable repository as unavailable without weakening the snapshot', async () => {
@@ -455,6 +582,14 @@ describe('safe repository admission', () => {
         name: 'empty common worktree',
         expected: 'malformed',
         mutate: async (root) => { await git(root, 'config', 'core.worktree', '') },
+      },
+      {
+        name: 'unknown object format',
+        expected: 'malformed',
+        mutate: async (root) => {
+          await git(root, 'config', 'core.repositoryFormatVersion', '1')
+          await git(root, 'config', 'extensions.objectFormat', 'sha512')
+        },
       },
       {
         name: 'non-UTF-8 HEAD',
@@ -571,6 +706,260 @@ describe('safe repository admission', () => {
     )
     expect(packedOpened.kind).toBe('repository')
     if (packedOpened.kind === 'repository') await packedOpened.view[Symbol.asyncDispose]()
+  })
+
+  it('pins a configured upstream without copying the current branch as its own loose ref', async () => {
+    const root = await repository()
+    const harness = await localHarness()
+    const branch = 'refs/heads/main'
+    const selfUpstream = {
+      run: async (...args: Parameters<GitRunner['run']>) => args[1].includes('for-each-ref')
+        ? {
+          stdout: Buffer.from(`${branch}\0${branch}\0main\0\n`),
+          stderr: Buffer.alloc(0),
+        }
+        : await harness.git.run(...args),
+    } as GitRunner
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      selfUpstream,
+      await realpath(root),
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    expect(opened.kind).toBe('repository')
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+  })
+
+  it('rejects malformed or overlong configured upstream evidence', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    const harness = await localHarness()
+    const branch = 'refs/heads/main'
+    for (const testCase of [
+      {
+        name: 'overlong upstream ref',
+        stdout: `${branch}\0refs/remotes/origin/${'a'.repeat(MAX_GIT_REF_CHARS)}\0origin/main\0\n`,
+        expected: 'unavailable',
+      },
+      {
+        name: 'overlong upstream short name',
+        stdout: `${branch}\0refs/remotes/origin/main\0origin/${'a'.repeat(MAX_GIT_REF_CHARS)}\0\n`,
+        expected: 'unavailable',
+      },
+      {
+        name: 'upstream without a full ref',
+        stdout: `${branch}\0origin/main\0origin/main\0\n`,
+        expected: 'malformed',
+      },
+      {
+        name: 'invalid full upstream ref',
+        stdout: `${branch}\0refs/remotes/origin/bad.lock\0origin/bad.lock\0\n`,
+        expected: 'malformed',
+      },
+      {
+        name: 'control character in upstream short name',
+        stdout: `${branch}\0refs/remotes/origin/main\0origin/\tmain\0\n`,
+        expected: 'malformed',
+      },
+      {
+        name: 'mismatched branch frame',
+        stdout: 'refs/heads/other\0refs/remotes/origin/main\0origin/main\0\n',
+        expected: 'malformed',
+      },
+      {
+        name: 'incomplete frame',
+        stdout: `${branch}\0refs/remotes/origin/main\0origin/main\0`,
+        expected: 'malformed',
+      },
+      {
+        name: 'upstream ref without a short name',
+        stdout: `${branch}\0refs/remotes/origin/main\0\0\n`,
+        expected: 'malformed',
+      },
+    ] as const) {
+      const injected = {
+        run: async (...args: Parameters<GitRunner['run']>) => args[1].includes('for-each-ref')
+          ? { stdout: Buffer.from(testCase.stdout), stderr: Buffer.alloc(0) }
+          : await harness.git.run(...args),
+      } as GitRunner
+
+      const opened = await openSafeRepositoryView(
+        harness.fs,
+        injected,
+        canonicalRoot,
+        MAX_CONTROL_FILE_BYTES,
+        new AbortController().signal,
+      )
+
+      if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+      expect(opened.kind, testCase.name).toBe(testCase.expected)
+    }
+  }, 30_000)
+
+  it('rejects Windows-unsafe upstream paths before probing their loose refs', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    const harness = await localHarness()
+    const branch = 'refs/heads/main'
+    const upstream = 'refs/remotes/NUL/main'
+    let looseRefProbes = 0
+    const unsafeUpstream = {
+      run: async (...args: Parameters<GitRunner['run']>) => args[1].includes('for-each-ref')
+        ? {
+          stdout: Buffer.from(`${branch}\0${upstream}\0NUL/main\0\n`),
+          stderr: Buffer.alloc(0),
+        }
+        : await harness.git.run(...args),
+    } as GitRunner
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+
+    const opened = await openSafeRepositoryView(
+      withLstatHook(
+        harness.fs,
+        join(canonicalRoot, '.git', ...upstream.split('/')),
+        1,
+        'before',
+        async () => { looseRefProbes += 1 },
+      ),
+      unsafeUpstream,
+      canonicalRoot,
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    expect(opened.kind).toBe('unavailable')
+    expect(looseRefProbes).toBe(0)
+  })
+
+  it('rejects a configured upstream with a malformed loose object id', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    const harness = await localHarness()
+    const branch = 'refs/heads/main'
+    const upstream = 'refs/remotes/origin/main'
+    const looseRef = join(canonicalRoot, '.git', ...upstream.split('/'))
+    await mkdir(dirname(looseRef), { recursive: true })
+    await writeFile(looseRef, 'not-an-object-id\n')
+    const malformedUpstream = {
+      run: async (...args: Parameters<GitRunner['run']>) => args[1].includes('for-each-ref')
+        ? {
+          stdout: Buffer.from(`${branch}\0${upstream}\0origin/main\0\n`),
+          stderr: Buffer.alloc(0),
+        }
+        : await harness.git.run(...args),
+    } as GitRunner
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      malformedUpstream,
+      canonicalRoot,
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    expect(opened.kind).toBe('unavailable')
+  })
+
+  it('copies a configured upstream with a valid loose object id', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    const harness = await localHarness()
+    const branch = 'refs/heads/main'
+    const upstream = 'refs/remotes/origin/main'
+    const looseRef = join(canonicalRoot, '.git', ...upstream.split('/'))
+    await mkdir(dirname(looseRef), { recursive: true })
+    await writeFile(looseRef, `${await gitText(root, 'rev-parse', 'HEAD')}\n`)
+    const configuredUpstream = {
+      run: async (...args: Parameters<GitRunner['run']>) => args[1].includes('for-each-ref')
+        ? {
+          stdout: Buffer.from(`${branch}\0${upstream}\0origin/main\0\n`),
+          stderr: Buffer.alloc(0),
+        }
+        : await harness.git.run(...args),
+    } as GitRunner
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      configuredUpstream,
+      canonicalRoot,
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    expect(opened.kind).toBe('repository')
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+  })
+
+  it('backdates the private index before repository-aware Git reads it', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    const sourceIndex = await nativeLstat(join(canonicalRoot, '.git', 'index'), { bigint: true })
+    const harness = await localHarness()
+    let privateIndexMtimeNs: bigint | undefined
+    const observingGit = {
+      run: async (...args: Parameters<GitRunner['run']>) => {
+        const [cwd, gitArgs] = args
+        if (privateIndexMtimeNs === undefined && gitArgs[0] === `--git-dir=${cwd}`) {
+          privateIndexMtimeNs = (await nativeLstat(join(cwd, 'index'), { bigint: true })).mtimeNs
+        }
+        return await harness.git.run(...args)
+      },
+    } as GitRunner
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      observingGit,
+      canonicalRoot,
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    expect(opened.kind).toBe('repository')
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    expect(privateIndexMtimeNs).toBeDefined()
+    expect(privateIndexMtimeNs as bigint).toBeLessThan(sourceIndex.mtimeNs)
+  })
+
+  it('rejects an index changed after its native timestamp capture', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    const index = join(canonicalRoot, '.git', 'index')
+    const harness = await localHarness()
+    const opened = await openSafeRepositoryView(
+      withLstatHook(harness.fs, index, 3, 'before', async () => {
+        await writeFile(index, 'raced index control file')
+      }),
+      harness.git,
+      canonicalRoot,
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    expect(opened.kind).toBe('unavailable')
+  })
+
+  it('clamps a private index timestamp at the Unix epoch', async () => {
+    const root = await repository()
+    const canonicalRoot = await realpath(root)
+    await utimes(join(canonicalRoot, '.git', 'index'), 0.5, 0.5)
+    const harness = await localHarness()
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      harness.git,
+      canonicalRoot,
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    expect(opened.kind).toBe('repository')
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
   })
 
   it('rejects a HEAD without its required line ending', async () => {
@@ -1051,12 +1440,97 @@ describe('safe repository admission', () => {
     await crlfView.git.run(root, ['rev-parse', '--verify', 'HEAD'], new AbortController().signal)
   })
 
+  it('contains malformed or unrepresentable private config list records', async () => {
+    const root = await repository()
+    const harness = await localHarness()
+    for (const testCase of [
+      {
+        name: 'record without a name-value separator',
+        stdout: Buffer.from('core.bare\0'),
+        expected: 'malformed',
+      },
+      {
+        name: 'control character in an ignored config name',
+        stdout: Buffer.from('ignored.\u0001name\nvalue\0'),
+        expected: 'repository',
+      },
+      {
+        name: 'control character in a retained config value',
+        stdout: Buffer.from('remote.origin.fetch\nbad\u000bvalue\0'),
+        expected: 'unavailable',
+      },
+    ] as const) {
+      const injected = {
+        run: async (...args: Parameters<GitRunner['run']>) => {
+          const gitArgs = args[1]
+          if (gitArgs[0] === 'config' && gitArgs.includes('--file') && gitArgs.includes('--list')) {
+            return { stdout: testCase.stdout, stderr: Buffer.alloc(0) }
+          }
+          return await harness.git.run(...args)
+        },
+      } as GitRunner
+      const opened = await openSafeRepositoryView(
+        harness.fs,
+        injected,
+        await realpath(root),
+        MAX_CONTROL_FILE_BYTES,
+        new AbortController().signal,
+      )
+
+      expect(opened.kind, testCase.name).toBe(testCase.expected)
+      if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+    }
+  })
+
+  it('omits repository identity fields from worktree-scoped private config', async () => {
+    const root = await repository()
+    await git(root, 'config', 'extensions.worktreeConfig', 'true')
+    await git(root, 'config', '--worktree', 'core.fileMode', 'true')
+    const harness = await localHarness()
+    const injected = {
+      run: async (...args: Parameters<GitRunner['run']>) => {
+        const gitArgs = args[1]
+        const fileIndex = gitArgs.indexOf('--file')
+        if (gitArgs[0] === 'config' && gitArgs.includes('--list') && fileIndex >= 0
+          && gitArgs[fileIndex + 1]?.endsWith('source.config.worktree') === true) {
+          return {
+            stdout: Buffer.from([
+              'core.repositoryFormatVersion\n1\0',
+              'extensions.objectFormat\nsha256\0',
+              'extensions.refStorage\nfiles\0',
+            ].join('')),
+            stderr: Buffer.alloc(0),
+          }
+        }
+        return await harness.git.run(...args)
+      },
+    } as GitRunner
+
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      injected,
+      await realpath(root),
+      MAX_CONTROL_FILE_BYTES,
+      new AbortController().signal,
+    )
+
+    expect(opened.kind).toBe('repository')
+    if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
+  })
+
   it('rejects diagnostics from successful private config parsing commands', async () => {
     const root = await repository()
     const harness = await localHarness()
     const selectors = [
       (args: readonly string[]) => args[0] === 'config' && args.includes('--file') && args.includes('--name-only'),
       (args: readonly string[]) => args[0] === 'config' && args.includes('--file') && args.includes('--get-all'),
+      (args: readonly string[]) => args[0] === 'config' && args.includes('--file') && args.includes('--get-regexp'),
+      (args: readonly string[]) => args[0] === 'config' && args.includes('--file')
+        && args.includes('--list') && !args.includes('--name-only'),
+      (args: readonly string[]) => args[0]?.startsWith('--git-dir=') === true
+        && args.includes('--shared-index-path'),
+      (args: readonly string[]) => args[0]?.startsWith('--git-dir=') === true
+        && args.includes('for-each-ref'),
     ]
 
     for (const selects of selectors) {
@@ -1069,10 +1543,11 @@ describe('safe repository admission', () => {
           stdin?: Parameters<GitRunner['run']>[3],
           outputBudget?: Parameters<GitRunner['run']>[4],
         ) => {
-          const output = await harness.git.run(cwd, args, signal, stdin, outputBudget)
-          if (injected || !selects(args)) return output
-          injected = true
-          return { ...output, stderr: Buffer.from('private config diagnostic') }
+          if (!injected && selects(args)) {
+            injected = true
+            return { stdout: Buffer.alloc(0), stderr: Buffer.from('private config diagnostic') }
+          }
+          return await harness.git.run(cwd, args, signal, stdin, outputBudget)
         },
       } as GitRunner
 
@@ -1088,7 +1563,7 @@ describe('safe repository admission', () => {
       expect(opened.kind).toBe('unavailable')
       if (opened.kind === 'repository') await opened.view[Symbol.asyncDispose]()
     }
-  })
+  }, 30_000)
 
   it('rejects missing or link-shaped object storage before repository queries', async () => {
     const harness = await localHarness()

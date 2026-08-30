@@ -53,7 +53,7 @@ import SakiControlPlane, {
   type SakiControlPlaneModule,
   type SakiDevelopmentProjectId,
 } from '../src/index.ts'
-import { SAKI_PROJECT_PROJECTION_FIXTURES } from '../src/fixtures.ts'
+import { SAKI_GIT_REQUEST_FIXTURES, SAKI_PROJECT_PROJECTION_FIXTURES } from '../src/fixtures.ts'
 import { resolveSakiAuthentication, takeSakiCookieHeader } from '../src/host.ts'
 import { DevelopmentProjects } from '../src/projects.ts'
 import { GitHubProjectSynchronization } from '../src/github-sync.ts'
@@ -148,6 +148,8 @@ async function repository(parent: string, name: string): Promise<string> {
   await run('git', ['init', root], { windowsHide: true })
   await run('git', ['config', 'user.name', 'Saki Test'], { cwd: root, windowsHide: true })
   await run('git', ['config', 'user.email', 'saki@example.invalid'], { cwd: root, windowsHide: true })
+  await run('git', ['config', 'core.autocrlf', 'false'], { cwd: root, windowsHide: true })
+  await run('git', ['config', 'commit.gpgSign', 'false'], { cwd: root, windowsHide: true })
   await writeFile(join(root, 'tracked.txt'), 'initial\n')
   await run('git', ['add', 'tracked.txt'], { cwd: root, windowsHide: true })
   await run('git', ['commit', '-m', 'initial'], { cwd: root, windowsHide: true })
@@ -167,6 +169,7 @@ async function context(
     backend: 'json',
     routes: {
       saki_control_plane: 'sqlite',
+      saki_host_execution: 'sqlite',
       saki_storage_generation: 'sqlite',
     },
   })
@@ -557,6 +560,191 @@ async function disposeDuringDispatchInspection(
 }
 
 describe('Development Project registration', { timeout: 60_000 }, () => {
+  it('reads Project changes and Diff through the exact trusted active binding while stale reads avoid Host calls', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'read-only-changes')
+    const harness = await start(durable)
+    const selection = await inspected(harness, repo)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-10101010-1010-4010-8010-101010101010',
+      'Read-only changes',
+      repo,
+      0,
+      selection,
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    await writeFile(join(repo, 'tracked.txt'), 'initial\nchanged\n')
+
+    const inspect = vi.spyOn(harness.ctx.sakiHostExecution, 'inspectProject')
+    const stale = await harness.control.query<'project-changes'>(harness.authentication, {
+      type: 'project-changes',
+      projectId: registered.receipt.projectId,
+      expectedRegistryRevision: 0,
+    }, new AbortController().signal)
+    expect(stale).toEqual({ ok: false, reason: 'stale' })
+    expect(inspect).not.toHaveBeenCalled()
+
+    const changes = await harness.control.query<'project-changes'>(harness.authentication, {
+      type: 'project-changes',
+      projectId: registered.receipt.projectId,
+      expectedRegistryRevision: 1,
+    }, new AbortController().signal)
+    expect(changes).toMatchObject({
+      ok: true,
+      projection: { type: 'project-changes', registryRevision: 1, projectRevision: 0, result: { ok: true } },
+    })
+    if (!changes.ok || !changes.projection.result.ok) throw new Error('changes unavailable')
+    expect('preEffectBaseline' in changes.projection.result).toBe(false)
+    expect(inspect).toHaveBeenCalledOnce()
+    const inspectedRequest = inspect.mock.calls[0]?.[0]
+    expect(inspectedRequest?.binding.health).toBe('active')
+    expect(inspectedRequest?.binding.expectedInspection.trusted.canonicalWorktreePath).toBe(await realpath(repo))
+
+    const change = changes.projection.result.observation.changes.find(candidate => candidate.path === 'tracked.txt')
+    if (change === undefined) throw new Error('tracked change absent')
+    inspect.mockResolvedValueOnce({ ok: false, reason: 'unavailable' })
+    expect(await harness.control.query<'project-changes'>(harness.authentication, {
+      type: 'project-changes',
+      projectId: registered.receipt.projectId,
+      expectedRegistryRevision: 1,
+    }, new AbortController().signal)).toMatchObject({
+      ok: true,
+      projection: { result: { ok: false, reason: 'unavailable' } },
+    })
+    const diff = await harness.control.query<'project-diff'>(harness.authentication, {
+      type: 'project-diff',
+      projectId: registered.receipt.projectId,
+      expectedRegistryRevision: 1,
+      request: {
+        expectedStatus: changes.projection.result.observation.fingerprint,
+        changeId: change.id,
+        layer: 'unstaged',
+      },
+    }, new AbortController().signal)
+    expect(diff).toMatchObject({
+      ok: true,
+      projection: { type: 'project-diff', registryRevision: 1, result: { ok: true } },
+    })
+  })
+
+  it('suppresses a completed Host changes result when the current Grant drifts during the call', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'changes-grant-drift')
+    const harness = await start(durable)
+    const selection = await inspected(harness, repo)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-20202020-2020-4020-8020-202020202020', 'Grant drift', repo, 0, selection,
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    const original = harness.ctx.sakiHostExecution.inspectProject.bind(harness.ctx.sakiHostExecution)
+    let release!: () => void
+    let started!: () => void
+    const startedPromise = new Promise<void>((resolve) => { started = resolve })
+    const releasePromise = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(harness.ctx.sakiHostExecution, 'inspectProject').mockImplementation(async (request, signal) => {
+      const result = await original(request, signal)
+      started()
+      await releasePromise
+      return result
+    })
+    const pending = harness.control.query<'project-changes'>(harness.authentication, {
+      type: 'project-changes', projectId: registered.receipt.projectId, expectedRegistryRevision: 1,
+    }, new AbortController().signal)
+    await startedPromise
+    await setGrantActions(harness, ['project-index:read'])
+    release()
+    await expect(pending).resolves.toEqual({ ok: false, reason: 'denied' })
+  })
+
+  it('suppresses a completed Host changes result when the Registry drifts during the call', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'changes-registry-drift')
+    const harness = await start(durable)
+    const selection = await inspected(harness, repo)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-30303030-3030-4030-8030-303030303030', 'Registry drift', repo, 0, selection,
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    const original = harness.ctx.sakiHostExecution.inspectProject.bind(harness.ctx.sakiHostExecution)
+    let release!: () => void
+    let started!: () => void
+    const startedPromise = new Promise<void>((resolve) => { started = resolve })
+    const releasePromise = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(harness.ctx.sakiHostExecution, 'inspectProject').mockImplementation(async (request, signal) => {
+      const result = await original(request, signal)
+      started()
+      await releasePromise
+      return result
+    })
+    const pending = harness.control.query<'project-changes'>(harness.authentication, {
+      type: 'project-changes', projectId: registered.receipt.projectId, expectedRegistryRevision: 1,
+    }, new AbortController().signal)
+    await startedPromise
+    const table = liveSakiDomain(harness.ctx).table('development_project_registry')
+    const entry = [...table.entries()][0]
+    if (entry === undefined) throw new Error('registry absent')
+    await table.update(entry[0], current => ({ ...current, revision: current.revision + 1 }))
+    release()
+    await expect(pending).resolves.toEqual({ ok: false, reason: 'stale' })
+  })
+
+  it.each([
+    ['Grant', 'denied'],
+    ['Registry', 'stale'],
+  ] as const)('suppresses a completed Host Diff when the current %s drifts during the call', async (drift, reason) => {
+    const durable = await paths()
+    const repo = await repository(durable.root, `diff-${drift.toLowerCase()}-drift`)
+    const harness = await start(durable)
+    const selection = await inspected(harness, repo)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      drift === 'Grant'
+        ? 'intent-40404040-4040-4040-8040-404040404040'
+        : 'intent-41414141-4141-4141-8141-414141414141',
+      `${drift} Diff drift`,
+      repo,
+      0,
+      selection,
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    await writeFile(join(repo, 'tracked.txt'), 'initial\nchanged\n')
+    const changes = await harness.control.query<'project-changes'>(harness.authentication, {
+      type: 'project-changes',
+      projectId: registered.receipt.projectId,
+      expectedRegistryRevision: 1,
+    }, new AbortController().signal)
+    if (!changes.ok || !changes.projection.result.ok) throw new Error('changes unavailable')
+    const change = changes.projection.result.observation.changes.find(candidate => candidate.path === 'tracked.txt')
+    if (change === undefined) throw new Error('tracked change absent')
+    const original = harness.ctx.sakiHostExecution.readDiff.bind(harness.ctx.sakiHostExecution)
+    const started = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    vi.spyOn(harness.ctx.sakiHostExecution, 'readDiff').mockImplementation(async (binding, request, signal) => {
+      const result = await original(binding, request, signal)
+      started.resolve(undefined)
+      await release.promise
+      return result
+    })
+    const pending = harness.control.query<'project-diff'>(harness.authentication, {
+      type: 'project-diff',
+      projectId: registered.receipt.projectId,
+      expectedRegistryRevision: 1,
+      request: {
+        expectedStatus: changes.projection.result.observation.fingerprint,
+        changeId: change.id,
+        layer: 'unstaged',
+      },
+    }, new AbortController().signal)
+    await started.promise
+    if (drift === 'Grant') {
+      await setGrantActions(harness, ['project-index:read'])
+    } else {
+      const table = liveSakiDomain(harness.ctx).table('development_project_registry')
+      await table.update('development-project-registry', current => ({ ...current, revision: current.revision + 1 }))
+    }
+    release.resolve(undefined)
+    await expect(pending).resolves.toEqual({ ok: false, reason })
+  })
+
   it('persists one real Git/Workspace/SQLite registration and replays stable ids after restart', async () => {
     const durable = await paths()
     const repo = await repository(durable.root, 'ordinary')
@@ -594,8 +782,9 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const database = new DatabaseSync(durable.sqlite)
     try {
       expect(database.prepare('SELECT name, version FROM units ORDER BY name').all()).toEqual([
-        { name: 'saki_control_plane', version: 4 },
-        { name: 'saki_storage_generation', version: 2 },
+        { name: 'saki_control_plane', version: 5 },
+        { name: 'saki_host_execution', version: 1 },
+        { name: 'saki_storage_generation', version: 3 },
       ])
       const tables = database.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
@@ -605,12 +794,14 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         'unit_tables',
         'units',
       ])
-      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(11)
+      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(14)
       expect(database.prepare(
         'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
       ).all('saki_control_plane')).toEqual([
+        { table_name: 'binding_write_admissions' },
         { table_name: 'control_state' },
         { table_name: 'development_project_registry' },
+        { table_name: 'git_operation_intents' },
         { table_name: 'github_project_sync' },
         { table_name: 'github_sync_configuration_intents' },
         { table_name: 'grants' },
@@ -619,6 +810,11 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         { table_name: 'installations' },
         { table_name: 'principals' },
         { table_name: 'registration_intents' },
+      ])
+      expect(database.prepare(
+        'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
+      ).all('saki_host_execution')).toEqual([
+        { table_name: 'operations' },
       ])
       expect(database.prepare(
         'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
@@ -766,7 +962,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     await harness.close()
   })
 
-  it('reserves each Control Intent id across registration and GitHub configuration', async () => {
+  it('reserves each Control Intent id across registration, GitHub configuration, and Git operations', async () => {
     const durable = await paths()
     const firstRepository = await repository(durable.root, 'cross-intent-first')
     const secondRepository = await repository(durable.root, 'cross-intent-second')
@@ -796,6 +992,14 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       1,
       firstSelection,
     ), new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+    expect(await harness.control.submit(harness.authentication, {
+      ...SAKI_GIT_REQUEST_FIXTURES.unstage,
+      intentId: configureFirstId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+    expect(await harness.control.submit(harness.authentication, {
+      ...SAKI_GIT_REQUEST_FIXTURES.commit,
+      intentId: configureFirstId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
 
     const secondSelection = await inspected(harness, secondRepository)
     const registerFirstId = 'intent-16161616-1616-4616-8616-161616161616' as SakiControlIntentId
@@ -1267,6 +1471,16 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       refresh: 'interactive',
     }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
     expect(await harness.control.query(harness.authentication, {
+      type: 'project-changes',
+      projectId: missingProjectId,
+      expectedRegistryRevision: 1,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await harness.control.query(harness.authentication, {
+      ...SAKI_GIT_REQUEST_FIXTURES.diff,
+      projectId: missingProjectId,
+      expectedRegistryRevision: 1,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await harness.control.query(harness.authentication, {
       type: 'inspect-project-selection',
       hostId: harness.control.identity().hostId,
       directoryLocator: join(durable.root, 'missing-selection'),
@@ -1308,6 +1522,20 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       type: 'board',
       projectId: registered.receipt.projectId,
       refresh: 'cached',
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-changes',
+      projectId: registered.receipt.projectId,
+      expectedRegistryRevision: 1,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(await harness.control.query(harness.authentication, {
+      ...SAKI_GIT_REQUEST_FIXTURES.diff,
+      projectId: registered.receipt.projectId,
+      expectedRegistryRevision: 1,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(await harness.control.submit(harness.authentication, {
+      ...SAKI_GIT_REQUEST_FIXTURES.stage,
+      intentId: 'intent-18181818-1818-4818-8818-18181818181c' as SakiControlIntentId,
     }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
     expect(liveSakiDomain(harness.ctx).table('development_project_registry')
       .get('development-project-registry')?.projects).toHaveLength(1)
@@ -1435,7 +1663,12 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       hostId,
       directoryLocator: linked,
     }, new AbortController().signal)
-    if (!mainObservation.ok || !linkedObservation.ok) throw new Error('linked-worktree fixture inspection failed')
+    if (!mainObservation.ok) {
+      throw new Error(`main linked-worktree fixture inspection failed: ${mainObservation.reason}`)
+    }
+    if (!linkedObservation.ok) {
+      throw new Error(`secondary linked-worktree fixture inspection failed: ${linkedObservation.reason}`)
+    }
     expect(mainObservation.inspection.trusted.canonicalCommonGitDirectory)
       .toBe(linkedObservation.inspection.trusted.canonicalCommonGitDirectory)
     expect(mainObservation.inspection.trusted.canonicalGitDirectory)
@@ -1603,6 +1836,11 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const firstMissingRevision = index.ok && index.projection.type === 'project-index'
       ? index.projection.revision
       : -1
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-changes',
+      projectId: registered.receipt.projectId,
+      expectedRegistryRevision: firstMissingRevision,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'binding-unavailable' })
     await harness.close()
 
     missing = await restartMissing()
@@ -1733,16 +1971,16 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       const current = binding.registrationInspection
       const {
         fingerprint: _fingerprint,
-        branch: _branch,
         upstream: _upstream,
         ...projection
       } = current.projection
+      if (current.projection.head.kind !== 'commit') throw new Error('Expected committed registration fixture')
       const baseline = SAKI_PROJECT_PROJECTION_FIXTURES.dirtySelection.baseline
       binding.health = 'active'
       binding.currentInspection = signedInspection({
         ...projection,
         workspaceId,
-        detached: true,
+        head: { kind: 'commit', objectId: current.projection.head.objectId },
         locked: true,
         inheritedChangeEntryCount: baseline.observed.entries,
         conversionAmbiguous: true,
@@ -1763,7 +2001,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       ok: true,
       projection: { projects: [{ binding: {
         health: 'active',
-        detached: true,
+        head: { kind: 'commit' },
         automaticMutationEligible: false,
         configurationGaps: ['conversion-ambiguous'],
       } }] },
@@ -1771,7 +2009,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     if (!blockedIndex.ok || blockedIndex.projection.type !== 'project-index') {
       throw new Error('Project index fixture failed')
     }
-    expect(blockedIndex.projection.projects[0]?.binding).not.toHaveProperty('branch')
+    expect(blockedIndex.projection.projects[0]?.binding.head).not.toHaveProperty('symbolicRef')
     expect(await harness.control.query(harness.authentication, {
       type: 'development-workspace',
       projectId: registered.receipt.projectId,
@@ -2198,6 +2436,43 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     })
     expect(liveSakiDomain(harness.ctx).table('registration_intents').get(request.intentId))
       .toMatchObject({ phase: 'workspace-observed' })
+    const committed = registry.get('development-project-registry')
+    const project = committed?.projects[0]
+    const binding = committed?.resourceBindings[0]
+    if (project === undefined || binding === undefined) throw new Error('committed Project is absent')
+    await writeFile(join(repo, 'tracked.txt'), 'changed before admission recovery\n')
+    const changes = await harness.control.query<'project-changes'>(harness.authentication, {
+      type: 'project-changes',
+      projectId: project.id,
+      expectedRegistryRevision: 1,
+    }, new AbortController().signal)
+    if (!changes.ok || !changes.projection.result.ok) throw new Error('committed Project changes are unavailable')
+    const observation = changes.projection.result.observation
+    if (observation.index.kind !== 'tree') throw new Error('committed Project index is unavailable')
+    const change = observation.changes.find(candidate => candidate.path === 'tracked.txt')
+    if (change === undefined) throw new Error('committed Project change is absent')
+    const gitIntentId = 'intent-76767676-7676-4676-8676-767676767677' as SakiControlIntentId
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'stage-files',
+      intentId: gitIntentId,
+      expected: {
+        projectId: project.id,
+        expectedRegistryRevision: 1,
+        expectedProjectRevision: project.revision,
+        expectedBinding: { id: binding.id, revision: binding.revision },
+        expectedStatus: observation.fingerprint,
+        expectedHead: observation.head,
+        expectedIndex: observation.index,
+        expectedWorktree: observation.worktree,
+      },
+      changes: [{ id: change.id, fingerprint: change.fingerprint }],
+    }, new AbortController().signal)).toMatchObject({
+      ok: false,
+      reason: 'unavailable',
+      receipt: { state: 'prepared' },
+    })
+    expect(liveSakiDomain(harness.ctx).table('git_operation_intents').get(gitIntentId))
+      .toMatchObject({ phase: 'prepared' })
     await harness.close()
 
     harness = await start(durable)
@@ -2207,6 +2482,22 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       new AbortController().signal,
     )
     expect(recovered).toMatchObject({ ok: true, receipt: { state: 'confirmed', registryRevision: 1 } })
+    expect(liveSakiDomain(harness.ctx).table('git_operation_intents').get(gitIntentId))
+      .toMatchObject({
+        phase: 'canceled',
+        terminalReason: 'source-canceled',
+        operationSnapshot: {
+          state: 'canceled',
+          admission: { kind: 'not-accepted' },
+          effect: 'none',
+        },
+      })
+    expect(liveSakiDomain(harness.ctx).table('binding_write_admissions').get(binding.id))
+      .toMatchObject({ state: 'available' })
+    expect((await run('git', ['diff', '--cached', '--name-only', '--'], {
+      cwd: repo,
+      windowsHide: true,
+    })).stdout).toBe('')
     expect(harness.ctx.workspaceRegistry.list()).toHaveLength(1)
     await harness.close()
   })
@@ -2683,7 +2974,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       }],
       ['Intent confirmation disagrees with retained inspection', (candidate) => {
         candidate.payload.intent.confirmedFingerprint = {
-          version: 1,
+          version: 2,
           digest: canonicalDigest('saki/test/alternate-fingerprint/v1', { id: candidate.id }),
         }
         refreshPayloadDigest(candidate)
@@ -3461,11 +3752,18 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       reason: 'conflict',
       receipt: { state: 'conflict', reason: 'expected-revision' },
     })
-    expect(invalidations).toEqual([{
-      keys: ['project-index', 'development-workspace'],
-      registryRevision: 1,
-      projectIds: [accepted.receipt.projectId],
-    }])
+    expect(invalidations).toEqual([
+      {
+        keys: ['project-index', 'development-workspace', 'project-changes'],
+        registryRevision: 1,
+        projectIds: [accepted.receipt.projectId],
+      },
+      {
+        keys: ['project-changes'],
+        registryRevision: 1,
+        projectIds: [accepted.receipt.projectId],
+      },
+    ])
     expect(harness.ctx.workspaceRegistry.list()).toHaveLength(2)
     const index = await harness.control.query(
       harness.authentication,

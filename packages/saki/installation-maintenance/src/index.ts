@@ -3,6 +3,9 @@
 export { SakiMaintenanceError } from './error.ts'
 export type { SakiMaintenanceErrorCode } from './error.ts'
 export { CURRENT_SAKI_BUILD_ID, LEGACY_B03_BUILD_ID } from './release.ts'
+export { sakiStateCapability, sakiStateControlPlaneMigrationPlan } from './state-version.ts'
+export type { SakiStateCapability, SakiStateVersionSpec } from './state-version.ts'
+export { validateCurrentSakiProductState } from './state-validation.ts'
 export {
   assertSqliteArtifactSetUnchanged,
   captureSqliteArtifactSet,
@@ -20,6 +23,7 @@ export {
   readClosedCurrentSakiState,
   readClosedSakiV2State,
   readClosedSakiV3State,
+  readClosedSakiV4State,
 } from './closed-state.ts'
 export type {
   ClosedCurrentSakiState,
@@ -27,6 +31,7 @@ export type {
   ClosedProvisioningSakiState,
   ClosedSakiV2State,
   ClosedSakiV3State,
+  ClosedSakiV4State,
 } from './closed-state.ts'
 export {
   createDurableFileWriter,

@@ -10,6 +10,7 @@ import type { RawCommandOutput } from './git-runner.ts'
 import type { RawOutputBudget } from './git-runner.ts'
 import { GitCommandError } from './git-runner.ts'
 import {
+  capturedInventoryEntryHasGitlink,
   type CapturedInventoryGitObject,
   type CapturedInventoryWorktree,
   type CapturedRepositoryInventory,
@@ -46,6 +47,110 @@ export interface RepositoryInventoryGit {
     stdin?: { readonly bytes: Uint8Array; readonly maxBytes: number },
     outputBudget?: RawOutputBudget,
   ): Promise<RawCommandOutput>
+}
+
+/** Exact private-index flag evidence retained across both observation rounds. */
+export interface RepositoryIndexFlagEvidence {
+  /** Whether structured mutation must fail closed for this index state. */
+  readonly mutationBlocked: boolean
+  /** Exact stage-zero CE_VALID paths whose hidden ordinary status may be reconstructed. */
+  readonly assumeUnchangedPaths: readonly Uint8Array[]
+  /** Digest of the sparse-config fact and complete raw flag output. */
+  readonly identity: string
+}
+
+/**
+ * Inspect index flags that are not represented by the index tree identity.
+ * @param git - Git runner bound to one admitted private repository view.
+ * @param cwd - canonical worktree path associated with the private view.
+ * @param signal - observation lifetime.
+ * @param inventory - same-round stage-zero membership for exact cross-checking.
+ * @param sparseIndexEnabled - admitted repository-local sparse configuration fact.
+ * @returns exact flag evidence plus candidate paths eligible for raw-inventory reconciliation.
+ */
+export async function captureRepositoryIndexFlagEvidence(
+  git: RepositoryInventoryGit,
+  cwd: string,
+  signal: AbortSignal,
+  inventory: CapturedRepositoryInventory,
+  sparseIndexEnabled: boolean,
+): Promise<RepositoryIndexFlagEvidence> {
+  const { stdout, stderr } = await git.run(cwd, ['ls-files', '-v', '-z', '--'], signal)
+  if (stderr.byteLength !== 0) throw new RepositoryInventoryError('unavailable')
+  if (stdout.byteLength !== 0 && stdout.at(-1) !== 0) throw new RepositoryInventoryError('malformed')
+  const expected = expectedIndexFlagEntries(inventory)
+  let anomaly = false
+  let mutationBlocked = sparseIndexEnabled
+  const assumeUnchangedPaths: Uint8Array[] = []
+  let start = 0
+  while (start < stdout.byteLength) {
+    const end = stdout.indexOf(0, start)
+    if (end < 0 || end - start < 3 || stdout[start + 1] !== 0x20) {
+      throw new RepositoryInventoryError('malformed')
+    }
+    const tag = String.fromCharCode(stdout[start] as number)
+    const normalizedTag = tag.toUpperCase()
+    if (!/^[HSMRCK?]$/u.test(normalizedTag)) throw new RepositoryInventoryError('malformed')
+    const path = stdout.subarray(start + 2, end)
+    const key = Buffer.from(path).toString('hex')
+    const entry = expected.get(key)
+    if (entry === undefined || entry.observed >= entry.count) {
+      anomaly = true
+    } else {
+      entry.observed += 1
+      const expectedTag = entry.kind === 'conflict' ? 'M' : entry.skipWorktree ? 'S' : 'H'
+      if (normalizedTag !== expectedTag) {
+        anomaly = true
+      } else if (tag === 'h') {
+        mutationBlocked = true
+        if (!capturedInventoryEntryHasGitlink(entry.inventoryEntry)) {
+          assumeUnchangedPaths.push(path.subarray())
+        }
+      } else if (tag === 's' || tag === 'm' || tag === 'S') {
+        mutationBlocked = true
+      }
+    }
+    start = end + 1
+  }
+  if ([...expected.values()].some(entry => entry.observed !== entry.count)) anomaly = true
+  if (anomaly) mutationBlocked = true
+  assumeUnchangedPaths.sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+  const identityMaterial = new Uint8Array(stdout.byteLength + 1)
+  identityMaterial[0] = sparseIndexEnabled ? 1 : 0
+  identityMaterial.set(stdout, 1)
+  return {
+    mutationBlocked,
+    assumeUnchangedPaths: anomaly ? [] : assumeUnchangedPaths,
+    identity: exactBytesDigest('saki/repository-index-flags/v1', identityMaterial),
+  }
+}
+
+interface ExpectedIndexFlagEntry {
+  readonly kind: 'stage-zero' | 'conflict'
+  readonly skipWorktree: boolean
+  readonly count: number
+  readonly inventoryEntry: CapturedRepositoryInventoryEntry
+  observed: number
+}
+
+function expectedIndexFlagEntries(
+  inventory: CapturedRepositoryInventory,
+): Map<string, ExpectedIndexFlagEntry> {
+  const entries = new Map<string, ExpectedIndexFlagEntry>()
+  for (const entry of inventory.entries) {
+    const conflictStages = entry.stages.filter(stage => stage !== undefined).length
+    const count = entry.index === undefined ? conflictStages : 1
+    if (count === 0) continue
+    const key = Buffer.from(entry.path).toString('hex')
+    entries.set(key, {
+      kind: entry.index === undefined ? 'conflict' : 'stage-zero',
+      skipWorktree: entry.skipWorktree === true,
+      count,
+      inventoryEntry: entry,
+      observed: 0,
+    })
+  }
+  return entries
 }
 
 /** One aggregate observation lifetime shared by every Git fact in a round. */
@@ -165,6 +270,7 @@ interface MutableInventoryEntry {
     CapturedInventoryGitObject | undefined,
     CapturedInventoryGitObject | undefined,
   ]
+  skipWorktree?: boolean
   untracked: boolean
 }
 
@@ -194,6 +300,7 @@ interface IdentityTransaction {
  * @param signal - required caller cancellation.
  * @param readSubmoduleObject - safe nested-repository object reader.
  * @param facts - injectable raw filesystem facts for deterministic race rejection.
+ * @param headObjectId - exact commit tree to inventory, or null for an unborn empty HEAD tree.
  * @returns complete joined inventory with no plaintext path projection.
  */
 export async function captureRepositoryInventory(
@@ -204,6 +311,7 @@ export async function captureRepositoryInventory(
   signal: AbortSignal,
   readSubmoduleObject?: SubmoduleObjectReader,
   facts: RepositoryInventoryFileFacts = NODE_FILE_FACTS,
+  headObjectId: string | null = 'HEAD',
 ): Promise<CapturedRepositoryInventory> {
   using lifetime = deadline(signal, bounds.maxCaptureMs, 'SAKI_INVENTORY_TIMEOUT')
   const state: CaptureState = {
@@ -221,8 +329,14 @@ export async function captureRepositoryInventory(
   signal.throwIfAborted()
   try {
     await rejectConfigIncludes(state, git)
-    const treeOutput = await runObserved(state, git, ['ls-tree', '-r', '--full-tree', '-z', 'HEAD'])
-    const indexOutput = await runObserved(state, git, ['ls-files', '-t', '--stage', '--full-name', '-z'])
+    const treeBytes = headObjectId === null
+      ? new Uint8Array()
+      : (await runObserved(state, git, ['ls-tree', '-r', '--full-tree', '-z', headObjectId])).stdout
+    const indexOutput = await runObserved(
+      state,
+      git,
+      ['ls-files', '--no-sparse', '-t', '--stage', '--full-name', '-z'],
+    )
     const untrackedOutput = await runObserved(state, git, [
       'ls-files', '--others', '--exclude-standard', '--full-name', '-z',
     ])
@@ -230,7 +344,7 @@ export async function captureRepositoryInventory(
     let index: ReturnType<typeof parseLsFilesStage>
     let untracked: ReturnType<typeof parseNulPaths>
     try {
-      tree = parseLsTree(treeOutput.stdout, bounds)
+      tree = parseLsTree(treeBytes, bounds)
       index = parseLsFilesStage(indexOutput.stdout, bounds)
       untracked = parseNulPaths(untrackedOutput.stdout, bounds)
     } catch (error) {
@@ -310,7 +424,7 @@ export async function captureRepositoryInventory(
       objectFormat,
       comparison,
       allowlistedGitEvidenceBytes:
-        treeOutput.stdout.byteLength + indexOutput.stdout.byteLength + untrackedOutput.stdout.byteLength,
+        treeBytes.byteLength + indexOutput.stdout.byteLength + untrackedOutput.stdout.byteLength,
       capture: { elapsedMs, rawBytes: state.retainedRawBytes },
       entries: captured,
     }
@@ -356,10 +470,13 @@ function joinMembership(
   }
   for (const value of tree) get(value.path).head = { mode: value.mode, objectId: value.objectId }
   for (const value of index) {
-    if (value.tag === 'S' || value.mode === '040000') throw new RepositoryInventoryError('unavailable')
+    if (value.mode === '040000') throw new RepositoryInventoryError('unavailable')
     const entry = get(value.path)
     const object = { mode: value.mode, objectId: value.objectId } as CapturedInventoryGitObject
-    if (value.stage === 0) entry.index = object
+    if (value.stage === 0) {
+      entry.index = object
+      if (value.tag === 'S') entry.skipWorktree = true
+    }
     else entry.stages[value.stage - 1] = object
   }
   for (const path of untracked) {
@@ -551,12 +668,17 @@ async function captureCurrentAtPath(
         throw new RepositoryInventoryError('malformed')
       }
       if (first === undefined) {
-        throw new CurrentEvidenceError('unsupported-state')
+        return await unavailablePresentGitlink(path, info, state, 'unsupported-state')
       }
       observeNestedGitBytes(state, first.semanticGitOutputBytes)
       const after = await state.facts.lstat(path)
       const second = await readSubmoduleObject(path, state.signal)
-      if (second === undefined) throw new CurrentEvidenceError('unsupported-state')
+      if (second === undefined) {
+        if (!after.isDirectory() || !sameStat(info, after)) {
+          throw new CurrentEvidenceError('unstable-content')
+        }
+        return await unavailablePresentGitlink(path, info, state, 'unsupported-state')
+      }
       if (!objectMatchesFormat(second.objectId, state.objectFormat)) {
         throw new RepositoryInventoryError('malformed')
       }
@@ -652,6 +774,19 @@ async function captureCurrentAtPath(
     if (error instanceof CurrentEvidenceError) throw new CurrentEvidenceError(error.reason, true)
     throw new CurrentEvidenceError('io-failure', true)
   }
+}
+
+async function unavailablePresentGitlink(
+  path: string,
+  initial: BigIntStats,
+  state: CaptureState,
+  reason: import('@breakfastdapaidang/saki-execution').InheritedChangeBaselineUnavailableReason,
+): Promise<CapturedInventoryWorktree> {
+  const confirmed = await state.facts.lstat(path)
+  if (!confirmed.isDirectory() || !sameStat(initial, confirmed)) {
+    throw new CurrentEvidenceError('unstable-content')
+  }
+  return { kind: 'unavailable', reason, observedMode: '160000' }
 }
 
 function currentKindProvesChange(

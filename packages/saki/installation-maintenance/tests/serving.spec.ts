@@ -2,14 +2,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { descriptorOf } from '@deepseek-ai/dsh-storage-domain'
+import type { KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
+import { descriptorOf, type DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   sakiControlPlaneMigrationPlan,
   sakiControlPlaneV3DomainSpec,
+  sakiControlPlaneV4DomainSpec,
   sakiStorageGenerationV1DomainSpec,
+  sakiStorageGenerationV2DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
+  storageGenerationV2SealRecordSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import type {
   SakiBuildId,
@@ -138,27 +142,27 @@ async function publishSelectedGeneration(
   }
 }
 
-async function materializeHistoricalV3(
+async function materializeHistoricalSealedGeneration(
   databasePath: string,
   legacyDatabasePath: string,
+  stateVersion: 3 | 4,
   signal: AbortSignal,
 ): Promise<void> {
   const historical = await readClosedSakiV2State(legacyDatabasePath, signal)
-  const backend = new SqliteStorageBackend({ path: databasePath, journalMode: 'delete' })
-  try {
-    const closed = backend.kv.closed
-    if (closed === undefined) throw new Error('test SQLite backend has no closed operations')
-    await closed.withReservedUnit(sakiControlPlaneV3DomainSpec.name, signal, async (lease) => {
-      const result = await lease.materializeMissing(
-        descriptorOf(sakiControlPlaneV3DomainSpec),
-        sakiControlPlaneMigrationPlan.steps[0]!.migrate(historical.controlPlaneSnapshot),
-      )
-      if (result.outcome !== 'durable') throw result.cause
-    })
-    await closed.withReservedUnit(sakiStorageGenerationV1DomainSpec.name, signal, async (lease) => {
-      const result = await lease.materializeMissing(
-        descriptorOf(sakiStorageGenerationV1DomainSpec),
-        {
+  const v3Snapshot = sakiControlPlaneMigrationPlan.steps[0]!.migrate(
+    historical.controlPlaneSnapshot,
+  )
+  const units: readonly { readonly spec: DomainSpec; readonly snapshot: KvUnitSnapshot }[] = [
+    stateVersion === 3
+      ? { spec: sakiControlPlaneV3DomainSpec, snapshot: v3Snapshot }
+      : {
+        spec: sakiControlPlaneV4DomainSpec,
+        snapshot: sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3Snapshot),
+      },
+    stateVersion === 3
+      ? {
+        spec: sakiStorageGenerationV1DomainSpec,
+        snapshot: {
           global: null,
           tables: {
             storage_generation: {
@@ -172,9 +176,35 @@ async function materializeHistoricalV3(
             },
           },
         },
-      )
-      if (result.outcome !== 'durable') throw result.cause
-    })
+      }
+      : {
+        spec: sakiStorageGenerationV2DomainSpec,
+        snapshot: {
+          global: null,
+          tables: {
+            storage_generation: {
+              [STORAGE_GENERATION_KEY]: storageGenerationV2SealRecordSchema.parse({
+                schemaVersion: 2,
+                installationId: B03_INSTALLATION_ID,
+                storageGenerationId: B03_STORAGE_GENERATION_ID,
+                stateVersion: 4,
+                createdByBuildId: BUILD_ID,
+              }),
+            },
+          },
+        },
+      },
+  ]
+  const backend = new SqliteStorageBackend({ path: databasePath, journalMode: 'delete' })
+  try {
+    const closed = backend.kv.closed
+    if (closed === undefined) throw new Error('test SQLite backend has no closed operations')
+    for (const unit of units) {
+      await closed.withReservedUnit(unit.spec.name, signal, async (lease) => {
+        const result = await lease.materializeMissing(descriptorOf(unit.spec), unit.snapshot)
+        if (result.outcome !== 'durable') throw result.cause
+      })
+    }
   } finally {
     await backend.close()
   }
@@ -264,7 +294,7 @@ describe('Saki serving Installation scope', () => {
     })
 
     await expect(readInstallationManifest(installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 4 },
+      value: { phase: 'ready', stateVersion: 5 },
     })
   })
 
@@ -276,7 +306,7 @@ describe('Saki serving Installation scope', () => {
     const signal = AbortSignal.timeout(10_000)
     const published = await publishSelectedGeneration(
       installationRoot,
-      4,
+      5,
       'ready',
       async (databasePath, activeSignal) => {
         await migrateSakiGeneration(sourcePath, databasePath, {
@@ -426,7 +456,7 @@ describe('Saki serving Installation scope', () => {
         const otherRoot = await root()
         await publishSelectedGeneration(
           otherRoot,
-          4,
+          5,
           'ready',
           async (databasePath) => {
             await writeFile(databasePath, 'unsupported')
@@ -461,7 +491,7 @@ describe('Saki serving Installation scope', () => {
       const signal = AbortSignal.timeout(5_000)
       const published = await publishSelectedGeneration(
         installationRoot,
-        4,
+        5,
         'provisioning',
         async (databasePath, activeSignal) => {
           await materializeFreshSakiGeneration(databasePath, {
@@ -530,7 +560,7 @@ describe('Saki serving Installation scope', () => {
       3,
       'ready',
       async (databasePath, activeSignal) => {
-        await materializeHistoricalV3(databasePath, legacyDatabasePath, activeSignal)
+        await materializeHistoricalSealedGeneration(databasePath, legacyDatabasePath, 3, activeSignal)
       },
       signal,
       B03_INSTALLATION_ID,
@@ -547,12 +577,42 @@ describe('Saki serving Installation scope', () => {
     })
   })
 
+  it('rejects a valid selected v4 generation until offline upgrade without invoking the server', async () => {
+    const installationRoot = await root()
+    const sourceRoot = await root()
+    const legacyDatabasePath = join(sourceRoot, 'control.sqlite')
+    writeB03Database(legacyDatabasePath)
+    const signal = AbortSignal.timeout(10_000)
+    await publishSelectedGeneration(
+      installationRoot,
+      4,
+      'ready',
+      async (databasePath, activeSignal) => {
+        await materializeHistoricalSealedGeneration(databasePath, legacyDatabasePath, 4, activeSignal)
+      },
+      signal,
+      B03_INSTALLATION_ID,
+      B03_STORAGE_GENERATION_ID,
+    )
+    const serve = vi.fn(async () => undefined)
+
+    await expect(withPreparedSakiServingState({
+      installationRoot,
+      legacyDatabasePath: join(installationRoot, 'unused.sqlite'),
+      currentBuildId: BUILD_ID,
+    }, signal, serve)).rejects.toMatchObject({
+      code: 'upgrade-required',
+      message: 'Saki state version 4 is valid but requires the offline upgrade command before serving',
+    })
+    expect(serve).not.toHaveBeenCalled()
+  })
+
   it('rejects a manifest-selected state version this build cannot read', async () => {
     const installationRoot = await root()
     const signal = AbortSignal.timeout(5_000)
     await publishSelectedGeneration(
       installationRoot,
-      5,
+      6,
       'ready',
       async (databasePath) => {
         await writeFile(databasePath, 'unsupported')

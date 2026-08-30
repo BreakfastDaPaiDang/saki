@@ -16,7 +16,7 @@ Status: implemented
 
 **让工程检查不依赖包族。** 共享包规则、源码平面映射、项目引用、许可证与不变式检查、生成目录、模块图和组合包解析均接受两个已分类产品包族。[包治理参考](../../../../docs/saki/package-governance.zh.md)负责完整的当前包与发布规则。
 
-**让组合证据随产品切片落地。** `@breakfastdapaidang/saki-bundle` 拥有空 Cordis 基础配置、一层补丁与仓库本地启动器。该补丁只挂载已经实现的产品切片和稳定的就绪配置项。当前组合把 JSON 作为默认存储后端，把 Saki 控制面与 Installation State Generation domain 路由到 SQLite，并挂载 Session 持久化、Workspace、本地文件系统与子进程提供方、Local Host 执行提供方、仅在 Windows 启用的 DPAPI 凭据提供方与 Product GitHub App、回环 Host 传输、`saki-control-plane` 和 `saki-host-api`。启动器会在 boot 前准备选定的 Installation State Generation，只在 `boot()` 完成配置项激活审计后输出就绪记录，并在 Saki Host 生命周期内持续运行；报告失败会先对应用执行 dispose（资源释放），再进入启动器失败路径。后续包随可独立验证的产品切片加入；规划中的名称不足以支持提前创建占位目录。
+**让组合证据随产品切片落地。** `@breakfastdapaidang/saki-bundle` 拥有空 Cordis 基础配置、一层补丁与仓库本地启动器。该补丁只挂载已经实现的产品切片和稳定的就绪配置项。当前组合把 JSON 作为默认存储后端，把 Saki 控制面、Host Execution 与 Installation State Generation domain 路由到同一个 manifest-selected SQLite generation，并挂载 Session 持久化、Workspace、本地文件系统与子进程提供方、Local Host 执行提供方、仅在 Windows 启用的 DPAPI 凭据提供方与 Product GitHub App、回环 Host 传输、`saki-control-plane` 和 `saki-host-api`。启动器会在 boot 前准备选定的 Installation State Generation，只在 `boot()` 完成配置项激活审计后输出就绪记录，并在 Saki Host 生命周期内持续运行；报告失败会先对应用执行 dispose（资源释放），再进入启动器失败路径。后续包随可独立验证的产品切片加入；规划中的名称不足以支持提前创建占位目录。
 
 ## 后果
 

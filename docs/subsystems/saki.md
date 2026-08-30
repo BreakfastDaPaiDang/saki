@@ -2,7 +2,7 @@
 
 English | [中文](saki.zh.md)
 
-The Saki control plane owns product state independently from agent conversations. Its implemented surface establishes one stable local Installation, one enrolled Host, one human Principal with a current Host Operator Grant, one versioned Installation Access aggregate, and a revisioned Development Project Registry with recoverable first-registration Intents. A versioned provisioning owner and independently revisioned entity tables retain those identities across interrupted startup. The [Saki backend architecture](../saki/architecture/0.1.0-backend.md) defines the wider control-plane and execution-plane split; this page is the reference for the implemented Cordis service.
+The Saki control plane owns product state independently from agent conversations. Its implemented surface establishes one stable local Installation, one enrolled Host, one human Principal with a current Host Operator Grant, one versioned Installation Access aggregate, a revisioned Development Project Registry with recoverable first-registration Intents, and recoverable direct structured-Git Intents for bound Projects. A versioned provisioning owner and independently revisioned entity tables retain those identities and operation evidence across interrupted startup. The [Saki backend architecture](../saki/architecture/0.1.0-backend.md) defines the wider control-plane and execution-plane split; this page is the reference for the implemented Cordis service.
 
 ## Installation access
 
@@ -14,11 +14,19 @@ The protected `inspect-project-selection` query passes an enrolled Host id and u
 
 `register-development-project` repeats the locator and exact browser-confirmed fingerprint and baseline, names an expected Registry revision, and carries no client-selected Actor or Grant. The control plane derives attribution from current authority, persists the Intent before Workspace creation, re-inspects the retained canonical worktree path as an untrusted locator before each effect-sensitive phase, and commits the Project, Resource Binding, path indexes, and Intent mapping through one Registry compare-and-set. Exact replay resumes the recorded phase and returns the same receipt and identities; changed payload, stale Registry revision, or duplicate canonical worktree or per-worktree Git-directory identity conflicts. Startup validates the complete Registry and Intent inventory before recovery, resumes nonterminal registration, and refreshes each Binding to `active`, `missing`, or `repair-required` from a new Host inspection.
 
-The `project-index` query returns the current Registry revision, enrolled Host choice, and detached Project summaries. A `development-workspace` query must name that exact revision and returns one Project with current safe inspection and recovery reasons, or a typed `stale` or `not-found` result. Rebind, retirement, Execution Leases, and repository mutation are not part of this operation set.
+The `project-index` query returns the current Registry revision, enrolled Host choice, and detached Project summaries. A `development-workspace` query must name that exact revision and returns one Project with current safe inspection and recovery reasons, or a typed `stale` or `not-found` result. Rebind, retirement, and Execution Leases are not part of the registration operation set; repository mutation uses the dedicated direct operation set below.
+
+## Project changes and Git operations
+
+The protected `project-changes` query reopens the exact active Resource Binding through `ctx.sakiHostExecution` and returns a complete display-safe status observation. It includes exact Binding revision, HEAD, branch and upstream, index-tree evidence, worktree fingerprint, structured rows with bounded repository-relative display paths, status fingerprint, and repository-level eligibility for stage, unstage, and Commit; canonical Host paths stay private. Each row uses an observation-scoped opaque id and fingerprint. `project-diff` resolves that identity and a staged, unstaged, or conflict layer against the exact observation and returns one bounded page tied to a complete patch fingerprint and cursor.
+
+`stage-files`, `unstage-files`, and `create-commit` are durable direct Control Intents. Submission freezes the authenticated Actor and authority plus the exact Registry, Project, Binding, status, HEAD, index, worktree, and inherited-change evidence. One Binding Write Admission row allows only one `manual-host-operation` writer for the Resource Binding. The control plane reserves it, prepares one idempotent `{ kind: 'control-intent' }` Host Operation, accepts that exact preparation, and starts or inspects it outside storage callbacks. Exact replay returns the same receipt; changed immutable input conflicts; unknown or contradictory effect evidence remains `reconciliation-required`.
+
+The Local Host builds stage and unstage results in an alternate index, persists a random same-directory pin, and links that pin without clobbering into the bound index lock before publication. It creates deterministic hook-free unsigned Commits from the observed index tree. Attached-HEAD publication freezes the target branch, revalidates HEAD immediately before the effect, and compare-and-sets only that target. Detached HEAD remains available for inspection, Diff, stage, and unstage, but CreateCommit is unavailable because Git 2.45 cannot atomically prove that `HEAD` stayed direct while compare-and-setting its object id. Git 2.45 is the minimum. Random scratch cleanup requires an exact owner marker; index-lock cleanup requires the operation-owned path, file identity, and digest; and attempted publication that cannot be proved is never retried automatically. Automated dispatch and Agent Run sources remain later work.
 
 ## Host transport
 
-[`saki-host-api`](../../packages/saki/host-api/README.md) owns strict endpoint schemas on the logical `/saki` [Connection](../../packages/client/connection/README.md) channel. The Host adapter rejects URL queries before decoding, extracts cookies and request headers outside JSON, constructs the non-wire `SakiAuthenticationContext`, and returns `Set-Cookie` outside the RPC result. Every Saki reply uses `Cache-Control: no-store`, and every transport or RPC failure uses one fixed opaque internal error. Its protected operations correlate exact request and result types for inspection, Project-index, Development-Workspace, and first-registration calls; strict outbound validation rejects an implementation result containing unexpected authority, path, credential, or Projection fields before serialization.
+[`saki-host-api`](../../packages/saki/host-api/README.md) owns strict endpoint schemas on the logical `/saki` [Connection](../../packages/client/connection/README.md) channel. The Host adapter rejects URL queries before decoding, extracts cookies and request headers outside JSON, constructs the non-wire `SakiAuthenticationContext`, and returns `Set-Cookie` outside the RPC result. Every Saki reply uses `Cache-Control: no-store`, and every transport or RPC failure uses one fixed opaque internal error. Its protected operations correlate exact request and result types for inspection, Project-index, Development-Workspace, first-registration, Project Changes, Project Diff, stage, unstage, and Commit calls; strict outbound validation rejects an implementation result containing unexpected authority, path, credential, or Projection fields before serialization.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -46,18 +54,19 @@ identity(): SakiInstallationIdentity
  * @param authentication - trusted server-derived AuthenticationContext.
  * @param query - closed Projection query.
  * @param signal - caller cancellation.
- * @returns the authorized Projection or that query kind's typed failure:
- * `denied` or `unavailable`, plus `stale` or `not-found` for Development Workspace reads.
+ * @returns the authorized Projection or that query kind's typed `denied`,
+ * `unavailable`, `stale`, `not-found`, or `binding-unavailable` failure.
  */
 query<K extends keyof SakiQueryMap>( authentication: SakiAuthenticationContext, query: SakiQueryMap[K]['request'], signal: AbortSignal, ): Promise<SakiQueryResult<K>>
 
 /**
- * Submit one durable Project-registration Intent after current authorization.
+ * Submit one durable Control Intent after current authorization.
  * @param authentication - trusted server-derived AuthenticationContext.
- * @param intent - bounded immutable registration content.
+ * @param intent - bounded immutable content for one declared Intent kind.
  * @param signal - caller cancellation.
- * @returns a confirmed receipt or typed `denied`, `unavailable`, `conflict`,
- * `failure`, or `reconciliation-required` result with only phase-valid receipt fields.
+ * @returns the kind-correlated terminal or recoverable receipt, or a typed
+ * `denied`, `unavailable`, `conflict`, `failure`, `canceled`, or
+ * `reconciliation-required` result with only phase-valid receipt fields.
  */
 submit<I extends SakiIntent>( authentication: SakiAuthenticationContext, intent: I, signal: AbortSignal, ): Promise<SakiIntentReceipt<I['type']>>
 
@@ -112,6 +121,70 @@ Host Execution capability. Providers resolve untrusted locators in their own exe
  * @returns detached safe evidence plus the trusted Host observation, or a bounded rejection.
  */
 abstract inspectProjectSelection( request: InspectProjectSelectionRequest, signal: AbortSignal, ): Promise<InspectProjectSelectionResult>
+
+/**
+ * Revalidate the Host resource named by one Resource Binding and return
+ * complete bounded Git status without changing the repository.
+ * @param request - revisioned binding and registration-time attribution evidence.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns browser-safe structured status or one bounded safe failure.
+ */
+abstract inspectProject( request: InspectProjectRequest, signal: AbortSignal, ): Promise<InspectProjectResult>
+
+/**
+ * Read one bounded page of a stable file-scoped Diff without accepting a
+ * caller-controlled path or Git command.
+ * @param binding - active Resource Binding evidence from the authorized control plane.
+ * @param request - expected status, opaque change id, layer, and optional continuation.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns one internally consistent Diff page or a bounded safe failure.
+ */
+abstract readDiff( binding: ActiveHostProjectBinding, request: ReadProjectDiffRequest, signal: AbortSignal, ): Promise<ReadProjectDiffResult>
+
+/**
+ * Durably create or replay one inert Host Operation before any external
+ * effect and bind an ephemeral current-admission callback to its receipt.
+ * @param request - complete immutable operation request and trusted Git preconditions.
+ * @param admissionSource - same-process callback used only at the effect boundary.
+ * @param signal - caller lifetime for preparation; aborting it is not durable cancellation.
+ * @returns the durable preparation plus a Provider-owned nominal acceptance, or a bounded rejection.
+ */
+abstract prepareOperation<K extends HostOperationKind>( request: HostOperationRequest<K>, admissionSource: HostOperationAdmissionSource, signal: AbortSignal, ): Promise<HostOperationReceipt<K>>
+
+/**
+ * Start or resume one prepared operation after checking its Provider-owned
+ * acceptance and current Binding write admission.
+ * @param operation - stable reference returned by preparation.
+ * @param acceptance - non-serializable Provider-owned acceptance from the matching receipt.
+ * @param signal - caller lifetime for this start attempt; aborting it is not durable cancellation.
+ * @returns the current durable snapshot and whether current admission allowed execution.
+ */
+abstract startOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, acceptance: HostOperationAcceptance, signal: AbortSignal, ): Promise<HostOperationStartResult<K>>
+
+/**
+ * Inspect and recover one durable Host Operation without starting a new external effect.
+ * @param operation - stable Provider-routed reference.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns the current durable snapshot after evidence-driven lifecycle advancement.
+ */
+abstract inspectOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, signal: AbortSignal, ): Promise<HostOperationSnapshot<K>>
+
+/**
+ * Request durable cancellation without treating caller cancellation as an
+ * operation outcome.
+ * @param operation - stable Provider-routed reference.
+ * @param reason - closed durable product reason.
+ * @param signal - caller lifetime for the cancellation request.
+ * @returns the current durable operation snapshot after cancellation handling.
+ */
+abstract cancelOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, reason: HostOperationCancellationReason, signal: AbortSignal, ): Promise<HostOperationSnapshot<K>>
+
+/**
+ * Subscribe to post-commit Host Operation revision changes.
+ * @param listener - contained wake-up listener; snapshots remain authoritative.
+ * @returns disposer for this subscription.
+ */
+abstract onChanged(listener: (change: HostOperationChange) => void): HostOperationChangedDisposer
 ```
 
 Source: [`packages/saki/execution/src/index.ts`](../../packages/saki/execution/src/index.ts)

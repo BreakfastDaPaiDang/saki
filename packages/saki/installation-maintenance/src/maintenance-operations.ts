@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import {
   sakiBuildIdSchema,
-  sakiStateCapability,
   sakiStorageGenerationIdSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import type {
@@ -39,7 +38,11 @@ import {
 import type { ManifestBytes, InstallationManifest, SelectedGeneration } from './manifest.ts'
 import { publishMissingFile, replaceFileDurably } from './durable-files.ts'
 import type { DurableFileResult } from './durable-files.ts'
-import { readClosedCurrentSakiState, readClosedSakiV3State } from './closed-state.ts'
+import {
+  readClosedCurrentSakiState,
+  readClosedSakiV3State,
+  readClosedSakiV4State,
+} from './closed-state.ts'
 import { selectSakiInstallationSource } from './layout.ts'
 import { validateClosedSakiV2Source } from './legacy-state.ts'
 import type { ValidatedSakiV2Source } from './legacy-state.ts'
@@ -47,6 +50,7 @@ import { withInstallationLease } from './lease.ts'
 import { SakiMaintenanceError } from './error.ts'
 import { recoverActiveSakiOperation } from './recovery.ts'
 import { LEGACY_B03_BUILD_ID } from './release.ts'
+import { sakiStateCapability } from './state-version.ts'
 
 /** Exact paths and build provenance required by offline maintenance. */
 export interface SakiMaintenanceOptions {
@@ -89,9 +93,9 @@ export interface SakiUpgradeResult {
   /** Manifest-selected current generation after publication and readback. */
   readonly selected: SelectedGeneration
   /** Exact adjacent source version. */
-  readonly sourceVersion: 2 | 3
+  readonly sourceVersion: 2 | 3 | 4
   /** Sole writable target version. */
-  readonly targetVersion: 4
+  readonly targetVersion: 5
 }
 
 /** Bound offline maintenance operations with optional crash hooks. */
@@ -104,7 +108,7 @@ export interface SakiMaintenanceOperations {
     backupId: SakiRecoveryBackupId,
     signal: AbortSignal,
   ): Promise<VerifiedRecoveryBackup>
-  /** Upgrade exact retained v2 or v3 state into a fresh validated v4 generation. */
+  /** Upgrade exact retained v2, v3, or v4 state into a fresh validated v5 generation. */
   upgrade(options: SakiMaintenanceOptions, signal: AbortSignal): Promise<SakiUpgradeResult>
 }
 
@@ -130,7 +134,11 @@ interface ValidatedV4Source extends ValidatedSourceBase {
   readonly stateVersion: 4
 }
 
-type ValidatedSource = ValidatedV2Source | ValidatedV3Source | ValidatedV4Source
+interface ValidatedV5Source extends ValidatedSourceBase {
+  readonly stateVersion: 5
+}
+
+type ValidatedSource = ValidatedV2Source | ValidatedV3Source | ValidatedV4Source | ValidatedV5Source
 
 function requireAbsolutePath(path: string, subject: string): string {
   const absolute = resolve(path)
@@ -241,7 +249,7 @@ async function loadValidatedSource(
     }
   }
   if (version?.version === 4) {
-    const current = await readClosedCurrentSakiState(
+    const historical = await readClosedSakiV4State(
       source.selected.databasePath,
       {
         installationId: source.selected.installation.installationId,
@@ -252,6 +260,26 @@ async function loadValidatedSource(
     )
     return {
       stateVersion: 4,
+      databasePath: source.selected.databasePath,
+      installationId: source.selected.installation.installationId,
+      storageGenerationId: source.selected.installation.storageGenerationId,
+      sourceBuildId: source.selected.generation.createdByBuildId,
+      sourceArtifacts: historical.sourceArtifacts,
+      authority,
+    }
+  }
+  if (version?.version === 5) {
+    const current = await readClosedCurrentSakiState(
+      source.selected.databasePath,
+      {
+        installationId: source.selected.installation.installationId,
+        storageGenerationId: source.selected.installation.storageGenerationId,
+        createdByBuildId: source.selected.generation.createdByBuildId,
+      },
+      signal,
+    )
+    return {
+      stateVersion: 5,
       databasePath: source.selected.databasePath,
       installationId: source.selected.installation.installationId,
       storageGenerationId: source.selected.installation.storageGenerationId,
@@ -516,10 +544,10 @@ export async function verifySakiInstallationBackup(
 }
 
 /**
- * Upgrade exact retained state through a verified backup into a fresh v4 generation.
+ * Upgrade exact retained state through a verified backup into a fresh v5 generation.
  * @param options - Installation paths and fixed build provenance.
  * @param signal - cancellation retained through lease release.
- * @returns the published v4 generation and its verified backup.
+ * @returns the published v5 generation and its verified backup.
  */
 export async function upgradeSakiInstallation(
   options: SakiMaintenanceOptions,

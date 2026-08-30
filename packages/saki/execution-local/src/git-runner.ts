@@ -61,6 +61,23 @@ export interface GitRunnerConfig {
   readonly terminationGraceMs: number
 }
 
+/** Closed environment additions used only by structured Git mutation plumbing. */
+export interface GitMutationEnvironment {
+  readonly hooksDirectory: string
+  readonly indexFile?: string
+  readonly objectDirectory?: string
+  readonly author?: {
+    readonly name: string
+    readonly email: string
+    readonly date: string
+  }
+  readonly committer?: {
+    readonly name: string
+    readonly email: string
+    readonly date: string
+  }
+}
+
 /**
  * Construct the fixed repository-isolation prefix for one Host platform.
  * @param platform - platform whose null device Git must use.
@@ -73,6 +90,7 @@ export function gitGlobalArguments(platform: NodeJS.Platform): readonly string[]
     '--no-lazy-fetch',
     '--no-replace-objects',
     '-c', 'core.fsmonitor=false',
+    '-c', 'advice.sparseIndexExpanded=false',
     '-c', 'core.pager=cat',
     '-c', 'credential.helper=',
     '-c', 'diff.external=',
@@ -228,6 +246,54 @@ export class GitRunner {
       env: gitInspectionEnvironment(),
       ...(stdin === undefined ? {} : { stdin }),
       ...(outputBudget === undefined ? {} : { outputBudget }),
+      ...this.config,
+    }, signal)
+  }
+
+  /**
+   * Run fixed structured-mutation plumbing with only the explicitly modeled
+   * index and identity environment additions.
+   * @param cwd - canonical bound worktree.
+   * @param args - fixed internal Git plumbing arguments.
+   * @param signal - required attempt lifetime.
+   * @param operation - private hooks directory and optional index/identity values.
+   * @param stdin - optional exact byte input.
+   * @returns complete bounded output.
+   */
+  async runMutation(
+    cwd: string,
+    args: readonly string[],
+    signal: AbortSignal,
+    operation: GitMutationEnvironment,
+    stdin?: { readonly bytes: Uint8Array; readonly maxBytes: number },
+  ): Promise<RawCommandOutput> {
+    const env = gitInspectionEnvironment()
+    if (operation.indexFile !== undefined) env.GIT_INDEX_FILE = operation.indexFile
+    if (operation.objectDirectory !== undefined) env.GIT_OBJECT_DIRECTORY = operation.objectDirectory
+    if (operation.author !== undefined) {
+      env.GIT_AUTHOR_NAME = operation.author.name
+      env.GIT_AUTHOR_EMAIL = operation.author.email
+      env.GIT_AUTHOR_DATE = operation.author.date
+    }
+    if (operation.committer !== undefined) {
+      env.GIT_COMMITTER_NAME = operation.committer.name
+      env.GIT_COMMITTER_EMAIL = operation.committer.email
+      env.GIT_COMMITTER_DATE = operation.committer.date
+    }
+    return await runBoundedCommand(this.subprocess, {
+      argv: [
+        this.executable,
+        ...GIT_GLOBAL_ARGS,
+        '-c', `core.hooksPath=${operation.hooksDirectory}`,
+        '-c', 'commit.gpgSign=false',
+        '-c', 'i18n.commitEncoding=UTF-8',
+        '-c', 'core.fsyncMethod=fsync',
+        '-c', 'core.fsync=loose-object,index,reference',
+        ...args,
+      ],
+      cwd,
+      env,
+      ...(stdin === undefined ? {} : { stdin }),
       ...this.config,
     }, signal)
   }

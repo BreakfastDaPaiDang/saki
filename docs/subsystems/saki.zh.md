@@ -2,7 +2,7 @@
 
 [English](saki.md) | 中文
 
-Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现接口建立一个稳定的本地 Installation、一个已登记的 Saki Host、一个具备当前 Host Operator Grant 的人类 Principal、一条带版本的 Installation Access 聚合记录，以及包含可恢复首次登记 Intent 的 Development Project Registry。版本化的置备所有者与各自带修订号的实体表会在启动中断后保留这些身份。[Saki 后端架构](../saki/architecture/0.1.0-backend.zh.md)定义了更完整的控制面与执行面划分；本页是已实现 Cordis 服务的参考。
+Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现接口建立一个稳定的本地 Installation、一个已登记的 Saki Host、一个具备当前 Host Operator Grant 的人类 Principal、一条带版本的 Installation Access 聚合记录、包含可恢复首次登记 Intent 的 Development Project Registry，以及面向已绑定 Project 的可恢复直接结构化 Git Intent。版本化的置备所有者与各自带修订号的实体表会在启动中断后保留这些身份与 operation evidence。[Saki 后端架构](../saki/architecture/0.1.0-backend.zh.md)定义了更完整的控制面与执行面划分；本页是已实现 Cordis 服务的参考。
 
 ## Installation 访问
 
@@ -14,11 +14,19 @@ Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现
 
 `register-development-project` 会重复 locator 与浏览器确认的准确指纹和 baseline，指定预期 Registry revision，并且不携带由 client 选择的 Actor 或 Grant。控制面根据当前权限派生归因，在创建 Workspace 前持久化 Intent，并在每个涉及 effect 的阶段前把保留的规范 worktree 路径作为不可信 locator 重新检查，再通过一次 Registry 比较并设置提交 Project、Resource Binding、路径索引与 Intent 映射。准确重放会从已记录阶段继续，并返回相同回执与身份；payload 变化、Registry revision 陈旧，或者规范 worktree 或每 worktree Git 目录身份重复时会发生冲突。启动流程在恢复前校验完整 Registry 与 Intent 库存，继续非终态登记，并根据新的 Host 检查把每项 Binding 刷新为 `active`、`missing` 或 `repair-required`。
 
-`project-index` 查询返回当前 Registry revision、已登记 Host 选项与分离的 Project 摘要。`development-workspace` 查询必须指定该准确 revision，并返回一个 Project 及其当前安全检查和恢复原因，或者类型化的 `stale` 或 `not-found` 结果。重绑定、退役、Execution Lease 与仓库修改不属于该操作集。
+`project-index` 查询返回当前 Registry revision、已登记 Host 选项与分离的 Project 摘要。`development-workspace` 查询必须指定该准确 revision，并返回一个 Project 及其当前安全检查和恢复原因，或者类型化的 `stale` 或 `not-found` 结果。重绑定、退役与 Execution Lease 不属于登记操作集；仓库 mutation 使用下方专用直接操作集。
+
+## Project change 与 Git 操作
+
+受保护的 `project-changes` 查询会通过 `ctx.sakiHostExecution` 重新打开精确 active Resource Binding，并返回一份完整且展示安全的 status observation。它包含精确 Binding revision、HEAD、branch 与 upstream、index-tree evidence、worktree fingerprint、带有界 repository-relative 展示路径的结构化 row、status fingerprint，以及 stage、unstage 与 Commit 的仓库级 eligibility；规范 Host 路径始终保持私有。每项 row 使用 observation-scoped opaque id 与 fingerprint。`project-diff` 会针对精确 observation 解析该 identity 与 staged、unstaged 或 conflict layer，并返回绑定到完整 patch fingerprint 与 cursor 的一个有界页面。
+
+`stage-files`、`unstage-files` 与 `create-commit` 是持久直接 Control Intent。提交会固定已认证 Actor 与 authority，以及精确 Registry、Project、Binding、status、HEAD、index、worktree 与 inherited-change evidence。一条 Binding Write Admission row 只允许该 Resource Binding 存在一个 `manual-host-operation` writer。控制面会预留它、prepare 一条幂等 `{ kind: 'control-intent' }` Host Operation、接受该精确 preparation，并在 storage callback 外启动或检查它。精确 replay 返回同一 receipt；不可变 input 改变会 conflict；未知或矛盾 effect evidence 会保持 `reconciliation-required`。
+
+Local Host 会通过 alternate index 构建 stage 与 unstage result，持久化位于同一目录的随机 pin，并在 publication 前以不覆盖既有文件的方式将该 pin 链接为绑定 index lock。它还会从已观察 index tree 创建确定性、无 hook 且无签名的 Commit。Attached-HEAD publication 会固定目标 branch、在副作用前立即重新验证 HEAD，并只对该 target 执行 compare-and-set。Detached HEAD 仍可用于 inspection、Diff、stage 与 unstage；但 CreateCommit 不可用，因为 Git 2.45 无法在 compare-and-set object id 的同时原子证明 `HEAD` 始终是 direct ref。Git 2.45 是最低版本。随机 scratch cleanup 要求精确 owner marker；index-lock cleanup 要求 operation-owned path、file identity 与 digest；而且无法证明结果的 attempted publication 绝不会自动重试。Automated dispatch 与 Agent Run source 仍属于后续工作。
 
 ## Host 传输
 
-[`saki-host-api`](../../packages/saki/host-api/README.zh.md) 在逻辑 `/saki` [Connection](../../packages/client/connection/README.zh.md) 通道上拥有严格的端点 schema。Host 适配器在解码前拒绝 URL 查询参数，在 JSON 外提取 Cookie 和请求头，构造不进入协议载荷的 `SakiAuthenticationContext`，并在 RPC 结果之外返回 `Set-Cookie`。每个 Saki 响应都使用 `Cache-Control: no-store`，每项传输或 RPC 故障都使用同一种固定且不透明的内部错误。其受保护操作为检查、Project-index、Development-Workspace 与首次登记调用关联准确的请求和结果类型；严格的出站验证会在序列化前拒绝含有意外权限、路径、凭据或 Projection 字段的实现结果。
+[`saki-host-api`](../../packages/saki/host-api/README.zh.md) 在逻辑 `/saki` [Connection](../../packages/client/connection/README.zh.md) 通道上拥有严格的端点 schema。Host 适配器在解码前拒绝 URL 查询参数，在 JSON 外提取 Cookie 和请求头，构造不进入协议载荷的 `SakiAuthenticationContext`，并在 RPC 结果之外返回 `Set-Cookie`。每个 Saki 响应都使用 `Cache-Control: no-store`，每项传输或 RPC 故障都使用同一种固定且不透明的内部错误。其受保护操作为检查、Project-index、Development-Workspace、首次登记、Project Changes、Project Diff、stage、unstage 与 Commit 调用关联准确的请求和结果类型；严格的出站验证会在序列化前拒绝含有意外权限、路径、凭据或 Projection 字段的实现结果。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -46,18 +54,19 @@ identity(): SakiInstallationIdentity
  * @param authentication - trusted server-derived AuthenticationContext.
  * @param query - closed Projection query.
  * @param signal - caller cancellation.
- * @returns the authorized Projection or that query kind's typed failure:
- * `denied` or `unavailable`, plus `stale` or `not-found` for Development Workspace reads.
+ * @returns the authorized Projection or that query kind's typed `denied`,
+ * `unavailable`, `stale`, `not-found`, or `binding-unavailable` failure.
  */
 query<K extends keyof SakiQueryMap>( authentication: SakiAuthenticationContext, query: SakiQueryMap[K]['request'], signal: AbortSignal, ): Promise<SakiQueryResult<K>>
 
 /**
- * Submit one durable Project-registration Intent after current authorization.
+ * Submit one durable Control Intent after current authorization.
  * @param authentication - trusted server-derived AuthenticationContext.
- * @param intent - bounded immutable registration content.
+ * @param intent - bounded immutable content for one declared Intent kind.
  * @param signal - caller cancellation.
- * @returns a confirmed receipt or typed `denied`, `unavailable`, `conflict`,
- * `failure`, or `reconciliation-required` result with only phase-valid receipt fields.
+ * @returns the kind-correlated terminal or recoverable receipt, or a typed
+ * `denied`, `unavailable`, `conflict`, `failure`, `canceled`, or
+ * `reconciliation-required` result with only phase-valid receipt fields.
  */
 submit<I extends SakiIntent>( authentication: SakiAuthenticationContext, intent: I, signal: AbortSignal, ): Promise<SakiIntentReceipt<I['type']>>
 
@@ -112,6 +121,70 @@ Host Execution capability. Providers resolve untrusted locators in their own exe
  * @returns detached safe evidence plus the trusted Host observation, or a bounded rejection.
  */
 abstract inspectProjectSelection( request: InspectProjectSelectionRequest, signal: AbortSignal, ): Promise<InspectProjectSelectionResult>
+
+/**
+ * Revalidate the Host resource named by one Resource Binding and return
+ * complete bounded Git status without changing the repository.
+ * @param request - revisioned binding and registration-time attribution evidence.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns browser-safe structured status or one bounded safe failure.
+ */
+abstract inspectProject( request: InspectProjectRequest, signal: AbortSignal, ): Promise<InspectProjectResult>
+
+/**
+ * Read one bounded page of a stable file-scoped Diff without accepting a
+ * caller-controlled path or Git command.
+ * @param binding - active Resource Binding evidence from the authorized control plane.
+ * @param request - expected status, opaque change id, layer, and optional continuation.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns one internally consistent Diff page or a bounded safe failure.
+ */
+abstract readDiff( binding: ActiveHostProjectBinding, request: ReadProjectDiffRequest, signal: AbortSignal, ): Promise<ReadProjectDiffResult>
+
+/**
+ * Durably create or replay one inert Host Operation before any external
+ * effect and bind an ephemeral current-admission callback to its receipt.
+ * @param request - complete immutable operation request and trusted Git preconditions.
+ * @param admissionSource - same-process callback used only at the effect boundary.
+ * @param signal - caller lifetime for preparation; aborting it is not durable cancellation.
+ * @returns the durable preparation plus a Provider-owned nominal acceptance, or a bounded rejection.
+ */
+abstract prepareOperation<K extends HostOperationKind>( request: HostOperationRequest<K>, admissionSource: HostOperationAdmissionSource, signal: AbortSignal, ): Promise<HostOperationReceipt<K>>
+
+/**
+ * Start or resume one prepared operation after checking its Provider-owned
+ * acceptance and current Binding write admission.
+ * @param operation - stable reference returned by preparation.
+ * @param acceptance - non-serializable Provider-owned acceptance from the matching receipt.
+ * @param signal - caller lifetime for this start attempt; aborting it is not durable cancellation.
+ * @returns the current durable snapshot and whether current admission allowed execution.
+ */
+abstract startOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, acceptance: HostOperationAcceptance, signal: AbortSignal, ): Promise<HostOperationStartResult<K>>
+
+/**
+ * Inspect and recover one durable Host Operation without starting a new external effect.
+ * @param operation - stable Provider-routed reference.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns the current durable snapshot after evidence-driven lifecycle advancement.
+ */
+abstract inspectOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, signal: AbortSignal, ): Promise<HostOperationSnapshot<K>>
+
+/**
+ * Request durable cancellation without treating caller cancellation as an
+ * operation outcome.
+ * @param operation - stable Provider-routed reference.
+ * @param reason - closed durable product reason.
+ * @param signal - caller lifetime for the cancellation request.
+ * @returns the current durable operation snapshot after cancellation handling.
+ */
+abstract cancelOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, reason: HostOperationCancellationReason, signal: AbortSignal, ): Promise<HostOperationSnapshot<K>>
+
+/**
+ * Subscribe to post-commit Host Operation revision changes.
+ * @param listener - contained wake-up listener; snapshots remain authoritative.
+ * @returns disposer for this subscription.
+ */
+abstract onChanged(listener: (change: HostOperationChange) => void): HostOperationChangedDisposer
 ```
 
 Source: [`packages/saki/execution/src/index.ts`](../../packages/saki/execution/src/index.ts)

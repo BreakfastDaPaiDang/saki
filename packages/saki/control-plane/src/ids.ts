@@ -1,13 +1,13 @@
 /** Strict Saki identity schemas shared by product state and maintenance metadata. */
 
 import { z } from 'zod'
+import { sakiControlIntentIdSchema } from '@breakfastdapaidang/saki-execution'
 import type {
   SakiBootstrapChallengeId,
   SakiBoardRemoteFingerprint,
   SakiBoardWorkItemId,
   SakiBrowserSessionId,
   SakiBuildId,
-  SakiControlIntentId,
   SakiDevelopmentProjectId,
   SakiGrantId,
   SakiGitHubScanAttemptId,
@@ -60,8 +60,7 @@ export const sakiBrowserSessionIdSchema = accessChildId<SakiBrowserSessionId>('s
 export const sakiDevelopmentProjectIdSchema = brandedId<SakiDevelopmentProjectId>('project')
 /** Strict Host-owned Resource Binding identity. */
 export const sakiResourceBindingIdSchema = brandedId<SakiResourceBindingId>('binding')
-/** Strict Control Intent identity. */
-export const sakiControlIntentIdSchema = brandedId<SakiControlIntentId>('intent')
+export { sakiControlIntentIdSchema }
 /** Strict Intent receipt identity. */
 export const sakiIntentReceiptIdSchema = brandedId<SakiIntentReceiptId>('receipt')
 /** Strict GitHub-backed Work Item identity. */

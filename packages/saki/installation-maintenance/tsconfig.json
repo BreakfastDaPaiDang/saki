@@ -21,6 +21,9 @@
       "path": "../execution"
     },
     {
+      "path": "../execution-local"
+    },
+    {
       "path": "../../util/brand"
     },
     {

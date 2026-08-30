@@ -1,4 +1,4 @@
-/** Package invariant companion for the stateless Local Host provider. @module @breakfastdapaidang/saki-execution-local/invariant */
+/** Package invariant companion for the Local Host provider. @module @breakfastdapaidang/saki-execution-local/invariant */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
@@ -10,7 +10,11 @@ export const name = 'saki-execution-local-invariant'
 /** Service required before package ownership can be reserved. */
 export const inject = ['invariants']
 
-/** No runtime invariant: detached calls leave no mutable product relationship after settlement. */
+/**
+ * No runtime invariant: the domain parser validates every provider-owned Host
+ * Operation record at open and before each write. Live acceptance callbacks
+ * are intentionally absent from durable state.
+ */
 const install: InvariantInstaller = () => {}
 
 /**

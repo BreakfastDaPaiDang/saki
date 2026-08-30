@@ -23,6 +23,8 @@ import type {
   InspectProjectSelectionResult,
   ProjectSelectionInspection,
   ProjectSelectionProjection,
+  ProjectSelectionRejectionReason,
+  ProjectGitHead,
   RepositoryAdministrativeIdentity,
   SafeGitRemoteObservation,
   TrustedProjectSelectionObservation,
@@ -33,6 +35,7 @@ import { GitCommandError, type GitRunner } from './git-runner.ts'
 import { parseWorktreeList, type ParsedWorktreeRecord } from './git-observation.ts'
 import {
   captureRepositoryInventory,
+  captureRepositoryIndexFlagEvidence,
   createRepositoryObservationRound,
   RepositoryInventoryError,
   type RepositoryInventoryGit,
@@ -43,9 +46,17 @@ import {
   openSafeRepositoryView,
   RepositoryControlChangedError,
 } from './safe-repository.ts'
+import {
+  captureVerifiedRepositoryStatus,
+  RepositoryStatusError,
+  type VerifiedRepositoryStatus,
+} from './status-evidence.ts'
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
 class MalformedObservationError extends Error {}
+
+/** Closed internal signal that a bound resource no longer names its admitted repository. */
+export class BoundProjectResourceMismatchError extends Error {}
 
 /** Applied inspection and baseline limits. */
 export interface InspectionConfig {
@@ -69,6 +80,19 @@ export interface WorkspaceIndex {
   list(): readonly { readonly id: WorkspaceId; readonly path: string }[]
 }
 
+/** Resource identity that a bound inspection must confirm before inventory capture. */
+export interface BoundProjectResourceExpectation {
+  readonly workspaceId: WorkspaceId
+  readonly trusted: TrustedProjectSelectionObservation
+}
+
+/** Optional requirements applied while retaining one stable private repository view. */
+export interface StableLocalProjectSelectionRequirements {
+  readonly boundResource?: BoundProjectResourceExpectation
+  /** Stop before porcelain status when a structured mutation cannot safely proceed. */
+  readonly rejectUnsupportedIndexState?: boolean
+}
+
 /**
  * Same-Host reader for one stable Git administrative-directory identity.
  * @param path - canonical Git administrative-directory path.
@@ -79,6 +103,35 @@ export type AdministrativeDirectoryIdentityReader = (
   path: string,
   signal: AbortSignal,
 ) => Promise<RepositoryAdministrativeIdentity>
+
+/** Failure retained only inside the Local Host provider before public mapping. */
+export type StableLocalProjectSelectionFailureReason =
+  | ProjectSelectionRejectionReason
+  | 'limit'
+  | 'unsupported-index-state'
+
+/** Stable selected-project evidence retained only inside the Local Host provider. */
+export type StableLocalProjectSelectionResult =
+  | {
+    readonly ok: true
+    readonly inspection: ProjectSelectionInspection
+    readonly inventory: CapturedRepositoryInventory
+    readonly status: VerifiedRepositoryStatus
+    readonly unsupportedIndexState: boolean
+  }
+  | { readonly ok: false; readonly reason: StableLocalProjectSelectionFailureReason }
+
+/**
+ * Map provider-private inspection limits onto the public rejection vocabulary.
+ * @param reason - stable inspection failure before public projection.
+ * @returns the browser-safe selection rejection reason.
+ * @internal
+ */
+export function projectSelectionRejectionReason(
+  reason: StableLocalProjectSelectionFailureReason,
+): ProjectSelectionRejectionReason {
+  return reason === 'limit' || reason === 'unsupported-index-state' ? 'unavailable' : reason
+}
 
 /**
  * Derive the fixed browser label for one canonical Local Host worktree path.
@@ -113,7 +166,43 @@ export async function inspectLocalProjectSelection(
   signal: AbortSignal,
   identityReader: AdministrativeDirectoryIdentityReader,
 ): Promise<InspectProjectSelectionResult> {
+  const result = await inspectStableLocalProjectSelection(
+    fs,
+    workspaces,
+    git,
+    config,
+    request,
+    signal,
+    identityReader,
+  )
+  if (result.ok) return { ok: true, inspection: result.inspection }
+  return { ok: false, reason: projectSelectionRejectionReason(result.reason) }
+}
+
+/**
+ * Resolve and inspect one caller selection while retaining the confirmed raw inventory.
+ * @param fs - filesystem provider sharing the Git execution world.
+ * @param workspaces - current DSH Workspace index.
+ * @param git - bounded structured Git runner.
+ * @param config - applied Git and baseline limits.
+ * @param request - selected Host and untrusted directory locator.
+ * @param signal - required caller lifetime.
+ * @param identityReader - Local Host filesystem-object identity reader.
+ * @param requirements - optional bound identity and mutation preflight requirements.
+ * @returns detached inspection plus its final stable inventory, or a bounded rejection.
+ */
+export async function inspectStableLocalProjectSelection(
+  fs: FileSystem,
+  workspaces: WorkspaceIndex,
+  git: GitRunner,
+  config: InspectionConfig,
+  request: InspectProjectSelectionRequest,
+  signal: AbortSignal,
+  identityReader: AdministrativeDirectoryIdentityReader,
+  requirements: StableLocalProjectSelectionRequirements = {},
+): Promise<StableLocalProjectSelectionResult> {
   signal.throwIfAborted()
+  const { boundResource, rejectUnsupportedIndexState = false } = requirements
   if (!isSafeLocalRepositoryPath(request.directoryLocator)) return { ok: false, reason: 'unavailable' }
   const inventoryBounds = {
     maxEntries: config.inventoryMaxEntries,
@@ -149,9 +238,7 @@ export async function inspectLocalProjectSelection(
     const firstGit = firstRepository.git
 
     const objectFormat = await gitText(firstGit, selectionPath.path, ['rev-parse', '--show-object-format'], firstSignal)
-    const head = await gitText(firstGit, selectionPath.path, ['rev-parse', '--verify', 'HEAD'], firstSignal)
-    if ((objectFormat !== 'sha1' && objectFormat !== 'sha256')
-      || !isGitObjectId(head, objectFormat)) {
+    if (objectFormat !== 'sha1' && objectFormat !== 'sha256') {
       return { ok: false, reason: 'malformed' }
     }
 
@@ -162,13 +249,31 @@ export async function inspectLocalProjectSelection(
     const commonGitDirectoryIdentity = commonDirectory.path === gitDirectory.path
       ? gitDirectoryIdentity
       : await identityReader(commonDirectory.path, firstSignal)
+    const boundWorkspaceId = boundResource === undefined
+      ? undefined
+      : workspaceForPath(workspaces, topLevel.path)
+    if (boundResource !== undefined) {
+      assertBoundProjectResource(boundResource, {
+        workspaceId: boundWorkspaceId,
+        canonicalWorktreePath: topLevel.path,
+        canonicalGitDirectory: gitDirectory.path,
+        canonicalCommonGitDirectory: commonDirectory.path,
+        gitDirectoryIdentity,
+        commonGitDirectoryIdentity,
+      })
+      firstObservation.check()
+    }
 
+    const branch = await inspectBranch(firstGit, topLevel.path, firstSignal)
+    const head = await inspectHead(firstGit, topLevel.path, objectFormat, branch, firstSignal)
     const worktreeOutput = await firstGit.run(commonDirectory.path, [
       '--bare', `--git-dir=${commonDirectory.path}`, 'worktree', 'list', '--porcelain', '-z',
     ], firstSignal)
     const selectedRecord = admittedWorktreeRecord(worktreeOutput.stdout)
-    const branch = await inspectBranch(firstGit, topLevel.path, firstSignal)
-    if (!worktreeBranchMatches(selectedRecord, branch)) return { ok: false, reason: 'ambiguous' }
+    if (!worktreeBranchMatches(selectedRecord, branch)
+      || !worktreeHeadMatches(selectedRecord, head, objectFormat)) {
+      return { ok: false, reason: 'ambiguous' }
+    }
     const inventory = await captureRepositoryInventory(
       topLevel.path,
       firstGit,
@@ -185,6 +290,31 @@ export async function inspectLocalProjectSelection(
         config.inventoryMaxFileBytes,
         childSignal,
       ),
+      undefined,
+      head.kind === 'commit' ? head.objectId : null,
+    )
+    if (boundResource === undefined && inventory.entries.some(entry => entry.skipWorktree === true)) {
+      return { ok: false, reason: 'unavailable' }
+    }
+    const indexFlagEvidence = await captureRepositoryIndexFlagEvidence(
+      firstGit,
+      topLevel.path,
+      firstSignal,
+      inventory,
+      firstRepository.sparseIndexEnabled,
+    )
+    if (rejectUnsupportedIndexState && indexFlagEvidence.mutationBlocked) {
+      return { ok: false, reason: 'unsupported-index-state' }
+    }
+    const status = await captureVerifiedRepositoryStatus(
+      firstGit,
+      topLevel.path,
+      objectFormat,
+      { head, ...(branch.upstream === undefined ? {} : { upstreamShort: branch.upstream.short }) },
+      inventory,
+      inventoryBounds,
+      firstSignal,
+      indexFlagEvidence.assumeUnchangedPaths,
     )
     const baselineFacts = buildInheritedChangeBaseline(inventory, {
       maxEntries: config.baselineMaxEntries,
@@ -197,7 +327,9 @@ export async function inspectLocalProjectSelection(
     const baseline = baselineFacts.baseline
     const remotes = await inspectRemotes(firstGit, topLevel.path, firstSignal)
     const githubRepositoryCandidates = deriveGitHubRepositoryCandidates(remotes)
-    const workspaceId = workspaceForPath(workspaces, topLevel.path)
+    const workspaceId = boundResource === undefined
+      ? workspaceForPath(workspaces, topLevel.path)
+      : boundWorkspaceId
     const workspace = workspaceObservation(workspaceId)
     const blockingReasons = [
       ...(baselineFacts.inheritedChangeEntryCount > 0 ? ['dirty' as const] : []),
@@ -206,16 +338,12 @@ export async function inspectLocalProjectSelection(
       ...(selectedRecord.locked ? ['locked' as const] : []),
     ]
     const projection: Omit<ProjectSelectionProjection, 'fingerprint'> = {
-      observationVersion: 1,
+      observationVersion: 2,
       hostId: request.hostId,
       displayLocation: projectDisplayLocation(topLevel.path),
       objectFormat,
       head,
-      ...(selectedRecord.branch !== undefined
-        ? { branch: selectedRecord.branch.replace(/^refs\/heads\//u, '') }
-        : {}),
-      detached: selectedRecord.detached,
-      ...(branch.upstream !== undefined ? { upstream: branch.upstream } : {}),
+      ...(branch.upstream !== undefined ? { upstream: branch.upstream.ref } : {}),
       locked: selectedRecord.locked,
       inheritedChangeEntryCount: baselineFacts.inheritedChangeEntryCount,
       conversionAmbiguous: baselineFacts.conversionAmbiguous,
@@ -260,22 +388,45 @@ export async function inspectLocalProjectSelection(
     const finalGit = finalRepository.git
     const finalSignal = finalObservation.signal
     const finalObjectFormat = await gitText(finalGit, selectionPath.path, ['rev-parse', '--show-object-format'], finalSignal)
-    const finalHead = await gitText(finalGit, selectionPath.path, ['rev-parse', '--verify', 'HEAD'], finalSignal)
-    if ((finalObjectFormat !== 'sha1' && finalObjectFormat !== 'sha256')
-      || !isGitObjectId(finalHead, finalObjectFormat)) {
+    if (finalObjectFormat !== 'sha1' && finalObjectFormat !== 'sha256') {
       return { ok: false, reason: 'malformed' }
     }
     const finalTopLevel = { path: finalRepository.topLevelPath }
     const finalGitDirectory = { path: finalRepository.gitDirectoryPath }
     const finalCommonDirectory = { path: finalRepository.commonDirectoryPath }
+    let guardedFinalResource: BoundProjectResourceObservation | undefined
+    if (boundResource !== undefined) {
+      const guardedGitDirectoryIdentity = await identityReader(finalGitDirectory.path, finalSignal)
+      const guardedCommonGitDirectoryIdentity = finalCommonDirectory.path === finalGitDirectory.path
+        ? guardedGitDirectoryIdentity
+        : await identityReader(finalCommonDirectory.path, finalSignal)
+      guardedFinalResource = {
+        workspaceId: workspaceForPath(workspaces, finalTopLevel.path),
+        canonicalWorktreePath: finalTopLevel.path,
+        canonicalGitDirectory: finalGitDirectory.path,
+        canonicalCommonGitDirectory: finalCommonDirectory.path,
+        gitDirectoryIdentity: guardedGitDirectoryIdentity,
+        commonGitDirectoryIdentity: guardedCommonGitDirectoryIdentity,
+      }
+      assertBoundProjectResource(boundResource, guardedFinalResource)
+      finalObservation.check()
+    }
+    const finalBranch = await inspectBranch(finalGit, finalTopLevel.path, finalSignal)
+    const finalHead = await inspectHead(
+      finalGit,
+      finalTopLevel.path,
+      finalObjectFormat,
+      finalBranch,
+      finalSignal,
+    )
     const finalWorktreeOutput = await finalGit.run(
       finalCommonDirectory.path,
       ['--bare', `--git-dir=${finalCommonDirectory.path}`, 'worktree', 'list', '--porcelain', '-z'],
       finalSignal,
     )
     const finalSelectedRecord = admittedWorktreeRecord(finalWorktreeOutput.stdout)
-    const finalBranch = await inspectBranch(finalGit, finalTopLevel.path, finalSignal)
-    if (!worktreeBranchMatches(finalSelectedRecord, finalBranch)) {
+    if (!worktreeBranchMatches(finalSelectedRecord, finalBranch)
+      || !worktreeHeadMatches(finalSelectedRecord, finalHead, finalObjectFormat)) {
       return { ok: false, reason: 'ambiguous' }
     }
     const finalInventory = await captureRepositoryInventory(
@@ -294,6 +445,34 @@ export async function inspectLocalProjectSelection(
         config.inventoryMaxFileBytes,
         childSignal,
       ),
+      undefined,
+      finalHead.kind === 'commit' ? finalHead.objectId : null,
+    )
+    if (boundResource === undefined && finalInventory.entries.some(entry => entry.skipWorktree === true)) {
+      return { ok: false, reason: 'unavailable' }
+    }
+    const finalIndexFlagEvidence = await captureRepositoryIndexFlagEvidence(
+      finalGit,
+      finalTopLevel.path,
+      finalSignal,
+      finalInventory,
+      finalRepository.sparseIndexEnabled,
+    )
+    if (rejectUnsupportedIndexState && finalIndexFlagEvidence.mutationBlocked) {
+      return { ok: false, reason: 'unsupported-index-state' }
+    }
+    const finalStatus = await captureVerifiedRepositoryStatus(
+      finalGit,
+      finalTopLevel.path,
+      finalObjectFormat,
+      {
+        head: finalHead,
+        ...(finalBranch.upstream === undefined ? {} : { upstreamShort: finalBranch.upstream.short }),
+      },
+      finalInventory,
+      inventoryBounds,
+      finalSignal,
+      finalIndexFlagEvidence.assumeUnchangedPaths,
     )
     const finalBaselineFacts = buildInheritedChangeBaseline(finalInventory, {
       maxEntries: config.baselineMaxEntries,
@@ -304,11 +483,20 @@ export async function inspectLocalProjectSelection(
       maxCaptureMs: config.baselineMaxCaptureMs,
     }, Date.now(), finalSignal)
     const finalRemotes = await inspectRemotes(finalGit, finalTopLevel.path, finalSignal)
-    const finalWorkspaceId = workspaceForPath(workspaces, finalTopLevel.path)
-    const finalGitDirectoryIdentity = await identityReader(finalGitDirectory.path, finalSignal)
-    const finalCommonGitDirectoryIdentity = finalCommonDirectory.path === finalGitDirectory.path
-      ? finalGitDirectoryIdentity
-      : await identityReader(finalCommonDirectory.path, finalSignal)
+    let finalWorkspaceId: WorkspaceId | undefined
+    let finalGitDirectoryIdentity: RepositoryAdministrativeIdentity
+    let finalCommonGitDirectoryIdentity: RepositoryAdministrativeIdentity
+    if (guardedFinalResource === undefined) {
+      finalWorkspaceId = workspaceForPath(workspaces, finalTopLevel.path)
+      finalGitDirectoryIdentity = await identityReader(finalGitDirectory.path, finalSignal)
+      finalCommonGitDirectoryIdentity = finalCommonDirectory.path === finalGitDirectory.path
+        ? finalGitDirectoryIdentity
+        : await identityReader(finalCommonDirectory.path, finalSignal)
+    } else {
+      finalWorkspaceId = guardedFinalResource.workspaceId
+      finalGitDirectoryIdentity = guardedFinalResource.gitDirectoryIdentity
+      finalCommonGitDirectoryIdentity = guardedFinalResource.commonGitDirectoryIdentity
+    }
     await finalRepository.assertSourceControlUnchanged(finalSignal)
     if (finalTopLevel.path !== topLevel.path
       || finalGitDirectory.path !== gitDirectory.path
@@ -317,10 +505,12 @@ export async function inspectLocalProjectSelection(
       || !isDeepStrictEqual(finalGitDirectoryIdentity, gitDirectoryIdentity)
       || !isDeepStrictEqual(finalCommonGitDirectoryIdentity, commonGitDirectoryIdentity)
       || finalObjectFormat !== objectFormat
-      || finalHead !== head
+      || !isDeepStrictEqual(finalHead, head)
       || !isDeepStrictEqual(finalSelectedRecord, selectedRecord)
       || !isDeepStrictEqual(finalBranch, branch)
       || !sameInventoryEvidence(finalInventory, inventory)
+      || !isDeepStrictEqual(finalStatus, status)
+      || !isDeepStrictEqual(finalIndexFlagEvidence, indexFlagEvidence)
       || finalBaselineFacts.inheritedChangeEntryCount !== baselineFacts.inheritedChangeEntryCount
       || finalBaselineFacts.conversionAmbiguous !== baselineFacts.conversionAmbiguous
       || !sameBaselineEvidence(finalBaselineFacts.baseline, baseline)
@@ -330,14 +520,46 @@ export async function inspectLocalProjectSelection(
     }
     const confirmed = projectSelectionInspectionSchema.parse(inspection)
     finalObservation.check()
-    return { ok: true, inspection: confirmed }
+    return {
+      ok: true,
+      inspection: confirmed,
+      inventory: finalInventory,
+      status: finalStatus,
+      unsupportedIndexState: finalIndexFlagEvidence.mutationBlocked,
+    }
   } catch (error) {
     if (signal.aborted) throw signal.reason
+    if (error instanceof BoundProjectResourceMismatchError) throw error
     if (error instanceof RepositoryControlChangedError) return { ok: false, reason: 'ambiguous' }
     if (error instanceof GitCommandError) return { ok: false, reason: 'unavailable' }
     if (error instanceof RepositoryInventoryError) return { ok: false, reason: error.kind }
+    if (error instanceof RepositoryStatusError) return { ok: false, reason: error.kind }
     if (error instanceof MalformedObservationError) return { ok: false, reason: 'malformed' }
     return { ok: false, reason: 'unavailable' }
+  }
+}
+
+interface BoundProjectResourceObservation {
+  readonly workspaceId: WorkspaceId | undefined
+  readonly canonicalWorktreePath: string
+  readonly canonicalGitDirectory: string
+  readonly canonicalCommonGitDirectory: string
+  readonly gitDirectoryIdentity: RepositoryAdministrativeIdentity
+  readonly commonGitDirectoryIdentity: RepositoryAdministrativeIdentity
+}
+
+function assertBoundProjectResource(
+  expectation: BoundProjectResourceExpectation,
+  actual: BoundProjectResourceObservation,
+): void {
+  const expected = expectation.trusted
+  if (actual.workspaceId !== expectation.workspaceId
+    || actual.canonicalWorktreePath !== expected.canonicalWorktreePath
+    || actual.canonicalGitDirectory !== expected.canonicalGitDirectory
+    || actual.canonicalCommonGitDirectory !== expected.canonicalCommonGitDirectory
+    || !isDeepStrictEqual(actual.gitDirectoryIdentity, expected.gitDirectoryIdentity)
+    || !isDeepStrictEqual(actual.commonGitDirectoryIdentity, expected.commonGitDirectoryIdentity)) {
+    throw new BoundProjectResourceMismatchError()
   }
 }
 
@@ -396,7 +618,32 @@ async function readSubmoduleObject(
 
 interface ObservedBranch {
   readonly ref?: string
-  readonly upstream?: string
+  readonly upstream?: { readonly ref: string; readonly short: string }
+}
+
+async function inspectHead(
+  git: RepositoryInventoryGit,
+  cwd: string,
+  objectFormat: 'sha1' | 'sha256',
+  branch: ObservedBranch,
+  signal: AbortSignal,
+): Promise<ProjectGitHead> {
+  let objectId: string | undefined
+  try {
+    objectId = await gitText(git, cwd, ['rev-parse', '--verify', 'HEAD'], signal)
+  } catch (error) {
+    if (!(error instanceof GitCommandError && error.code === 'nonzero' && error.exitCode === 128)) throw error
+  }
+  if (objectId === undefined) {
+    if (branch.ref === undefined) throw new MalformedObservationError()
+    return { kind: 'unborn', symbolicRef: branch.ref }
+  }
+  if (!isGitObjectId(objectId, objectFormat)) throw new MalformedObservationError()
+  return {
+    kind: 'commit',
+    objectId,
+    ...(branch.ref === undefined ? {} : { symbolicRef: branch.ref }),
+  }
 }
 
 function admittedWorktreeRecord(output: Uint8Array): ParsedWorktreeRecord {
@@ -421,10 +668,12 @@ async function inspectBranch(
     throw new MalformedObservationError()
   }
   const upstream = await inspectUpstream(git, cwd, ref, signal)
-  if (upstream !== undefined && upstream.length > MAX_GIT_REF_CHARS) {
+  if (upstream !== undefined && (upstream.ref.length > MAX_GIT_REF_CHARS
+    || upstream.short.length > MAX_GIT_REF_CHARS)) {
     throw new RepositoryInventoryError('unavailable')
   }
-  if (upstream !== undefined && (!upstream.startsWith('refs/') || !isSafeGitRef(upstream))) {
+  if (upstream !== undefined && (!upstream.ref.startsWith('refs/') || !isSafeGitRef(upstream.ref)
+    || /[\u0000-\u0020\u007f]/u.test(upstream.short))) {
     throw new MalformedObservationError()
   }
   return { ref, ...(upstream === undefined ? {} : { upstream }) }
@@ -435,19 +684,35 @@ async function inspectUpstream(
   cwd: string,
   ref: string,
   signal: AbortSignal,
-): Promise<string | undefined> {
+): Promise<ObservedBranch['upstream']> {
   const { stdout } = await git.run(cwd, [
-    'for-each-ref', '--count=2', '--format=%(refname)%00%(upstream)%00', ref,
+    'for-each-ref', '--count=2', '--format=%(refname)%00%(upstream)%00%(upstream:short)%00', ref,
   ], signal)
+  return parseObservedUpstream(stdout, ref)
+}
+
+/**
+ * Parse the bounded upstream frame returned for one exact branch ref.
+ * @param bytes - complete `for-each-ref` stdout frame.
+ * @param ref - exact branch ref requested from Git.
+ * @returns the configured upstream, or `undefined` when no upstream exists.
+ * @internal
+ */
+export function parseObservedUpstream(
+  bytes: Uint8Array,
+  ref: string,
+): { readonly ref: string; readonly short: string } | undefined {
   let text: string
   try {
-    text = UTF8.decode(stdout)
+    text = UTF8.decode(bytes)
   } catch {
     throw new MalformedObservationError()
   }
-  const match = /^([^\0\r\n]+)\0([^\0\r\n]*)\0\n$/u.exec(text)
+  if (text === '') return undefined
+  const match = /^([^\0\r\n]+)\0([^\0\r\n]*)\0([^\0\r\n]*)\0\n$/u.exec(text)
   if (match === null || match[1] !== ref) throw new MalformedObservationError()
-  return match[2] === '' ? undefined : match[2]
+  if ((match[2] === '') !== (match[3] === '')) throw new MalformedObservationError()
+  return match[2] === '' ? undefined : { ref: match[2] as string, short: match[3] as string }
 }
 
 function worktreeBranchMatches(
@@ -456,6 +721,24 @@ function worktreeBranchMatches(
 ): boolean {
   if (record.detached) return record.branch === undefined && branch.ref === undefined
   return record.branch !== undefined && record.branch === branch.ref
+}
+
+/**
+ * Compare one admitted worktree-list HEAD slot with the independently inspected HEAD.
+ * @param record - worktree-list record carrying an optional object id.
+ * @param head - independently inspected commit or unborn branch.
+ * @param objectFormat - repository object-id format.
+ * @returns whether both views name the same HEAD state.
+ * @internal
+ */
+export function worktreeHeadMatches(
+  record: Pick<ParsedWorktreeRecord, 'head'>,
+  head: ProjectGitHead,
+  objectFormat: 'sha1' | 'sha256',
+): boolean {
+  if (record.head === undefined) return false
+  if (head.kind === 'commit') return record.head === head.objectId
+  return record.head.length === (objectFormat === 'sha1' ? 40 : 64) && /^0+$/u.test(record.head)
 }
 
 function sameBaselineEvidence(
@@ -555,7 +838,15 @@ async function gitTextWithBytes(
   return { text: value, bytes: stdout.byteLength }
 }
 
-async function inspectRemotes(
+/**
+ * Inspect the bounded remote URL view exposed by an admitted repository.
+ * @param git - admitted repository query face.
+ * @param cwd - canonical worktree directory.
+ * @param signal - observation lifetime.
+ * @returns deterministic credential-free remote observations.
+ * @internal
+ */
+export async function inspectRemotes(
   git: RepositoryInventoryGit,
   cwd: string,
   signal: AbortSignal,

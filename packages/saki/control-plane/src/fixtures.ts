@@ -6,9 +6,17 @@
 import {
   canonicalDigest,
   computeProjectInspectionFingerprint,
+  computeProjectGitChangeFingerprint,
+  computeProjectGitChangeId,
+  computeProjectGitStatusFingerprint,
+  computeProjectGitStatusSeedDigest,
 } from '@breakfastdapaidang/saki-execution'
 import type {
+  HostOperationId,
   InheritedChangeBaseline,
+  ProjectGitChangeFingerprintMaterial,
+  ProjectGitStatusObservation,
+  ProjectGitStatusSeedMaterial,
   ProjectSelectionProjection,
   TrustedProjectSelectionObservation,
   WorkspaceId,
@@ -39,11 +47,14 @@ import type {
   SakiConfirmedBoardProjection,
   SakiDevelopmentProjectId,
   SakiDevelopmentWorkspaceProjection,
+  SakiGitOperationIntent,
   SakiGitHubScanAttemptId,
   SakiGitHubSyncCheckpointProjection,
   SakiIntentReceipt,
   SakiIntentReceiptId,
   SakiProjectSelectionInspectionProjection,
+  SakiProjectChangesProjection,
+  SakiProjectDiffProjection,
   SakiProjectIndexProjection,
   SakiProjectSettingsProjection,
   SakiQuery,
@@ -61,6 +72,12 @@ const INTENT_ID = 'intent-00000000-0000-4000-8000-000000000005' as SakiControlIn
 const DUPLICATE_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000006' as SakiControlIntentId
 const RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000005' as SakiIntentReceiptId
 const DUPLICATE_RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000006' as SakiIntentReceiptId
+const STAGE_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000010' as SakiControlIntentId
+const UNSTAGE_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000011' as SakiControlIntentId
+const COMMIT_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000012' as SakiControlIntentId
+const STAGE_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000010' as HostOperationId
+const UNSTAGE_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000011' as HostOperationId
+const COMMIT_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000012' as HostOperationId
 const GITHUB_APP_ID = '12345' as GitHubAppId
 const GITHUB_INSTALLATION_ID = '12345678' as GitHubInstallationId
 const GITHUB_ACCOUNT_ID = 'O_fixture_account' as GitHubAccountId
@@ -148,13 +165,11 @@ function selection(
   workspaceId?: WorkspaceId,
 ): ProjectSelectionProjection {
   const material = {
-    observationVersion: 1,
+    observationVersion: 2,
     hostId: HOST_ID,
     displayLocation: 'repository',
     objectFormat: 'sha1',
-    head: '3'.repeat(40),
-    branch: 'main',
-    detached: false,
+    head: { kind: 'commit', objectId: '3'.repeat(40), symbolicRef: 'refs/heads/main' },
     locked: false,
     inheritedChangeEntryCount: baseline.observed.entries,
     conversionAmbiguous: false,
@@ -211,9 +226,8 @@ const PROJECT_SUMMARY = {
     health: 'active',
     hostId: HOST_ID,
     displayLocation: CURRENT_SELECTION.displayLocation,
+    objectFormat: CURRENT_SELECTION.objectFormat,
     head: CURRENT_SELECTION.head,
-    branch: 'main',
-    detached: CURRENT_SELECTION.detached,
     inheritedChangeEntryCount: 0,
     baseline: 'complete',
     automaticMutationEligible: true,
@@ -246,6 +260,400 @@ export const SAKI_PROJECT_PROJECTION_FIXTURES = Object.freeze({
     recovery: { state: 'ready', reasons: [] },
   } as const satisfies SakiDevelopmentWorkspaceProjection,
 })
+
+const GIT_OBSERVED_AT = 1_787_101_230_000
+const FIXTURE_HEAD = {
+  kind: 'commit', objectId: '3'.repeat(40), symbolicRef: 'refs/heads/main',
+} as const
+const DIRTY_INDEX = { kind: 'tree', treeId: '5'.repeat(40) } as const
+const DIRTY_WORKTREE = { version: 1, digest: '6'.repeat(64) } as const
+const GIT_STATUS_BASE = {
+  observationVersion: 1,
+  bindingId: BINDING_ID,
+  bindingRevision: 0,
+  bindingHealth: 'active',
+  locked: false,
+  objectFormat: 'sha1',
+  head: FIXTURE_HEAD,
+  branch: { kind: 'attached', ref: 'refs/heads/main', name: 'main' },
+} as const
+
+function signedGitChange<const T extends ProjectGitChangeFingerprintMaterial>(material: T) {
+  return { ...material, fingerprint: computeProjectGitChangeFingerprint(material) }
+}
+
+function identifiedGitChange<const T extends ProjectGitStatusSeedMaterial['changes'][number]>(
+  seedDigest: string,
+  change: T,
+) {
+  return { id: computeProjectGitChangeId(seedDigest, change), ...change }
+}
+
+function signedGitStatus(seed: ProjectGitStatusSeedMaterial): ProjectGitStatusObservation {
+  const seedDigest = computeProjectGitStatusSeedDigest(seed)
+  const observed = {
+    ...seed,
+    observedAt: GIT_OBSERVED_AT,
+    changes: seed.changes.map(change => identifiedGitChange(seedDigest, change)),
+  }
+  return { ...observed, fingerprint: computeProjectGitStatusFingerprint(observed) }
+}
+
+const CLEAN_GIT_STATUS = signedGitStatus({
+  ...GIT_STATUS_BASE,
+  upstream: { ref: 'refs/remotes/origin/main', name: 'origin/main', divergence: { ahead: 0, behind: 0 } },
+  index: { kind: 'tree', treeId: '4'.repeat(40) },
+  worktree: { version: 1, digest: '4'.repeat(64) },
+  changes: [],
+  structuredMutation: { available: true, blockers: [] },
+})
+
+const DIRTY_UNTRACKED_CHANGE_MATERIAL = signedGitChange({
+  kind: 'untracked',
+  path: 'new.txt',
+  indexStatus: 'absent',
+  worktreeStatus: 'untracked',
+  submodule: { kind: 'not-submodule' },
+  worktreeMode: '100644',
+  worktreeEvidence: {
+    kind: 'regular', mode: '100644', byteLength: 4, contentDigest: '7'.repeat(64),
+  },
+  attribution: 'unattributed',
+})
+const DIRTY_STAGED_CHANGE_MATERIAL = signedGitChange({
+  kind: 'ordinary',
+  path: 'staged.txt',
+  indexStatus: 'modified',
+  worktreeStatus: 'unchanged',
+  submodule: { kind: 'not-submodule' },
+  head: { mode: '100644', objectId: '1'.repeat(40) },
+  index: { mode: '100644', objectId: '2'.repeat(40) },
+  worktreeMode: '100644',
+  worktreeEvidence: {
+    kind: 'regular', mode: '100644', byteLength: 7, contentDigest: '8'.repeat(64),
+  },
+  attribution: 'not-inherited',
+})
+const DIRTY_UNSTAGED_CHANGE_MATERIAL = signedGitChange({
+  kind: 'ordinary',
+  path: 'unstaged.txt',
+  indexStatus: 'unchanged',
+  worktreeStatus: 'modified',
+  submodule: { kind: 'not-submodule' },
+  head: { mode: '100644', objectId: '1'.repeat(40) },
+  index: { mode: '100644', objectId: '1'.repeat(40) },
+  worktreeMode: '100644',
+  worktreeEvidence: {
+    kind: 'regular', mode: '100644', byteLength: 9, contentDigest: '9'.repeat(64),
+  },
+  attribution: 'inherited',
+})
+const DIRTY_GIT_STATUS_SEED = {
+  ...GIT_STATUS_BASE,
+  upstream: { ref: 'refs/remotes/origin/main', name: 'origin/main', divergence: { ahead: 1, behind: 0 } },
+  index: DIRTY_INDEX,
+  worktree: DIRTY_WORKTREE,
+  changes: [
+    DIRTY_UNTRACKED_CHANGE_MATERIAL,
+    DIRTY_STAGED_CHANGE_MATERIAL,
+    DIRTY_UNSTAGED_CHANGE_MATERIAL,
+  ],
+  structuredMutation: { available: true, blockers: [] },
+} as const satisfies ProjectGitStatusSeedMaterial
+const DIRTY_GIT_STATUS_SEED_DIGEST = computeProjectGitStatusSeedDigest(DIRTY_GIT_STATUS_SEED)
+const DIRTY_GIT_STATUS = signedGitStatus(DIRTY_GIT_STATUS_SEED)
+const DIRTY_UNTRACKED_CHANGE = identifiedGitChange(DIRTY_GIT_STATUS_SEED_DIGEST, DIRTY_UNTRACKED_CHANGE_MATERIAL)
+const DIRTY_STAGED_CHANGE = identifiedGitChange(DIRTY_GIT_STATUS_SEED_DIGEST, DIRTY_STAGED_CHANGE_MATERIAL)
+const DIRTY_UNSTAGED_CHANGE = identifiedGitChange(DIRTY_GIT_STATUS_SEED_DIGEST, DIRTY_UNSTAGED_CHANGE_MATERIAL)
+
+const CONFLICTED_GIT_STATUS = signedGitStatus({
+  ...GIT_STATUS_BASE,
+  index: { kind: 'unmerged', stagesDigest: { version: 1, digest: 'a'.repeat(64) } },
+  worktree: { version: 1, digest: 'b'.repeat(64) },
+  changes: [signedGitChange({
+    kind: 'unmerged',
+    path: 'conflicted.txt',
+    indexStatus: 'unmerged',
+    worktreeStatus: 'present',
+    conflict: 'both-modified',
+    submodule: { kind: 'not-submodule' },
+    stages: {
+      base: { mode: '100644', objectId: '1'.repeat(40) },
+      ours: { mode: '100644', objectId: '2'.repeat(40) },
+      theirs: { mode: '100644', objectId: '3'.repeat(40) },
+    },
+    worktreeMode: '100644',
+    worktreeEvidence: {
+      kind: 'regular', mode: '100644', byteLength: 18, contentDigest: 'c'.repeat(64),
+    },
+    attribution: 'not-inherited',
+  })],
+  structuredMutation: { available: false, blockers: ['unmerged'] },
+})
+
+const GIT_MUTATION_EXPECTATION = {
+  projectId: PROJECT_ID,
+  expectedRegistryRevision: 1,
+  expectedProjectRevision: 0,
+  expectedBinding: { id: BINDING_ID, revision: 0 },
+  expectedStatus: DIRTY_GIT_STATUS.fingerprint,
+  expectedHead: FIXTURE_HEAD,
+  expectedIndex: DIRTY_INDEX,
+  expectedWorktree: DIRTY_WORKTREE,
+} as const
+
+/** Browser-safe Changes and bounded Diff query examples plus path-free mutation Intents. */
+export const SAKI_GIT_REQUEST_FIXTURES = Object.freeze({
+  changes: { type: 'project-changes', projectId: PROJECT_ID, expectedRegistryRevision: 1 },
+  diff: {
+    type: 'project-diff',
+    projectId: PROJECT_ID,
+    expectedRegistryRevision: 1,
+    request: {
+      expectedStatus: DIRTY_GIT_STATUS.fingerprint,
+      changeId: DIRTY_UNSTAGED_CHANGE.id,
+      layer: 'unstaged',
+    },
+  },
+  stage: {
+    type: 'stage-files',
+    intentId: STAGE_INTENT_ID,
+    expected: GIT_MUTATION_EXPECTATION,
+    changes: [
+      { id: DIRTY_UNSTAGED_CHANGE.id, fingerprint: DIRTY_UNSTAGED_CHANGE.fingerprint },
+      { id: DIRTY_UNTRACKED_CHANGE.id, fingerprint: DIRTY_UNTRACKED_CHANGE.fingerprint },
+    ],
+  },
+  unstage: {
+    type: 'unstage-files',
+    intentId: UNSTAGE_INTENT_ID,
+    expected: GIT_MUTATION_EXPECTATION,
+    changes: [{ id: DIRTY_STAGED_CHANGE.id, fingerprint: DIRTY_STAGED_CHANGE.fingerprint }],
+  },
+  commit: {
+    type: 'create-commit',
+    intentId: COMMIT_INTENT_ID,
+    expected: GIT_MUTATION_EXPECTATION,
+    message: 'Record fixture changes',
+  },
+} as const satisfies Record<string, SakiQuery | SakiGitOperationIntent>)
+
+const AVAILABLE_GIT_OPERATIONS = {
+  stageFiles: { available: true, reasons: [] },
+  unstageFiles: { available: true, reasons: [] },
+  createCommit: { available: true, reasons: [] },
+} as const
+const CLEAN_GIT_OPERATIONS = {
+  ...AVAILABLE_GIT_OPERATIONS,
+  createCommit: { available: false, reasons: ['no-staged-changes'] },
+} as const
+const CONFLICTED_GIT_OPERATIONS = {
+  stageFiles: { available: false, reasons: ['unmerged'] },
+  unstageFiles: { available: false, reasons: ['unmerged'] },
+  createCommit: { available: false, reasons: ['unmerged'] },
+} as const
+
+/** Changes Projection examples for clean, dirty, and conflicted repositories. */
+export const SAKI_GIT_CHANGES_PROJECTION_FIXTURES = Object.freeze({
+  clean: {
+    type: 'project-changes', registryRevision: 1, projectId: PROJECT_ID, projectRevision: 0,
+    result: { ok: true, observation: CLEAN_GIT_STATUS },
+    gitOperations: CLEAN_GIT_OPERATIONS,
+  } as const satisfies SakiProjectChangesProjection,
+  dirty: {
+    type: 'project-changes', registryRevision: 1, projectId: PROJECT_ID, projectRevision: 0,
+    result: { ok: true, observation: DIRTY_GIT_STATUS },
+    gitOperations: AVAILABLE_GIT_OPERATIONS,
+  } as const satisfies SakiProjectChangesProjection,
+  conflict: {
+    type: 'project-changes', registryRevision: 1, projectId: PROJECT_ID, projectRevision: 0,
+    result: { ok: true, observation: CONFLICTED_GIT_STATUS },
+    gitOperations: CONFLICTED_GIT_OPERATIONS,
+  } as const satisfies SakiProjectChangesProjection,
+})
+
+const DIFF_LINES = [
+  'diff --git a/unstaged.txt b/unstaged.txt',
+  '--- a/unstaged.txt',
+  '+++ b/unstaged.txt',
+  '@@ -1 +1 @@',
+  '-before',
+  '+after',
+] as const
+const DIFF_UTF8_BYTES = DIFF_LINES.reduce(
+  (bytes, line) => bytes + new TextEncoder().encode(line).byteLength + 1,
+  0,
+)
+
+/** Bounded file Diff Projection examples for success and stale observation evidence. */
+export const SAKI_GIT_DIFF_PROJECTION_FIXTURES = Object.freeze({
+  success: {
+    type: 'project-diff',
+    registryRevision: 1,
+    projectId: PROJECT_ID,
+    projectRevision: 0,
+    result: {
+      ok: true,
+      page: {
+        pageVersion: 1,
+        observation: DIRTY_GIT_STATUS.fingerprint,
+        changeId: DIRTY_UNSTAGED_CHANGE.id,
+        layer: 'unstaged',
+        patchFingerprint: { version: 1, digest: 'd'.repeat(64) },
+        range: { startLine: 0, endLineExclusive: DIFF_LINES.length, totalLines: DIFF_LINES.length },
+        lines: DIFF_LINES,
+        pageUtf8Bytes: DIFF_UTF8_BYTES,
+        totalUtf8Bytes: DIFF_UTF8_BYTES,
+        omittedBeforeLines: 0,
+        omittedAfterLines: 0,
+        truncated: false,
+      },
+    },
+  } as const satisfies SakiProjectDiffProjection,
+  stale: {
+    type: 'project-diff',
+    registryRevision: 1,
+    projectId: PROJECT_ID,
+    projectRevision: 0,
+    result: { ok: false, reason: 'observation-stale' },
+  } as const satisfies SakiProjectDiffProjection,
+})
+
+const STAGE_OPERATION = {
+  id: STAGE_OPERATION_ID, type: 'stage-files', revision: 4,
+} as const
+const UNSTAGE_OPERATION = {
+  id: UNSTAGE_OPERATION_ID, type: 'unstage-files', revision: 4,
+} as const
+const COMMIT_OPERATION = {
+  id: COMMIT_OPERATION_ID, type: 'commit', revision: 4,
+} as const
+const GIT_COMMIT_SIGNATURE = {
+  name: 'Fixture Operator',
+  email: 'fixture@example.test',
+  timestamp: 1_787_101_240,
+  timezone: '+0800',
+  source: 'git-config',
+} as const
+
+/** Terminal structured-operation examples for success, conflict, failure, cancellation, and unknown effect. */
+export const SAKI_GIT_OPERATION_RESULT_FIXTURES = Object.freeze({
+  stageSuccess: {
+    ok: true,
+    receipt: {
+      id: 'receipt-00000000-0000-4000-8000-000000000010' as SakiIntentReceiptId,
+      intentId: STAGE_INTENT_ID,
+      type: 'stage-files',
+      projectId: PROJECT_ID,
+      state: 'succeeded',
+      operation: { ...STAGE_OPERATION, state: 'succeeded' },
+      result: {
+        type: 'stage-files',
+        changes: [
+          { id: DIRTY_UNSTAGED_CHANGE.id, fingerprint: DIRTY_UNSTAGED_CHANGE.fingerprint, path: 'unstaged.txt' },
+          { id: DIRTY_UNTRACKED_CHANGE.id, fingerprint: DIRTY_UNTRACKED_CHANGE.fingerprint, path: 'new.txt' },
+        ],
+        resultingIndex: { kind: 'tree', treeId: 'e'.repeat(40) },
+      },
+    },
+  },
+  unstageSuccess: {
+    ok: true,
+    receipt: {
+      id: 'receipt-00000000-0000-4000-8000-000000000011' as SakiIntentReceiptId,
+      intentId: UNSTAGE_INTENT_ID,
+      type: 'unstage-files',
+      projectId: PROJECT_ID,
+      state: 'succeeded',
+      operation: { ...UNSTAGE_OPERATION, state: 'succeeded' },
+      result: {
+        type: 'unstage-files',
+        changes: [{ id: DIRTY_STAGED_CHANGE.id, fingerprint: DIRTY_STAGED_CHANGE.fingerprint, path: 'staged.txt' }],
+        resultingIndex: { kind: 'tree', treeId: 'f'.repeat(40) },
+      },
+    },
+  },
+  commitSuccess: {
+    ok: true,
+    receipt: {
+      id: 'receipt-00000000-0000-4000-8000-000000000012' as SakiIntentReceiptId,
+      intentId: COMMIT_INTENT_ID,
+      type: 'create-commit',
+      projectId: PROJECT_ID,
+      state: 'succeeded',
+      operation: { ...COMMIT_OPERATION, state: 'succeeded' },
+      result: {
+        type: 'commit',
+        commitId: 'a'.repeat(40),
+        treeId: 'e'.repeat(40),
+        parent: { kind: 'commit', objectId: FIXTURE_HEAD.objectId },
+        target: { kind: 'symbolic-ref', ref: 'refs/heads/main' },
+        author: GIT_COMMIT_SIGNATURE,
+        committer: GIT_COMMIT_SIGNATURE,
+      },
+    },
+  },
+  conflict: {
+    ok: false,
+    reason: 'conflict',
+    receipt: {
+      id: 'receipt-00000000-0000-4000-8000-000000000013' as SakiIntentReceiptId,
+      intentId: 'intent-00000000-0000-4000-8000-000000000013' as SakiControlIntentId,
+      type: 'stage-files',
+      projectId: PROJECT_ID,
+      state: 'conflict',
+      reason: 'expected-evidence',
+    },
+  },
+  failure: {
+    ok: false,
+    reason: 'failure',
+    receipt: {
+      id: 'receipt-00000000-0000-4000-8000-000000000014' as SakiIntentReceiptId,
+      intentId: 'intent-00000000-0000-4000-8000-000000000014' as SakiControlIntentId,
+      type: 'stage-files',
+      projectId: PROJECT_ID,
+      state: 'failed',
+      reason: 'invalid-selection',
+      operation: { ...STAGE_OPERATION, state: 'failed' },
+    },
+  },
+  cancellation: {
+    ok: false,
+    reason: 'canceled',
+    receipt: {
+      id: 'receipt-00000000-0000-4000-8000-000000000015' as SakiIntentReceiptId,
+      intentId: 'intent-00000000-0000-4000-8000-000000000015' as SakiControlIntentId,
+      type: 'unstage-files',
+      projectId: PROJECT_ID,
+      state: 'canceled',
+      reason: 'source-canceled',
+      operation: { ...UNSTAGE_OPERATION, state: 'canceled' },
+    },
+  },
+  unknownOutcome: {
+    ok: false,
+    reason: 'reconciliation-required',
+    receipt: {
+      id: 'receipt-00000000-0000-4000-8000-000000000016' as SakiIntentReceiptId,
+      intentId: 'intent-00000000-0000-4000-8000-000000000016' as SakiControlIntentId,
+      type: 'create-commit',
+      projectId: PROJECT_ID,
+      state: 'reconciliation-required',
+      reason: 'effect-unknown',
+      operation: { ...COMMIT_OPERATION, state: 'reconciliation-required' },
+    },
+  },
+} as const satisfies Record<string, SakiIntentReceipt<'stage-files' | 'unstage-files' | 'create-commit'>>)
+
+/** Protected structured Git query examples, including a stale Registry observation. */
+export const SAKI_GIT_QUERY_RESULT_FIXTURES = Object.freeze({
+  clean: { ok: true, projection: SAKI_GIT_CHANGES_PROJECTION_FIXTURES.clean },
+  dirty: { ok: true, projection: SAKI_GIT_CHANGES_PROJECTION_FIXTURES.dirty },
+  stale: { ok: false, reason: 'stale' },
+  conflict: { ok: true, projection: SAKI_GIT_CHANGES_PROJECTION_FIXTURES.conflict },
+  diff: { ok: true, projection: SAKI_GIT_DIFF_PROJECTION_FIXTURES.success },
+} as const satisfies Record<string, SakiQueryResult>)
 
 const GITHUB_STATUS_OPTION_IDS = {
   inbox: 'option-inbox' as GitHubProjectOptionId,

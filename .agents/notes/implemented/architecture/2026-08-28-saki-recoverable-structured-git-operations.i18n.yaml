@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.md
+2026-08-28-saki-recoverable-structured-git-operations.md: 732553ca1b9dca04a377eccacdf2500d65db3042
+2026-08-28-saki-recoverable-structured-git-operations.zh.md: b91cce1caa176c344a2d85c798654ca8df0fec9a

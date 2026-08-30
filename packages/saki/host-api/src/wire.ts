@@ -3,15 +3,26 @@
 import { z } from 'zod'
 import {
   canonicalDigest,
+  commitHostOperationRequestSchema,
+  commitHostOperationResultSchema,
+  hostOperationIdSchema,
   inheritedChangeBaselineSchema,
   isGitObjectId,
   isSafeDisplayLocation,
-  isSafeGitBranchName,
+  MAX_HOST_OPERATION_SELECTED_CHANGES,
   MAX_DISPLAY_LOCATION_CHARS,
-  MAX_GIT_REF_CHARS,
   MAX_INVENTORY_ENTRIES,
+  projectGitHeadSchema,
+  projectGitStatusObservationSchema,
+  projectGitStatusFingerprintSchema,
+  projectGitWorktreeFingerprintSchema,
   projectInspectionFingerprintSchema,
   projectSelectionProjectionSchema,
+  readProjectDiffRequestSchema,
+  readProjectDiffResultSchema,
+  selectedProjectGitChangeSchema,
+  stageFilesHostOperationResultSchema,
+  unstageFilesHostOperationResultSchema,
 } from '@breakfastdapaidang/saki-execution'
 import {
   SAKI_BOARD_WORK_ITEM_LIMIT,
@@ -21,6 +32,8 @@ import {
 import type {
   AccessProjection,
   ConfigureGitHubSynchronizationIntent,
+  CreateCommitIntent,
+  GitMutationExpectation,
   GitHubAccountId,
   GitHubAppId,
   GitHubInstallationId,
@@ -55,13 +68,22 @@ import type {
   SakiGitHubScanStateProjection,
   SakiGitHubSyncCheckpointProjection,
   SakiGitHubSynchronizationFailureProjection,
+  SakiCurrentGitOperationProjection,
+  SakiGitOperationAvailabilityProjection,
+  SakiGitOperationIntentReceipt,
+  SakiGitOperationReferenceProjection,
+  SakiGitOperationsProjection,
   SakiPrincipalId,
   SakiProjectIndexProjection,
+  SakiProjectDiffProjection,
+  SakiProjectChangesProjection,
   SakiProjectSettingsProjection,
   SakiProjectSelectionInspectionProjection,
   SakiQuery,
   SakiQueryResult,
   SakiResourceBindingId,
+  StageFilesIntent,
+  UnstageFilesIntent,
 } from '@breakfastdapaidang/saki-control-plane'
 
 const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -80,8 +102,6 @@ const revision = safeInteger
 const positiveRevision = positiveInteger
 const projectTitle = z.string().min(1).max(200).refine(value => value.trim().length > 0)
 const directoryLocator = z.string().min(1).max(32_768)
-const gitHead = z.string().refine(value => isGitObjectId(value))
-const gitBranch = z.string().min(1).max(MAX_GIT_REF_CHARS).refine(isSafeGitBranchName)
 const displayLocation = z.string().min(1).max(MAX_DISPLAY_LOCATION_CHARS).refine(isSafeDisplayLocation)
 const githubPositiveDecimalId = <T extends string>() => z.string().regex(/^[1-9][0-9]*$/u).max(40)
   .transform(value => value as T)
@@ -110,7 +130,6 @@ const scanAttemptId = z.string().regex(new RegExp(`^scan-attempt-${UUID_PATTERN}
   .transform(value => value as SakiGitHubScanAttemptId)
 const boardRemoteFingerprint = z.string().regex(/^remote-fingerprint-[0-9a-f]{64}$/u)
   .transform(value => value as SakiBoardRemoteFingerprint)
-
 function boundedArray<T extends z.ZodType>(element: T, minimum: number, maximum: number) {
   return z.custom<unknown[]>(value => Array.isArray(value)
     && value.length >= minimum
@@ -138,6 +157,17 @@ export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
     type: z.literal('development-workspace'),
     projectId,
     expectedRegistryRevision: revision,
+  }).strict(),
+  z.object({
+    type: z.literal('project-changes'),
+    projectId,
+    expectedRegistryRevision: revision,
+  }).strict(),
+  z.object({
+    type: z.literal('project-diff'),
+    projectId,
+    expectedRegistryRevision: revision,
+    request: readProjectDiffRequestSchema,
   }).strict(),
   z.object({
     type: z.literal('project-settings'),
@@ -228,10 +258,74 @@ export const sakiConfigureGitHubSynchronizationIntentSchema = z.object({
   patch: githubSynchronizationConfigurationPatchSchema,
 }).strict() satisfies z.ZodType<ConfigureGitHubSynchronizationIntent>
 
+/** Browser-supplied status evidence without trusted Binding or baseline authority. */
+// This browser boundary must not import the Node-facing durable Control Plane schema it independently validates.
+/* jscpd:ignore-start */
+export const sakiGitMutationExpectationSchema = z.object({
+  projectId,
+  expectedRegistryRevision: revision,
+  expectedProjectRevision: revision,
+  expectedBinding: z.object({ id: bindingId, revision }).strict(),
+  expectedStatus: projectGitStatusFingerprintSchema,
+  expectedHead: projectGitHeadSchema,
+  expectedIndex: z.object({ kind: z.literal('tree'), treeId: z.string().refine(value => isGitObjectId(value)) }).strict(),
+  expectedWorktree: projectGitWorktreeFingerprintSchema,
+}).strict().superRefine((value, context) => {
+  if (value.expectedHead.kind === 'commit'
+    && value.expectedHead.objectId.length !== value.expectedIndex.treeId.length) {
+    context.addIssue({
+      code: 'custom',
+      message: 'expected HEAD and index use different object formats',
+      path: ['expectedIndex', 'treeId'],
+    })
+  }
+}) satisfies z.ZodType<GitMutationExpectation>
+/* jscpd:ignore-end */
+
+const sakiSelectedGitChangesSchema = boundedArray(
+  selectedProjectGitChangeSchema,
+  1,
+  MAX_HOST_OPERATION_SELECTED_CHANGES,
+)
+  .superRefine((changes, context) => {
+    if (new Set(changes.map(change => change.id)).size !== changes.length) {
+      context.addIssue({ code: 'custom', message: 'selected changes repeat a change id' })
+    }
+  })
+
+/** Strict path-free StageFiles Control Intent. */
+export const sakiStageFilesIntentSchema = z.object({
+  type: z.literal('stage-files'),
+  intentId,
+  expected: sakiGitMutationExpectationSchema,
+  changes: sakiSelectedGitChangesSchema,
+}).strict() satisfies z.ZodType<StageFilesIntent>
+
+/** Strict path-free UnstageFiles Control Intent. */
+export const sakiUnstageFilesIntentSchema = z.object({
+  type: z.literal('unstage-files'),
+  intentId,
+  expected: sakiGitMutationExpectationSchema,
+  changes: sakiSelectedGitChangesSchema,
+}).strict() satisfies z.ZodType<UnstageFilesIntent>
+
+const sakiCommitMessageSchema = commitHostOperationRequestSchema.shape.message
+
+/** Strict Commit Control Intent without caller-supplied Git identity or ref authority. */
+export const sakiCreateCommitIntentSchema = z.object({
+  type: z.literal('create-commit'),
+  intentId,
+  expected: sakiGitMutationExpectationSchema,
+  message: sakiCommitMessageSchema,
+}).strict() satisfies z.ZodType<CreateCommitIntent>
+
 /** Closed Control Intent request union. */
 export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
   sakiRegisterDevelopmentProjectIntentSchema,
   sakiConfigureGitHubSynchronizationIntentSchema,
+  sakiStageFilesIntentSchema,
+  sakiUnstageFilesIntentSchema,
+  sakiCreateCommitIntentSchema,
 ]) satisfies z.ZodType<SakiIntentInput>
 
 /** Authenticated member of the Access Projection schema. */
@@ -288,9 +382,8 @@ const projectSummaryWireSchema = z.object({
     health: z.enum(['active', 'missing', 'repair-required']),
     hostId,
     displayLocation,
-    head: gitHead,
-    branch: gitBranch.optional(),
-    detached: z.boolean(),
+    objectFormat: z.enum(['sha1', 'sha256']),
+    head: projectGitHeadSchema,
     inheritedChangeEntryCount: revision.max(MAX_INVENTORY_ENTRIES),
     baseline: z.enum(['complete', 'unavailable']),
     automaticMutationEligible: z.boolean(),
@@ -299,8 +392,14 @@ const projectSummaryWireSchema = z.object({
 }).strict()
 
 const projectSummarySchema = projectSummaryWireSchema.superRefine((value, context) => {
-  if (value.binding.detached === (value.binding.branch !== undefined)) {
-    context.addIssue({ code: 'custom', message: 'summary branch and detached state disagree' })
+  const expectedObjectLength = value.binding.objectFormat === 'sha1' ? 40 : 64
+  if (value.binding.head.kind === 'commit'
+    && value.binding.head.objectId.length !== expectedObjectLength) {
+    context.addIssue({
+      code: 'custom',
+      message: 'summary HEAD does not match object format',
+      path: ['binding', 'head', 'objectId'],
+    })
   }
   if (new Set(value.binding.configurationGaps).size !== value.binding.configurationGaps.length) {
     context.addIssue({ code: 'custom', message: 'summary contains duplicate configuration gaps' })
@@ -312,13 +411,7 @@ const projectSummarySchema = projectSummaryWireSchema.superRefine((value, contex
   if (value.binding.automaticMutationEligible && !eligible) {
     context.addIssue({ code: 'custom', message: 'summary eligibility disagrees with blocking evidence' })
   }
-}).transform((value): SakiDevelopmentProjectSummary => {
-  const { branch, ...binding } = value.binding
-  return {
-    ...value,
-    binding: { ...binding, ...(branch === undefined ? {} : { branch }) },
-  }
-})
+}).transform((value): SakiDevelopmentProjectSummary => value)
 
 /** Revisioned Project-index Projection schema. */
 export const sakiProjectIndexProjectionSchema = z.object({
@@ -360,6 +453,175 @@ export const sakiDevelopmentWorkspaceProjectionSchema = z.object({
   const { currentSelection, ...projection } = value
   return { ...projection, ...(currentSelection === undefined ? {} : { currentSelection }) }
 }) satisfies z.ZodType<SakiDevelopmentWorkspaceProjection>
+
+/** Structured Project-status Projection schema with no trusted Binding evidence. */
+const sakiProjectChangesObservationResultSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    observation: projectGitStatusObservationSchema,
+  }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.enum([
+      'binding-stale', 'missing', 'malformed', 'limit', 'invalid-path', 'ambiguous', 'unavailable',
+    ]),
+  }).strict(),
+])
+
+const gitOperationUnavailableReason = z.enum([
+  'baseline-unavailable',
+  'conversion-ambiguous',
+  'current-unavailable',
+  'index-flags',
+  'unmerged',
+  'locked',
+  'detached-head',
+  'no-staged-changes',
+  'status-unavailable',
+  'action-denied',
+  'write-admission-busy',
+  'write-admission-unavailable',
+])
+const GIT_OPERATION_UNAVAILABLE_REASON_ORDER = gitOperationUnavailableReason.options
+
+/** Repository-level structured Git operation eligibility. */
+export const sakiGitOperationAvailabilitySchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(true), reasons: z.tuple([]) }).strict(),
+  z.object({
+    available: z.literal(false),
+    reasons: z.array(gitOperationUnavailableReason).min(1).max(gitOperationUnavailableReason.options.length)
+      .refine((reasons) => {
+        const canonical = [...new Set(reasons)].sort((left, right) =>
+          GIT_OPERATION_UNAVAILABLE_REASON_ORDER.indexOf(left)
+          - GIT_OPERATION_UNAVAILABLE_REASON_ORDER.indexOf(right))
+        return canonical.length === reasons.length
+          && canonical.every((reason, index) => reason === reasons[index])
+      }),
+  }).strict(),
+]) satisfies z.ZodType<SakiGitOperationAvailabilityProjection>
+
+const gitOperationReferenceShape = {
+  id: hostOperationIdSchema,
+  type: z.enum(['stage-files', 'unstage-files', 'commit']),
+  revision,
+} as const
+const hostOperationState = z.enum([
+  'prepared', 'accepted', 'planning', 'publishing',
+  'succeeded', 'failed', 'canceled', 'reconciliation-required',
+])
+
+/** Browser-safe Host Operation reference with no routing or admission evidence. */
+export const sakiGitOperationReferenceProjectionSchema = z.object({
+  ...gitOperationReferenceShape,
+  state: hostOperationState,
+}).strict() satisfies z.ZodType<SakiGitOperationReferenceProjection>
+
+/** Current structured Git operation without Host routing or admission evidence. */
+export const sakiCurrentGitOperationProjectionSchema = z.discriminatedUnion('state', [
+  z.object({
+    intentId,
+    type: z.enum(['stage-files', 'unstage-files', 'create-commit']),
+    state: z.literal('admission-reserved'),
+  }).strict(),
+  z.object({
+    intentId,
+    type: z.enum(['stage-files', 'unstage-files', 'create-commit']),
+    state: z.literal('host-prepared'),
+    operation: z.object({ ...gitOperationReferenceShape, state: z.literal('prepared') }).strict(),
+  }).strict(),
+  z.object({
+    intentId,
+    type: z.enum(['stage-files', 'unstage-files', 'create-commit']),
+    state: z.literal('accepted'),
+    operation: z.object({
+      ...gitOperationReferenceShape,
+      state: z.enum(['accepted', 'planning', 'publishing']),
+    }).strict(),
+  }).strict(),
+  z.object({
+    intentId,
+    type: z.enum(['stage-files', 'unstage-files', 'create-commit']),
+    state: z.literal('reconciliation-required'),
+    operation: z.object({ ...gitOperationReferenceShape, state: z.literal('reconciliation-required') }).strict(),
+  }).strict(),
+]).superRefine((value, context) => {
+  if ('operation' in value) {
+    const expectedType = value.type === 'create-commit' ? 'commit' : value.type
+    if (value.operation.type !== expectedType) {
+      context.addIssue({ code: 'custom', message: 'operation type disagrees with Intent type', path: ['operation', 'type'] })
+    }
+  }
+}).transform((value): SakiCurrentGitOperationProjection => {
+  // The preceding refinement establishes the Intent-to-Host-kind correlation that Zod cannot infer.
+  return value as SakiCurrentGitOperationProjection
+}) satisfies z.ZodType<SakiCurrentGitOperationProjection>
+
+/** Structured Git action eligibility and current single-writer owner. */
+export const sakiGitOperationsProjectionSchema = z.object({
+  stageFiles: sakiGitOperationAvailabilitySchema,
+  unstageFiles: sakiGitOperationAvailabilitySchema,
+  createCommit: sakiGitOperationAvailabilitySchema,
+  current: sakiCurrentGitOperationProjectionSchema.optional(),
+}).strict().transform((value): SakiGitOperationsProjection => {
+  const { current, ...operations } = value
+  return { ...operations, ...(current === undefined ? {} : { current }) }
+})
+
+/** Structured Project-status Projection schema with no trusted Binding evidence. */
+export const sakiProjectChangesProjectionSchema = z.object({
+  type: z.literal('project-changes'),
+  registryRevision: revision,
+  projectId,
+  projectRevision: revision,
+  result: sakiProjectChangesObservationResultSchema,
+  gitOperations: sakiGitOperationsProjectionSchema,
+}).strict().superRefine((projection, context) => {
+  const actions = [
+    ['stageFiles', projection.gitOperations.stageFiles],
+    ['unstageFiles', projection.gitOperations.unstageFiles],
+    ['createCommit', projection.gitOperations.createCommit],
+  ] as const
+  const statusReasons = [
+    ...(projection.result.ok ? projection.result.observation.structuredMutation.available
+      ? []
+      : projection.result.observation.structuredMutation.blockers : ['status-unavailable'] as const),
+  ]
+  const noStagedChanges = projection.result.ok
+    && projection.result.observation.structuredMutation.available
+    && !projection.result.observation.changes.some(change =>
+      change.kind === 'ordinary' && change.indexStatus !== 'unchanged')
+  for (const [name, action] of actions) {
+    const requiredReasons = [
+      ...statusReasons,
+      ...(name === 'createCommit'
+        && projection.result.ok
+        && projection.result.observation.branch.kind === 'detached'
+        ? ['detached-head'] as const
+        : []),
+      ...(name === 'createCommit' && noStagedChanges ? ['no-staged-changes'] as const : []),
+      ...(projection.gitOperations.current === undefined ? [] : ['write-admission-busy'] as const),
+    ]
+    const actualFactReasons = action.available ? [] : action.reasons.filter(reason =>
+      reason !== 'action-denied' && reason !== 'write-admission-unavailable')
+    if (actualFactReasons.length !== requiredReasons.length
+      || actualFactReasons.some((reason, index) => reason !== requiredReasons[index])) {
+      context.addIssue({
+        code: 'custom',
+        message: 'operation eligibility disagrees with status or current write admission',
+        path: ['gitOperations', name],
+      })
+    }
+  }
+}) satisfies z.ZodType<SakiProjectChangesProjection>
+
+/** Bounded file-scoped Project-Diff Projection schema. */
+export const sakiProjectDiffProjectionSchema = z.object({
+  type: z.literal('project-diff'),
+  registryRevision: revision,
+  projectId,
+  projectRevision: revision,
+  result: readProjectDiffResultSchema,
+}).strict() satisfies z.ZodType<SakiProjectDiffProjection>
 
 const sakiBoardStatusSchema = z.enum([
   'inbox',
@@ -1247,6 +1509,10 @@ const developmentWorkspaceFailureSchema = z.object({
   ok: z.literal(false),
   reason: z.enum(['denied', 'unavailable', 'stale', 'not-found']),
 }).strict()
+const boundProjectReadFailureSchema = z.object({
+  ok: z.literal(false),
+  reason: z.enum(['denied', 'unavailable', 'stale', 'not-found', 'binding-unavailable']),
+}).strict()
 const projectSettingsFailureSchema = z.object({
   ok: z.literal(false),
   reason: z.enum(['denied', 'unavailable', 'not-found']),
@@ -1274,6 +1540,18 @@ export const sakiDevelopmentWorkspaceResultSchema = z.discriminatedUnion('ok', [
   developmentWorkspaceFailureSchema,
 ]) satisfies z.ZodType<SakiQueryResult<'development-workspace'>>
 
+/** Exact result schema for a Project-status query. */
+export const sakiProjectChangesResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: sakiProjectChangesProjectionSchema }).strict(),
+  boundProjectReadFailureSchema,
+]) satisfies z.ZodType<SakiQueryResult<'project-changes'>>
+
+/** Exact result schema for a Project-Diff query. */
+export const sakiProjectDiffResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: sakiProjectDiffProjectionSchema }).strict(),
+  boundProjectReadFailureSchema,
+]) satisfies z.ZodType<SakiQueryResult<'project-diff'>>
+
 /** Exact result schema for a Project Settings query. */
 export const sakiProjectSettingsResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), projection: sakiProjectSettingsProjectionSchema }).strict(),
@@ -1291,6 +1569,8 @@ export const sakiQueryResultSchema = z.union([
   sakiInspectProjectSelectionResultSchema,
   sakiProjectIndexResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
+  sakiProjectChangesResultSchema,
+  sakiProjectDiffResultSchema,
   sakiProjectSettingsResultSchema,
   sakiBoardResultSchema,
 ])
@@ -1396,10 +1676,136 @@ export const sakiConfigureGitHubSynchronizationResultSchema = z.union([
   authorityFailureIntentResultSchema,
 ]) satisfies z.ZodType<SakiIntentReceipt<'configure-github-synchronization'>>
 
+const gitOperationConflictReason = z.enum([
+  'expected-evidence',
+  'invalid-selection',
+  'source-conflict',
+  'protocol',
+])
+const gitOperationFailedReason = z.enum([
+  'binding-stale',
+  'observation-stale',
+  'invalid-selection',
+  'unsupported-state',
+])
+
+function createGitOperationResultSchema<
+  T extends 'stage-files' | 'unstage-files' | 'create-commit',
+  H extends 'stage-files' | 'unstage-files' | 'commit',
+  R extends z.ZodType,
+>(intentType: T, hostType: H, successfulResult: R) {
+  const base = {
+    ...receiptIdentity,
+    type: z.literal(intentType),
+    projectId,
+  } as const
+  const operationBase = {
+    id: hostOperationIdSchema,
+    type: z.literal(hostType),
+    revision,
+  } as const
+  const prepared = z.object({ ...base, state: z.literal('prepared') }).strict()
+  const admissionReserved = z.object({ ...base, state: z.literal('admission-reserved') }).strict()
+  const hostPrepared = z.object({
+    ...base,
+    state: z.literal('host-prepared'),
+    operation: z.object({ ...operationBase, state: z.literal('prepared') }).strict(),
+  }).strict()
+  const accepted = z.object({
+    ...base,
+    state: z.literal('accepted'),
+    operation: z.object({
+      ...operationBase,
+      state: z.enum(['accepted', 'planning', 'publishing']),
+    }).strict(),
+  }).strict()
+  const succeeded = z.object({
+    ...base,
+    state: z.literal('succeeded'),
+    operation: z.object({ ...operationBase, state: z.literal('succeeded') }).strict(),
+    result: successfulResult,
+  }).strict()
+  const conflict = z.object({
+    ...base,
+    state: z.literal('conflict'),
+    reason: gitOperationConflictReason,
+    operation: z.object({ ...operationBase, state: z.literal('prepared') }).strict().optional(),
+  }).strict().transform((value) => {
+    const { operation: currentOperation, ...receipt } = value
+    return { ...receipt, ...(currentOperation === undefined ? {} : { operation: currentOperation }) }
+  })
+  const failed = z.object({
+    ...base,
+    state: z.literal('failed'),
+    reason: gitOperationFailedReason,
+    operation: z.object({ ...operationBase, state: z.literal('failed') }).strict(),
+  }).strict()
+  const canceled = z.object({
+    ...base,
+    state: z.literal('canceled'),
+    reason: z.enum(['source-canceled', 'authority-revoked']),
+    operation: z.object({ ...operationBase, state: z.literal('canceled') }).strict().optional(),
+  }).strict().transform((value) => {
+    const { operation, ...receipt } = value
+    return { ...receipt, ...(operation === undefined ? {} : { operation }) }
+  })
+  const reconciliationRequired = z.object({
+    ...base,
+    state: z.literal('reconciliation-required'),
+    reason: z.enum(['effect-unknown', 'evidence-conflict']),
+    operation: z.object({ ...operationBase, state: z.literal('reconciliation-required') }).strict(),
+  }).strict()
+  const nonterminal = z.union([prepared, admissionReserved, hostPrepared, accepted])
+  return z.union([
+    z.object({ ok: z.literal(true), receipt: succeeded }).strict(),
+    deniedIntentResultSchema,
+    unavailableIntentResultSchema,
+    z.object({ ok: z.literal(false), reason: z.literal('unavailable'), receipt: nonterminal }).strict(),
+    plainConflictIntentResultSchema,
+    z.object({ ok: z.literal(false), reason: z.literal('conflict'), receipt: conflict }).strict(),
+    z.object({ ok: z.literal(false), reason: z.literal('failure'), receipt: failed }).strict(),
+    z.object({ ok: z.literal(false), reason: z.literal('canceled'), receipt: canceled }).strict(),
+    z.object({
+      ok: z.literal(false),
+      reason: z.literal('reconciliation-required'),
+      receipt: reconciliationRequired,
+    }).strict(),
+  ]).superRefine((value, context) => {
+    if ('receipt' in value
+      && value.receipt.id !== value.receipt.intentId.replace(/^intent-/u, 'receipt-')) {
+      context.addIssue({ code: 'custom', message: 'receipt id disagrees with Intent id', path: ['receipt', 'id'] })
+    }
+  })
+}
+
+/** StageFiles business-result schema with a safe Host Operation Projection. */
+export const sakiStageFilesResultSchema = createGitOperationResultSchema(
+  'stage-files',
+  'stage-files',
+  stageFilesHostOperationResultSchema,
+) satisfies z.ZodType<SakiGitOperationIntentReceipt<'stage-files'>>
+
+/** UnstageFiles business-result schema with a safe Host Operation Projection. */
+export const sakiUnstageFilesResultSchema = createGitOperationResultSchema(
+  'unstage-files',
+  'unstage-files',
+  unstageFilesHostOperationResultSchema,
+) satisfies z.ZodType<SakiGitOperationIntentReceipt<'unstage-files'>>
+
+/** CreateCommit business-result schema with hook-free Commit evidence. */
+export const sakiCreateCommitResultSchema = createGitOperationResultSchema(
+  'create-commit',
+  'commit',
+  commitHostOperationResultSchema,
+) satisfies z.ZodType<SakiGitOperationIntentReceipt<'create-commit'>>
+
 /** Union schema retained for callers that intentionally handle every Control Intent result. */
 export const sakiIntentResultSchema = z.union([
   sakiRegisterDevelopmentProjectResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
+  sakiStageFilesResultSchema,
+  sakiUnstageFilesResultSchema,
+  sakiCreateCommitResultSchema,
 ]) satisfies z.ZodType<SakiIntentReceipt<keyof SakiIntentReceiptMap>>
 
 /** Browser Access Projection inferred from the strict wire schema. */
@@ -1414,6 +1820,12 @@ export type SakiWireProjectIndexResult = z.infer<typeof sakiProjectIndexResultSc
 export type SakiWireInspectProjectSelectionResult = z.infer<typeof sakiInspectProjectSelectionResultSchema>
 /** Browser Development-Workspace result inferred from its exact wire schema. */
 export type SakiWireDevelopmentWorkspaceResult = z.infer<typeof sakiDevelopmentWorkspaceResultSchema>
+/** Browser Project-status result inferred from its exact wire schema. */
+export type SakiWireProjectChangesResult = z.infer<typeof sakiProjectChangesResultSchema>
+/** Browser Project-Diff result inferred from its exact wire schema. */
+export type SakiWireProjectDiffResult = z.infer<typeof sakiProjectDiffResultSchema>
+/** Opaque browser Diff request inferred from the shared execution schema. */
+export type SakiWireProjectDiffRequest = z.infer<typeof readProjectDiffRequestSchema>
 /** Browser Project Settings result inferred from its exact wire schema. */
 export type SakiWireProjectSettingsResult = z.infer<typeof sakiProjectSettingsResultSchema>
 /** Browser Board result inferred from its exact wire schema. */
@@ -1438,6 +1850,20 @@ export type SakiWireConfigureGitHubSynchronizationIntent = z.infer<
 export type SakiWireConfigureGitHubSynchronizationResult = z.infer<
   typeof sakiConfigureGitHubSynchronizationResultSchema
 >
+/** Browser Git mutation expectation inferred from its strict authority-free schema. */
+export type SakiWireGitMutationExpectation = z.infer<typeof sakiGitMutationExpectationSchema>
+/** Browser StageFiles Intent inferred from its strict path-free schema. */
+export type SakiWireStageFilesIntent = z.infer<typeof sakiStageFilesIntentSchema>
+/** Browser StageFiles result inferred from its exact safe receipt schema. */
+export type SakiWireStageFilesResult = z.infer<typeof sakiStageFilesResultSchema>
+/** Browser UnstageFiles Intent inferred from its strict path-free schema. */
+export type SakiWireUnstageFilesIntent = z.infer<typeof sakiUnstageFilesIntentSchema>
+/** Browser UnstageFiles result inferred from its exact safe receipt schema. */
+export type SakiWireUnstageFilesResult = z.infer<typeof sakiUnstageFilesResultSchema>
+/** Browser CreateCommit Intent inferred from its strict identity-free schema. */
+export type SakiWireCreateCommitIntent = z.infer<typeof sakiCreateCommitIntentSchema>
+/** Browser CreateCommit result inferred from its exact safe receipt schema. */
+export type SakiWireCreateCommitResult = z.infer<typeof sakiCreateCommitResultSchema>
 /** Branded Host id accepted by the browser client. */
 export type SakiWireHostId = SakiHostId
 /** Branded Project id accepted by the browser client. */

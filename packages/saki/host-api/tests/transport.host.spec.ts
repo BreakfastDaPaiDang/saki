@@ -13,6 +13,10 @@ import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import LocalSakiHostExecution from '@breakfastdapaidang/saki-execution-local'
+import {
+  computeProjectGitStatusFingerprint,
+  type ProjectGitStatusObservation,
+} from '@breakfastdapaidang/saki-execution'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import * as Connection from '@deepseek-ai/dsh-client-connection'
 import { RpcId, type ClientRequest, type ServerResponse } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -67,6 +71,7 @@ async function start(): Promise<RunningHost> {
     backend: 'json',
     routes: {
       saki_control_plane: 'sqlite',
+      saki_host_execution: 'sqlite',
       saki_storage_generation: 'sqlite',
     },
   })
@@ -84,7 +89,7 @@ async function start(): Promise<RunningHost> {
     databasePath: join(directory, 'saki.sqlite'),
     installationId: INSTALLATION_ID,
     storageGenerationId: STORAGE_GENERATION_ID,
-    stateVersion: 4,
+    stateVersion: 5,
     createdByBuildId: BUILD_ID,
     promoteToReady: () => Promise.resolve(),
   })
@@ -434,6 +439,56 @@ describe('Saki /saki Host transport', () => {
     await host.close()
   })
 
+  it('serializes detached Project Changes while only CreateCommit is unavailable', async () => {
+    const host = await start()
+    const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
+    const exchange = await rpc(host, 'access/exchange', { secret })
+    const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
+    const material = {
+      observationVersion: 1 as const,
+      observedAt: 1,
+      bindingId: 'binding-33333333-3333-4333-8333-333333333333' as ProjectGitStatusObservation['bindingId'],
+      bindingRevision: 2,
+      bindingHealth: 'active' as const,
+      locked: false,
+      objectFormat: 'sha1' as const,
+      head: { kind: 'commit' as const, objectId: '1'.repeat(40) },
+      branch: { kind: 'detached' as const },
+      index: { kind: 'tree' as const, treeId: '2'.repeat(40) },
+      worktree: { version: 1 as const, digest: '3'.repeat(64) },
+      changes: [],
+      structuredMutation: { available: true as const, blockers: [] as const },
+    }
+    const projection = {
+      type: 'project-changes' as const,
+      registryRevision: 7,
+      projectId: 'project-22222222-2222-4222-8222-222222222222',
+      projectRevision: 3,
+      result: {
+        ok: true as const,
+        observation: { ...material, fingerprint: computeProjectGitStatusFingerprint(material) },
+      },
+      gitOperations: {
+        stageFiles: { available: true as const, reasons: [] as const },
+        unstageFiles: { available: true as const, reasons: [] as const },
+        createCommit: {
+          available: false as const,
+          reasons: ['detached-head', 'no-staged-changes'] as const,
+        },
+      },
+    }
+    vi.spyOn(host.context.sakiControlPlane, 'query').mockResolvedValueOnce({ ok: true, projection } as never)
+
+    const result = await rpc(host, 'control/query', {
+      type: 'project-changes',
+      projectId: projection.projectId,
+      expectedRegistryRevision: projection.registryRevision,
+    }, { cookie })
+
+    expect(result.message.result).toEqual({ ok: true, value: { ok: true, projection } })
+    await host.close()
+  })
+
   it('rejects uncorrelated or authority-bearing control results before serialization', async () => {
     const host = await start()
     const authoritySentinel = 'C:/private/authority-sentinel'
@@ -450,6 +505,33 @@ describe('Saki /saki Host transport', () => {
     const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
     const token = (exchange.message.result as { value: { access: { requestToken: string } } }).value.access.requestToken
     const query = vi.spyOn(host.context.sakiControlPlane, 'query')
+    query.mockResolvedValueOnce({ ok: false, reason: 'binding-unavailable' } as never)
+    const unavailableStatus = await rpc(host, 'control/query', {
+      type: 'project-changes',
+      projectId: 'project-22222222-2222-4222-8222-222222222222',
+      expectedRegistryRevision: 7,
+    }, { cookie })
+    expect(unavailableStatus.message.result).toEqual({
+      ok: true,
+      value: { ok: false, reason: 'binding-unavailable' },
+    })
+
+    query.mockResolvedValueOnce({ ok: false, reason: 'binding-unavailable' } as never)
+    const unavailableDiff = await rpc(host, 'control/query', {
+      type: 'project-diff',
+      projectId: 'project-22222222-2222-4222-8222-222222222222',
+      expectedRegistryRevision: 7,
+      request: {
+        expectedStatus: { version: 1, digest: '4'.repeat(64) },
+        changeId: `git-change-${'5'.repeat(64)}`,
+        layer: 'unstaged',
+      },
+    }, { cookie })
+    expect(unavailableDiff.message.result).toEqual({
+      ok: true,
+      value: { ok: false, reason: 'binding-unavailable' },
+    })
+
     query.mockResolvedValueOnce({ ok: false, reason: 'not-found' } as never)
     const missingBoard = await rpc(host, 'control/query', {
       type: 'board',
@@ -526,7 +608,7 @@ describe('Saki /saki Host transport', () => {
       hostId: host.context.sakiControlPlane.identity().hostId,
       directoryLocator: authoritySentinel,
       expectedRegistryRevision: 0,
-      confirmedFingerprint: { version: 1, digest: '1'.repeat(64) },
+      confirmedFingerprint: { version: 2, digest: '1'.repeat(64) },
       confirmedBaseline: {
         kind: 'unavailable',
         reason: 'io-failure',
@@ -715,7 +797,7 @@ describe('Saki /saki Host transport', () => {
       hostId: host.context.sakiControlPlane.identity().hostId,
       directoryLocator: 'D:/selected-repository',
       expectedRegistryRevision: 0,
-      confirmedFingerprint: { version: 1, digest: '9'.repeat(64) },
+      confirmedFingerprint: { version: 2, digest: '9'.repeat(64) },
       confirmedBaseline: {
         kind: 'unavailable',
         reason: 'io-failure',
@@ -739,6 +821,149 @@ describe('Saki /saki Host transport', () => {
       expect(JSON.stringify(rejected.message)).not.toContain('authority-sentinel')
     }
     expect(submit).not.toHaveBeenCalled()
+    await host.close()
+  })
+
+  it('routes structured Git Intents and rejects browser path or Host authority before submit', async () => {
+    const host = await start()
+    const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
+    const exchange = await rpc(host, 'access/exchange', { secret })
+    const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
+    const token = (exchange.message.result as { value: { access: { requestToken: string } } }).value.access.requestToken
+    const expected = {
+      projectId: 'project-22222222-2222-4222-8222-222222222222',
+      expectedRegistryRevision: 7,
+      expectedProjectRevision: 3,
+      expectedBinding: { id: 'binding-33333333-3333-4333-8333-333333333333', revision: 2 },
+      expectedStatus: { version: 1, digest: '4'.repeat(64) },
+      expectedHead: { kind: 'commit', objectId: '5'.repeat(40) },
+      expectedIndex: { kind: 'tree', treeId: '6'.repeat(40) },
+      expectedWorktree: { version: 1, digest: '7'.repeat(64) },
+    } as const
+    const change = {
+      id: `git-change-${'8'.repeat(64)}`,
+      fingerprint: { version: 1, digest: '9'.repeat(64) },
+    } as const
+    const intents = [
+      {
+        type: 'stage-files',
+        intentId: 'intent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        expected,
+        changes: [change],
+      },
+      {
+        type: 'unstage-files',
+        intentId: 'intent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        expected,
+        changes: [change],
+      },
+      {
+        type: 'create-commit',
+        intentId: 'intent-cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        expected,
+        message: 'transport commit',
+      },
+    ] as const
+    const stageOutcome = {
+      ok: true,
+      receipt: {
+        id: 'receipt-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        intentId: 'intent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        type: 'stage-files',
+        projectId: expected.projectId,
+        state: 'succeeded',
+        operation: {
+          id: 'host-operation-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+          type: 'stage-files',
+          revision: 0,
+          state: 'succeeded',
+        },
+        result: {
+          type: 'stage-files',
+          changes: [{ ...change, path: 'src/file.ts' }],
+          resultingIndex: { kind: 'tree', treeId: 'a'.repeat(40) },
+        },
+      },
+    } as const
+    const submit = vi.spyOn(host.context.sakiControlPlane, 'submit')
+      .mockResolvedValueOnce(stageOutcome as never)
+      .mockResolvedValue({ ok: false, reason: 'unavailable' })
+
+    for (const [index, intent] of intents.entries()) {
+      const result = (await rpc(host, 'control/submit', intent, {
+        cookie,
+        'x-saki-request-token': token,
+      })).message.result
+      if (index === 0) {
+        expect(result).toEqual({ ok: true, value: stageOutcome })
+      } else {
+        expect(result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
+      }
+    }
+    const invalidSelectionOutcome = {
+      ok: false,
+      reason: 'failure',
+      receipt: {
+        id: 'receipt-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        intentId: 'intent-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        type: 'stage-files',
+        projectId: expected.projectId,
+        state: 'failed',
+        reason: 'invalid-selection',
+        operation: {
+          id: 'host-operation-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+          type: 'stage-files',
+          revision: 2,
+          state: 'failed',
+        },
+      },
+    } as const
+    submit.mockResolvedValueOnce(invalidSelectionOutcome as never)
+    expect((await rpc(host, 'control/submit', {
+      ...intents[0],
+      intentId: invalidSelectionOutcome.receipt.intentId,
+    }, { cookie, 'x-saki-request-token': token })).message.result)
+      .toEqual({ ok: true, value: invalidSelectionOutcome })
+    submit.mockResolvedValueOnce({
+      ok: true,
+      receipt: {
+        id: 'receipt-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        intentId: 'intent-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        type: 'stage-files',
+        projectId: expected.projectId,
+        state: 'succeeded',
+        operation: {
+          id: 'host-operation-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+          type: 'stage-files',
+          revision: 0,
+          state: 'succeeded',
+          hostId: 'host-authority-sentinel',
+        },
+        result: {
+          type: 'stage-files',
+          changes: [{ ...change, path: 'src/file.ts' }],
+          resultingIndex: { kind: 'tree', treeId: 'a'.repeat(40) },
+        },
+      },
+    } as never)
+    const hostileResult = await rpc(host, 'control/submit', {
+      ...intents[0],
+      intentId: 'intent-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    }, { cookie, 'x-saki-request-token': token })
+    expect(hostileResult.message.result).toEqual(OPAQUE_ERROR_RESULT)
+    expect(JSON.stringify(hostileResult.message)).not.toContain('authority-sentinel')
+    for (const invalid of [
+      { ...intents[0], changes: [{ ...change, path: 'src/private.ts' }] },
+      { ...intents[0], acceptance: { capability: true } },
+      { ...intents[0], expected: { ...expected, preEffectBaseline: { kind: 'complete' } } },
+      { ...intents[2], author: { name: 'Browser', email: 'browser@example.test' } },
+    ]) {
+      expect((await rpc(host, 'control/submit', invalid, {
+        cookie,
+        'x-saki-request-token': token,
+      })).message.result).toEqual(OPAQUE_ERROR_RESULT)
+    }
+    expect(submit).toHaveBeenCalledTimes(5)
     await host.close()
   })
 

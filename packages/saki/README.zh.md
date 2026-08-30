@@ -7,7 +7,7 @@ Saki 专属产品语义位于 `packages/saki/<pkg>`，并使用 `@breakfastdapai
 | 包 | 职责 | ctx key |
 | --- | --- | --- |
 | [`execution/`](execution/README.zh.md) | 与 Host 实现无关的只读项目选择检查 Service Definition | `sakiHostExecution` |
-| [`execution-local/`](execution-local/README.zh.md) | 使用本地文件系统、Git、subprocess 与 Workspace index 的 Host 检查 Service Provider | 提供 `sakiHostExecution` |
+| [`execution-local/`](execution-local/README.zh.md) | 使用本地文件系统、Git、subprocess、storage 与 Workspace index 的 Host 检查和结构化 operation Service Provider | 提供 `sakiHostExecution` |
 | [`github/`](github/README.zh.md) | 提供方无关的 GitHub 读取、完整 Project board 扫描、原始事实、闭合失败与 Provider 约定 | `sakiGitHub` |
 | [`github-app/`](github-app/README.zh.md) | 使用 operation 作用域只读 token 和有界完整 scan 的 Saki Product GitHub App Service Provider | 提供 `sakiGitHub` |
 | [`control-plane/`](control-plane/README.zh.md) | Installation 置备、本地 Access 权限真源、持久 Project 登记、原子 GitHub Board 发布，以及受保护产品 Projection | `sakiControlPlane` |

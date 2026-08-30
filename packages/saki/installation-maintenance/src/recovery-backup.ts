@@ -20,7 +20,6 @@ import {
 import type {
   SakiBuildId,
   SakiInstallationId,
-  SakiStateCapability,
   SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
@@ -49,6 +48,7 @@ import {
   readStableRegularFileEvidence,
 } from './stable-files.ts'
 import type { StableRegularFileFailures } from './stable-files.ts'
+import type { SakiStateCapability } from './state-version.ts'
 
 const BACKUP_METADATA_LEAF = 'backup.json'
 const BACKUP_DATABASE_LEAF = 'state.sqlite'
@@ -94,7 +94,7 @@ export const recoveryBackupManifestSchema = z.object({
   backupId: sakiRecoveryBackupIdSchema,
   installationId: sakiInstallationIdSchema,
   storageGenerationId: sakiStorageGenerationIdSchema,
-  stateVersion: z.union([z.literal(2), z.literal(3), z.literal(4)]),
+  stateVersion: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
   sourceBuildId: sakiBuildIdSchema,
   databaseLeaf: z.literal(BACKUP_DATABASE_LEAF),
   artifacts: z.array(recoveryBackupArtifactSchema).min(1).max(4),
@@ -130,7 +130,7 @@ export interface RecoveryBackupCreateRequest {
   /** Physical storage generation copied into the backup. */
   readonly storageGenerationId: SakiStorageGenerationId
   /** Product-state format of the copied database. */
-  readonly stateVersion: 2 | 3 | 4
+  readonly stateVersion: 2 | 3 | 4 | 5
   /** Build provenance; this value never decides readability. */
   readonly sourceBuildId: SakiBuildId
 }

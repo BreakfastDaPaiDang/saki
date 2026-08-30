@@ -1,11 +1,15 @@
 import { Context } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+import type { ProjectGitChangeId } from '@breakfastdapaidang/saki-execution'
 import { describe, expect, it, vi } from 'vitest'
 import SakiHostClientService from '../src/client/index.ts'
 import {
   sakiConfigureGitHubSynchronizationIntentSchema,
+  sakiCreateCommitIntentSchema,
   sakiQueryRequestSchema,
   sakiRegisterDevelopmentProjectIntentSchema,
+  sakiStageFilesIntentSchema,
+  sakiUnstageFilesIntentSchema,
 } from '../src/wire.ts'
 
 const HOST_ID = 'host-11111111-1111-4111-8111-111111111111'
@@ -52,7 +56,7 @@ describe('Saki browser Host client', () => {
       hostId: HOST_ID,
       directoryLocator: 'D:/repository',
       expectedRegistryRevision: 7,
-      confirmedFingerprint: { version: 1, digest: '3'.repeat(64) },
+      confirmedFingerprint: { version: 2, digest: '3'.repeat(64) },
       confirmedBaseline: {
         kind: 'unavailable',
         reason: 'io-failure',
@@ -66,17 +70,58 @@ describe('Saki browser Host client', () => {
       expectedSynchronizationRevision: 0,
       patch: { activePollIntervalMs: 45_000 },
     })
+    const expectedGit = {
+      projectId: PROJECT_ID,
+      expectedRegistryRevision: 7,
+      expectedProjectRevision: 3,
+      expectedBinding: { id: 'binding-55555555-5555-4555-8555-555555555555', revision: 2 },
+      expectedStatus: { version: 1 as const, digest: '5'.repeat(64) },
+      expectedHead: { kind: 'commit' as const, objectId: '6'.repeat(40) },
+      expectedIndex: { kind: 'tree' as const, treeId: '7'.repeat(40) },
+      expectedWorktree: { version: 1 as const, digest: '8'.repeat(64) },
+    }
+    const selectedChange = {
+      id: `git-change-${'9'.repeat(64)}`,
+      fingerprint: { version: 1 as const, digest: 'a'.repeat(64) },
+    }
+    const stageIntent = sakiStageFilesIntentSchema.parse({
+      type: 'stage-files',
+      intentId: 'intent-66666666-6666-4666-8666-666666666666',
+      expected: expectedGit,
+      changes: [selectedChange],
+    })
+    const unstageIntent = sakiUnstageFilesIntentSchema.parse({
+      type: 'unstage-files',
+      intentId: 'intent-77777777-7777-4777-8777-777777777777',
+      expected: expectedGit,
+      changes: [selectedChange],
+    })
+    const commitIntent = sakiCreateCommitIntentSchema.parse({
+      type: 'create-commit',
+      intentId: 'intent-88888888-8888-4888-8888-888888888888',
+      expected: expectedGit,
+      message: 'client commit',
+    })
 
     await ctx.sakiHostClient.readAccess()
     await ctx.sakiHostClient.queryProjectIndex()
     await ctx.sakiHostClient.inspectProjectSelection(intent.hostId, 'D:/repository')
     await ctx.sakiHostClient.queryDevelopmentWorkspace(workspaceQuery.projectId, 7)
+    await ctx.sakiHostClient.queryProjectChanges(PROJECT_ID, 7)
+    await ctx.sakiHostClient.readProjectDiff(PROJECT_ID, 7, {
+      expectedStatus: { version: 1, digest: '4'.repeat(64) },
+      changeId: `git-change-${'5'.repeat(64)}` as ProjectGitChangeId,
+      layer: 'unstaged',
+    })
     await ctx.sakiHostClient.queryProjectSettings(PROJECT_ID)
     await ctx.sakiHostClient.queryBoard(PROJECT_ID, 'cached')
     await ctx.sakiHostClient.queryBoard(PROJECT_ID, 'interactive')
     await ctx.sakiHostClient.logout('request-token')
     await ctx.sakiHostClient.registerDevelopmentProject(intent, 'request-token')
     await ctx.sakiHostClient.configureGitHubSynchronization(githubIntent, 'request-token')
+    await ctx.sakiHostClient.stageFiles(stageIntent, 'request-token')
+    await ctx.sakiHostClient.unstageFiles(unstageIntent, 'request-token')
+    await ctx.sakiHostClient.createCommit(commitIntent, 'request-token')
 
     expect(call.mock.calls).toEqual([
       ['/saki', 'access/read', {}, { credentials: 'same-origin' }],
@@ -90,6 +135,21 @@ describe('Saki browser Host client', () => {
         type: 'development-workspace',
         projectId: PROJECT_ID,
         expectedRegistryRevision: 7,
+      }, { credentials: 'same-origin' }],
+      ['/saki', 'control/query', {
+        type: 'project-changes',
+        projectId: PROJECT_ID,
+        expectedRegistryRevision: 7,
+      }, { credentials: 'same-origin' }],
+      ['/saki', 'control/query', {
+        type: 'project-diff',
+        projectId: PROJECT_ID,
+        expectedRegistryRevision: 7,
+        request: {
+          expectedStatus: { version: 1, digest: '4'.repeat(64) },
+          changeId: `git-change-${'5'.repeat(64)}`,
+          layer: 'unstaged',
+        },
       }, { credentials: 'same-origin' }],
       ['/saki', 'control/query', {
         type: 'project-settings',
@@ -114,6 +174,18 @@ describe('Saki browser Host client', () => {
         headers: { 'x-saki-request-token': 'request-token' },
       }],
       ['/saki', 'control/submit', githubIntent, {
+        credentials: 'same-origin',
+        headers: { 'x-saki-request-token': 'request-token' },
+      }],
+      ['/saki', 'control/submit', stageIntent, {
+        credentials: 'same-origin',
+        headers: { 'x-saki-request-token': 'request-token' },
+      }],
+      ['/saki', 'control/submit', unstageIntent, {
+        credentials: 'same-origin',
+        headers: { 'x-saki-request-token': 'request-token' },
+      }],
+      ['/saki', 'control/submit', commitIntent, {
         credentials: 'same-origin',
         headers: { 'x-saki-request-token': 'request-token' },
       }],
@@ -170,6 +242,18 @@ describe('Saki browser Host client', () => {
         ok: true,
         value: {
           ok: true,
+          projection: {
+            type: 'project-index',
+            revision: 0,
+            hosts: [],
+            projects: [],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          ok: true,
           receipt: {
             id: 'receipt-55555555-5555-4555-8555-555555555555',
             intentId: 'intent-55555555-5555-4555-8555-555555555555',
@@ -186,6 +270,7 @@ describe('Saki browser Host client', () => {
 
     await expect(ctx.sakiHostClient.queryProjectIndex()).rejects.toThrow()
     await expect(ctx.sakiHostClient.queryBoard(PROJECT_ID, 'cached')).rejects.toThrow()
+    await expect(ctx.sakiHostClient.queryProjectChanges(PROJECT_ID, 0)).rejects.toThrow()
     const githubIntent = sakiConfigureGitHubSynchronizationIntentSchema.parse({
       type: 'configure-github-synchronization',
       intentId: 'intent-55555555-5555-4555-8555-555555555555',

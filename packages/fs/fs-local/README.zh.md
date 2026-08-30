@@ -23,7 +23,7 @@ await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
 - **`writeText`**：原子写入。它会向排他打开的临时文件（`wx`、`0o600`）写入；该文件位于目标旁随机命名的私有暂存目录（`0o700`）内，随后执行 fsync 并发布。现有文件的 mode 会保留，新文件默认为 `0o600`；Windows 上的新文件继承目标目录的 DACL，而替换会在写入前把目标 DACL 复制到空临时文件，并通过 `ReplaceFileW` 发布，使原访问策略得以保留（见 [Windows DACL 保留 Agent Note](../../../.agents/notes/implemented/bug-fix/2026-07-19-windows-atomic-write-dacl-preservation.zh.md)）。`expected` 防护是可选的：省略时无条件创建或覆盖；`createIfAbsent` 通过硬链接把暂存文件发布到目标位置，以实现原子且不替换的发布，因此初始探测后创建的普通文件会被保留，并以 `FS_NOT_OBSERVED` 拒绝本次写入；非普通路径条目也会被保留，并以 `FS_NOT_REGULAR_FILE` 拒绝；`replaceIfVersion` 只在观察到的版本上替换（目标缺失或版本不匹配均为 `FS_STALE_VERSION`）。仅当打开后的旧文件和 UTF-8 替换内容都严格低于 `config.diffBasisMaxBytes`（默认 10 MiB）时，覆写才返回旧文本作为上下文 diff 基础。即使外部写入方在初次探测后替换文件或改变文件大小，文件描述符读取仍会强制执行该上限；否则提供方返回 `before: null`，由展示层使用整文件回退。
 - **`editText`**：在同一原语之上依次执行原子的字面量读取、修改和写入，并通过变更锁按目标串行化。`expected` 防护是可选的：提供时，会在字面量匹配之前校验版本（陈旧编辑报告 `FS_STALE_VERSION`，绝不会针对较新内容报告 `FS_EDIT_NOT_FOUND`/`FS_AMBIGUOUS_EDIT`）；省略时，无条件编辑当前内容。无论哪种情况，目标缺失都报告 `FS_STALE_VERSION`。匹配时规范化为 LF，随后恢复文件主要的 CRLF/LF 风格；空 `oldString` / 零匹配报告 `FS_EDIT_NOT_FOUND`，未设置 `replace_all` 的多个匹配则报告 `FS_AMBIGUOUS_EDIT`。
 
-包根 SDK 接口包含默认/具名 `LocalFileSystem` 类和 `Config`。原始 I/O 位于 `src/fsio.ts`（不依赖 Cordis，单独进行单元测试）；`src/index.ts` 是轻量服务接线。
+包根 API 包含默认/具名 `LocalFileSystem` 类和 `Config`，以及仅限 Windows、供受信任宿主侧代码检查 DACL、复制 DACL 和替换文件的 `readFileDaclWin32`、`copyFileDaclWin32` 与 `replaceFileWin32` helper。原始 I/O 位于 `src/fsio.ts`（不依赖 Cordis，单独进行单元测试）；`src/index.ts` 是轻量服务接线。
 
 ## 模型体验
 

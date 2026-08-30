@@ -1,5 +1,7 @@
 /** Raw-byte Git observation parsers used by the Local Host provider. @module @breakfastdapaidang/saki-execution-local/git-observation */
 
+import { iterateNulFields, startsWithAscii } from './raw-git-output.ts'
+
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
 const TREE_MODE = /^(?:100644|100755|120000|160000)$/u
@@ -72,7 +74,7 @@ export function parseLsTree(bytes: Uint8Array, bounds: GitInventoryParseBounds):
   const entries: ParsedTreeEntry[] = []
   const paths = new Set<string>()
   let pathBytes = 0
-  for (const field of iterateNulFields(bytes)) {
+  for (const field of iterateNulFields(bytes, 'Git output')) {
     if (field.length === 0) throw new Error('Git tree inventory contains an empty record')
     const tab = field.indexOf(0x09)
     if (tab <= 0 || tab === field.length - 1) throw new Error('Git tree inventory record is malformed')
@@ -100,7 +102,7 @@ export function parseLsTree(bytes: Uint8Array, bounds: GitInventoryParseBounds):
 
 /**
  * Parse complete tagged index stage slots without decoding path bytes.
- * @param bytes - complete `ls-files -t --stage --full-name -z` stdout.
+ * @param bytes - complete `ls-files --no-sparse -t --stage --full-name -z` stdout.
  * @param bounds - distinct-path count and byte limits enforced before retention.
  * @returns validated stage-zero, conflict-stage, and sparse-directory slots.
  */
@@ -111,7 +113,7 @@ export function parseLsFilesStage(bytes: Uint8Array, bounds: GitInventoryParseBo
   const stagesByPath = new Map<string, Set<number>>()
   const maxSlots = bounds.maxEntries * 3
   let pathBytes = 0
-  for (const field of iterateNulFields(bytes)) {
+  for (const field of iterateNulFields(bytes, 'Git output')) {
     if (field.length === 0) throw new Error('Git index inventory contains an empty record')
     const tab = field.indexOf(0x09)
     if (tab <= 0 || tab === field.length - 1) throw new Error('Git index inventory record is malformed')
@@ -171,7 +173,7 @@ export function parseNulPaths(bytes: Uint8Array, bounds: GitInventoryParseBounds
   const paths: Uint8Array[] = []
   const seen = new Set<string>()
   let pathBytes = 0
-  for (const field of iterateNulFields(bytes)) {
+  for (const field of iterateNulFields(bytes, 'Git output')) {
     if (field.length === 0) throw new Error('Git path inventory contains an empty record')
     if (field.byteLength > bounds.maxPathBytes) {
       throw new GitInventoryLimitError('Git path inventory exceeds distinct-path limits')
@@ -330,17 +332,7 @@ function finishWorktree(record: MutableWorktree): ParsedWorktreeRecord {
 }
 
 function splitNul(bytes: Uint8Array): Uint8Array[] {
-  return [...iterateNulFields(bytes)]
-}
-
-function* iterateNulFields(bytes: Uint8Array): Generator<Uint8Array> {
-  let start = 0
-  for (let index = 0; index < bytes.length; index += 1) {
-    if (bytes[index] !== 0) continue
-    yield bytes.subarray(start, index)
-    start = index + 1
-  }
-  if (start !== bytes.length) throw new Error('Git output is not NUL terminated')
+  return [...iterateNulFields(bytes, 'Git output')]
 }
 
 function validateInventoryParseBounds(bounds: GitInventoryParseBounds): void {
@@ -373,14 +365,6 @@ function decode(bytes: Uint8Array): string {
 
 function equalsAscii(bytes: Uint8Array, value: string): boolean {
   return bytes.length === value.length && startsWithAscii(bytes, value)
-}
-
-function startsWithAscii(bytes: Uint8Array, value: string): boolean {
-  if (bytes.length < value.length) return false
-  for (let index = 0; index < value.length; index += 1) {
-    if (bytes[index] !== value.charCodeAt(index)) return false
-  }
-  return true
 }
 
 function hasValidExtensionName(field: Uint8Array): boolean {
