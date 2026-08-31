@@ -110,6 +110,12 @@ export type GitHubWorkItemMutationContextResult =
     readonly reasons: readonly SakiBoardMutationUnavailableReason[]
   }
 
+type AvailableGitHubWorkItemMutationRecord = GitHubProjectSyncRecord & {
+  readonly active: NonNullable<GitHubProjectSyncRecord['active']>
+  readonly checkpoint: NonNullable<GitHubProjectSyncRecord['checkpoint']>
+  readonly confirmedBoard: NonNullable<GitHubProjectSyncRecord['confirmedBoard']>
+}
+
 /** Parsed and cross-checked synchronization records suitable for deterministic recovery. */
 export interface ValidatedGitHubSynchronizationState {
   readonly syncRecords: readonly GitHubProjectSyncRecord[]
@@ -544,17 +550,15 @@ export class GitHubProjectSynchronization implements SakiGitHubSynchronizationCo
     const record = value === undefined ? undefined : githubProjectSyncRecordSchema.parse(value)
     const reasons = mutationUnavailableReasons(record, mappingHealth(record))
     if (reasons.length > 0) return { ok: false, reason: 'unavailable', reasons }
-    if (record?.active === undefined || record.checkpoint === undefined || record.confirmedBoard === undefined) {
-      throw new Error('available GitHub Work Item mutation context is incomplete')
-    }
+    const available = record as AvailableGitHubWorkItemMutationRecord
     return {
       ok: true,
       context: {
-        synchronizationRevision: record.revision,
-        mappingRevision: record.checkpoint.configurationRevision,
-        checkpointObservedAt: record.checkpoint.observedAt,
-        configuration: record.active.configuration,
-        confirmedBoard: record.confirmedBoard,
+        synchronizationRevision: available.revision,
+        mappingRevision: available.checkpoint.configurationRevision,
+        checkpointObservedAt: available.checkpoint.observedAt,
+        configuration: available.active.configuration,
+        confirmedBoard: available.confirmedBoard,
       },
     }
   }

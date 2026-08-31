@@ -792,9 +792,9 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const database = new DatabaseSync(durable.sqlite)
     try {
       expect(database.prepare('SELECT name, version FROM units ORDER BY name').all()).toEqual([
-        { name: 'saki_control_plane', version: 5 },
+        { name: 'saki_control_plane', version: 6 },
         { name: 'saki_host_execution', version: 1 },
-        { name: 'saki_storage_generation', version: 3 },
+        { name: 'saki_storage_generation', version: 4 },
       ])
       const tables = database.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
@@ -804,7 +804,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         'unit_tables',
         'units',
       ])
-      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(14)
+      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(16)
       expect(database.prepare(
         'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
       ).all('saki_control_plane')).toEqual([
@@ -814,6 +814,8 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         { table_name: 'git_operation_intents' },
         { table_name: 'github_project_sync' },
         { table_name: 'github_sync_configuration_intents' },
+        { table_name: 'github_work_item_intents' },
+        { table_name: 'github_work_item_recovery' },
         { table_name: 'grants' },
         { table_name: 'hosts' },
         { table_name: 'installation_access' },
