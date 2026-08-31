@@ -41,6 +41,7 @@ import type {
   SakiAccessExchangeResult,
   SakiAccessLogoutResult,
   SakiBoardProjection,
+  SakiBoardMutationOverlayProjection,
   SakiBoardRemoteFingerprint,
   SakiBoardWorkItemId,
   SakiControlIntentId,
@@ -75,6 +76,10 @@ const DUPLICATE_RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000006' as S
 const STAGE_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000010' as SakiControlIntentId
 const UNSTAGE_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000011' as SakiControlIntentId
 const COMMIT_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000012' as SakiControlIntentId
+const CREATE_WORK_ITEM_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000013' as SakiControlIntentId
+const MOVE_WORK_ITEM_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000014' as SakiControlIntentId
+const CREATE_WORK_ITEM_RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000013' as SakiIntentReceiptId
+const MOVE_WORK_ITEM_RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000014' as SakiIntentReceiptId
 const STAGE_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000010' as HostOperationId
 const UNSTAGE_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000011' as HostOperationId
 const COMMIT_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000012' as HostOperationId
@@ -739,6 +744,7 @@ const CONFIRMED_BOARD = {
     url: 'https://github.example.invalid/BreakfastDaPaiDang/saki/issues/27',
     issueState: 'open',
     status: 'ready',
+    latestNonTerminalStatus: 'ready',
     order: 0,
     archived: false,
     notInProject: false,
@@ -780,6 +786,64 @@ const FRESH_BOARD = {
   ageMs: 10_000,
 } as const
 
+/** Durable Work Item mutation overlays layered over a complete Board checkpoint. */
+export const SAKI_BOARD_MUTATION_OVERLAY_FIXTURES = Object.freeze({
+  optimisticMove: {
+    state: 'optimistic',
+    intentId: MOVE_WORK_ITEM_INTENT_ID,
+    type: 'move-work-item',
+    workItemId: BOARD_WORK_ITEM_ID,
+    targetStatus: 'in-progress',
+  },
+  targetedConfirmed: {
+    state: 'targeted-confirmed',
+    intentId: MOVE_WORK_ITEM_INTENT_ID,
+    type: 'move-work-item',
+    workItem: {
+      ...CONFIRMED_BOARD.items[0],
+      status: 'in-progress',
+      latestNonTerminalStatus: 'in-progress',
+      remoteFingerprint: `remote-fingerprint-${'7'.repeat(64)}` as SakiBoardRemoteFingerprint,
+    },
+    confirmedAt: BOARD_CONFIRMED_AT + 10_000,
+  },
+  conflict: {
+    state: 'conflict',
+    intentId: MOVE_WORK_ITEM_INTENT_ID,
+    type: 'move-work-item',
+    reason: 'stale-remote',
+    workItem: {
+      ...CONFIRMED_BOARD.items[0],
+      status: 'backlog',
+      latestNonTerminalStatus: 'backlog',
+      remoteFingerprint: `remote-fingerprint-${'8'.repeat(64)}` as SakiBoardRemoteFingerprint,
+    },
+    confirmedAt: BOARD_CONFIRMED_AT + 10_000,
+  },
+  partialFailure: {
+    state: 'partial-failure',
+    intentId: CREATE_WORK_ITEM_INTENT_ID,
+    type: 'create-work-item',
+    workItemId: BOARD_WORK_ITEM_ID,
+    stage: 'project-item-add',
+    recoveryAction: { kind: 'resume-intent' },
+  },
+  reconciliationRequired: {
+    state: 'reconciliation-required',
+    intentId: CREATE_WORK_ITEM_INTENT_ID,
+    type: 'create-work-item',
+    stage: 'issue-create',
+    reason: 'marker-ambiguous',
+  },
+  repairRequired: {
+    state: 'repair-required',
+    workItemId: BOARD_WORK_ITEM_ID,
+    reason: 'external-close',
+    action: 'move-with-actor',
+    suggestedStatus: 'done',
+  },
+} as const satisfies Record<string, SakiBoardMutationOverlayProjection>)
+
 const PENDING_SYNCHRONIZATION_EVIDENCE_FIXTURE = {
   checkpoint: CHECKPOINT,
   mapping: { state: 'revalidation-required', configurationRevision: 2 },
@@ -792,7 +856,7 @@ const PENDING_SYNCHRONIZATION_EVIDENCE_FIXTURE = {
   },
   effectiveMutationAvailability: {
     available: false,
-    reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
+    reasons: ['configuration-not-activated', 'mapping-revalidation-required'],
   },
 } as const
 
@@ -815,8 +879,9 @@ export const SAKI_BOARD_PROJECTION_FIXTURES = Object.freeze({
     scan: { state: 'idle' },
     effectiveMutationAvailability: {
       available: false,
-      reasons: ['synchronization-unconfigured', 'checkpoint-unavailable', 'no-concrete-mutation'],
+      reasons: ['synchronization-unconfigured', 'checkpoint-unavailable'],
     },
+    mutationOverlays: [],
   } as const satisfies SakiBoardProjection,
   awaitingFirstCheckpoint: {
     type: 'board',
@@ -834,9 +899,9 @@ export const SAKI_BOARD_PROJECTION_FIXTURES = Object.freeze({
         'configuration-not-activated',
         'mapping-revalidation-required',
         'checkpoint-unavailable',
-        'no-concrete-mutation',
       ],
     },
+    mutationOverlays: [],
   } as const satisfies SakiBoardProjection,
   mappingRevalidation: {
     type: 'board',
@@ -845,6 +910,7 @@ export const SAKI_BOARD_PROJECTION_FIXTURES = Object.freeze({
     synchronizationRevision: 2,
     confirmed: CONFIRMED_BOARD,
     ...PENDING_SYNCHRONIZATION_EVIDENCE_FIXTURE,
+    mutationOverlays: [],
   } as const satisfies SakiBoardProjection,
   confirmedStaleFailure: {
     type: 'board',
@@ -870,7 +936,8 @@ export const SAKI_BOARD_PROJECTION_FIXTURES = Object.freeze({
       reason: 'retry',
       attemptAt: BOARD_CONFIRMED_AT + 50_000,
     },
-    effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+    effectiveMutationAvailability: { available: true, reasons: [] },
+    mutationOverlays: [],
   } as const satisfies SakiBoardProjection,
 })
 
@@ -908,7 +975,7 @@ export const SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES = Object.freeze({
       },
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
+        reasons: ['configuration-not-activated', 'mapping-revalidation-required'],
       },
     },
   } as const satisfies SakiProjectSettingsProjection,
@@ -923,7 +990,7 @@ export const SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES = Object.freeze({
       mapping: { state: 'valid', configurationRevision: 1, validatedAt: BOARD_CONFIRMED_AT },
       freshness: FRESH_BOARD,
       scan: { state: 'idle' },
-      effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+      effectiveMutationAvailability: { available: true, reasons: [] },
     },
   } as const satisfies SakiProjectSettingsProjection,
 })
@@ -949,6 +1016,76 @@ export const SAKI_PROJECT_RECEIPT_FIXTURES = Object.freeze({
       intentId: DUPLICATE_INTENT_ID,
       state: 'conflict',
       reason: 'duplicate-binding',
+    },
+  },
+} as const satisfies Record<string, SakiIntentReceipt>)
+
+/** Browser-safe success and recovery receipts for GitHub-backed Work Item sagas. */
+export const SAKI_WORK_ITEM_RESULT_FIXTURES = Object.freeze({
+  succeeded: {
+    ok: true,
+    receipt: {
+      id: MOVE_WORK_ITEM_RECEIPT_ID,
+      intentId: MOVE_WORK_ITEM_INTENT_ID,
+      type: 'move-work-item',
+      projectId: PROJECT_ID,
+      state: 'succeeded',
+      workItemId: BOARD_WORK_ITEM_ID,
+      issueNumber: 27,
+      url: 'https://github.example.invalid/BreakfastDaPaiDang/saki/issues/27',
+      remoteFingerprint: `remote-fingerprint-${'7'.repeat(64)}` as SakiBoardRemoteFingerprint,
+    },
+  },
+  prepared: {
+    ok: false,
+    reason: 'unavailable',
+    receipt: {
+      id: CREATE_WORK_ITEM_RECEIPT_ID,
+      intentId: CREATE_WORK_ITEM_INTENT_ID,
+      type: 'create-work-item',
+      projectId: PROJECT_ID,
+      state: 'prepared',
+    },
+  },
+  conflict: {
+    ok: false,
+    reason: 'conflict',
+    receipt: {
+      id: MOVE_WORK_ITEM_RECEIPT_ID,
+      intentId: MOVE_WORK_ITEM_INTENT_ID,
+      type: 'move-work-item',
+      projectId: PROJECT_ID,
+      state: 'conflict',
+      reason: 'stale-remote',
+      workItemId: BOARD_WORK_ITEM_ID,
+      remoteFingerprint: `remote-fingerprint-${'8'.repeat(64)}` as SakiBoardRemoteFingerprint,
+    },
+  },
+  partialFailure: {
+    ok: false,
+    reason: 'unavailable',
+    receipt: {
+      id: CREATE_WORK_ITEM_RECEIPT_ID,
+      intentId: CREATE_WORK_ITEM_INTENT_ID,
+      type: 'create-work-item',
+      projectId: PROJECT_ID,
+      state: 'partial-failure',
+      workItemId: BOARD_WORK_ITEM_ID,
+      stage: 'project-item-add',
+      recoveryAction: { kind: 'resume-intent' },
+    },
+  },
+  reconciliationRequired: {
+    ok: false,
+    reason: 'reconciliation-required',
+    receipt: {
+      id: CREATE_WORK_ITEM_RECEIPT_ID,
+      intentId: CREATE_WORK_ITEM_INTENT_ID,
+      type: 'create-work-item',
+      projectId: PROJECT_ID,
+      state: 'reconciliation-required',
+      reason: 'marker-ambiguous',
+      stage: 'issue-create',
     },
   },
 } as const satisfies Record<string, SakiIntentReceipt>)
@@ -999,6 +1136,10 @@ export const SAKI_CONTROL_RESULT_FIXTURES = Object.freeze({
   activatedProjectSettings: { ok: true, projection: SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES.activated },
   registrationConfirmed: SAKI_PROJECT_RECEIPT_FIXTURES.confirmed,
   duplicateRegistration: SAKI_PROJECT_RECEIPT_FIXTURES.duplicate,
+  workItemSucceeded: SAKI_WORK_ITEM_RESULT_FIXTURES.succeeded,
+  workItemConflict: SAKI_WORK_ITEM_RESULT_FIXTURES.conflict,
+  workItemPartialFailure: SAKI_WORK_ITEM_RESULT_FIXTURES.partialFailure,
+  workItemReconciliationRequired: SAKI_WORK_ITEM_RESULT_FIXTURES.reconciliationRequired,
   currentGrantDenied: { ok: false, reason: 'denied' },
   intentDenied: { ok: false, reason: 'denied' },
 } as const satisfies Record<string, SakiQueryResult | SakiIntentReceipt>)

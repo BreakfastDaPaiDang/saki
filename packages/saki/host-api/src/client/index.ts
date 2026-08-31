@@ -9,6 +9,7 @@ import {
   sakiBoardResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiCreateCommitResultSchema,
+  sakiCreateWorkItemResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiInspectProjectSelectionResultSchema,
   sakiProjectDiffResultSchema,
@@ -16,6 +17,7 @@ import {
   sakiRegisterDevelopmentProjectResultSchema,
   sakiProjectIndexResultSchema,
   sakiProjectSettingsResultSchema,
+  sakiMoveWorkItemResultSchema,
   sakiStageFilesResultSchema,
   sakiUnstageFilesResultSchema,
 } from '../wire.ts'
@@ -29,6 +31,8 @@ import type {
   SakiWireConfigureGitHubSynchronizationResult,
   SakiWireCreateCommitIntent,
   SakiWireCreateCommitResult,
+  SakiWireCreateWorkItemIntent,
+  SakiWireCreateWorkItemResult,
   SakiWireDevelopmentWorkspaceResult,
   SakiWireHostId,
   SakiWireInspectProjectSelectionResult,
@@ -38,6 +42,8 @@ import type {
   SakiWireProjectIndexResult,
   SakiWireProjectChangesResult,
   SakiWireProjectSettingsResult,
+  SakiWireMoveWorkItemIntent,
+  SakiWireMoveWorkItemResult,
   SakiWireRegisterDevelopmentProjectIntent,
   SakiWireRegisterDevelopmentProjectResult,
   SakiWireStageFilesIntent,
@@ -197,6 +203,30 @@ export interface SakiHostClient {
     requestToken: string,
     signal?: AbortSignal,
   ): Promise<SakiWireCreateCommitResult>
+  /**
+   * Create one GitHub-backed Work Item from browser-safe product fields.
+   * @param intent - revision-fenced creation Intent without provider authority.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns a succeeded receipt or a typed durable/recoverable outcome.
+   */
+  createWorkItem(
+    intent: SakiWireCreateWorkItemIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireCreateWorkItemResult>
+  /**
+   * Move one confirmed Work Item using its exact remote fingerprint.
+   * @param intent - status and optional Saki-relative placement Intent.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns a succeeded receipt or a typed durable/recoverable outcome.
+   */
+  moveWorkItem(
+    intent: SakiWireMoveWorkItemIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireMoveWorkItemResult>
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -387,6 +417,34 @@ export class SakiHostClientService extends Service implements SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireCreateCommitResult> {
     return sakiCreateCommitResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  /** @inheritdoc */
+  async createWorkItem(
+    intent: SakiWireCreateWorkItemIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireCreateWorkItemResult> {
+    return sakiCreateWorkItemResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  /** @inheritdoc */
+  async moveWorkItem(
+    intent: SakiWireMoveWorkItemIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireMoveWorkItemResult> {
+    return sakiMoveWorkItemResultSchema.parse(await this.call(
       'control/submit',
       intent,
       signal,

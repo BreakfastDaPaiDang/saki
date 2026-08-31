@@ -32,11 +32,11 @@ import type {
   GitHubSynchronizationConfiguration,
   GitHubSynchronizationConfigurationField,
   SakiControlIntentId,
+  SakiBoardWorkItemId,
   SakiBoardMutationUnavailableReason,
   SakiBoardProjection,
-  SakiBoardRemoteFingerprint,
   SakiBoardStatus,
-  SakiBoardWorkItemId,
+  SakiConfirmedBoardProjection,
   SakiDevelopmentProjectId,
   SakiGitHubDueScan,
   SakiGitHubMappingHealthProjection,
@@ -54,6 +54,11 @@ import type {
   SakiProjectSettingsProjection,
 } from './types.ts'
 import { enqueueKeyedOperation } from './keyed-operation.ts'
+import {
+  boardWorkItemId,
+  joinedBoardRemoteFingerprint,
+  unjoinedBoardRemoteFingerprint,
+} from './work-item-mapping.ts'
 
 /** Durable aggregate table keyed directly by its owning Development Project. */
 export type GitHubProjectSyncTable = KvTable<SakiDevelopmentProjectId, GitHubProjectSyncRecord>
@@ -66,11 +71,46 @@ export type GitHubSynchronizationConfigurationIntentTable = KvTable<
 interface GitHubProjectSynchronizationOptions {
   readonly syncTable: GitHubProjectSyncTable
   readonly intentTable: GitHubSynchronizationConfigurationIntentTable
+  readonly workItemRecovery: (
+    projectId: SakiDevelopmentProjectId,
+    workItemId: SakiBoardWorkItemId,
+  ) => GitHubWorkItemRecoveryMemory | undefined
   readonly installationId: RegistrationActor['installationId']
   readonly projectExists: (projectId: SakiDevelopmentProjectId) => boolean
   readonly authorityCurrent: (actor: RegistrationActor) => boolean
   readonly validateActorReference: (actor: RegistrationActor) => void
 }
+
+/** Narrow targeted Status memory that a complete scan may fold into one terminal Work Item. */
+export interface GitHubWorkItemRecoveryMemory {
+  readonly latestNonTerminalStatus: Exclude<SakiBoardStatus, 'done' | 'canceled'> | null
+  readonly observedAt: number
+  readonly repositoryId: GitHubProjectBoardScanCandidate['repository']['id']
+  readonly repositoryDatabaseId: GitHubProjectBoardScanCandidate['repository']['databaseId']
+  readonly projectId: GitHubProjectBoardScanCandidate['project']['id']
+  readonly statusFieldId: GitHubProjectBoardScanCandidate['statusFieldId']
+}
+
+/** Detached active mapping and confirmed Board evidence used to derive one mutation target. */
+export interface GitHubWorkItemMutationContext {
+  readonly projectId: SakiDevelopmentProjectId
+  readonly synchronizationRevision: number
+  readonly mappingRevision: number
+  readonly boardGeneration: number
+  readonly checkpointObservedAt: number
+  readonly configuration: GitHubSynchronizationConfiguration
+  readonly confirmedBoard: SakiConfirmedBoardProjection
+}
+
+/** Exact context lookup result before browser input can be mapped to GitHub authority ids. */
+export type GitHubWorkItemMutationContextResult =
+  | { readonly ok: true; readonly context: GitHubWorkItemMutationContext }
+  | { readonly ok: false; readonly reason: 'not-found' }
+  | {
+    readonly ok: false
+    readonly reason: 'unavailable'
+    readonly reasons: readonly SakiBoardMutationUnavailableReason[]
+  }
 
 /** Parsed and cross-checked synchronization records suitable for deterministic recovery. */
 export interface ValidatedGitHubSynchronizationState {
@@ -379,7 +419,26 @@ export class GitHubProjectSynchronization implements SakiGitHubSynchronizationCo
         await this.completeFailure(current, attemptId, failure, now)
         return { state: 'failed', failure }
       }
-      const mapped = mapBoardCandidate(admitted.data, configuration, current.nextBoardGeneration, attempt.configurationRevision)
+      const mapped = mapBoardCandidate(
+        admitted.data,
+        configuration,
+        current.nextBoardGeneration,
+        attempt.configurationRevision,
+        current.confirmedBoard,
+        (workItemId) => {
+          const recovery = this.options.workItemRecovery(projectId, workItemId)
+          return recovery !== undefined
+            && current.checkpoint !== undefined
+            && recovery.observedAt >= current.checkpoint.observedAt
+            && recovery.observedAt <= admitted.data.observedAt
+            && recovery.repositoryId === admitted.data.repository.id
+            && recovery.repositoryDatabaseId === admitted.data.repository.databaseId
+            && recovery.projectId === admitted.data.project.id
+            && recovery.statusFieldId === admitted.data.statusFieldId
+            ? recovery.latestNonTerminalStatus
+            : undefined
+        },
+      )
       if (!mapped.ok) {
         const failure = { kind: 'mapping', issues: mapped.issues } as const
         await this.completeFailure(current, attemptId, failure, now)
@@ -474,6 +533,34 @@ export class GitHubProjectSynchronization implements SakiGitHubSynchronizationCo
   board(projectId: SakiDevelopmentProjectId): SakiBoardProjection | 'not-found' {
     if (!this.options.projectExists(projectId)) return 'not-found'
     return boardProjection(projectId, this.options.syncTable.get(projectId), Date.now())
+  }
+
+  /**
+   * Resolve the active server-owned GitHub target and a detached confirmed Board.
+   * @param projectId - selected Development Project.
+   * @returns a mutation context only when configuration, mapping, and checkpoint are active.
+   */
+  mutationContext(projectId: SakiDevelopmentProjectId): GitHubWorkItemMutationContextResult {
+    if (!this.options.projectExists(projectId)) return { ok: false, reason: 'not-found' }
+    const value = this.options.syncTable.get(projectId)
+    const record = value === undefined ? undefined : githubProjectSyncRecordSchema.parse(value)
+    const reasons = mutationUnavailableReasons(record, mappingHealth(record))
+    if (reasons.length > 0) return { ok: false, reason: 'unavailable', reasons }
+    if (record?.active === undefined || record.checkpoint === undefined || record.confirmedBoard === undefined) {
+      throw new Error('available GitHub Work Item mutation context is incomplete')
+    }
+    return {
+      ok: true,
+      context: {
+        projectId,
+        synchronizationRevision: record.revision,
+        mappingRevision: record.checkpoint.configurationRevision,
+        boardGeneration: record.confirmedBoard.generation,
+        checkpointObservedAt: record.checkpoint.observedAt,
+        configuration: structuredClone(record.active.configuration),
+        confirmedBoard: structuredClone(record.confirmedBoard),
+      },
+    }
   }
 
   /**
@@ -581,7 +668,7 @@ export class GitHubProjectSynchronization implements SakiGitHubSynchronizationCo
     const savedAt = Date.now()
     const next = githubProjectSyncRecordSchema.parse({
       id: intent.projectId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: synchronizationRevision,
       installationId: this.options.installationId,
       nextCandidateRevision: candidateRevision + 1,
@@ -935,6 +1022,10 @@ function mapBoardCandidate(
   configuration: GitHubSynchronizationConfiguration,
   generation: number,
   configurationRevision: number,
+  previousBoard: SakiConfirmedBoardProjection | undefined,
+  recoveredNonTerminalStatus: (
+    workItemId: SakiBoardWorkItemId,
+  ) => Exclude<SakiBoardStatus, 'done' | 'canceled'> | null | undefined,
 ):
   | { readonly ok: true; readonly board: NonNullable<GitHubProjectSyncRecord['confirmedBoard']> }
   | { readonly ok: false; readonly issues: readonly SakiGitHubMappingIssue[] } {
@@ -989,36 +1080,53 @@ function mapBoardCandidate(
     return { ok: false, issues: uniqueMappingIssues(issues) }
   }
 
+  const previousItems = previousBoard?.repository.id === candidate.repository.id
+    && previousBoard.project.id === candidate.project.id
+    ? new Map(previousBoard.items.map(item => [item.id, item] as const))
+    : new Map<SakiBoardWorkItemId, SakiConfirmedBoardProjection['items'][number]>()
+  const latestNonTerminalStatus = (
+    id: ReturnType<typeof boardWorkItemId>,
+    status: SakiBoardStatus,
+  ): Exclude<SakiBoardStatus, 'done' | 'canceled'> | null => {
+    if (status !== 'done' && status !== 'canceled') return status
+    const recovered = recoveredNonTerminalStatus(id)
+    return recovered === undefined ? previousItems.get(id)?.latestNonTerminalStatus ?? null : recovered
+  }
   const joinedIssueIds = new Set(joined.map(value => value.issue.id))
-  const joinedItems = joined.map(({ item, issue, status }) => ({
-    id: workItemId(issue.repositoryId, issue.id),
-    title: issue.title,
-    issueNumber: issue.number,
-    url: issue.url,
-    issueState: issue.state,
-    status,
-    order: item.apiOrder,
-    archived: item.archived,
-    notInProject: false,
-    updatedAt: Math.max(issue.updatedAt, item.updatedAt),
-    source: {
-      kind: 'github-issue' as const,
-      repositoryId: issue.repositoryId,
-      issueId: issue.id,
-      projectItemId: item.id,
-      apiOrder: item.apiOrder,
-    },
-    remoteFingerprint: joinedRemoteFingerprint(candidate.items, item, issue.state),
-  }))
+  const joinedItems = joined.map(({ item, issue, status }) => {
+    const id = boardWorkItemId(issue.repositoryId, issue.id)
+    return {
+      id,
+      title: issue.title,
+      issueNumber: issue.number,
+      url: issue.url,
+      issueState: issue.state,
+      status,
+      latestNonTerminalStatus: latestNonTerminalStatus(id, status),
+      order: item.apiOrder,
+      archived: item.archived,
+      notInProject: false,
+      updatedAt: Math.max(issue.updatedAt, item.updatedAt),
+      source: {
+        kind: 'github-issue' as const,
+        repositoryId: issue.repositoryId,
+        issueId: issue.id,
+        projectItemId: item.id,
+        apiOrder: item.apiOrder,
+      },
+      remoteFingerprint: joinedBoardRemoteFingerprint(candidate.items, item, issue.state),
+    }
+  })
   const unjoinedItems = candidate.openIssues
     .filter(issue => !joinedIssueIds.has(issue.id))
     .map((issue, index) => ({
-      id: workItemId(issue.repositoryId, issue.id),
+      id: boardWorkItemId(issue.repositoryId, issue.id),
       title: issue.title,
       issueNumber: issue.number,
       url: issue.url,
       issueState: issue.state,
       status: 'inbox' as const,
+      latestNonTerminalStatus: 'inbox' as const,
       order: candidate.items.length + index,
       archived: false,
       notInProject: true,
@@ -1028,7 +1136,7 @@ function mapBoardCandidate(
         repositoryId: issue.repositoryId,
         issueId: issue.id,
       },
-      remoteFingerprint: unjoinedRemoteFingerprint(issue.repositoryId, issue.id, issue.state),
+      remoteFingerprint: unjoinedBoardRemoteFingerprint(issue.repositoryId, issue.id, issue.state),
     }))
   return {
     ok: true,
@@ -1052,42 +1160,6 @@ function mapBoardCandidate(
 
 function uniqueMappingIssues(issues: readonly SakiGitHubMappingIssue[]): readonly SakiGitHubMappingIssue[] {
   return [...new Map(issues.map(issue => [JSON.stringify(issue), issue] as const)).values()]
-}
-
-function workItemId(repositoryId: string, issueId: string): SakiBoardWorkItemId {
-  return `work-item-${canonicalDigest('saki/board-work-item/v1', { repositoryId, issueId })}` as SakiBoardWorkItemId
-}
-
-function joinedRemoteFingerprint(
-  rawItems: readonly GitHubProjectItemFact[],
-  item: GitHubProjectItemFact,
-  issueState: 'open' | 'closed',
-): SakiBoardRemoteFingerprint {
-  const previous = rawItems[item.apiOrder - 1]
-  const next = rawItems[item.apiOrder + 1]
-  const digest = canonicalDigest('saki/board-remote-fingerprint/v1', {
-    membership: { state: 'joined', projectItemId: item.id },
-    statusOptionId: item.statusOptionId,
-    archived: item.archived,
-    issueState,
-    apiOrder: item.apiOrder,
-    previousProjectItemId: previous?.id,
-    nextProjectItemId: next?.id,
-  })
-  return `remote-fingerprint-${digest}` as SakiBoardRemoteFingerprint
-}
-
-function unjoinedRemoteFingerprint(
-  repositoryId: string,
-  issueId: string,
-  issueState: 'open' | 'closed',
-): SakiBoardRemoteFingerprint {
-  const digest = canonicalDigest('saki/board-remote-fingerprint/v1', {
-    membership: { state: 'absent', repositoryId, issueId },
-    status: 'inbox',
-    issueState,
-  })
-  return `remote-fingerprint-${digest}` as SakiBoardRemoteFingerprint
 }
 
 function summarizeRateLimit(observations: readonly GitHubRateObservation[]): SakiGitHubRateLimitProjection {
@@ -1183,6 +1255,7 @@ function boardProjection(
     synchronizationRevision: record?.revision ?? 0,
     ...(record?.confirmedBoard === undefined ? {} : { confirmed: record.confirmedBoard }),
     ...common,
+    mutationOverlays: [],
   }
 }
 
@@ -1209,10 +1282,7 @@ function synchronizationProjection(
     ...(record?.currentFailure === undefined ? {} : { failure: record.currentFailure }),
     freshness,
     scan: scanState(record),
-    effectiveMutationAvailability: {
-      available: false,
-      reasons: mutationUnavailableReasons(record, mapping),
-    },
+    effectiveMutationAvailability: mutationAvailability(record, mapping),
   }
 }
 
@@ -1290,8 +1360,17 @@ function mutationUnavailableReasons(
   if (mapping.state === 'revalidation-required') reasons.push('mapping-revalidation-required')
   if (mapping.state === 'repair-required') reasons.push('mapping-repair-required')
   if (record?.checkpoint === undefined) reasons.push('checkpoint-unavailable')
-  reasons.push('no-concrete-mutation')
   return reasons
+}
+
+function mutationAvailability(
+  record: GitHubProjectSyncRecord | undefined,
+  mapping: SakiGitHubMappingHealthProjection,
+): SakiBoardProjection['effectiveMutationAvailability'] {
+  const reasons = mutationUnavailableReasons(record, mapping)
+  return reasons.length === 0
+    ? { available: true, reasons: [] }
+    : { available: false, reasons }
 }
 
 /**

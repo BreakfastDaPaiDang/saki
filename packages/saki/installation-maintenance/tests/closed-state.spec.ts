@@ -11,12 +11,15 @@ import {
   sakiControlPlaneV2DomainSpec,
   sakiControlPlaneV3DomainSpec,
   sakiControlPlaneV4DomainSpec,
+  sakiControlPlaneV5DomainSpec,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
+  sakiStorageGenerationV3DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
+  storageGenerationV3SealRecordSchema,
   type SakiBuildId,
   type SakiGrantId,
   type SakiHostId,
@@ -36,6 +39,7 @@ import {
   readClosedSakiV2State,
   readClosedSakiV3State,
   readClosedSakiV4State,
+  readClosedSakiV5State,
 } from '../src/closed-state.ts'
 
 const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId
@@ -150,6 +154,8 @@ function currentControlSnapshot(): KvUnitSnapshot {
       github_sync_configuration_intents: {},
       git_operation_intents: {},
       binding_write_admissions: {},
+      github_work_item_intents: {},
+      github_work_item_recovery: {},
     },
   }
 }
@@ -176,6 +182,8 @@ function v3ControlSnapshot(): KvUnitSnapshot {
   delete tables['github_sync_configuration_intents']
   delete tables['git_operation_intents']
   delete tables['binding_write_admissions']
+  delete tables['github_work_item_intents']
+  delete tables['github_work_item_recovery']
   return { global: null, tables }
 }
 
@@ -184,6 +192,16 @@ function v4ControlSnapshot(): KvUnitSnapshot {
   const tables = { ...current.tables }
   delete tables['git_operation_intents']
   delete tables['binding_write_admissions']
+  delete tables['github_work_item_intents']
+  delete tables['github_work_item_recovery']
+  return { global: null, tables }
+}
+
+function v5ControlSnapshot(): KvUnitSnapshot {
+  const current = currentControlSnapshot()
+  const tables = { ...current.tables }
+  delete tables['github_work_item_intents']
+  delete tables['github_work_item_recovery']
   return { global: null, tables }
 }
 
@@ -214,6 +232,23 @@ function v2SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapsho
           installationId: INSTALLATION_ID,
           storageGenerationId: STORAGE_GENERATION_ID,
           stateVersion: 4,
+          createdByBuildId,
+        }),
+      },
+    },
+  }
+}
+
+function v3SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot {
+  return {
+    global: null,
+    tables: {
+      storage_generation: {
+        [STORAGE_GENERATION_KEY]: storageGenerationV3SealRecordSchema.parse({
+          schemaVersion: 3,
+          installationId: INSTALLATION_ID,
+          storageGenerationId: STORAGE_GENERATION_ID,
+          stateVersion: 5,
           createdByBuildId,
         }),
       },
@@ -289,7 +324,7 @@ describe('closed Saki state reads', () => {
     const state = await readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 5,
+      stateVersion: 6,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))
 
@@ -325,7 +360,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 5,
+      stateVersion: 6,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -343,7 +378,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 5,
+      stateVersion: 6,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     await expect(readFile(path)).resolves.toEqual(before)
@@ -362,7 +397,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 5,
+      stateVersion: 6,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -461,6 +496,29 @@ describe('closed Saki state reads', () => {
       storageGenerationId: STORAGE_GENERATION_ID,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
+  })
+
+  it('validates exact historical v5 domains without changing source artifacts', async () => {
+    const path = await databasePath()
+    await materialize(path, [
+      { spec: sakiControlPlaneV5DomainSpec, snapshot: v5ControlSnapshot() },
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
+      { spec: sakiStorageGenerationV3DomainSpec, snapshot: v3SealSnapshot() },
+    ])
+    await writeFile(`${path}-shm`, Buffer.from([5, 3, 5, 3]))
+    const before = await exactFiles(path)
+
+    const historical = await readClosedSakiV5State(path, {
+      installationId: INSTALLATION_ID,
+      storageGenerationId: STORAGE_GENERATION_ID,
+      createdByBuildId: BUILD_ID,
+    }, AbortSignal.timeout(2_000))
+
+    expect(historical.stateVersion).toBe(5)
+    expect(historical.controlPlane.table('installations').get(INSTALLATION_ID)?.currentHostId).toBe(HOST_ID)
+    expect(historical.hostExecution.table('operations').size).toBe(0)
+    expect(historical.storageGeneration.table('storage_generation').size).toBe(1)
+    expect(await exactFiles(path)).toEqual(before)
   })
 
   it('classifies a historical v3 seal that disagrees with selected build provenance', async () => {

@@ -6,7 +6,6 @@ import {
   GITHUB_PROJECT_BOARD_FIELD_LIMIT,
   GitHubProviderError,
   githubAccountId,
-  githubIssueId,
   githubProjectBoardScanCandidateSchema,
   githubProjectFieldId,
   githubProjectId,
@@ -14,11 +13,9 @@ import {
   githubProjectOptionId,
   githubPullRequestId,
   githubRepositoryDatabaseId,
-  githubRepositoryDatabaseIdSchema,
   githubRepositoryId,
 } from '@breakfastdapaidang/saki-github'
 import type {
-  GitHubGraphqlRateObservation,
   GitHubInstallationFact,
   GitHubIssueFact,
   GitHubProjectBoardFingerprintSource,
@@ -34,9 +31,20 @@ import type {
 } from '@breakfastdapaidang/saki-github'
 import type { ResolvedConfig } from './index.ts'
 import {
+  graphqlIssueFact,
   graphqlIssueNodeSchema,
+  graphqlNumericRepositoryDatabaseIdSchema as repositoryDatabaseIdSchema,
+  graphqlPageInfoSchema as pageInfoSchema,
   graphqlProjectNodeSchema,
+  graphqlRateObservation,
+  graphqlRateSchema,
   graphqlRepositoryNodeSchema,
+  graphqlSingleSelectFieldValueSchema as fieldValueSchema,
+  graphqlSingleSelectFieldValuesSchema as fieldValuesConnectionSchema,
+  graphqlSingleSelectStatusOptionId,
+  graphqlTimestamp as timestamp,
+  invalidGraphqlResponse as invalid,
+  nextGraphqlCursor as nextCursor,
   queryGraphql,
 } from './graphql.ts'
 import { inspectInstallation } from './installation.ts'
@@ -57,7 +65,7 @@ query SakiProjectBoardFence($projectId: ID!, $repositoryId: ID!) {
   repository: node(id: $repositoryId) {
     __typename
     ... on Repository {
-      id databaseId: fullDatabaseId nameWithOwner visibility url updatedAt owner { id }
+      id databaseId nameWithOwner visibility url updatedAt owner { id }
       issues(states: OPEN) { totalCount }
     }
   }
@@ -97,7 +105,7 @@ query SakiProjectItems($projectId: ID!, $first: Int!, $after: String) {
           id isArchived updatedAt
           content {
             __typename
-            ... on Issue { id number state title url updatedAt repository { id databaseId: fullDatabaseId } }
+            ... on Issue { id number state title url updatedAt repository { id databaseId } }
             ... on PullRequest { id url repository { id } }
             ... on DraftIssue { title }
           }
@@ -148,9 +156,9 @@ query SakiOpenIssues($repositoryId: ID!, $first: Int!, $after: String) {
     __typename
     ... on Repository {
       id
-      databaseId: fullDatabaseId
+      databaseId
       issues(states: OPEN, first: $first, after: $after, orderBy: { field: CREATED_AT, direction: ASC }) {
-        nodes { id number state title url updatedAt repository { id databaseId: fullDatabaseId } }
+        nodes { id number state title url updatedAt repository { id databaseId } }
         pageInfo { hasNextPage endCursor }
       }
     }
@@ -158,25 +166,9 @@ query SakiOpenIssues($repositoryId: ID!, $first: Int!, $after: String) {
   rateLimit { cost limit used remaining resetAt }
 }`
 
-const pageInfoSchema = z.object({
-  hasNextPage: z.boolean(),
-  endCursor: z.string().min(1).nullable(),
-}).loose()
-
-const rateSchema = z.object({
-  cost: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  limit: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  used: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  remaining: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  resetAt: z.iso.datetime(),
-}).loose().superRefine((rate, ctx) => {
-  if (rate.used > rate.limit || rate.remaining > rate.limit || rate.used !== rate.limit - rate.remaining) {
-    ctx.addIssue({ code: 'custom', message: 'primary rate counters must partition the reported limit' })
-  }
-})
-
 const repositoryNodeSchema = graphqlRepositoryNodeSchema.extend({
   __typename: z.literal('Repository'),
+  databaseId: repositoryDatabaseIdSchema,
   issues: z.object({ totalCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).loose(),
 }).loose()
 
@@ -188,7 +180,7 @@ const projectNodeSchema = graphqlProjectNodeSchema.extend({
 const fenceDataSchema = z.object({
   project: projectNodeSchema,
   repository: repositoryNodeSchema,
-  rateLimit: rateSchema,
+  rateLimit: graphqlRateSchema,
 }).loose()
 
 const fieldSchema = z.object({
@@ -209,19 +201,7 @@ const fieldsDataSchema = z.object({
       pageInfo: pageInfoSchema,
     }).loose(),
   }).loose(),
-  rateLimit: rateSchema,
-}).loose()
-
-const fieldValueSchema = z.object({
-  __typename: z.string().min(1),
-  optionId: z.string().min(1).nullable().optional(),
-  field: z.object({ __typename: z.string().min(1).optional(), id: z.string().min(1) }).loose().nullable().optional(),
-}).loose()
-
-const fieldValuesConnectionSchema = z.object({
-  totalCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  nodes: z.array(fieldValueSchema),
-  pageInfo: pageInfoSchema,
+  rateLimit: graphqlRateSchema,
 }).loose()
 
 const contentSchema = z.object({
@@ -234,7 +214,7 @@ const contentSchema = z.object({
   updatedAt: z.iso.datetime().optional(),
   repository: z.object({
     id: z.string().min(1),
-    databaseId: githubRepositoryDatabaseIdSchema.optional(),
+    databaseId: repositoryDatabaseIdSchema.optional(),
   }).loose().nullable().optional(),
 }).loose()
 
@@ -252,7 +232,7 @@ const itemsDataSchema = z.object({
     id: z.string().min(1),
     items: z.object({ nodes: z.array(itemSchema), pageInfo: pageInfoSchema }).loose(),
   }).loose(),
-  rateLimit: rateSchema,
+  rateLimit: graphqlRateSchema,
 }).loose()
 
 const itemFieldValuesDataSchema = z.object({
@@ -261,19 +241,24 @@ const itemFieldValuesDataSchema = z.object({
     id: z.string().min(1),
     fieldValues: fieldValuesConnectionSchema,
   }).loose(),
-  rateLimit: rateSchema,
+  rateLimit: graphqlRateSchema,
 }).loose()
 
-const issueNodeSchema = graphqlIssueNodeSchema
+const issueNodeSchema = graphqlIssueNodeSchema.extend({
+  repository: z.object({
+    id: z.string().min(1),
+    databaseId: repositoryDatabaseIdSchema,
+  }).loose(),
+}).loose()
 
 const openIssuesDataSchema = z.object({
   repository: z.object({
     __typename: z.literal('Repository'),
     id: z.string().min(1),
-    databaseId: githubRepositoryDatabaseIdSchema,
+    databaseId: repositoryDatabaseIdSchema,
     issues: z.object({ nodes: z.array(issueNodeSchema), pageInfo: pageInfoSchema }).loose(),
   }).loose(),
-  rateLimit: rateSchema,
+  rateLimit: graphqlRateSchema,
 }).loose()
 
 interface ScanState {
@@ -378,7 +363,7 @@ async function readFence(state: ScanState): Promise<{
   observeRate(state, data.rateLimit)
   if (data.project.id !== state.request.projectId
     || data.repository.id !== state.request.repositoryId
-    || data.repository.databaseId !== state.request.repositoryDatabaseId) invalid('project-board-fence')
+    || String(data.repository.databaseId) !== state.request.repositoryDatabaseId) invalid('project-board-fence')
   return {
     project: data.project,
     repository: data.repository,
@@ -511,9 +496,9 @@ async function readOpenIssues(state: ScanState): Promise<GitHubIssueFact[]> {
       'open-issues',
     ))
     if (data.repository.id !== state.request.repositoryId
-      || data.repository.databaseId !== state.request.repositoryDatabaseId) invalid('open-issues')
+      || String(data.repository.databaseId) !== state.request.repositoryDatabaseId) invalid('open-issues')
     observeRate(state, data.rateLimit)
-    issues.push(...data.repository.issues.nodes.map(issueFact))
+    issues.push(...data.repository.issues.nodes.map(issue => graphqlIssueFact(issue, 'open-issues')))
     if (issues.length > state.config.maxItems) invalid('open-issues')
     cursor = nextCursor(data.repository.issues.pageInfo, cursors, 'open-issues')
     if (cursor === null) return issues
@@ -548,18 +533,15 @@ function statusValue(
   values: readonly z.infer<typeof fieldValueSchema>[],
   statusFieldId: string,
 ): { readonly statusOptionId?: ReturnType<typeof githubProjectOptionId> } {
-  const matches = values.filter(value => value.__typename === 'ProjectV2ItemFieldSingleSelectValue'
-    && value.field?.id === statusFieldId)
-  if (matches.length > 1) invalid('project-item-status')
-  const optionId = matches[0]?.optionId
-  return optionId === undefined || optionId === null ? {} : { statusOptionId: githubProjectOptionId(optionId) }
+  const optionId = graphqlSingleSelectStatusOptionId(values, statusFieldId, 'project-item-status')
+  return optionId === undefined ? {} : { statusOptionId: optionId }
 }
 
 function projectContent(content: z.infer<typeof contentSchema> | null): GitHubProjectItemContent {
   if (content === null) return { kind: 'redacted' }
   switch (content.__typename) {
     case 'Issue':
-      return { kind: 'issue', issue: issueFact(issueContent(content)) }
+      return { kind: 'issue', issue: graphqlIssueFact(issueContent(content), 'project-item-content') }
     case 'PullRequest':
       if (content.id === undefined) invalid('project-item-content')
       return {
@@ -582,23 +564,10 @@ function issueContent(content: z.infer<typeof contentSchema>): z.infer<typeof is
   return issueNodeSchema.parse(content)
 }
 
-function issueFact(issue: z.infer<typeof issueNodeSchema>): GitHubIssueFact {
-  return {
-    id: githubIssueId(issue.id),
-    repositoryId: githubRepositoryId(issue.repository.id),
-    repositoryDatabaseId: githubRepositoryDatabaseId(issue.repository.databaseId),
-    number: issue.number,
-    state: issue.state.toLowerCase() as 'open' | 'closed',
-    title: issue.title,
-    url: issue.url,
-    updatedAt: timestamp(issue.updatedAt),
-  }
-}
-
 function repositoryFact(node: z.infer<typeof repositoryNodeSchema>, observedAt: number): GitHubRepositoryFact {
   return {
     id: githubRepositoryId(node.id),
-    databaseId: githubRepositoryDatabaseId(node.databaseId),
+    databaseId: githubRepositoryDatabaseId(String(node.databaseId)),
     ownerAccountId: githubAccountId(node.owner.id),
     nameWithOwner: node.nameWithOwner,
     visibility: node.visibility.toLowerCase() as 'public' | 'private' | 'internal',
@@ -621,31 +590,12 @@ function projectFact(node: z.infer<typeof projectNodeSchema>, observedAt: number
   }
 }
 
-function observeRate(state: ScanState, rate: z.infer<typeof rateSchema>): void {
-  const observation: GitHubGraphqlRateObservation = {
-    kind: 'graphql',
-    cost: rate.cost,
-    limit: rate.limit,
-    used: rate.used,
-    remaining: rate.remaining,
-    resetAt: timestamp(rate.resetAt),
-    observedAt: Date.now(),
-  }
+function observeRate(state: ScanState, rate: z.infer<typeof graphqlRateSchema>): void {
+  const observation = graphqlRateObservation(rate, Date.now())
   appendGitHubRateObservation(state.rates, observation)
   if (state.request.priority === 'background' && rate.remaining <= state.request.rateLimitReserve) {
     throw new GitHubProviderError({ code: 'primary-rate-limit', resetAt: observation.resetAt })
   }
-}
-
-function nextCursor(
-  pageInfo: z.infer<typeof pageInfoSchema>,
-  seen: Set<string>,
-  operation: string,
-): string | null {
-  if (!pageInfo.hasNextPage) return null
-  if (pageInfo.endCursor === null || seen.has(pageInfo.endCursor)) invalid(operation)
-  seen.add(pageInfo.endCursor)
-  return pageInfo.endCursor
 }
 
 function sameFence(left: GitHubProjectBoardUpdateFence, right: GitHubProjectBoardUpdateFence): boolean {
@@ -653,14 +603,4 @@ function sameFence(left: GitHubProjectBoardUpdateFence, right: GitHubProjectBoar
     && left.repositoryUpdatedAt === right.repositoryUpdatedAt
     && left.projectItemCount === right.projectItemCount
     && left.openIssueCount === right.openIssueCount
-}
-
-function timestamp(value: string): number {
-  const parsed = Date.parse(value)
-  if (!Number.isSafeInteger(parsed) || parsed < 0) invalid('timestamp')
-  return parsed
-}
-
-function invalid(operation: string): never {
-  throw new GitHubProviderError({ code: 'invalid-external-response', operation })
 }

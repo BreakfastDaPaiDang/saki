@@ -6,9 +6,11 @@ import {
   sakiControlPlaneV2DomainSpec,
   sakiControlPlaneV3DomainSpec,
   sakiControlPlaneV4DomainSpec,
+  sakiControlPlaneV5DomainSpec,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
+  sakiStorageGenerationV3DomainSpec,
 } from '@breakfastdapaidang/saki-control-plane'
 import { sakiHostExecutionDomainSpec } from '@breakfastdapaidang/saki-execution-local'
 
@@ -34,6 +36,17 @@ export type SakiStateVersionSpec =
   | Readonly<{
     version: 5
     domains: readonly [
+      typeof sakiControlPlaneV5DomainSpec,
+      typeof sakiHostExecutionDomainSpec,
+      typeof sakiStorageGenerationV3DomainSpec,
+    ]
+    controlPlane: typeof sakiControlPlaneV5DomainSpec
+    hostExecution: typeof sakiHostExecutionDomainSpec
+    storageGeneration: typeof sakiStorageGenerationV3DomainSpec
+  }>
+  | Readonly<{
+    version: 6
+    domains: readonly [
       typeof sakiControlPlaneDomainSpec,
       typeof sakiHostExecutionDomainSpec,
       typeof sakiStorageGenerationDomainSpec,
@@ -48,7 +61,7 @@ export interface SakiStateCapability {
   /** Every product-state version this build can inspect or migrate. */
   readonly readable: readonly SakiStateVersionSpec[]
   /** The sole product-state version this build may create or publish. */
-  readonly writable: Extract<SakiStateVersionSpec, { readonly version: 5 }>
+  readonly writable: Extract<SakiStateVersionSpec, { readonly version: 6 }>
   /**
    * Resolve one readable product-state format.
    * @param version - untrusted manifest or backup state version.
@@ -80,6 +93,18 @@ const V4_STATE_SPEC = Object.freeze({
 const V5_STATE_SPEC = Object.freeze({
   version: 5,
   domains: Object.freeze([
+    sakiControlPlaneV5DomainSpec,
+    sakiHostExecutionDomainSpec,
+    sakiStorageGenerationV3DomainSpec,
+  ] as const),
+  controlPlane: sakiControlPlaneV5DomainSpec,
+  hostExecution: sakiHostExecutionDomainSpec,
+  storageGeneration: sakiStorageGenerationV3DomainSpec,
+}) satisfies SakiStateVersionSpec
+
+const V6_STATE_SPEC = Object.freeze({
+  version: 6,
+  domains: Object.freeze([
     sakiControlPlaneDomainSpec,
     sakiHostExecutionDomainSpec,
     sakiStorageGenerationDomainSpec,
@@ -91,17 +116,18 @@ const V5_STATE_SPEC = Object.freeze({
 
 /** Current Saki state-format capability; build ids are deliberately absent. */
 export const sakiStateCapability: SakiStateCapability = Object.freeze({
-  readable: Object.freeze([V2_STATE_SPEC, V3_STATE_SPEC, V4_STATE_SPEC, V5_STATE_SPEC]),
-  writable: V5_STATE_SPEC,
+  readable: Object.freeze([V2_STATE_SPEC, V3_STATE_SPEC, V4_STATE_SPEC, V5_STATE_SPEC, V6_STATE_SPEC]),
+  writable: V6_STATE_SPEC,
   resolveReadable: (version: number) => {
     if (version === V2_STATE_SPEC.version) return V2_STATE_SPEC
     if (version === V3_STATE_SPEC.version) return V3_STATE_SPEC
     if (version === V4_STATE_SPEC.version) return V4_STATE_SPEC
     if (version === V5_STATE_SPEC.version) return V5_STATE_SPEC
+    if (version === V6_STATE_SPEC.version) return V6_STATE_SPEC
     return undefined
   },
 })
 
-/** Control-plane migration chain used when any retained v2-v4 format advances to writable v5. */
+/** Control-plane migration chain used when any retained v2-v5 format advances to writable v6. */
 export const sakiStateControlPlaneMigrationPlan: typeof sakiControlPlaneMigrationPlan =
   sakiControlPlaneMigrationPlan

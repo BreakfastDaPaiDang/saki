@@ -606,6 +606,7 @@ describe('Saki Product GitHub App provider', () => {
       if (pathname !== '/graphql') throw new Error(`unexpected GitHub request: ${request.method} ${pathname}`)
       const body = JSON.parse(await request.text()) as { query?: unknown; variables?: unknown }
       const query = String(body.query)
+      expect(query).not.toContain('fullDatabaseId')
       const rateLimit = {
         cost: 1,
         limit: 5_000,
@@ -615,7 +616,7 @@ describe('Saki Product GitHub App provider', () => {
       }
       if (query.includes('query SakiProjectBoardFence')) {
         expect(query).toContain('items(archivedStates: [ARCHIVED, NOT_ARCHIVED])')
-        expect(query).toContain('databaseId: fullDatabaseId')
+        expect(query).toContain('databaseId')
         fenceReads += 1
         return json({ data: {
           project: {
@@ -632,7 +633,7 @@ describe('Saki Product GitHub App provider', () => {
           repository: {
             __typename: 'Repository',
             id: 'R_kgDOBoundRepository',
-            databaseId: '4242',
+            databaseId: 4_242,
             nameWithOwner: 'BreakfastDaPaiDang/saki',
             visibility: 'PUBLIC',
             url: 'https://github.com/BreakfastDaPaiDang/saki',
@@ -704,7 +705,7 @@ describe('Saki Product GitHub App provider', () => {
                   title: 'Publish a read-only Board',
                   url: 'https://github.com/BreakfastDaPaiDang/saki/issues/27',
                   updatedAt: '2026-08-26T08:01:00Z',
-                  repository: { id: 'R_kgDOBoundRepository', databaseId: '4242' },
+                  repository: { id: 'R_kgDOBoundRepository', databaseId: 4_242 },
                 },
                 fieldValues: {
                   totalCount: reportedFirstItemFieldValueCount,
@@ -762,7 +763,7 @@ describe('Saki Product GitHub App provider', () => {
           repository: {
             __typename: 'Repository',
             id: 'R_kgDOBoundRepository',
-            databaseId: '4242',
+            databaseId: 4_242,
             issues: {
               nodes: firstPage ? [{
                 id: 'I_kwDOIssueOne',
@@ -771,7 +772,7 @@ describe('Saki Product GitHub App provider', () => {
                 title: substituteOpenIssueTitle ? 'Substituted Issue title' : 'Publish a read-only Board',
                 url: 'https://github.com/BreakfastDaPaiDang/saki/issues/27',
                 updatedAt: '2026-08-26T08:01:00Z',
-                repository: { id: 'R_kgDOBoundRepository', databaseId: '4242' },
+                repository: { id: 'R_kgDOBoundRepository', databaseId: 4_242 },
               }] : [{
                 id: 'I_kwDOUnjoined',
                 number: 64,
@@ -779,7 +780,7 @@ describe('Saki Product GitHub App provider', () => {
                 title: 'Unjoined Inbox work',
                 url: 'https://github.com/BreakfastDaPaiDang/saki/issues/64',
                 updatedAt: '2026-08-26T08:03:00Z',
-                repository: { id: 'R_kgDOBoundRepository', databaseId: '4242' },
+                repository: { id: 'R_kgDOBoundRepository', databaseId: 4_242 },
               }],
               pageInfo: firstPage
                 ? { hasNextPage: true, endCursor: 'issues-page-1' }

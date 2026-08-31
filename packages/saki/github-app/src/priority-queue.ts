@@ -1,6 +1,6 @@
 /** Per-installation API-call serialization with stable interactive priority. @module @breakfastdapaidang/saki-github-app/priority-queue */
 
-/** Priorities currently exercised by B05 reads and scan pages. */
+/** Priorities for Product App requests and scan pages. */
 export type GitHubRequestPriority = 'interactive' | 'background'
 
 interface QueueEntry<T> {

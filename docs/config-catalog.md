@@ -92,7 +92,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/github-app/src/index.ts:57`](../packages/saki/github-app/src/index.ts)
+Source: [`packages/saki/github-app/src/index.ts:64`](../packages/saki/github-app/src/index.ts)
 
 <a id="deepseek-aidsh-acp"></a>
 

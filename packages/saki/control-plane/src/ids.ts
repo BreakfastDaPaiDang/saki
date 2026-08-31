@@ -19,6 +19,7 @@ import type {
   SakiPrincipalId,
   SakiResourceBindingId,
   SakiStorageGenerationId,
+  SakiWorkItemRecoveryId,
 } from './types.ts'
 
 const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -65,6 +66,8 @@ export { sakiControlIntentIdSchema }
 export const sakiIntentReceiptIdSchema = brandedId<SakiIntentReceiptId>('receipt')
 /** Strict GitHub-backed Work Item identity. */
 export const sakiBoardWorkItemIdSchema = digestId<SakiBoardWorkItemId>('work-item')
+/** Strict Development-Project-scoped Work Item recovery identity. */
+export const sakiWorkItemRecoveryIdSchema = digestId<SakiWorkItemRecoveryId>('work-item-recovery')
 /** Strict complete-scan attempt identity. */
 export const sakiGitHubScanAttemptIdSchema = brandedId<SakiGitHubScanAttemptId>('scan-attempt')
 /** Strict confirmed remote-input fingerprint. */

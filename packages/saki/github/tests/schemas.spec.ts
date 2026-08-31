@@ -22,13 +22,10 @@ import {
   githubInstallationIdSchema,
   githubInstallationProfileSchema,
   githubInstallationReadRequestSchema,
+  githubIssueStateSetInspectionSchema,
   githubIssueId,
   githubIssueIdSchema,
   githubIssueReadRequestSchema,
-  githubMutationIdentitySchema,
-  githubMutationInspectionSchema,
-  githubMutationKind,
-  githubMutationKindSchema,
   githubProjectBoardScanCandidateSchema,
   githubProjectBoardScanRequestSchema,
   githubProjectFactSchema,
@@ -38,8 +35,12 @@ import {
   githubProjectId,
   githubProjectIdSchema,
   githubProjectItemContentSchema,
+  githubProjectItemAddInspectionSchema,
+  githubProjectItemAddSnapshotSchema,
   githubProjectItemId,
   githubProjectItemIdSchema,
+  githubProjectItemPositionSetInspectionSchema,
+  githubProjectItemStatusSetInspectionSchema,
   githubProjectOptionId,
   githubProjectOptionIdSchema,
   githubProjectReadRequestSchema,
@@ -83,11 +84,15 @@ import {
   ISSUE,
   OBSERVED_AT,
   PROJECT_ID,
+  PROJECT_ITEM_ADD_INSPECTION,
+  PROJECT_ITEM_ADD_SNAPSHOT,
   READY_OPTION_ID,
   REPOSITORY_DATABASE_ID,
   REPOSITORY_ID,
   SCAN_REQUEST,
   SCAN_WITHOUT_FINGERPRINT,
+  STATUS_SET_INSPECTION,
+  TARGETED_SNAPSHOT,
   STATUS_FIELD_ID,
 } from './fixtures.ts'
 
@@ -96,6 +101,18 @@ const OTHER_COMMIT_ID = githubCommitId('2'.repeat(64))
 const TAG_NAME = githubReleaseTagName('saki-v0.1.0')
 const TAG_ID = githubTagObjectId('T_tag')
 const NEXT_TAG_ID = githubTagObjectId('T_next')
+const POSITION_SET_REQUEST = {
+  kind: 'project-item-position-set' as const,
+  operationId: githubExternalOperationId('operation:position:27'),
+  installation: INSTALLATION_PROFILE,
+  repositoryId: REPOSITORY_ID,
+  repositoryDatabaseId: REPOSITORY_DATABASE_ID,
+  projectId: PROJECT_ID,
+  issueId: ISSUE.id,
+  projectItemId: githubProjectItemId('PVTI_moving'),
+  statusFieldId: STATUS_FIELD_ID,
+  afterItemId: githubProjectItemId('PVTI_previous'),
+}
 
 describe('GitHub id and request admission', () => {
   it('constructs every branded external identity through its owning package', () => {
@@ -116,7 +133,6 @@ describe('GitHub id and request admission', () => {
       [githubCommitId, 'a'.repeat(40), githubCommitIdSchema],
       [githubReleaseTagName, 'saki-v1.0.0-rc.1', githubReleaseTagNameSchema],
       [githubExternalOperationId, 'operation:one', githubExternalOperationIdSchema],
-      [githubMutationKind, 'project-item-update', githubMutationKindSchema],
     ]
     for (const [construct, value, schema] of cases) {
       expect(construct(value)).toBe(value)
@@ -133,7 +149,6 @@ describe('GitHub id and request admission', () => {
     expect(() => githubCommitId('A'.repeat(40))).toThrow()
     expect(() => githubReleaseTagName('v0.1.0')).toThrow()
     expect(() => githubExternalOperationId('bad operation')).toThrow()
-    expect(() => githubMutationKind('BadKind')).toThrow()
   })
 
   it('admits every read and scan request without accepting unknown fields', () => {
@@ -516,23 +531,310 @@ describe('closed failures, mutation vocabulary, and invariant companion', () => 
     expect(() => new GitHubProviderError({ code: 'cancelled', raw: 'secret' } as never)).toThrow()
   })
 
-  it('keeps mutation identity and inspection states provider-neutral', () => {
-    const identity = {
-      operationId: githubExternalOperationId('operation:27'),
-      kind: githubMutationKind('project-item-update'),
-      targetFingerprint: 'a'.repeat(64),
+  it('admits only the concrete targeted Status inspection', () => {
+    expect(githubProjectItemStatusSetInspectionSchema.parse(STATUS_SET_INSPECTION)).toEqual(STATUS_SET_INSPECTION)
+    expect(githubProjectItemStatusSetInspectionSchema.safeParse({
+      ...STATUS_SET_INSPECTION,
+      fingerprint: { version: 1, digest: 'f'.repeat(64) },
+    }).success).toBe(false)
+  })
+
+  it('admits a position inspection with exact moving-item and predecessor facts', () => {
+    const previousItemId = POSITION_SET_REQUEST.afterItemId
+    if (previousItemId === null) throw new Error('expected a position anchor fixture')
+    const previousIssue = {
+      ...ISSUE,
+      id: githubIssueId('I_previous'),
+      number: ISSUE.number + 1,
+      title: 'Previous Work Item',
+      url: 'https://github.example/owner/repo/issues/28',
     }
-    expect(githubMutationIdentitySchema.parse(identity)).toEqual(identity)
-    const inspections = [
-      { state: 'pending', identity, observedAt: 1 },
-      { state: 'observed', identity, observedAt: 1 },
-      { state: 'absent', identity, observedAt: 1 },
-      { state: 'unknown', identity, observedAt: 1 },
-      { state: 'error', identity, failure: { code: 'cancelled' }, observedAt: 1 },
-    ] as const
-    for (const inspection of inspections) {
-      expect(githubMutationInspectionSchema.parse(inspection)).toEqual(inspection)
+    const snapshot = {
+      repositoryId: REPOSITORY_ID,
+      repositoryDatabaseId: REPOSITORY_DATABASE_ID,
+      projectId: PROJECT_ID,
+      statusFieldId: STATUS_FIELD_ID,
+      issue: ISSUE,
+      membership: {
+        state: 'present' as const,
+        item: {
+          id: POSITION_SET_REQUEST.projectItemId,
+          projectId: PROJECT_ID,
+          issueId: ISSUE.id,
+          statusOptionId: READY_OPTION_ID,
+          archived: false,
+          apiOrder: 1,
+          totalCount: 2,
+          previousItemId,
+          nextItemId: null,
+          updatedAt: OBSERVED_AT,
+        },
+      },
+      after: {
+        state: 'present' as const,
+        item: {
+          id: previousItemId,
+          projectId: PROJECT_ID,
+          issue: previousIssue,
+          statusOptionId: READY_OPTION_ID,
+          archived: false,
+          apiOrder: 0,
+          totalCount: 2,
+          previousItemId: null,
+          nextItemId: POSITION_SET_REQUEST.projectItemId,
+          updatedAt: OBSERVED_AT,
+        },
+      },
     }
+    const inspection = {
+      snapshot,
+      observedAt: OBSERVED_AT,
+    }
+    expect(githubProjectItemPositionSetInspectionSchema.parse(inspection)).toEqual(inspection)
+    expect(githubProjectItemPositionSetInspectionSchema.safeParse({
+      ...inspection,
+      snapshot: {
+        ...snapshot,
+        issue: { ...snapshot.issue, repositoryId: githubRepositoryId('R_other') },
+      },
+    }).success).toBe(false)
+    expect(githubProjectItemPositionSetInspectionSchema.safeParse({
+      ...inspection,
+      snapshot: {
+        ...snapshot,
+        membership: {
+          state: 'present',
+          item: { ...snapshot.membership.item, projectId: githubProjectId('PVT_other') },
+        },
+      },
+    }).success).toBe(false)
+    const duplicateId = githubProjectItemId('PVTI_duplicate')
+    expect(githubProjectItemPositionSetInspectionSchema.safeParse({
+      ...inspection,
+      snapshot: {
+        ...snapshot,
+        membership: {
+          state: 'duplicate-conflict',
+          items: [
+            {
+              ...snapshot.membership.item,
+              totalCount: 3,
+              nextItemId: duplicateId,
+            },
+            {
+              ...snapshot.membership.item,
+              id: duplicateId,
+              apiOrder: 0,
+              totalCount: 3,
+              previousItemId: null,
+              nextItemId: snapshot.membership.item.id,
+            },
+          ],
+        },
+      },
+    }).success).toBe(false)
+    expect(githubProjectItemPositionSetInspectionSchema.safeParse({
+      ...inspection,
+      snapshot: {
+        ...snapshot,
+        after: {
+          ...snapshot.after,
+          item: {
+            ...snapshot.after.item,
+            issue: { ...previousIssue, repositoryId: githubRepositoryId('R_other') },
+          },
+        },
+      },
+    }).success).toBe(false)
+    for (const removed of [
+      { fingerprint: { version: 1, digest: 'f'.repeat(64) } },
+      { semanticFence: { version: 1 } },
+    ]) {
+      expect(githubProjectItemPositionSetInspectionSchema.safeParse({
+        ...inspection,
+        ...removed,
+      }).success).toBe(false)
+    }
+  })
+
+  it('admits an Issue-state inspection without echoing its requested Repository', () => {
+    const snapshot = {
+      issue: ISSUE,
+    }
+    const inspection = {
+      snapshot,
+      observedAt: OBSERVED_AT,
+    }
+    expect(githubIssueStateSetInspectionSchema.parse(inspection)).toEqual(inspection)
+    expect(githubIssueStateSetInspectionSchema.safeParse({
+      ...inspection,
+      snapshot: { ...snapshot, repositoryId: githubRepositoryId('R_other') },
+    }).success).toBe(false)
+    expect(githubIssueStateSetInspectionSchema.safeParse({
+      ...inspection,
+      fingerprint: { version: 1, digest: 'f'.repeat(64) },
+    }).success).toBe(false)
+    expect(githubIssueStateSetInspectionSchema.safeParse({
+      ...inspection,
+      semanticFence: { version: 1 },
+    }).success).toBe(false)
+  })
+
+  it('admits strict Project membership inspections without provider response metadata', () => {
+    expect(githubProjectItemAddInspectionSchema.parse(PROJECT_ITEM_ADD_INSPECTION))
+      .toEqual(PROJECT_ITEM_ADD_INSPECTION)
+    expect(githubProjectItemAddInspectionSchema.safeParse({
+      ...PROJECT_ITEM_ADD_INSPECTION,
+      fingerprint: { version: 1, digest: 'f'.repeat(64) },
+    }).success).toBe(false)
+  })
+
+  it('distinguishes absent, unique, and duplicate Project memberships', () => {
+    if (PROJECT_ITEM_ADD_SNAPSHOT.membership.state !== 'present') {
+      throw new Error('expected present Project membership fixture')
+    }
+    const first = {
+      ...PROJECT_ITEM_ADD_SNAPSHOT.membership.item,
+      totalCount: 2,
+      nextItemId: githubProjectItemId('PVTI_duplicate'),
+    }
+    const second = {
+      ...first,
+      id: githubProjectItemId('PVTI_duplicate'),
+      apiOrder: 1,
+      previousItemId: first.id,
+      nextItemId: null,
+    }
+    const snapshots = [
+      { ...PROJECT_ITEM_ADD_SNAPSHOT, membership: { state: 'absent' as const } },
+      PROJECT_ITEM_ADD_SNAPSHOT,
+      {
+        ...PROJECT_ITEM_ADD_SNAPSHOT,
+        membership: { state: 'duplicate-conflict' as const, items: [first, second] },
+      },
+    ]
+    for (const snapshot of snapshots) {
+      expect(githubProjectItemAddSnapshotSchema.parse(snapshot)).toEqual(snapshot)
+    }
+    for (const membership of [
+      { state: 'duplicate-conflict' as const, items: [first] },
+      { state: 'duplicate-conflict' as const, items: [first, { ...second, id: first.id }] },
+      { state: 'duplicate-conflict' as const, items: [second, first] },
+      {
+        state: 'duplicate-conflict' as const,
+        items: [first, { ...second, projectId: githubProjectId('P_other') }],
+      },
+    ]) {
+      expect(githubProjectItemAddSnapshotSchema.safeParse({
+        ...PROJECT_ITEM_ADD_SNAPSHOT,
+        membership,
+      }).success).toBe(false)
+    }
+    expect(githubProjectItemAddSnapshotSchema.safeParse({
+      ...PROJECT_ITEM_ADD_SNAPSHOT,
+      membership: {
+        state: 'present',
+        item: { ...PROJECT_ITEM_ADD_SNAPSHOT.membership.item, statusOptionId: INBOX_OPTION_ID },
+      },
+    }).success).toBe(false)
+    expect(githubProjectItemAddSnapshotSchema.safeParse({
+      ...PROJECT_ITEM_ADD_SNAPSHOT,
+      repositoryId: githubRepositoryId('R_other'),
+    }).success).toBe(false)
+    expect(githubProjectItemAddInspectionSchema.safeParse({
+      ...PROJECT_ITEM_ADD_INSPECTION,
+      semanticFence: { version: 1 },
+    }).success).toBe(false)
+  })
+
+  it('requires complete item cardinality and a strict targeted inspection', () => {
+    if (TARGETED_SNAPSHOT.membership.state !== 'present') throw new Error('expected present membership fixture')
+    expect(githubProjectItemStatusSetInspectionSchema.parse(STATUS_SET_INSPECTION)).toEqual(STATUS_SET_INSPECTION)
+    expect(githubProjectItemStatusSetInspectionSchema.safeParse({
+      ...STATUS_SET_INSPECTION,
+      snapshot: {
+        ...TARGETED_SNAPSHOT,
+        membership: {
+          state: 'present',
+          item: { ...TARGETED_SNAPSHOT.membership.item, totalCount: undefined },
+        },
+      },
+    }).success).toBe(false)
+    expect(githubProjectItemStatusSetInspectionSchema.safeParse({
+      ...STATUS_SET_INSPECTION,
+      semanticFence: { version: 1 },
+    }).success).toBe(false)
+    expect(githubProjectItemStatusSetInspectionSchema.safeParse({
+      ...STATUS_SET_INSPECTION,
+      fingerprint: { version: 1, digest: 'f'.repeat(64) },
+    }).success).toBe(false)
+  })
+
+  it('rejects contradictory targeted membership, ownership, and neighbor facts', () => {
+    if (TARGETED_SNAPSHOT.membership.state !== 'present') throw new Error('expected present membership fixture')
+    const retained = TARGETED_SNAPSHOT.membership.item
+    const neighbor = githubProjectItemId('PVTI_neighbor')
+    for (const item of [
+      { ...retained, previousItemId: neighbor },
+      { ...retained, apiOrder: 1, previousItemId: null },
+      { ...retained, previousItemId: retained.id },
+      { ...retained, nextItemId: retained.id },
+      { ...retained, totalCount: 0 },
+      { ...retained, apiOrder: retained.totalCount },
+      { ...retained, totalCount: 2, nextItemId: null },
+      { ...retained, apiOrder: 1, previousItemId: neighbor, nextItemId: neighbor },
+    ]) {
+      expect(githubProjectItemStatusSetInspectionSchema.safeParse({
+        ...STATUS_SET_INSPECTION,
+        snapshot: {
+          ...TARGETED_SNAPSHOT,
+          membership: { state: 'present', item },
+        },
+      }).success).toBe(false)
+    }
+    expect(githubProjectItemStatusSetInspectionSchema.parse({
+      ...STATUS_SET_INSPECTION,
+      snapshot: {
+        ...TARGETED_SNAPSHOT,
+        membership: {
+          state: 'present',
+          item: {
+            ...retained,
+            apiOrder: 1,
+            totalCount: 2,
+            previousItemId: neighbor,
+          },
+        },
+      },
+    }).snapshot.membership).toMatchObject({
+      state: 'present',
+      item: { apiOrder: 1, previousItemId: neighbor },
+    })
+
+    for (const snapshot of [
+      { ...TARGETED_SNAPSHOT, repositoryId: githubRepositoryId('R_other') },
+      { ...TARGETED_SNAPSHOT, repositoryDatabaseId: githubRepositoryDatabaseId('4243') },
+      {
+        ...TARGETED_SNAPSHOT,
+        membership: { state: 'present' as const, item: { ...retained, projectId: githubProjectId('P_other') } },
+      },
+      {
+        ...TARGETED_SNAPSHOT,
+        membership: { state: 'present' as const, item: { ...retained, issueId: githubIssueId('I_other') } },
+      },
+    ]) {
+      expect(githubProjectItemStatusSetInspectionSchema.safeParse({
+        ...STATUS_SET_INSPECTION,
+        snapshot,
+      }).success).toBe(false)
+    }
+    expect(githubProjectItemStatusSetInspectionSchema.parse({
+      ...STATUS_SET_INSPECTION,
+      snapshot: {
+        ...TARGETED_SNAPSHOT,
+        membership: { state: 'absent' },
+      },
+    }).snapshot).toMatchObject({ membership: { state: 'absent' } })
   })
 
 })

@@ -18,7 +18,7 @@
 
 ## 当前组合包与本地入口
 
-[`packages/saki`](../../packages/saki/README.zh.md)列出当前包族。`@breakfastdapaidang/saki-bundle` 保持空根配置，并拥有声明的 patch；该 patch 组合本地访问、已有目录检查、首次 Project 登记、结构化 Git 读取与直接 mutation，以及一条就绪配置项。存储域默认使用 JSON，并把当前 `saki_control_plane@5`、`saki_host_execution@1` 与 `saki_storage_generation@3` 路由到同一个 manifest-selected SQLite generation；Session 日志继续使用独立 JSONL 持久化。`pnpm run saki` 是仓库开发入口；它不会读取或替代用户的 `start-dsh-with-clash.ps1` 或其他宿主本地启动包装层。
+[`packages/saki`](../../packages/saki/README.zh.md)列出当前包族。`@breakfastdapaidang/saki-bundle` 保持空根配置，并拥有声明的 patch；该 patch 组合本地访问、已有目录检查、首次 Project 登记、结构化 Git 读取与直接 mutation、GitHub Board 同步与 Work Item mutation，以及一条就绪配置项。存储域默认使用 JSON，并把当前 `saki_control_plane@6`、`saki_host_execution@1` 与 `saki_storage_generation@4` 路由到同一个 manifest-selected SQLite generation；Session 日志继续使用独立 JSONL 持久化。`pnpm run saki` 是仓库开发入口；它不会读取或替代用户的 `start-dsh-with-clash.ps1` 或其他宿主本地启动包装层。
 
 启动器只在 `boot()` 完成配置项激活审计后输出稳定的就绪记录。`SAKI_ONESHOT=1` 随后以零退出且不消费 bootstrap 交接值；普通模式会另输出一行含明文 secret 的 launcher-handoff JSON，并持续运行至收到 `SIGINT` 或 `SIGTERM`。就绪输出或退出回调失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。无密钥快照覆盖源码入口；构建产物存在时，普通 Node 冒烟测试覆盖构建后的可执行文件。
 

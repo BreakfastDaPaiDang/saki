@@ -95,8 +95,8 @@ interface HistoricalFoundationSnapshot {
  * The operation performs synchronous reads only: it never writes, invokes Host or Workspace
  * capabilities, or changes the active Installation. The caller must exclusively own both
  * domains with no concurrent writers because cross-table reads are not internally serialized.
- * @param controlPlane - opened `saki_control_plane@5` candidate domain.
- * @param storageGeneration - opened `saki_storage_generation@3` candidate domain.
+ * @param controlPlane - opened `saki_control_plane@6` candidate domain.
+ * @param storageGeneration - opened `saki_storage_generation@4` candidate domain.
  * @param expectedInstallationId - Installation identity selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation identity selected by maintenance metadata.
  * @param expectedCreatedByBuildId - generation.json provenance that the seal must repeat.

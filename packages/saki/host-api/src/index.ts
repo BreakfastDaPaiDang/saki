@@ -20,6 +20,7 @@ import {
   sakiBootstrapExchangeRequestSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiCreateCommitResultSchema,
+  sakiCreateWorkItemResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiEmptyRequestSchema,
   sakiInspectProjectSelectionResultSchema,
@@ -30,6 +31,7 @@ import {
   sakiProjectChangesResultSchema,
   sakiProjectSettingsResultSchema,
   sakiQueryRequestSchema,
+  sakiMoveWorkItemResultSchema,
   sakiStageFilesResultSchema,
   sakiUnstageFilesResultSchema,
 } from './wire.ts'
@@ -224,6 +226,14 @@ async function authenticatedMutation(
       case 'create-commit': {
         const result = await controlPlane.submit(authentication, operation.intent, signal)
         return reply({ ok: true, value: sakiCreateCommitResultSchema.parse(result) })
+      }
+      case 'create-work-item': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiCreateWorkItemResultSchema.parse(result) })
+      }
+      case 'move-work-item': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiMoveWorkItemResultSchema.parse(result) })
       }
       /* v8 ignore next 2 -- Saki Intent input is closed and strict Host parsing rejects unknown tags before dispatch. */
       default: return assertNever(operation.intent)

@@ -2,7 +2,7 @@
 
 English | [中文](saki.zh.md)
 
-The Saki control plane owns product state independently from agent conversations. Its implemented surface establishes one stable local Installation, one enrolled Host, one human Principal with a current Host Operator Grant, one versioned Installation Access aggregate, a revisioned Development Project Registry with recoverable first-registration Intents, and recoverable direct structured-Git Intents for bound Projects. A versioned provisioning owner and independently revisioned entity tables retain those identities and operation evidence across interrupted startup. The [Saki backend architecture](../saki/architecture/0.1.0-backend.md) defines the wider control-plane and execution-plane split; this page is the reference for the implemented Cordis service.
+The Saki control plane owns product state independently from agent conversations. Its implemented surface establishes one stable local Installation, one enrolled Host, one human Principal with a current Host Operator Grant, one versioned Installation Access aggregate, a revisioned Development Project Registry with recoverable first-registration Intents, recoverable direct structured-Git Intents for bound Projects, and recoverable GitHub-backed Create/Move Work Item Intents. A versioned provisioning owner and independently revisioned entity tables retain those identities and operation evidence across interrupted startup. The [Saki backend architecture](../saki/architecture/0.1.0-backend.md) defines the wider control-plane and execution-plane split; this page is the reference for the implemented Cordis service.
 
 ## Installation access
 
@@ -24,9 +24,15 @@ The protected `project-changes` query reopens the exact active Resource Binding 
 
 The Local Host builds stage and unstage results in an alternate index, persists a random same-directory pin, and links that pin without clobbering into the bound index lock before publication. It creates deterministic hook-free unsigned Commits from the observed index tree. Attached-HEAD publication freezes the target branch, revalidates HEAD immediately before the effect, and compare-and-sets only that target. Detached HEAD remains available for inspection, Diff, stage, and unstage, but CreateCommit is unavailable because Git 2.45 cannot atomically prove that `HEAD` stayed direct while compare-and-setting its object id. Git 2.45 is the minimum. Random scratch cleanup requires an exact owner marker; index-lock cleanup requires the operation-owned path, file identity, and digest; and attempted publication that cannot be proved is never retried automatically. Automated dispatch and Agent Run sources remain later work.
 
+## GitHub Board and Work Item operations
+
+Complete GitHub Project scans publish one confirmed Board and checkpoint atomically. Each projected Work Item retains nullable `latestNonTerminalStatus` memory so a later external Issue reopen has a deterministic repair target; archived items remain Canceled and do not advertise an impossible reopen action. A closed Issue under a non-terminal Status and an open Issue under a terminal Status produce narrow `move-with-actor` repair overlays instead of a second repair state machine.
+
+`create-work-item` durably stages marker-bearing Issue creation, Project membership, and Inbox assignment. `move-work-item` stages membership when required, Status and optional API-position changes, plus the matching Issue close or reopen transition. The control plane records the Intent and stage target before each external effect, allows no Provider-internal retry, and uses targeted inspection plus per-Work-Item recovery evidence to decide success, conflict, a proven-safe repeat from the exact pre-effect state, or reconciliation after a missing reply or restart. Targeted overlays bridge the interval before the next complete Board scan without claiming exactly-once behavior.
+
 ## Host transport
 
-[`saki-host-api`](../../packages/saki/host-api/README.md) owns strict endpoint schemas on the logical `/saki` [Connection](../../packages/client/connection/README.md) channel. The Host adapter rejects URL queries before decoding, extracts cookies and request headers outside JSON, constructs the non-wire `SakiAuthenticationContext`, and returns `Set-Cookie` outside the RPC result. Every Saki reply uses `Cache-Control: no-store`, and every transport or RPC failure uses one fixed opaque internal error. Its protected operations correlate exact request and result types for inspection, Project-index, Development-Workspace, first-registration, Project Changes, Project Diff, stage, unstage, and Commit calls; strict outbound validation rejects an implementation result containing unexpected authority, path, credential, or Projection fields before serialization.
+[`saki-host-api`](../../packages/saki/host-api/README.md) owns strict endpoint schemas on the logical `/saki` [Connection](../../packages/client/connection/README.md) channel. The Host adapter rejects URL queries before decoding, extracts cookies and request headers outside JSON, constructs the non-wire `SakiAuthenticationContext`, and returns `Set-Cookie` outside the RPC result. Every Saki reply uses `Cache-Control: no-store`, and every transport or RPC failure uses one fixed opaque internal error. Its protected operations correlate exact request and result types for inspection, Project-index, Development-Workspace, first-registration, Project Changes, Project Diff, Board, Project Settings, stage, unstage, Commit, CreateWorkItem, and MoveWorkItem calls; strict outbound validation rejects an implementation result containing unexpected authority, path, credential, or Projection fields before serialization.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -84,7 +90,7 @@ Source: [`packages/saki/control-plane/src/service.ts`](../../packages/saki/contr
 
 ### `ctx.sakiGitHub` — `SakiGitHub` (abstract seam)
 
-GitHub capability. Providers own authentication, pagination, response admission, and rate observations. Consumers receive only complete detached facts or a GitHubProviderError.
+GitHub capability. Providers own authentication, pagination, response admission, and scan rate observations. Consumers receive only complete detached facts and mutation results, or a GitHubProviderError.
 
 ```ts cordis-catalog
 /**
@@ -102,6 +108,22 @@ abstract read<K extends keyof GitHubReadMap>( request: GitHubReadMap[K]['request
  * @returns one detached complete validated scan candidate.
  */
 abstract scan<K extends keyof GitHubScanMap>( request: GitHubScanMap[K]['request'], signal: AbortSignal, ): Promise<GitHubScanMap[K]['result']>
+
+/**
+ * Dispatch one atomic GitHub mutation without provider retries.
+ * @param request - declaration-map mutation request with a caller-persisted operation id.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns the declaration-map result after one validated external call.
+ */
+abstract dispatch<K extends keyof GitHubMutationMap>( request: GitHubMutationMap[K]['request'], signal: AbortSignal, ): Promise<GitHubMutationMap[K]['result']>
+
+/**
+ * Inspect the exact external target of one mutation without publishing a complete scan.
+ * @param request - the immutable request originally recorded for dispatch.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns detached targeted facts; provider failures reject with {@link GitHubProviderError}.
+ */
+abstract inspectMutation<K extends keyof GitHubMutationMap>( request: GitHubMutationMap[K]['request'], signal: AbortSignal, ): Promise<GitHubMutationMap[K]['inspection']>
 ```
 
 Source: [`packages/saki/github/src/index.ts`](../../packages/saki/github/src/index.ts)

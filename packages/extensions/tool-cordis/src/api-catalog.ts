@@ -1184,7 +1184,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'sakiGitHub',
     summary: 'GitHub capability.',
-    description: 'GitHub capability. Providers own authentication, pagination, response admission, and rate observations. Consumers receive only complete detached facts or a GitHubProviderError.',
+    description: 'GitHub capability. Providers own authentication, pagination, response admission, and scan rate observations. Consumers receive only complete detached facts and mutation results, or a GitHubProviderError.',
     methods: [
       {
         signature: 'abstract read<K extends keyof GitHubReadMap>( request: GitHubReadMap[K][\'request\'], signal: AbortSignal, ): Promise<GitHubReadMap[K][\'result\']>',
@@ -1197,6 +1197,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Perform one complete scan; pagination cursors and partial results never cross this interface.',
         parameters: [{ name: 'request', description: 'declaration-map scan request including caller priority.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
         returns: 'one detached complete validated scan candidate.',
+      },
+      {
+        signature: 'abstract dispatch<K extends keyof GitHubMutationMap>( request: GitHubMutationMap[K][\'request\'], signal: AbortSignal, ): Promise<GitHubMutationMap[K][\'result\']>',
+        description: 'Dispatch one atomic GitHub mutation without provider retries.',
+        parameters: [{ name: 'request', description: 'declaration-map mutation request with a caller-persisted operation id.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
+        returns: 'the declaration-map result after one validated external call.',
+      },
+      {
+        signature: 'abstract inspectMutation<K extends keyof GitHubMutationMap>( request: GitHubMutationMap[K][\'request\'], signal: AbortSignal, ): Promise<GitHubMutationMap[K][\'inspection\']>',
+        description: 'Inspect the exact external target of one mutation without publishing a complete scan.',
+        parameters: [{ name: 'request', description: 'the immutable request originally recorded for dispatch.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
+        returns: 'detached targeted facts; provider failures reject with {@link GitHubProviderError}.',
       },
     ],
   },
@@ -1276,7 +1288,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'abstract readonly stateVersion: 5',
+        signature: 'abstract readonly stateVersion: 6',
         description: 'State-format version selected by the Installation manifest.',
         parameters: [],
       },
@@ -3404,6 +3416,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface CreateTeamTaskRequest {\n    readonly subject: string;\n    readonly description: string;\n    readonly blockedBy?: readonly TeamTaskId[];\n    readonly writeScopes?: readonly string[];\n}',
   },
   {
+    name: 'CreateWorkItemIntent',
+    declaration: 'export interface CreateWorkItemIntent {\n    readonly type: \'create-work-item\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expected: CreateWorkItemExpectation;\n    readonly title: string;\n    readonly intendedOutcome: string;\n    readonly acceptanceCriteria: readonly string[];\n}',
+  },
+  {
     name: 'CredentialHealth',
     declaration: 'export type CredentialHealth = \'available\' | \'missing\' | \'unavailable\';',
   },
@@ -3680,6 +3696,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitHubCompareCommitsReadRequest {\n    readonly kind: \'compare-commits\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly baseCommitId: GitHubCommitId;\n    readonly headCommitId: GitHubCommitId;\n}',
   },
   {
+    name: 'GitHubExternalOperationId',
+    declaration: 'export type GitHubExternalOperationId = Branded<\'GitHubExternalOperationId\'>;',
+  },
+  {
     name: 'GitHubFailure',
     declaration: 'export type GitHubFailure = {\n    readonly code: \'cancelled\';\n} | {\n    readonly code: \'auth-unavailable\';\n    readonly credentialRef?: CredentialRef | undefined;\n} | {\n    readonly code: \'permission-mismatch\';\n    readonly permission: string;\n    readonly required: \'none\' | \'read\' | \'write\' | \'admin\';\n    readonly observed?: \'none\' | \'read\' | \'write\' | \'admin\' | undefined;\n    readonly requestId?: string | undefined;\n} | {\n    readonly code: \'mapping-mismatch\';\n    readonly reason: \'field-missing-or-not-single-select\';\n    readonly statusFieldId: GitHubProjectFieldId;\n} | {\n    readonly code: \'mapping-mismatch\';\n    readonly reason: \'required-options-missing\';\n    readonly statusFieldId: GitHubProjectFieldId;\n    readonly missingRequiredStatusOptionIds: readonly GitHubProjectOptionId[];\n} | {\n    readonly code: \'not-found\';\n    readonly resource: string;\n    readonly requestId?: string | undefined;\n} | {\n    readonly code: \'invalid-external-response\';\n    readonly operation: string;\n    readonly requestId?: string | undefined;\n} | {\n    readonly code: \'primary-rate-limit\';\n    readonly resetAt?: number | undefined;\n    readonly requestId?: string | undefined;\n} | {\n    readonly code: \'secondary-rate-limit\';\n    readonly retryAfterMs?: number | undefined;\n    readonly requestId?: string | undefined;\n} | {\n    readonly code: \'transient-transport\';\n    readonly retryAfterMs?: number | undefined;\n    readonly requestId?: string | undefined;\n} | {\n    readonly code: \'permanent-re /* …truncated — full shape in source */',
   },
@@ -3704,6 +3724,46 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitHubInstallationReadRequest {\n    readonly kind: \'installation\';\n    readonly installation: GitHubInstallationProfile;\n}',
   },
   {
+    name: 'GitHubIssueCreateEntryId',
+    declaration: 'export type GitHubIssueCreateEntryId = Branded<\'GitHubIssueCreateEntryId\'>;',
+  },
+  {
+    name: 'GitHubIssueCreateIncompleteReason',
+    declaration: 'export type GitHubIssueCreateIncompleteReason = \'page-limit\' | \'item-limit\' | \'pagination\' | \'duplicate-entry\';',
+  },
+  {
+    name: 'GitHubIssueCreateInspection',
+    declaration: 'export interface GitHubIssueCreateInspection {\n    readonly snapshot: GitHubIssueCreateSnapshot;\n    readonly observedAt: number;\n}',
+  },
+  {
+    name: 'GitHubIssueCreateInspectionHint',
+    declaration: 'export interface GitHubIssueCreateInspectionHint {\n    readonly issueId: GitHubIssueId;\n    readonly issueNumber: number;\n}',
+  },
+  {
+    name: 'GitHubIssueCreateInspectionOutcome',
+    declaration: 'export type GitHubIssueCreateInspectionOutcome = {\n    readonly state: \'unique-issue\';\n    readonly issue: GitHubIssueFact;\n} | {\n    readonly state: \'absent-complete\';\n} | {\n    readonly state: \'pull-request-marker-match\';\n    readonly pullRequest: GitHubIssueCreatePullRequestFact;\n} | {\n    readonly state: \'marker-removed\';\n    readonly hint: GitHubIssueCreateInspectionHint;\n    readonly issue: GitHubIssueFact;\n} | {\n    readonly state: \'known-issue-absent\';\n    readonly hint: GitHubIssueCreateInspectionHint;\n} | {\n    readonly state: \'identity-conflict\';\n    readonly hint: GitHubIssueCreateInspectionHint;\n    readonly observed: GitHubIssueCreateMarkerMatch;\n} | {\n    readonly state: \'multiple-matches\';\n    readonly matchCount: number;\n    readonly matches: readonly GitHubIssueCreateMarkerMatch[];\n} | {\n    readonly state: \'incomplete\';\n    readonly reason: GitHubIssueCreateIncompleteReason;\n    readonly observedMatchCount: number;\n    readonly observedMatches: readonly GitHubIssueCreateMarkerMatch[];\n};',
+  },
+  {
+    name: 'GitHubIssueCreateMarkerId',
+    declaration: 'export type GitHubIssueCreateMarkerId = Branded<\'GitHubIssueCreateMarkerId\'>;',
+  },
+  {
+    name: 'GitHubIssueCreateMarkerMatch',
+    declaration: 'export type GitHubIssueCreateMarkerMatch = {\n    readonly kind: \'issue\';\n    readonly issue: GitHubIssueFact;\n    readonly markerOccurrences: number;\n} | {\n    readonly kind: \'pull-request\';\n    readonly pullRequest: GitHubIssueCreatePullRequestFact;\n    readonly markerOccurrences: number;\n};',
+  },
+  {
+    name: 'GitHubIssueCreatePullRequestFact',
+    declaration: 'export interface GitHubIssueCreatePullRequestFact {\n    readonly id: GitHubIssueCreateEntryId;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly number: number;\n    readonly state: \'open\' | \'closed\';\n    readonly title: string;\n    readonly url: string;\n    readonly updatedAt: number;\n}',
+  },
+  {
+    name: 'GitHubIssueCreateRequest',
+    declaration: 'export interface GitHubIssueCreateRequest {\n    readonly kind: \'issue-create\';\n    readonly operationId: GitHubExternalOperationId;\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly title: string;\n    readonly body: string;\n    readonly markerId: GitHubIssueCreateMarkerId;\n    readonly inspectionHint?: GitHubIssueCreateInspectionHint | undefined;\n}',
+  },
+  {
+    name: 'GitHubIssueCreateSnapshot',
+    declaration: 'export interface GitHubIssueCreateSnapshot {\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly outcome: GitHubIssueCreateInspectionOutcome;\n}',
+  },
+  {
     name: 'GitHubIssueFact',
     declaration: 'export interface GitHubIssueFact {\n    readonly id: GitHubIssueId;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly number: number;\n    readonly state: \'open\' | \'closed\';\n    readonly title: string;\n    readonly url: string;\n    readonly updatedAt: number;\n}',
   },
@@ -3714,6 +3774,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitHubIssueReadRequest',
     declaration: 'export interface GitHubIssueReadRequest {\n    readonly kind: \'issue\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly issueId: GitHubIssueId;\n}',
+  },
+  {
+    name: 'GitHubIssueStateSetInspection',
+    declaration: 'export interface GitHubIssueStateSetInspection {\n    readonly snapshot: GitHubIssueStateSnapshot;\n    readonly observedAt: number;\n}',
+  },
+  {
+    name: 'GitHubIssueStateSetRequest',
+    declaration: 'export interface GitHubIssueStateSetRequest {\n    readonly kind: \'issue-state-set\';\n    readonly operationId: GitHubExternalOperationId;\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly issueId: GitHubIssueId;\n    readonly desiredState: \'open\' | \'closed\';\n}',
+  },
+  {
+    name: 'GitHubMutationMap',
+    declaration: 'export interface GitHubMutationMap {\n    \'issue-create\': {\n        readonly request: GitHubIssueCreateRequest;\n        readonly result: GitHubIssueCreateInspectionHint;\n        readonly inspection: GitHubIssueCreateInspection;\n    };\n    \'project-item-add\': {\n        readonly request: GitHubProjectItemAddRequest;\n        readonly result: void;\n        readonly inspection: GitHubProjectItemAddInspection;\n    };\n    \'project-item-status-set\': {\n        readonly request: GitHubProjectItemStatusSetRequest;\n        readonly result: void;\n        readonly inspection: GitHubProjectItemStatusSetInspection;\n    };\n    \'project-item-position-set\': {\n        readonly request: GitHubProjectItemPositionSetRequest;\n        readonly result: void;\n        readonly inspection: GitHubProjectItemPositionSetInspection;\n    };\n    \'issue-state-set\': {\n        readonly request: GitHubIssueStateSetRequest;\n        readonly result: void;\n        readonly inspection: GitHubIssueStateSetInspection;\n    };\n}',
   },
   {
     name: 'GitHubPermissionFact',
@@ -3752,6 +3824,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type GitHubProjectId = Branded<\'GitHubProjectId\'>;',
   },
   {
+    name: 'GitHubProjectItemAddInspection',
+    declaration: 'export interface GitHubProjectItemAddInspection {\n    readonly snapshot: GitHubProjectItemAddSnapshot;\n    readonly observedAt: number;\n}',
+  },
+  {
+    name: 'GitHubProjectItemAddRequest',
+    declaration: 'export interface GitHubProjectItemAddRequest {\n    readonly kind: \'project-item-add\';\n    readonly operationId: GitHubExternalOperationId;\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly projectId: GitHubProjectId;\n    readonly issueId: GitHubIssueId;\n}',
+  },
+  {
     name: 'GitHubProjectItemContent',
     declaration: 'export type GitHubProjectItemContent = {\n    readonly kind: \'issue\';\n    readonly issue: GitHubIssueFact;\n} | {\n    readonly kind: \'pull-request\';\n    readonly id: GitHubPullRequestId;\n    readonly repositoryId?: GitHubRepositoryId | undefined;\n    readonly url?: string | undefined;\n} | {\n    readonly kind: \'draft-issue\';\n    readonly title: string;\n} | {\n    readonly kind: \'redacted\';\n} | {\n    readonly kind: \'other\';\n    readonly typeName: string;\n};',
   },
@@ -3762,6 +3842,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitHubProjectItemId',
     declaration: 'export type GitHubProjectItemId = Branded<\'GitHubProjectItemId\'>;',
+  },
+  {
+    name: 'GitHubProjectItemPositionSetInspection',
+    declaration: 'export interface GitHubProjectItemPositionSetInspection {\n    readonly snapshot: GitHubProjectItemPositionSnapshot;\n    readonly observedAt: number;\n}',
+  },
+  {
+    name: 'GitHubProjectItemPositionSetRequest',
+    declaration: 'export interface GitHubProjectItemPositionSetRequest {\n    readonly kind: \'project-item-position-set\';\n    readonly operationId: GitHubExternalOperationId;\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly projectId: GitHubProjectId;\n    readonly issueId: GitHubIssueId;\n    readonly projectItemId: GitHubProjectItemId;\n    readonly statusFieldId: GitHubProjectFieldId;\n    readonly afterItemId: GitHubProjectItemId | null;\n}',
+  },
+  {
+    name: 'GitHubProjectItemStatusSetInspection',
+    declaration: 'export interface GitHubProjectItemStatusSetInspection {\n    readonly snapshot: GitHubTargetedWorkItemSnapshot;\n    readonly observedAt: number;\n}',
+  },
+  {
+    name: 'GitHubProjectItemStatusSetRequest',
+    declaration: 'export interface GitHubProjectItemStatusSetRequest {\n    readonly kind: \'project-item-status-set\';\n    readonly operationId: GitHubExternalOperationId;\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly projectId: GitHubProjectId;\n    readonly issueId: GitHubIssueId;\n    readonly projectItemId: GitHubProjectItemId;\n    readonly statusFieldId: GitHubProjectFieldId;\n    readonly desiredStatusOptionId: GitHubProjectOptionId;\n}',
   },
   {
     name: 'GitHubProjectOptionFact',
@@ -3878,6 +3974,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitHubTagTarget',
     declaration: 'export type GitHubTagTarget = {\n    readonly kind: \'tag\';\n    readonly id: GitHubTagObjectId;\n} | {\n    readonly kind: \'commit\';\n    readonly id: GitHubCommitId;\n};',
+  },
+  {
+    name: 'GitHubTargetedWorkItemSnapshot',
+    declaration: 'export interface GitHubTargetedWorkItemSnapshot {\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly projectId: GitHubProjectId;\n    readonly statusFieldId: GitHubProjectFieldId;\n    readonly issue: GitHubIssueFact;\n    readonly membership: GitHubTargetedWorkItemMembership;\n}',
   },
   {
     name: 'GitMutationExpectation',
@@ -4424,6 +4524,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ModelModalityMap {\n    text: \'text\';\n    image: \'image\';\n}',
   },
   {
+    name: 'MoveWorkItemIntent',
+    declaration: 'export interface MoveWorkItemIntent {\n    readonly type: \'move-work-item\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly workItemId: SakiBoardWorkItemId;\n    readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint;\n    readonly targetStatus: SakiBoardStatus;\n    readonly position?: MoveWorkItemPosition | undefined;\n}',
+  },
+  {
     name: 'ObjectJsonSchema',
     declaration: 'export type ObjectJsonSchema = JsonSchemaNode & {\n    type: \'object\';\n};',
   },
@@ -4797,19 +4901,27 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiBoardMutationAvailabilityProjection',
-    declaration: 'export interface SakiBoardMutationAvailabilityProjection {\n    readonly available: false;\n    readonly reasons: readonly SakiBoardMutationUnavailableReason[];\n}',
+    declaration: 'export type SakiBoardMutationAvailabilityProjection = {\n    readonly available: true;\n    readonly reasons: readonly [\n    ];\n} | {\n    readonly available: false;\n    readonly reasons: readonly SakiBoardMutationUnavailableReason[];\n};',
   },
   {
     name: 'SakiBoardMutationUnavailableReason',
-    declaration: 'export type SakiBoardMutationUnavailableReason = \'synchronization-unconfigured\' | \'configuration-not-activated\' | \'mapping-revalidation-required\' | \'mapping-repair-required\' | \'checkpoint-unavailable\' | \'no-concrete-mutation\';',
+    declaration: 'export type SakiBoardMutationUnavailableReason = \'synchronization-unconfigured\' | \'configuration-not-activated\' | \'mapping-revalidation-required\' | \'mapping-repair-required\' | \'checkpoint-unavailable\' | \'provider-unavailable\' | \'action-denied\';',
   },
   {
     name: 'SakiBoardQuery',
     declaration: 'export interface SakiBoardQuery {\n    readonly type: \'board\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly refresh: \'cached\' | \'interactive\';\n}',
   },
   {
+    name: 'SakiBoardRemoteFingerprint',
+    declaration: 'export type SakiBoardRemoteFingerprint = Branded<\'SakiBoardRemoteFingerprint\'>;',
+  },
+  {
     name: 'SakiBoardStatus',
     declaration: 'export type SakiBoardStatus = \'inbox\' | \'backlog\' | \'ready\' | \'in-progress\' | \'in-review\' | \'done\' | \'canceled\';',
+  },
+  {
+    name: 'SakiBoardWorkItemId',
+    declaration: 'export type SakiBoardWorkItemId = Branded<\'SakiBoardWorkItemId\'>;',
   },
   {
     name: 'SakiBootstrapChallengePurpose',
@@ -4941,11 +5053,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiIntentMap',
-    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n}',
+    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n    readonly \'create-work-item\': CreateWorkItemIntent;\n    readonly \'move-work-item\': MoveWorkItemIntent;\n}',
   },
   {
     name: 'SakiIntentReceipt',
-    declaration: 'export type SakiIntentReceipt<K extends keyof SakiIntentReceiptMap = \'register-development-project\'> = K extends keyof SakiIntentReceiptMap ? SakiIntentReceiptMap[K] : never;',
+    declaration: 'export type SakiIntentReceipt<K extends keyof SakiIntentReceiptMap = keyof SakiIntentReceiptMap> = SakiIntentReceiptMap[K];',
   },
   {
     name: 'SakiIntentReceiptMap',

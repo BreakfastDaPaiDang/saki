@@ -14,6 +14,7 @@ import {
   SakiGitHub,
 } from '@breakfastdapaidang/saki-github'
 import type {
+  GitHubMutationMap,
   GitHubReadMap,
   GitHubScanMap,
 } from '@breakfastdapaidang/saki-github'
@@ -30,6 +31,12 @@ import {
   readTagReference,
 } from './reads.ts'
 import { InstallationPriorityQueue } from './priority-queue.ts'
+import { inspectProjectItemStatus } from './project-item-status-inspection.ts'
+import { inspectProjectItemAdd } from './project-item-add-inspection.ts'
+import { inspectIssueState } from './issue-state-inspection.ts'
+import { inspectIssueCreate } from './issue-create-inspection.ts'
+import { inspectProjectItemPosition } from './project-item-position-inspection.ts'
+import { addProjectItem, createIssue, setIssueState, setProjectItemPosition, setProjectItemStatus } from './mutations.ts'
 import { scanProjectBoard } from './scan.ts'
 import { ScanConcurrencyGate } from './scan-gate.ts'
 
@@ -140,6 +147,70 @@ export class SakiGitHubApp extends SakiGitHub {
           const queue = this.queueFor(request.installation.installationId)
           return await scanProjectBoard(request, privateKey, this.config, operationSignal, queue)
         })
+      } catch (error) {
+        throw translateGitHubError(error, request.kind, operationSignal)
+      }
+    })
+  }
+
+  /** @inheritdoc */
+  override dispatch<K extends keyof GitHubMutationMap>(
+    request: GitHubMutationMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<GitHubMutationMap[K]['result']> {
+    return this.runOwned(signal, async (operationSignal) => {
+      try {
+        operationSignal.throwIfAborted()
+        const privateKey = await this.resolvePrivateKey(request.installation.privateKeyRef)
+        const queue = this.queueFor(request.installation.installationId)
+        if (request.kind === 'issue-create') {
+          return await createIssue(request, privateKey, this.config, operationSignal, queue)
+        }
+        if (request.kind === 'project-item-add') {
+          await addProjectItem(request, privateKey, this.config, operationSignal, queue)
+          return
+        }
+        if (request.kind === 'project-item-position-set') {
+          await setProjectItemPosition(request, privateKey, this.config, operationSignal, queue)
+          return
+        }
+        if (request.kind === 'issue-state-set') {
+          await setIssueState(request, privateKey, this.config, operationSignal, queue)
+          return
+        }
+        await setProjectItemStatus(request, privateKey, this.config, operationSignal, queue)
+      } catch (error) {
+        throw translateGitHubError(error, request.kind, operationSignal)
+      }
+    })
+  }
+
+  /** @inheritdoc */
+  override inspectMutation<K extends keyof GitHubMutationMap>(
+    request: GitHubMutationMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<GitHubMutationMap[K]['inspection']> {
+    // Keep the public generic request/result narrowing visible; `runOwned` already owns the shared lifecycle.
+    /* jscpd:ignore-start */
+    return this.runOwned(signal, async (operationSignal) => {
+      try {
+        operationSignal.throwIfAborted()
+        const privateKey = await this.resolvePrivateKey(request.installation.privateKeyRef)
+        const queue = this.queueFor(request.installation.installationId)
+        /* jscpd:ignore-end */
+        if (request.kind === 'issue-create') {
+          return await inspectIssueCreate(request, privateKey, this.config, operationSignal, queue)
+        }
+        if (request.kind === 'project-item-add') {
+          return await inspectProjectItemAdd(request, privateKey, this.config, operationSignal, queue)
+        }
+        if (request.kind === 'issue-state-set') {
+          return await inspectIssueState(request, privateKey, this.config, operationSignal, queue)
+        }
+        if (request.kind === 'project-item-position-set') {
+          return await inspectProjectItemPosition(request, privateKey, this.config, operationSignal, queue)
+        }
+        return await inspectProjectItemStatus(request, privateKey, this.config, operationSignal, queue)
       } catch (error) {
         throw translateGitHubError(error, request.kind, operationSignal)
       }

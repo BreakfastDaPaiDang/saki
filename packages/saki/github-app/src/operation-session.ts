@@ -26,8 +26,8 @@ const authenticationSchema = z.object({
   ])).max(500).optional(),
 }).loose()
 
-/** Read-only Product App permissions requested for B05 operations. */
-export const PRODUCT_APP_READ_PERMISSIONS = Object.freeze({
+/** Complete Product App permission profile for existing read operations. */
+const READ_PERMISSIONS = Object.freeze({
   actions: 'read',
   checks: 'read',
   contents: 'read',
@@ -37,6 +37,59 @@ export const PRODUCT_APP_READ_PERMISSIONS = Object.freeze({
   pull_requests: 'read',
   statuses: 'read',
 })
+
+/** Minimal Product App permission profile for Project mutations. */
+const PROJECT_WRITE_PERMISSIONS = Object.freeze({
+  metadata: 'read',
+  organization_projects: 'write',
+})
+
+/** Minimal Product App permission profile for Issue mutations. */
+const ISSUE_WRITE_PERMISSIONS = Object.freeze({
+  issues: 'write',
+  metadata: 'read',
+})
+
+/** Minimal Product App permission profile for Issue inspections. */
+const ISSUE_READ_PERMISSIONS = Object.freeze({
+  issues: 'read',
+  metadata: 'read',
+})
+
+/** Minimal Product App permission profile for Project inspections. */
+const PROJECT_READ_PERMISSIONS = Object.freeze({
+  issues: 'read',
+  metadata: 'read',
+  organization_projects: 'read',
+})
+
+/** Closed operation purpose used to select provider-owned token permissions. */
+type GitHubOperationPurpose =
+  | 'read'
+  | 'issue-create'
+  | 'issue-create-inspection'
+  | 'project-item-add'
+  | 'project-item-add-inspection'
+  | 'project-item-position-set'
+  | 'project-item-status-set'
+  | 'project-item-status-inspection'
+  | 'issue-state-set'
+  | 'issue-state-inspection'
+  | 'project-item-position-inspection'
+
+const PRODUCT_APP_OPERATION_PERMISSIONS = {
+  read: READ_PERMISSIONS,
+  'issue-create': ISSUE_WRITE_PERMISSIONS,
+  'issue-create-inspection': ISSUE_READ_PERMISSIONS,
+  'project-item-add': PROJECT_WRITE_PERMISSIONS,
+  'project-item-add-inspection': PROJECT_READ_PERMISSIONS,
+  'project-item-position-set': PROJECT_WRITE_PERMISSIONS,
+  'project-item-status-set': PROJECT_WRITE_PERMISSIONS,
+  'project-item-status-inspection': PROJECT_READ_PERMISSIONS,
+  'issue-state-set': ISSUE_WRITE_PERMISSIONS,
+  'issue-state-inspection': ISSUE_READ_PERMISSIONS,
+  'project-item-position-inspection': PROJECT_READ_PERMISSIONS,
+} satisfies Record<GitHubOperationPurpose, Readonly<Record<string, 'read' | 'write' | 'admin'>>>
 
 /** Validated installation-token metadata retained without the token. */
 export interface InstallationTokenFact {
@@ -52,7 +105,7 @@ export interface InstallationTokenFact {
 export class GitHubOperationSession {
   /** App-JWT client used only for installation inspection. */
   readonly app: Octokit
-  /** Short-lived installation-token client used for operation reads. */
+  /** Short-lived installation-token client used for operation requests. */
   readonly installation: Octokit
   /** Safe metadata retained from the admitted installation-token response. */
   readonly token: InstallationTokenFact
@@ -72,6 +125,7 @@ export class GitHubOperationSession {
    * @param signal - operation lifetime.
    * @param queue - concurrency-one scheduler for this installation.
    * @param priority - operation priority applied independently to each HTTP request.
+   * @param purpose - provider-owned permission profile for this operation.
    * @returns authenticated, bounded clients and safe token metadata.
    */
   static async create(
@@ -82,6 +136,7 @@ export class GitHubOperationSession {
     signal: AbortSignal,
     queue: InstallationPriorityQueue,
     priority: GitHubRequestPriority,
+    purpose: GitHubOperationPurpose = 'read',
   ): Promise<GitHubOperationSession> {
     const boundedFetch = createBoundedFetch(config, signal, queue, priority)
     const app = new Octokit({
@@ -92,14 +147,15 @@ export class GitHubOperationSession {
     const repositoryIds = repositoryDatabaseId === undefined
       ? undefined
       : [safeNumericId(repositoryDatabaseId, 'Repository database id')]
+    const permissions = permissionsFor(purpose)
     const rawAuthentication: unknown = await app.auth({
       type: 'installation',
       installationId: safeNumericId(profile.installationId, 'installation id'),
-      permissions: PRODUCT_APP_READ_PERMISSIONS,
+      permissions,
       ...(repositoryIds === undefined ? {} : { repositoryIds }),
     })
     const authentication = authenticationSchema.parse(rawAuthentication)
-    validateTokenPermissions(authentication.permissions)
+    validateTokenPermissions(authentication.permissions, permissions)
     if (repositoryIds !== undefined && (
       authentication.repositorySelection !== 'selected'
       || authentication.repositoryIds?.length !== 1
@@ -124,8 +180,15 @@ export class GitHubOperationSession {
   }
 }
 
-function validateTokenPermissions(observed: Readonly<Record<string, 'read' | 'write' | 'admin'>>): void {
-  for (const [permission, required] of Object.entries(PRODUCT_APP_READ_PERMISSIONS)) {
+function permissionsFor(purpose: GitHubOperationPurpose): Readonly<Record<string, 'read' | 'write' | 'admin'>> {
+  return PRODUCT_APP_OPERATION_PERMISSIONS[purpose]
+}
+
+function validateTokenPermissions(
+  observed: Readonly<Record<string, 'read' | 'write' | 'admin'>>,
+  expected: Readonly<Record<string, 'read' | 'write' | 'admin'>>,
+): void {
+  for (const [permission, required] of Object.entries(expected)) {
     const granted = observed[permission]
     if (granted !== required) {
       throw new GitHubProviderError({
@@ -136,7 +199,7 @@ function validateTokenPermissions(observed: Readonly<Record<string, 'read' | 'wr
       })
     }
   }
-  const extra = Object.keys(observed).find(permission => !(permission in PRODUCT_APP_READ_PERMISSIONS))
+  const extra = Object.keys(observed).find(permission => !(permission in expected))
   if (extra !== undefined) {
     throw new GitHubProviderError({
       code: 'permission-mismatch',

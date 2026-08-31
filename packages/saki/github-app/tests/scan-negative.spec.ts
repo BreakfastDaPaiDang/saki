@@ -77,7 +77,7 @@ const PAGE_END = { hasNextPage: false, endCursor: null }
 function fenceData(options: {
   readonly projectId?: string
   readonly repositoryId?: string
-  readonly repositoryDatabaseId?: string
+  readonly repositoryDatabaseId?: number
   readonly projectUpdatedAt?: string
   readonly repositoryUpdatedAt?: string
   readonly itemCount?: number
@@ -98,7 +98,7 @@ function fenceData(options: {
     repository: {
       __typename: 'Repository',
       id: options.repositoryId ?? REQUEST.repositoryId,
-      databaseId: options.repositoryDatabaseId ?? REQUEST.repositoryDatabaseId,
+      databaseId: options.repositoryDatabaseId ?? Number(REQUEST.repositoryDatabaseId),
       nameWithOwner: 'BreakfastDaPaiDang/saki',
       visibility: 'PUBLIC',
       url: 'https://github.com/BreakfastDaPaiDang/saki',
@@ -184,7 +184,7 @@ function issue(id: string, number: number): Record<string, unknown> {
     title: `Issue ${number}`,
     url: `https://github.com/BreakfastDaPaiDang/saki/issues/${number}`,
     updatedAt: '2026-08-26T08:03:00Z',
-    repository: { id: REQUEST.repositoryId, databaseId: REQUEST.repositoryDatabaseId },
+    repository: { id: REQUEST.repositoryId, databaseId: Number(REQUEST.repositoryDatabaseId) },
   }
 }
 
@@ -192,7 +192,7 @@ function issuesData(
   nodes: readonly unknown[] = [],
   pageInfo: Readonly<Record<string, unknown>> = PAGE_END,
   repositoryId: string = REQUEST.repositoryId,
-  repositoryDatabaseId: string = REQUEST.repositoryDatabaseId,
+  repositoryDatabaseId: number = Number(REQUEST.repositoryDatabaseId),
 ): Record<string, unknown> {
   return {
     repository: {
@@ -284,7 +284,7 @@ describe('complete Project Board scan rejection paths', () => {
   it.each([
     ['Project id', { projectId: 'PVT_other' }],
     ['Repository id', { repositoryId: 'R_other' }],
-    ['Repository database id', { repositoryDatabaseId: '4243' }],
+    ['Repository database id', { repositoryDatabaseId: 4_243 }],
   ])('rejects a substituted fence %s', async (_description, override) => {
     await expectInvalid(scan([fenceData(override)]), 'project-board-fence')
   })
@@ -462,8 +462,8 @@ describe('complete Project Board scan rejection paths', () => {
   })
 
   it.each([
-    ['node id', 'R_other', REQUEST.repositoryDatabaseId],
-    ['database id', REQUEST.repositoryId, '4243'],
+    ['node id', 'R_other', Number(REQUEST.repositoryDatabaseId)],
+    ['database id', REQUEST.repositoryId, 4_243],
   ])('rejects a substituted Repository %s on an open-Issues page', async (
     _description,
     repositoryId,
@@ -565,5 +565,12 @@ describe('complete Project Board scan rejection paths', () => {
     await expectInvalid(scan([
       fenceData({ projectUpdatedAt: '0001-01-01T00:00:00Z' }),
     ]), 'timestamp')
+  })
+
+  it('rejects a syntactically valid pre-epoch GraphQL rate reset', async () => {
+    const response = fenceData()
+    ;(response.rateLimit as { resetAt: string }).resetAt = '0001-01-01T00:00:00Z'
+
+    await expectInvalid(scan([response]), 'timestamp')
   })
 })

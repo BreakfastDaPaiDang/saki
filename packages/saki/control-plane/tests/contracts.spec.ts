@@ -10,6 +10,7 @@ import {
   SAKI_ACCESS_FIXTURES,
   SAKI_ACCESS_LIFECYCLE_FIXTURES,
   SAKI_ACCESS_RESULT_FIXTURES,
+  SAKI_BOARD_MUTATION_OVERLAY_FIXTURES,
   SAKI_BOARD_PROJECTION_FIXTURES,
   SAKI_CONTROL_RESULT_FIXTURES,
   SAKI_EMPTY_PROJECT_INDEX_FIXTURE,
@@ -23,6 +24,7 @@ import {
   SAKI_PROJECT_REQUEST_FIXTURES,
   SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES,
   SAKI_SECURITY_RECORD_FIXTURES,
+  SAKI_WORK_ITEM_RESULT_FIXTURES,
 } from '../src/fixtures.ts'
 import {
   resolveSakiAuthentication,
@@ -251,7 +253,7 @@ describe('Saki control-plane public contracts', () => {
       scan: { state: 'scheduled', reason: 'configuration' },
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
+        reasons: ['configuration-not-activated', 'mapping-revalidation-required'],
       },
     })
     expect(activating.synchronization).toMatchObject({
@@ -262,7 +264,7 @@ describe('Saki control-plane public contracts', () => {
       scan: { state: 'in-flight', configurationRevision: 2 },
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
+        reasons: ['configuration-not-activated', 'mapping-revalidation-required'],
       },
     })
     expect(activated.synchronization).toMatchObject({
@@ -272,7 +274,7 @@ describe('Saki control-plane public contracts', () => {
       checkpoint: { generation: 1, configurationRevision: 1 },
       mapping: { state: 'valid', configurationRevision: 1 },
       scan: { state: 'idle' },
-      effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+      effectiveMutationAvailability: { available: true, reasons: [] },
     })
     expect(activated.synchronization.mapping).toEqual({
       state: 'valid',
@@ -294,7 +296,7 @@ describe('Saki control-plane public contracts', () => {
       scan: { state: 'idle' },
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['synchronization-unconfigured', 'checkpoint-unavailable', 'no-concrete-mutation'],
+        reasons: ['synchronization-unconfigured', 'checkpoint-unavailable'],
       },
     })
     expect(awaitingFirstCheckpoint).toMatchObject({
@@ -308,7 +310,6 @@ describe('Saki control-plane public contracts', () => {
           'configuration-not-activated',
           'mapping-revalidation-required',
           'checkpoint-unavailable',
-          'no-concrete-mutation',
         ],
       },
     })
@@ -320,7 +321,7 @@ describe('Saki control-plane public contracts', () => {
       mapping: { state: 'revalidation-required', configurationRevision: 2 },
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'no-concrete-mutation'],
+        reasons: ['configuration-not-activated', 'mapping-revalidation-required'],
       },
     })
     expect(confirmedStaleFailure).toMatchObject({
@@ -335,7 +336,7 @@ describe('Saki control-plane public contracts', () => {
       },
       freshness: { state: 'stale' },
       scan: { state: 'scheduled', reason: 'retry' },
-      effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+      effectiveMutationAvailability: { available: true, reasons: [] },
     })
     expect(confirmedStaleFailure.confirmed?.generation)
       .toBe(confirmedStaleFailure.checkpoint?.generation)
@@ -350,5 +351,17 @@ describe('Saki control-plane public contracts', () => {
       projection: confirmedStaleFailure,
     })
     expect(SAKI_CONTROL_RESULT_FIXTURES.savedProjectSettings).toEqual({ ok: true, projection: saved })
+
+    expect(Object.values(SAKI_BOARD_MUTATION_OVERLAY_FIXTURES).map(overlay => overlay.state)).toEqual([
+      'optimistic',
+      'targeted-confirmed',
+      'conflict',
+      'partial-failure',
+      'reconciliation-required',
+      'repair-required',
+    ])
+    expect(Object.values(SAKI_WORK_ITEM_RESULT_FIXTURES).map(result => (
+      result.receipt.state
+    ))).toEqual(['succeeded', 'prepared', 'conflict', 'partial-failure', 'reconciliation-required'])
   })
 })

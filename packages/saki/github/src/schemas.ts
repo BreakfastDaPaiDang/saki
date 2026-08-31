@@ -1,14 +1,19 @@
 /** Strict runtime schemas for provider-admitted GitHub values. @module @breakfastdapaidang/saki-github/schemas */
 
 import { z } from 'zod'
+import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 import {
+  GITHUB_ISSUE_CREATE_BODY_UTF8_LIMIT,
+  GITHUB_ISSUE_CREATE_TITLE_UTF8_LIMIT,
   GITHUB_INSTALLATION_REPOSITORY_LIMIT,
   GITHUB_PROJECT_BOARD_FIELD_LIMIT,
   GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT,
   GITHUB_RATE_OBSERVATION_LIMIT,
   GITHUB_TAG_PEEL_DEPTH_LIMIT,
 } from './constants.ts'
-import { computeGitHubProjectBoardFingerprint } from './fingerprint.ts'
+import {
+  computeGitHubProjectBoardFingerprint,
+} from './fingerprint.ts'
 import {
   githubAccountIdSchema,
   githubAppIdSchema,
@@ -16,7 +21,8 @@ import {
   githubExternalOperationIdSchema,
   githubInstallationIdSchema,
   githubIssueIdSchema,
-  githubMutationKindSchema,
+  githubIssueCreateMarkerIdSchema,
+  githubIssueCreateEntryIdSchema,
   githubProjectFieldIdSchema,
   githubProjectIdSchema,
   githubProjectItemIdSchema,
@@ -37,6 +43,7 @@ const safeName = z.string().min(1).max(255).regex(/^[^\u0000-\u001f\u007f]+$/)
 const safeRequestId = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/)
 const digest = z.string().regex(/^[0-9a-f]{64}$/)
 const credentialRefSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+  .transform(value => value as CredentialRef)
 const safeUrl = z.url().max(2_048).refine((value) => {
   const parsed = new URL(value)
   return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === '' && parsed.hash === ''
@@ -545,26 +552,407 @@ const mappingMismatchFailureSchema = z.discriminatedUnion('reason', [
 /** Strict closed provider-failure data schema. */
 export const githubFailureSchema = z.union([standardGitHubFailureSchema, mappingMismatchFailureSchema])
 
-/** Strict future mutation identity schema. */
-export const githubMutationIdentitySchema = z.object({
-  operationId: githubExternalOperationIdSchema,
-  kind: githubMutationKindSchema,
-  targetFingerprint: digest,
+/** Strict exact Issue identity returned by create and used by inspection. */
+export const githubIssueCreateInspectionHintSchema = z.object({
+  issueId: githubIssueIdSchema,
+  issueNumber: positiveInteger,
 }).strict()
 
-/** Strict future mutation inspection vocabulary schema. */
-export const githubMutationInspectionSchema = z.discriminatedUnion('state', [
-  z.object({ state: z.literal('pending'), identity: githubMutationIdentitySchema, observedAt: safeTimestamp }).strict(),
-  z.object({ state: z.literal('observed'), identity: githubMutationIdentitySchema, observedAt: safeTimestamp }).strict(),
-  z.object({ state: z.literal('absent'), identity: githubMutationIdentitySchema, observedAt: safeTimestamp }).strict(),
-  z.object({ state: z.literal('unknown'), identity: githubMutationIdentitySchema, observedAt: safeTimestamp }).strict(),
+const issueCreateTitleSchema = z.string().min(1).max(GITHUB_ISSUE_CREATE_TITLE_UTF8_LIMIT)
+  .superRefine((value, ctx) => {
+    if (!value.isWellFormed()) issue(ctx, 'Issue-create title must be well-formed Unicode')
+    if (value.trim() === '') issue(ctx, 'Issue-create title must contain visible text')
+    if (/\r|\n|[\u0000-\u001f\u007f]/u.test(value)) issue(ctx, 'Issue-create title must be one safe line')
+    if (utf8ByteLength(value) > GITHUB_ISSUE_CREATE_TITLE_UTF8_LIMIT) {
+      issue(ctx, 'Issue-create title exceeds the complete UTF-8 byte limit')
+    }
+  })
+
+const issueCreateBodySchema = z.string().min(1).max(GITHUB_ISSUE_CREATE_BODY_UTF8_LIMIT)
+  .superRefine((value, ctx) => {
+    if (!value.isWellFormed()) issue(ctx, 'Issue-create body must be well-formed Unicode')
+    if (value.includes('\r')) issue(ctx, 'Issue-create body must use normalized LF line endings')
+    if (/[\u0000\u007f]/u.test(value)) issue(ctx, 'Issue-create body contains a forbidden control character')
+    if (utf8ByteLength(value) > GITHUB_ISSUE_CREATE_BODY_UTF8_LIMIT) {
+      issue(ctx, 'Issue-create body exceeds the complete UTF-8 byte limit')
+    }
+  })
+
+/** Strict atomic Issue-create request schema. */
+export const githubIssueCreateRequestSchema = z.object({
+  kind: z.literal('issue-create'),
+  operationId: githubExternalOperationIdSchema,
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  title: issueCreateTitleSchema,
+  body: issueCreateBodySchema,
+  markerId: githubIssueCreateMarkerIdSchema,
+  inspectionHint: githubIssueCreateInspectionHintSchema.optional(),
+}).strict().superRefine((request, ctx) => {
+  const marker = `<!-- saki-work-item:${request.markerId} -->`
+  if (!request.body.endsWith(`\n${marker}\n`)) {
+    issue(ctx, 'Issue-create body must end with the exact persisted marker on its own line')
+  }
+  if (request.body.split('<!-- saki-work-item:').length !== 2) {
+    issue(ctx, 'Issue-create body must contain exactly one Saki Work Item marker prefix')
+  }
+})
+
+const projectMembershipItemFactShape = {
+  id: githubProjectItemIdSchema,
+  projectId: githubProjectIdSchema,
+  issueId: githubIssueIdSchema,
+  archived: z.boolean(),
+  apiOrder: safeInteger,
+  totalCount: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  previousItemId: githubProjectItemIdSchema.nullable(),
+  nextItemId: githubProjectItemIdSchema.nullable(),
+  updatedAt: safeTimestamp,
+} as const
+
+/** Strict Project membership fact without an implied Status-field read. */
+const githubProjectMembershipItemFactSchema = z.object(projectMembershipItemFactShape)
+  .strict().superRefine(validateProjectMembershipItem)
+
+/** Strict Project membership fact retained by a Status inspection. */
+const githubTargetedProjectItemFactSchema = z.object({
+  ...projectMembershipItemFactShape,
+  statusOptionId: githubProjectOptionIdSchema.optional(),
+}).strict().superRefine(validateProjectMembershipItem)
+
+const githubTargetedWorkItemMembershipOptions = [
+  z.object({ state: z.literal('present'), item: githubTargetedProjectItemFactSchema }).strict(),
+  z.object({ state: z.literal('absent') }).strict(),
+] as const
+
+const githubTargetedWorkItemMembershipSchema = z.discriminatedUnion(
+  'state',
+  githubTargetedWorkItemMembershipOptions,
+)
+
+function validateProjectMembershipItem(
+  item: {
+    readonly id: z.infer<typeof githubProjectItemIdSchema>
+    readonly apiOrder: number
+    readonly totalCount: number
+    readonly previousItemId: z.infer<typeof githubProjectItemIdSchema> | null
+    readonly nextItemId: z.infer<typeof githubProjectItemIdSchema> | null
+  },
+  ctx: z.core.$RefinementCtx,
+): void {
+  if (item.apiOrder >= item.totalCount) {
+    issue(ctx, 'Project item order must be within the complete connection')
+  }
+  if ((item.apiOrder === 0) !== (item.previousItemId === null)) {
+    issue(ctx, 'Project item previous neighbor must match its complete position')
+  }
+  if ((item.apiOrder === item.totalCount - 1) !== (item.nextItemId === null)) {
+    issue(ctx, 'Project item next neighbor must match its complete position')
+  }
+  if (item.previousItemId === item.id || item.nextItemId === item.id
+    || (item.previousItemId !== null && item.previousItemId === item.nextItemId)) {
+    issue(ctx, 'Project item neighbors must be distinct')
+  }
+}
+
+/** Strict raw targeted Work Item snapshot schema. */
+const githubTargetedWorkItemSnapshotSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  projectId: githubProjectIdSchema,
+  statusFieldId: githubProjectFieldIdSchema,
+  issue: githubIssueFactSchema,
+  membership: githubTargetedWorkItemMembershipSchema,
+}).strict().superRefine((snapshot, ctx) => {
+  if (snapshot.issue.repositoryId !== snapshot.repositoryId
+    || snapshot.issue.repositoryDatabaseId !== snapshot.repositoryDatabaseId) {
+    issue(ctx, 'targeted Issue ownership must match the inspected Repository')
+  }
+  if (snapshot.membership.state === 'present'
+    && (snapshot.membership.item.projectId !== snapshot.projectId
+      || snapshot.membership.item.issueId !== snapshot.issue.id)) {
+    issue(ctx, 'targeted Project membership must match the inspected Project and Issue')
+  }
+})
+
+/** Strict targeted post-dispatch Status observation schema. */
+export const githubProjectItemStatusSetInspectionSchema = z.object({
+  snapshot: githubTargetedWorkItemSnapshotSchema,
+  observedAt: safeTimestamp,
+}).strict()
+
+const githubProjectItemAddMembershipSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('absent') }).strict(),
+  z.object({ state: z.literal('present'), item: githubProjectMembershipItemFactSchema }).strict(),
   z.object({
-    state: z.literal('error'),
-    identity: githubMutationIdentitySchema,
-    failure: githubFailureSchema,
-    observedAt: safeTimestamp,
+    state: z.literal('duplicate-conflict'),
+    items: z.array(githubProjectMembershipItemFactSchema)
+      .min(2)
+      .max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
   }).strict(),
 ])
+
+const githubProjectItemPositionMembershipSchema = z.discriminatedUnion('state', [
+  ...githubTargetedWorkItemMembershipOptions,
+  z.object({
+    state: z.literal('duplicate-conflict'),
+    items: z.array(githubTargetedProjectItemFactSchema)
+      .min(2)
+      .max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+  }).strict(),
+])
+
+/** Strict Issue-selected Project membership snapshot schema. */
+export const githubProjectItemAddSnapshotSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  projectId: githubProjectIdSchema,
+  issue: githubIssueFactSchema,
+  membership: githubProjectItemAddMembershipSchema,
+}).strict().superRefine((snapshot, ctx) => {
+  if (snapshot.issue.repositoryId !== snapshot.repositoryId
+    || snapshot.issue.repositoryDatabaseId !== snapshot.repositoryDatabaseId) {
+    issue(ctx, 'targeted Issue ownership must match the inspected Repository')
+  }
+  const items = snapshot.membership.state === 'absent'
+    ? []
+    : snapshot.membership.state === 'present'
+      ? [snapshot.membership.item]
+      : snapshot.membership.items
+  for (const item of items) {
+    if (item.projectId !== snapshot.projectId || item.issueId !== snapshot.issue.id) {
+      issue(ctx, 'targeted Project membership must match the inspected Project and Issue')
+    }
+  }
+  if (snapshot.membership.state === 'duplicate-conflict') {
+    rejectDuplicate(items.map(item => item.id), 'duplicate membership item id', ctx)
+    rejectDuplicate(items.map(item => String(item.apiOrder)), 'duplicate membership API order', ctx)
+    const totalCount = items[0]?.totalCount
+    if (items.some((item, index) => item.totalCount !== totalCount
+      || (index > 0 && item.apiOrder <= (items[index - 1]?.apiOrder ?? Number.MAX_SAFE_INTEGER)))) {
+      issue(ctx, 'duplicate memberships must retain one complete ordered connection')
+    }
+  }
+})
+
+/** Strict targeted Project membership observation schema. */
+export const githubProjectItemAddInspectionSchema = z.object({
+  snapshot: githubProjectItemAddSnapshotSchema,
+  observedAt: safeTimestamp,
+}).strict()
+
+/** Strict API-position anchor fact without an implied content kind. */
+const githubProjectItemPositionAnchorFactSchema = z.object({
+  id: githubProjectItemIdSchema,
+  projectId: githubProjectIdSchema,
+  issue: githubIssueFactSchema,
+  statusOptionId: githubProjectOptionIdSchema.optional(),
+  archived: z.boolean(),
+  apiOrder: safeInteger,
+  totalCount: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  previousItemId: githubProjectItemIdSchema.nullable(),
+  nextItemId: githubProjectItemIdSchema.nullable(),
+  updatedAt: safeTimestamp,
+}).strict().superRefine(validateProjectMembershipItem)
+
+/** Strict observed predecessor and Project membership snapshot. */
+export const githubProjectItemPositionSnapshotSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  projectId: githubProjectIdSchema,
+  statusFieldId: githubProjectFieldIdSchema,
+  issue: githubIssueFactSchema,
+  membership: githubProjectItemPositionMembershipSchema,
+  after: z.discriminatedUnion('state', [
+    z.object({ state: z.literal('top') }).strict(),
+    z.object({ state: z.literal('present'), item: githubProjectItemPositionAnchorFactSchema }).strict(),
+    z.object({ state: z.literal('absent'), itemId: githubProjectItemIdSchema }).strict(),
+  ]),
+}).strict().superRefine((snapshot, ctx) => {
+  if (snapshot.issue.repositoryId !== snapshot.repositoryId
+    || snapshot.issue.repositoryDatabaseId !== snapshot.repositoryDatabaseId) {
+    issue(ctx, 'position Issue ownership must match the inspected Repository')
+  }
+  const memberships = snapshot.membership.state === 'absent'
+    ? []
+    : snapshot.membership.state === 'present'
+      ? [snapshot.membership.item]
+      : snapshot.membership.items
+  for (const item of memberships) {
+    if (item.projectId !== snapshot.projectId || item.issueId !== snapshot.issue.id) {
+      issue(ctx, 'position membership must match the inspected Project and Issue')
+    }
+  }
+  if (snapshot.membership.state === 'duplicate-conflict') {
+    rejectDuplicate(memberships.map(item => item.id), 'duplicate position membership item id', ctx)
+    rejectDuplicate(memberships.map(item => String(item.apiOrder)), 'duplicate position membership API order', ctx)
+    let previousApiOrder = -1
+    for (const item of memberships) {
+      if (item.apiOrder <= previousApiOrder) {
+        issue(ctx, 'duplicate position memberships must remain in API order')
+      }
+      previousApiOrder = item.apiOrder
+    }
+  }
+  if (snapshot.after.state === 'present'
+    && (snapshot.after.item.projectId !== snapshot.projectId
+      || snapshot.after.item.issue.repositoryId !== snapshot.repositoryId
+      || snapshot.after.item.issue.repositoryDatabaseId !== snapshot.repositoryDatabaseId)) {
+    issue(ctx, 'position predecessor observation must match the inspected Project and Repository')
+  }
+})
+
+/** Strict targeted Project-item API-position observation schema. */
+export const githubProjectItemPositionSetInspectionSchema = z.object({
+  snapshot: githubProjectItemPositionSnapshotSchema,
+  observedAt: safeTimestamp,
+}).strict()
+
+/** Strict repository-bound Issue-state snapshot schema. */
+export const githubIssueStateSnapshotSchema = z.object({
+  issue: githubIssueFactSchema,
+}).strict()
+
+/** Strict targeted Issue-state observation schema. */
+export const githubIssueStateSetInspectionSchema = z.object({
+  snapshot: githubIssueStateSnapshotSchema,
+  observedAt: safeTimestamp,
+}).strict()
+
+/** Strict safe pull-request fact admitted from the REST Issues collection. */
+const githubIssueCreatePullRequestFactSchema = z.object({
+  id: githubIssueCreateEntryIdSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  number: positiveInteger,
+  state: z.enum(['open', 'closed']),
+  title: safeText,
+  url: safeUrl,
+  updatedAt: safeTimestamp,
+}).strict()
+
+/** Strict exact-marker REST Issues match schema. */
+const githubIssueCreateMarkerMatchSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('issue'),
+    issue: githubIssueFactSchema,
+    markerOccurrences: safeInteger,
+  }).strict(),
+  z.object({
+    kind: z.literal('pull-request'),
+    pullRequest: githubIssueCreatePullRequestFactSchema,
+    markerOccurrences: safeInteger,
+  }).strict(),
+])
+
+const githubIssueCreateInspectionOutcomeSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('unique-issue'), issue: githubIssueFactSchema }).strict(),
+  z.object({ state: z.literal('absent-complete') }).strict(),
+  z.object({
+    state: z.literal('pull-request-marker-match'),
+    pullRequest: githubIssueCreatePullRequestFactSchema,
+  }).strict(),
+  z.object({
+    state: z.literal('marker-removed'),
+    hint: githubIssueCreateInspectionHintSchema,
+    issue: githubIssueFactSchema,
+  }).strict(),
+  z.object({
+    state: z.literal('known-issue-absent'),
+    hint: githubIssueCreateInspectionHintSchema,
+  }).strict(),
+  z.object({
+    state: z.literal('identity-conflict'),
+    hint: githubIssueCreateInspectionHintSchema,
+    observed: githubIssueCreateMarkerMatchSchema,
+  }).strict(),
+  z.object({
+    state: z.literal('multiple-matches'),
+    matchCount: z.number().int().min(2).max(Number.MAX_SAFE_INTEGER),
+    matches: z.array(githubIssueCreateMarkerMatchSchema).min(1).max(2),
+  }).strict(),
+  z.object({
+    state: z.literal('incomplete'),
+    reason: z.enum(['page-limit', 'item-limit', 'pagination', 'duplicate-entry']),
+    observedMatchCount: safeInteger,
+    observedMatches: z.array(githubIssueCreateMarkerMatchSchema).max(2),
+  }).strict(),
+])
+
+/** Strict repository-bound Issue-create marker snapshot schema. */
+const githubIssueCreateSnapshotSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  outcome: githubIssueCreateInspectionOutcomeSchema,
+}).strict().superRefine((snapshot, ctx) => {
+  const matches = issueCreateOutcomeMatches(snapshot.outcome)
+  for (const match of matches) {
+    if (issueCreateMatchRepositoryId(match) !== snapshot.repositoryId
+      || issueCreateMatchRepositoryDatabaseId(match) !== snapshot.repositoryDatabaseId) {
+      issue(ctx, 'Issue-create outcome must match the inspected Repository')
+    }
+  }
+  rejectDuplicate(matches.map(issueCreateMatchKey), 'Issue-create outcome match', ctx)
+  const outcome = snapshot.outcome
+  if (outcome.state === 'marker-removed'
+    && (outcome.issue.id !== outcome.hint.issueId || outcome.issue.number !== outcome.hint.issueNumber)) {
+    issue(ctx, 'marker-removed evidence must identify the exact hinted Issue')
+  }
+  if (outcome.state === 'marker-removed'
+    && (outcome.issue.repositoryId !== snapshot.repositoryId
+      || outcome.issue.repositoryDatabaseId !== snapshot.repositoryDatabaseId)) {
+    issue(ctx, 'marker-removed evidence must match the inspected Repository')
+  }
+  if (outcome.state === 'multiple-matches') {
+    const retainedOccurrences = outcome.matches.reduce((count, match) => count + match.markerOccurrences, 0)
+    if (retainedOccurrences < 2 || outcome.matchCount < retainedOccurrences) {
+      issue(ctx, 'multiple Issue-create matches must retain proof of non-uniqueness and a valid total count')
+    }
+  }
+  if (outcome.state === 'incomplete' && outcome.observedMatchCount < outcome.observedMatches.length) {
+    issue(ctx, 'incomplete Issue-create evidence must retain a valid observed count')
+  }
+})
+
+/** Strict targeted Issue-create exact-marker observation schema. */
+export const githubIssueCreateInspectionSchema = z.object({
+  snapshot: githubIssueCreateSnapshotSchema,
+  observedAt: safeTimestamp,
+}).strict()
+
+function issueCreateOutcomeMatches(
+  outcome: z.infer<typeof githubIssueCreateInspectionOutcomeSchema>,
+): readonly z.infer<typeof githubIssueCreateMarkerMatchSchema>[] {
+  switch (outcome.state) {
+    case 'unique-issue': return [{ kind: 'issue', issue: outcome.issue, markerOccurrences: 1 }]
+    case 'pull-request-marker-match': return [{
+      kind: 'pull-request', pullRequest: outcome.pullRequest, markerOccurrences: 1,
+    }]
+    case 'marker-removed': return []
+    case 'identity-conflict': return [outcome.observed]
+    case 'multiple-matches': return outcome.matches
+    case 'incomplete': return outcome.observedMatches
+    case 'absent-complete':
+    case 'known-issue-absent': return []
+  }
+}
+
+function issueCreateMatchRepositoryId(match: z.infer<typeof githubIssueCreateMarkerMatchSchema>): string {
+  return match.kind === 'issue' ? match.issue.repositoryId : match.pullRequest.repositoryId
+}
+
+function issueCreateMatchRepositoryDatabaseId(match: z.infer<typeof githubIssueCreateMarkerMatchSchema>): string {
+  return match.kind === 'issue' ? match.issue.repositoryDatabaseId : match.pullRequest.repositoryDatabaseId
+}
+
+function issueCreateMatchKey(match: z.infer<typeof githubIssueCreateMarkerMatchSchema>): string {
+  return match.kind === 'issue' ? `issue:${match.issue.id}` : `pull-request:${match.pullRequest.id}`
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength
+}
 
 function rejectDuplicate(values: readonly string[], subject: string, ctx: z.core.$RefinementCtx): void {
   if (new Set(values).size !== values.length) issue(ctx, `${subject} must not repeat`)

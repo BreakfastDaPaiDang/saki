@@ -23,6 +23,7 @@ import {
   githubAppId,
   SakiGitHub,
   type GitHubIssueId,
+  type GitHubMutationMap,
   type GitHubReadMap,
   type GitHubProjectBoardScanCandidate,
   type GitHubProjectBoardFingerprintSource,
@@ -120,6 +121,14 @@ class FakeBoardGitHub extends SakiGitHub {
       throw failure
     }
     return structuredClone(this.candidate)
+  }
+
+  override async dispatch<K extends keyof GitHubMutationMap>(): Promise<GitHubMutationMap[K]['result']> {
+    throw new Error('scan-only fake must not dispatch a GitHub mutation')
+  }
+
+  override async inspectMutation<K extends keyof GitHubMutationMap>(): Promise<GitHubMutationMap[K]['inspection']> {
+    throw new Error('scan-only fake must not inspect a GitHub mutation')
   }
 }
 
@@ -289,6 +298,7 @@ function githubSynchronization(harness: Harness): GitHubProjectSynchronization {
   return new GitHubProjectSynchronization({
     syncTable: domain.table('github_project_sync'),
     intentTable: domain.table('github_sync_configuration_intents'),
+    workItemRecovery: () => undefined,
     installationId: harness.control.identity().installationId,
     projectExists: () => true,
     authorityCurrent: () => true,
@@ -1181,7 +1191,8 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         },
         checkpoint: { generation: 1, configurationRevision: 1 },
         mapping: { state: 'valid', configurationRevision: 1 },
-        effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+        effectiveMutationAvailability: { available: false, reasons: ['provider-unavailable'] },
+        mutationOverlays: [],
       },
     })
     await harness.close()
@@ -1282,7 +1293,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     })
     expect(after.projection.effectiveMutationAvailability).toEqual({
       available: false,
-      reasons: ['configuration-not-activated', 'mapping-repair-required', 'no-concrete-mutation'],
+      reasons: ['configuration-not-activated', 'mapping-repair-required', 'provider-unavailable'],
     })
     expect(await harness.control.query(harness.authentication, {
       type: 'project-settings',

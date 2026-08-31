@@ -7,13 +7,20 @@ import {
 import type { GitHubInstallationProfile } from '@breakfastdapaidang/saki-github'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ResolvedConfig } from '../src/index.ts'
-import {
-  GitHubOperationSession,
-  PRODUCT_APP_READ_PERMISSIONS,
-} from '../src/operation-session.ts'
+import { GitHubOperationSession } from '../src/operation-session.ts'
 import { GitHubResponseLimitError } from '../src/errors.ts'
 import { InstallationPriorityQueue } from '../src/priority-queue.ts'
-import { json, privateKey } from './harness.ts'
+import {
+  expectedIssueReadPermissions,
+  expectedIssueWritePermissions,
+  expectedProjectReadPermissions,
+  expectedProjectWritePermissions,
+  expectedReadPermissions,
+  json,
+  privateKey,
+} from './harness.ts'
+
+type OperationPurpose = NonNullable<Parameters<typeof GitHubOperationSession.create>[7]>
 
 const PROFILE: GitHubInstallationProfile = {
   appId: githubAppId('12345'),
@@ -37,7 +44,7 @@ function authentication(overrides: Readonly<Record<string, unknown>> = {}): Reco
   return {
     token: 'ghs_operation_session_fixture',
     expires_at: '2030-01-02T03:04:05Z',
-    permissions: PRODUCT_APP_READ_PERMISSIONS,
+    permissions: expectedReadPermissions,
     repository_selection: 'selected',
     repositories: [{ id: 4_242 }],
     ...overrides,
@@ -48,6 +55,7 @@ async function create(
   config: ResolvedConfig = CONFIG,
   profile: GitHubInstallationProfile = PROFILE,
   repositoryDatabaseId = githubRepositoryDatabaseId('4242'),
+  purpose: OperationPurpose = 'read',
 ): Promise<GitHubOperationSession> {
   return await GitHubOperationSession.create(
     profile,
@@ -57,6 +65,7 @@ async function create(
     new AbortController().signal,
     new InstallationPriorityQueue(),
     'interactive',
+    purpose,
   )
 }
 
@@ -71,6 +80,30 @@ async function expectResponseLimitCause(promise: Promise<unknown>): Promise<void
 describe('GitHub operation session admission', () => {
   afterEach(() => { vi.unstubAllGlobals() })
 
+  it.each([
+    ['read operation', 'read', expectedReadPermissions],
+    ['Project membership mutation', 'project-item-add', expectedProjectWritePermissions],
+    ['Project Status mutation', 'project-item-status-set', expectedProjectWritePermissions],
+    ['Project position mutation', 'project-item-position-set', expectedProjectWritePermissions],
+    ['Project membership inspection', 'project-item-add-inspection', expectedProjectReadPermissions],
+    ['Project Status inspection', 'project-item-status-inspection', expectedProjectReadPermissions],
+    ['Project position inspection', 'project-item-position-inspection', expectedProjectReadPermissions],
+    ['Issue-state mutation', 'issue-state-set', expectedIssueWritePermissions],
+    ['Issue-create mutation', 'issue-create', expectedIssueWritePermissions],
+    ['Issue-state inspection', 'issue-state-inspection', expectedIssueReadPermissions],
+    ['Issue-create inspection', 'issue-create-inspection', expectedIssueReadPermissions],
+  ] as const)('requests and admits only the %s permission set', async (_label, purpose, permissions) => {
+    let tokenRequest: Record<string, unknown> | undefined
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      tokenRequest = JSON.parse(await new Request(input, init).text()) as Record<string, unknown>
+      return json(authentication({ permissions }), { status: 201 })
+    }))
+
+    await expect(create(CONFIG, PROFILE, githubRepositoryDatabaseId('4242'), purpose))
+      .resolves.toMatchObject({ token: { permissions } })
+    expect(tokenRequest).toMatchObject({ permissions, repository_ids: [4_242] })
+  })
+
   it('rejects expired token metadata', async () => {
     vi.stubGlobal('fetch', vi.fn(async (): Promise<Response> => json(authentication({
       expires_at: '2020-01-02T03:04:05Z',
@@ -80,7 +113,7 @@ describe('GitHub operation session admission', () => {
   })
 
   it('attributes a missing requested token permission as no access', async () => {
-    const { contents: _contents, ...permissions } = PRODUCT_APP_READ_PERMISSIONS
+    const { contents: _contents, ...permissions } = expectedReadPermissions
     vi.stubGlobal('fetch', vi.fn(async (): Promise<Response> => json(authentication({ permissions }), { status: 201 })))
 
     await expect(create()).rejects.toMatchObject({
@@ -90,7 +123,7 @@ describe('GitHub operation session admission', () => {
 
   it('rejects an extra token permission at the exact no-access ceiling', async () => {
     vi.stubGlobal('fetch', vi.fn(async (): Promise<Response> => json(authentication({
-      permissions: { ...PRODUCT_APP_READ_PERMISSIONS, workflows: 'read' },
+      permissions: { ...expectedReadPermissions, workflows: 'read' },
     }), { status: 201 })))
 
     await expect(create()).rejects.toMatchObject({

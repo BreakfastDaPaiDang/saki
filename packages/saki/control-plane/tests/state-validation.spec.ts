@@ -1067,7 +1067,7 @@ describe('current Saki state validation', () => {
     const projectId = SAKI_PROJECT_REQUEST_FIXTURES.projectSettings.projectId
     const sync = githubProjectSyncRecordSchema.parse({
       id: projectId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       installationId: INSTALLATION_ID,
       nextCandidateRevision: 1,

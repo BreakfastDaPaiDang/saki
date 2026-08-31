@@ -14,3 +14,9 @@ export const GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT = 100_000
 
 /** Maximum annotated-tag objects retained by one complete peel fact. */
 export const GITHUB_TAG_PEEL_DEPTH_LIMIT = 100
+
+/** Maximum complete Issue-create title size after UTF-8 encoding. */
+export const GITHUB_ISSUE_CREATE_TITLE_UTF8_LIMIT = 1_024
+
+/** Maximum complete Issue-create body size after UTF-8 encoding. */
+export const GITHUB_ISSUE_CREATE_BODY_UTF8_LIMIT = 60_000

@@ -2,7 +2,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { githubFailureSchema } from './schemas.ts'
-import type { GitHubFailure, GitHubReadMap, GitHubScanMap } from './types.ts'
+import type { GitHubFailure, GitHubMutationMap, GitHubReadMap, GitHubScanMap } from './types.ts'
 
 export {
   githubAccountId,
@@ -17,8 +17,10 @@ export {
   githubInstallationIdSchema,
   githubIssueId,
   githubIssueIdSchema,
-  githubMutationKind,
-  githubMutationKindSchema,
+  githubIssueCreateMarkerId,
+  githubIssueCreateMarkerIdSchema,
+  githubIssueCreateEntryId,
+  githubIssueCreateEntryIdSchema,
   githubProjectFieldId,
   githubProjectFieldIdSchema,
   githubProjectId,
@@ -40,8 +42,12 @@ export {
   githubTagObjectId,
   githubTagObjectIdSchema,
 } from './ids.ts'
-export { computeGitHubProjectBoardFingerprint } from './fingerprint.ts'
 export {
+  computeGitHubProjectBoardFingerprint,
+} from './fingerprint.ts'
+export {
+  GITHUB_ISSUE_CREATE_BODY_UTF8_LIMIT,
+  GITHUB_ISSUE_CREATE_TITLE_UTF8_LIMIT,
   GITHUB_INSTALLATION_REPOSITORY_LIMIT,
   GITHUB_PROJECT_BOARD_FIELD_LIMIT,
   GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT,
@@ -57,10 +63,13 @@ export {
   githubInstallationFactSchema,
   githubInstallationProfileSchema,
   githubInstallationReadRequestSchema,
+  githubIssueStateSetInspectionSchema,
+  githubIssueStateSnapshotSchema,
+  githubIssueCreateInspectionHintSchema,
+  githubIssueCreateInspectionSchema,
+  githubIssueCreateRequestSchema,
   githubIssueFactSchema,
   githubIssueReadRequestSchema,
-  githubMutationIdentitySchema,
-  githubMutationInspectionSchema,
   githubPermissionFactSchema,
   githubProjectBoardFingerprintSchema,
   githubProjectBoardScanCandidateSchema,
@@ -70,6 +79,11 @@ export {
   githubProjectFieldFactSchema,
   githubProjectItemContentSchema,
   githubProjectItemFactSchema,
+  githubProjectItemAddInspectionSchema,
+  githubProjectItemAddSnapshotSchema,
+  githubProjectItemPositionSetInspectionSchema,
+  githubProjectItemPositionSnapshotSchema,
+  githubProjectItemStatusSetInspectionSchema,
   githubProjectOptionFactSchema,
   githubProjectReadRequestSchema,
   githubRateObservationSchema,
@@ -103,10 +117,19 @@ export type {
   GitHubInstallationReadRequest,
   GitHubIssueFact,
   GitHubIssueId,
+  GitHubIssueCreateEntryId,
+  GitHubIssueCreateIncompleteReason,
+  GitHubIssueCreateInspection,
+  GitHubIssueCreateInspectionHint,
+  GitHubIssueCreateInspectionOutcome,
+  GitHubIssueCreateMarkerId,
+  GitHubIssueCreateMarkerMatch,
+  GitHubIssueCreatePullRequestFact,
+  GitHubIssueCreateRequest,
+  GitHubIssueCreateSnapshot,
   GitHubIssueReadRequest,
-  GitHubMutationIdentity,
-  GitHubMutationInspection,
-  GitHubMutationKind,
+  GitHubIssueStateSetInspection,
+  GitHubIssueStateSetRequest,
   GitHubMutationMap,
   GitHubPermissionFact,
   GitHubProjectBoardFingerprint,
@@ -120,7 +143,16 @@ export type {
   GitHubProjectId,
   GitHubProjectItemContent,
   GitHubProjectItemFact,
+  GitHubProjectItemAddInspection,
+  GitHubProjectItemAddMembership,
+  GitHubProjectItemAddRequest,
   GitHubProjectItemId,
+  GitHubProjectItemPositionAnchorFact,
+  GitHubProjectItemPositionMembership,
+  GitHubProjectItemPositionSetInspection,
+  GitHubProjectItemPositionSetRequest,
+  GitHubProjectItemStatusSetInspection,
+  GitHubProjectItemStatusSetRequest,
   GitHubProjectOptionFact,
   GitHubProjectOptionId,
   GitHubProjectReadRequest,
@@ -150,11 +182,14 @@ export type {
   GitHubTagReferenceFact,
   GitHubTagReferenceReadRequest,
   GitHubTagTarget,
+  GitHubTargetedProjectItemFact,
+  GitHubProjectMembershipItemFact,
+  GitHubTargetedWorkItemSnapshot,
 } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** Provider-neutral GitHub reads and complete scans used by Saki Consumers. */
+    /** Provider-neutral GitHub reads, scans, and mutations used by Saki Consumers. */
     sakiGitHub: SakiGitHub
   }
 }
@@ -177,8 +212,8 @@ export class GitHubProviderError extends Error {
 
 /**
  * GitHub capability. Providers own authentication, pagination, response
- * admission, and rate observations. Consumers receive only complete detached
- * facts or a {@link GitHubProviderError}.
+ * admission, and scan rate observations. Consumers receive only complete
+ * detached facts and mutation results, or a {@link GitHubProviderError}.
  */
 export abstract class SakiGitHub extends Service {
   constructor(ctx: Context) {
@@ -206,6 +241,28 @@ export abstract class SakiGitHub extends Service {
     request: GitHubScanMap[K]['request'],
     signal: AbortSignal,
   ): Promise<GitHubScanMap[K]['result']>
+
+  /**
+   * Dispatch one atomic GitHub mutation without provider retries.
+   * @param request - declaration-map mutation request with a caller-persisted operation id.
+   * @param signal - required caller lifetime and cancellation.
+   * @returns the declaration-map result after one validated external call.
+   */
+  abstract dispatch<K extends keyof GitHubMutationMap>(
+    request: GitHubMutationMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<GitHubMutationMap[K]['result']>
+
+  /**
+   * Inspect the exact external target of one mutation without publishing a complete scan.
+   * @param request - the immutable request originally recorded for dispatch.
+   * @param signal - required caller lifetime and cancellation.
+   * @returns detached targeted facts; provider failures reject with {@link GitHubProviderError}.
+   */
+  abstract inspectMutation<K extends keyof GitHubMutationMap>(
+    request: GitHubMutationMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<GitHubMutationMap[K]['inspection']>
 }
 
 export default SakiGitHub

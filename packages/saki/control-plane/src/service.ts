@@ -20,8 +20,12 @@ import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
   configureGitHubSynchronizationIntentSchema,
+  createWorkItemIntentSchema,
   createCommitIntentSchema,
+  githubWorkItemRecoveryId,
+  githubWorkItemRecoveryRecordSchema,
   HOST_OPERATOR_ACTIONS,
+  moveWorkItemIntentSchema,
   registerDevelopmentProjectIntentSchema,
   sakiControlPlaneDomainSpec,
   stageFilesIntentSchema,
@@ -58,6 +62,11 @@ import {
   type GitHubSynchronizationConfigurationIntentTable,
 } from './github-sync.ts'
 import {
+  GitHubWorkItemOperations,
+  type GitHubWorkItemIntentTable,
+  type GitHubWorkItemRecoveryTable,
+} from './work-item-operations.ts'
+import {
   bootstrapDigest,
   constantTimeTextEqual,
   cookieDigest,
@@ -91,11 +100,13 @@ import type {
   SakiControlIntentId,
   SakiIntent,
   ConfigureGitHubSynchronizationIntent,
+  CreateWorkItemIntent,
   CreateCommitIntent,
   SakiGitOperationIntent,
   SakiGitOperationIntentReceipt,
-  SakiIntentReceiptMap,
+  SakiWorkItemIntentReceipt,
   StageFilesIntent,
+  MoveWorkItemIntent,
   UnstageFilesIntent,
 } from './types.ts'
 import { enqueueKeyedOperation } from './keyed-operation.ts'
@@ -106,6 +117,8 @@ import {
   validateInstallationAccessRecord,
 } from './state-validation.ts'
 import { sakiStorageGenerationDomainSpec } from './state-version.ts'
+
+type SakiWorkItemIntent = CreateWorkItemIntent | MoveWorkItemIntent
 
 async function closeOpenedDomains(
   domains: readonly { close(): Promise<void> }[],
@@ -299,11 +312,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private registrationIntentTable!: RegistrationIntentTable
   private githubProjectSyncTable!: GitHubProjectSyncTable
   private githubSynchronizationConfigurationIntentTable!: GitHubSynchronizationConfigurationIntentTable
+  private githubWorkItemIntentTable!: GitHubWorkItemIntentTable
+  private githubWorkItemRecoveryTable!: GitHubWorkItemRecoveryTable
   private gitOperationIntentTable!: GitOperationIntentTable
   private bindingWriteAdmissionTable!: BindingWriteAdmissionTable
   private projects!: DevelopmentProjects
   private gitOperations!: GitOperations
   private githubSynchronization!: GitHubProjectSynchronization
+  private githubWorkItemOperations!: GitHubWorkItemOperations
   private githubSynchronizationConsumer: GitHubSynchronizationConsumer | undefined
   private pendingBootstrap: SakiBootstrapHandoff | undefined
   private readonly listeners = new Set<(keys: readonly SakiProjectionKey[]) => void>()
@@ -365,6 +381,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       if (change.domain !== sakiControlPlaneDomainSpec.name) return
       if (change.table === 'registration_intents' || change.table === 'github_sync_configuration_intents'
         || change.table === 'git_operation_intents') return
+      if (change.table === 'github_work_item_intents' || change.table === 'github_work_item_recovery') {
+        this.notify(['board'])
+        return
+      }
       if (change.table === 'binding_write_admissions') {
         this.notify(['project-changes'])
         return
@@ -406,6 +426,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         : new Error('opening Saki storage-generation state failed', { cause: error })
     }
     let gitOperationsForDisposal: GitOperations | undefined
+    let workItemOperationsForDisposal: GitHubWorkItemOperations | undefined
     this.ctx.effect(() => async () => {
       this.operationAdmissionOpen = false
       this.lifetime.abort(new Error('saki control plane is disposing'))
@@ -414,6 +435,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ...this.activeOperations,
         ...this.intentOperationTails.values(),
         gitOperationsForDisposal?.dispose() ?? Promise.resolve(),
+        workItemOperationsForDisposal?.dispose() ?? Promise.resolve(),
       ])
       await closeOpenedDomains(
         [domain, storageGenerationDomain],
@@ -430,6 +452,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     this.registrationIntentTable = domain.table('registration_intents')
     this.githubProjectSyncTable = domain.table('github_project_sync')
     this.githubSynchronizationConfigurationIntentTable = domain.table('github_sync_configuration_intents')
+    this.githubWorkItemIntentTable = domain.table('github_work_item_intents')
+    this.githubWorkItemRecoveryTable = domain.table('github_work_item_recovery')
     this.gitOperationIntentTable = domain.table('git_operation_intents')
     this.bindingWriteAdmissionTable = domain.table('binding_write_admissions')
 
@@ -473,12 +497,58 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       this.githubSynchronization = new GitHubProjectSynchronization({
         syncTable: this.githubProjectSyncTable,
         intentTable: this.githubSynchronizationConfigurationIntentTable,
+        workItemRecovery: (projectId, workItemId) => {
+          const value = this.githubWorkItemRecoveryTable.get(githubWorkItemRecoveryId(projectId, workItemId))
+          if (value === undefined) return undefined
+          const recovery = githubWorkItemRecoveryRecordSchema.parse(value)
+          const observation = recovery.confirmed.observation
+          return {
+            latestNonTerminalStatus: recovery.latestNonTerminalStatus,
+            observedAt: observation.observedAt,
+            repositoryId: observation.facts.repositoryId,
+            repositoryDatabaseId: observation.facts.repositoryDatabaseId,
+            projectId: observation.facts.projectId,
+            statusFieldId: observation.facts.statusFieldId,
+          }
+        },
         installationId: this.installationState.installationId,
         projectExists: projectId => this.projects.registry().projects.some(project => project.id === projectId),
         authorityCurrent: actor => this.intentAuthorityCurrent(actor, 'github-synchronization:configure'),
         validateActorReference: (actor) => { this.validateRegistrationActorReference(actor) },
       })
       const githubSynchronization = this.githubSynchronization.validateDurableState()
+      this.githubWorkItemOperations = new GitHubWorkItemOperations({
+        intentTable: this.githubWorkItemIntentTable,
+        recoveryTable: this.githubWorkItemRecoveryTable,
+        mutationContext: projectId => this.githubSynchronization.mutationContext(projectId),
+        projectRevision: (projectId) => {
+          const project = this.projects.registry().projects.find(candidate => candidate.id === projectId)
+          return project?.revision ?? 'not-found'
+        },
+        authorityCurrent: (actor, action) => this.intentAuthorityCurrent(actor, action),
+        validateActorReference: (actor) => { this.validateRegistrationActorReference(actor) },
+        requestScan: async (projectId) => {
+          const scheduled = await this.githubSynchronization.requestScan(
+            projectId,
+            'interactive',
+            'interactive',
+            Date.now(),
+            this.lifetime.signal,
+          )
+          if (scheduled === 'scheduled') this.githubSynchronizationConsumer?.wake()
+        },
+        notifyChanged: () => { this.notify(['project-settings', 'board']) },
+        reportUnexpectedFailure: (error) => {
+          this.ctx.logger.error(`Saki GitHub Work Item recovery failed: ${String(error)}`)
+        },
+        lifetime: this.lifetime.signal,
+      })
+      workItemOperationsForDisposal = this.githubWorkItemOperations
+      const workItemOtherIntentIds = new Set([
+        ...projects.intents.map(intent => intent.id),
+        ...githubSynchronization.intents.map(intent => intent.id),
+      ])
+      const workItems = this.githubWorkItemOperations.validateDurableState(workItemOtherIntentIds)
       this.gitOperations = new GitOperations({
         intentTable: this.gitOperationIntentTable,
         admissionTable: this.bindingWriteAdmissionTable,
@@ -493,6 +563,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       const otherIntentIds = new Set([
         ...projects.intents.map(intent => intent.id),
         ...githubSynchronization.intents.map(intent => intent.id),
+        ...workItems.intents.map(intent => intent.id),
       ])
       const recoverableMissingBindingIds = recoverableRegistrationAdmissionBindingIds(
         projects.registry,
@@ -503,7 +574,12 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         projects.registry,
         recoverableMissingBindingIds,
       )
-      validateDisjointControlIntentIds(projects.intents, githubSynchronization.intents, gitOperations.intents)
+      validateDisjointControlIntentIds(
+        projects.intents,
+        githubSynchronization.intents,
+        workItems.intents,
+        gitOperations.intents,
+      )
       validateCurrentSakiState(
         domain,
         storageGenerationDomain,
@@ -519,6 +595,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       this.ctx.effect(() => disposeHostOperationChanges, 'saki-control-plane.hostOperationChanges')
       await this.gitOperations.initializeValidated(gitOperations)
       await this.githubSynchronization.initializeValidated(githubSynchronization, this.lifetime.signal)
+      await this.githubWorkItemOperations.initializeValidated(workItems)
       this.lifetime.signal.throwIfAborted()
       await this.issueStartupChallenge()
       await this.installationState.activateAfterValidation(this.lifetime.signal)
@@ -674,9 +751,26 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       case 'project-settings': {
         if (!this.authorized(authentication, 'project-settings:read')) return { ok: false, reason: 'denied' }
         const projection = this.githubSynchronization.projectSettings(query.projectId)
-        return projection === 'not-found'
-          ? { ok: false, reason: 'not-found' }
-          : { ok: true, projection }
+        if (projection === 'not-found') return { ok: false, reason: 'not-found' }
+        const workItems = this.githubWorkItemOperations.project(
+          query.projectId,
+          undefined,
+          projection.synchronization.effectiveMutationAvailability,
+          {
+            'work-item:create': this.authorized(authentication, 'work-item:create'),
+            'work-item:move': this.authorized(authentication, 'work-item:move'),
+          },
+        )
+        return {
+          ok: true,
+          projection: {
+            ...projection,
+            synchronization: {
+              ...projection.synchronization,
+              effectiveMutationAvailability: workItems.effectiveMutationAvailability,
+            },
+          },
+        }
       }
       case 'board': {
         if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
@@ -692,9 +786,23 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           this.githubSynchronizationConsumer?.wake()
         }
         const projection = this.githubSynchronization.board(query.projectId)
-        return projection === 'not-found'
-          ? { ok: false, reason: 'not-found' }
-          : { ok: true, projection }
+        if (projection === 'not-found') return { ok: false, reason: 'not-found' }
+        return {
+          ok: true,
+          projection: {
+            ...projection,
+            ...this.githubWorkItemOperations.project(
+              query.projectId,
+              projection.confirmed,
+              projection.effectiveMutationAvailability,
+              {
+                'work-item:create': this.authorized(authentication, 'work-item:create'),
+                'work-item:move': this.authorized(authentication, 'work-item:move'),
+              },
+              projection.checkpoint?.observedAt,
+            ),
+          },
+        }
       }
       /* v8 ignore next 2 -- SakiQuery is closed and Host wire parsing rejects unknown tags before dispatch. */
       default: return assertNever(query)
@@ -707,7 +815,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     intent: I,
     signal: AbortSignal,
   ): Promise<SakiIntentReceipt<I['type']>> {
-    let result: Promise<SakiIntentReceipt<keyof SakiIntentReceiptMap>>
+    let result: Promise<SakiIntentReceipt>
     switch (intent.type) {
       case 'register-development-project': {
         const parsed = registerDevelopmentProjectIntentSchema.parse(intent) as RegisterDevelopmentProjectIntent
@@ -719,7 +827,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
               return { ok: false, reason: 'denied' }
             }
             if (this.requireGitHubSynchronizationConfigurationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitOperationIntentTable().get(parsed.intentId) !== undefined) {
+              || this.requireGitOperationIntentTable().get(parsed.intentId) !== undefined
+              || this.requireGitHubWorkItemIntentTable().get(parsed.intentId) !== undefined) {
               return { ok: false, reason: 'conflict' }
             }
             return await this.registerDevelopmentProject(authentication, parsed, operationSignal)
@@ -737,7 +846,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
               return { ok: false, reason: 'denied' }
             }
             if (this.requireRegistrationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitOperationIntentTable().get(parsed.intentId) !== undefined) {
+              || this.requireGitOperationIntentTable().get(parsed.intentId) !== undefined
+              || this.requireGitHubWorkItemIntentTable().get(parsed.intentId) !== undefined) {
               return { ok: false, reason: 'conflict' }
             }
             return await this.githubSynchronization.configure(
@@ -773,9 +883,27 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ))
         break
       }
+      case 'create-work-item': {
+        const parsed = createWorkItemIntentSchema.parse(intent) as CreateWorkItemIntent
+        result = this.runOwnedOperation(signal, operationSignal => this.enqueueIntentOperation(
+          parsed.intentId,
+          () => this.submitWorkItem(authentication, parsed, operationSignal),
+        ))
+        break
+      }
+      case 'move-work-item': {
+        const parsed = moveWorkItemIntentSchema.parse(intent) as MoveWorkItemIntent
+        result = this.runOwnedOperation(signal, operationSignal => this.enqueueIntentOperation(
+          parsed.intentId,
+          () => this.submitWorkItem(authentication, parsed, operationSignal),
+        ))
+        break
+      }
       /* v8 ignore next 2 -- SakiIntent is closed and Host wire parsing rejects unknown tags before dispatch. */
       default: return assertNever(intent)
     }
+    // TypeScript cannot retain the generic Intent/receipt correlation across the exhaustive switch.
+    // oxlint-disable-next-line typescript/no-unnecessary-type-assertion
     return await result as SakiIntentReceipt<I['type']>
   }
 
@@ -790,10 +918,27 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       : intent.type === 'unstage-files' ? 'project-changes:unstage' : 'project-commit:create'
     if (!this.authorized(authentication, action)) return { ok: false, reason: 'denied' }
     if (this.requireRegistrationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined) {
+      || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined
+      || this.requireGitHubWorkItemIntentTable().get(intent.intentId) !== undefined) {
       return { ok: false, reason: 'conflict' }
     }
     return await this.gitOperations.submit(intent, this.currentControlIntentActor(), signal)
+  }
+
+  private async submitWorkItem<I extends SakiWorkItemIntent>(
+    authentication: SakiAuthenticationContext,
+    intent: I,
+    signal: AbortSignal,
+  ): Promise<SakiWorkItemIntentReceipt<I['type']>> {
+    signal.throwIfAborted()
+    const action = intent.type === 'create-work-item' ? 'work-item:create' : 'work-item:move'
+    if (!this.authorized(authentication, action)) return { ok: false, reason: 'denied' }
+    if (this.requireRegistrationIntentTable().get(intent.intentId) !== undefined
+      || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined
+      || this.requireGitOperationIntentTable().get(intent.intentId) !== undefined) {
+      return { ok: false, reason: 'conflict' }
+    }
+    return await this.githubWorkItemOperations.submit(intent, this.currentControlIntentActor(), signal)
   }
 
   private currentControlIntentActor(): ControlIntentActor {
@@ -1512,6 +1657,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       || this.requireRegistrationIntentTable().size !== 0
       || this.requireGitHubProjectSyncTable().size !== 0
       || this.requireGitHubSynchronizationConfigurationIntentTable().size !== 0
+      || this.requireGitHubWorkItemIntentTable().size !== 0
+      || this.requireGitHubWorkItemRecoveryTable().size !== 0
       || this.requireGitOperationIntentTable().size !== 0
       || this.requireBindingWriteAdmissionTable().size !== 0
   }
@@ -1552,6 +1699,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private installGitHubSynchronizationConsumer(): void {
     const providerFiber = this.ctx.inject(['sakiGitHub'], (providerContext: Context) => {
+      const detachWorkItemOperations = this.githubWorkItemOperations.attach(providerContext.sakiGitHub)
       const consumer = new GitHubSynchronizationConsumer({
         synchronization: this.githubSynchronization,
         github: providerContext.sakiGitHub,
@@ -1563,6 +1711,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       this.githubSynchronizationConsumer = consumer
       consumer.wake()
       providerContext.effect(() => async () => {
+        detachWorkItemOperations()
         this.githubSynchronizationConsumer = undefined
         await consumer.dispose()
       }, 'saki-control-plane.githubSynchronizationConsumer')
@@ -1608,6 +1757,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private requireGitHubSynchronizationConfigurationIntentTable(): GitHubSynchronizationConfigurationIntentTable {
     return this.githubSynchronizationConfigurationIntentTable
+  }
+
+  private requireGitHubWorkItemIntentTable(): GitHubWorkItemIntentTable {
+    return this.githubWorkItemIntentTable
+  }
+
+  private requireGitHubWorkItemRecoveryTable(): GitHubWorkItemRecoveryTable {
+    return this.githubWorkItemRecoveryTable
   }
 
   private requireGitOperationIntentTable(): GitOperationIntentTable {

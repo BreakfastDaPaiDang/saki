@@ -1,7 +1,7 @@
 /** Cross-domain validation for one complete current Saki product state. */
 
 import { isDeepStrictEqual } from 'node:util'
-import type { Domain } from '@deepseek-ai/dsh-storage-domain'
+import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import {
   bindingWriteAdmissionRecordSchema,
   gitOperationIntentRecordSchema,
@@ -23,12 +23,16 @@ type CurrentControlPlaneDomain = Domain<typeof sakiControlPlaneDomainSpec>
 type CurrentHostExecutionDomain = Domain<typeof sakiHostExecutionDomainSpec>
 type CurrentStorageGenerationDomain = Domain<typeof sakiStorageGenerationDomainSpec>
 
+interface GitOperationControlPlaneDomain {
+  table(name: 'git_operation_intents' | 'binding_write_admissions'): KvTable<string, unknown>
+}
+
 /**
  * Validate complete current product relationships across Control Plane, Host Execution, and generation identity.
  * Recoverable write-order gaps are accepted only when the Host still proves that no effect was admitted.
- * @param controlPlane - opened exact `saki_control_plane@5` domain.
+ * @param controlPlane - opened exact `saki_control_plane@6` domain.
  * @param hostExecution - opened exact `saki_host_execution@1` domain.
- * @param storageGeneration - opened exact `saki_storage_generation@3` domain.
+ * @param storageGeneration - opened exact `saki_storage_generation@4` domain.
  * @param expectedInstallationId - Installation selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation selected by maintenance metadata.
  * @param expectedCreatedByBuildId - generation provenance repeated by its seal.
@@ -59,7 +63,7 @@ export function validateCurrentSakiProductState(
  * @returns nothing after every cross-domain relationship passes.
  */
 export function validateGitOperationLinks(
-  controlPlane: CurrentControlPlaneDomain,
+  controlPlane: GitOperationControlPlaneDomain,
   hostExecution: CurrentHostExecutionDomain,
 ): void {
   const intents = new Map([...controlPlane.table('git_operation_intents').entries()].map(([key, value]) => {
