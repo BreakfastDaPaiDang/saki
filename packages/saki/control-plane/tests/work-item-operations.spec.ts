@@ -6,7 +6,6 @@ import { canonicalDigest } from '@breakfastdapaidang/saki-execution'
 import {
   GitHubProviderError,
   SakiGitHub,
-  githubIssueCreateEntryId,
   githubIssueCreateInspectionHintSchema,
   githubIssueCreateInspectionSchema,
   githubIssueId,
@@ -223,10 +222,8 @@ const TERMINAL_ANCHOR_POSITION_SNAPSHOT = positionAnchorSnapshot(false, CONFIGUR
 const TERMINAL_ANCHOR_REMOTE_FINGERPRINT = targetedBoardRemoteFingerprint(TERMINAL_ANCHOR_POSITION_SNAPSHOT)
 
 const CONTEXT: GitHubWorkItemMutationContext = {
-  projectId: PROJECT_ID,
   synchronizationRevision: 3,
   mappingRevision: 3,
-  boardGeneration: 7,
   checkpointObservedAt: 100,
   configuration: CONFIGURATION,
   confirmedBoard: {
@@ -1420,12 +1417,6 @@ const createEffectPossibleMarkerOutcomes = [
     reason: 'evidence-conflict',
     outcome: {
       state: 'identity-conflict',
-      hint: { issueId: CREATED_ISSUE_ID, issueNumber: 28 },
-      observed: {
-        kind: 'issue',
-        issue: snapshot(CONFIGURATION.statusOptionNodeIds.ready).issue,
-        markerOccurrences: 1,
-      },
     },
   },
   {
@@ -1433,16 +1424,6 @@ const createEffectPossibleMarkerOutcomes = [
     reason: 'marker-ambiguous',
     outcome: {
       state: 'pull-request-marker-match',
-      pullRequest: {
-        id: githubIssueCreateEntryId('PR_marker_28'),
-        repositoryId: CONFIGURATION.repositoryNodeId,
-        repositoryDatabaseId: CONFIGURATION.repositoryDatabaseId,
-        number: 28,
-        state: 'open',
-        title: 'Marker-bearing Pull Request',
-        url: 'https://github.com/example/repo/pull/28',
-        updatedAt: 100,
-      },
     },
   },
 ] as const satisfies readonly {
@@ -3100,9 +3081,6 @@ describe('GitHub Work Item operations', () => {
     const intent = createIntent()
     state.github.createInspectionOutcomeOverride = {
       state: 'incomplete',
-      reason: 'page-limit',
-      observedMatchCount: 0,
-      observedMatches: [],
     }
 
     const first = await state.operations.submit(intent, ACTOR, new AbortController().signal)
@@ -5735,7 +5713,7 @@ describe('GitHub Work Item operations', () => {
     await first.operations.submit(moveIntent(), ACTOR, new AbortController().signal)
     const second = harness({
       ok: true,
-      context: { ...CONTEXT, projectId: SECOND_PROJECT_ID },
+      context: CONTEXT,
     }, true, {
       intentTable,
       recoveryTable,
@@ -6100,7 +6078,7 @@ describe('GitHub Work Item operations', () => {
     await first.operations.submit(moveIntent(), ACTOR, new AbortController().signal)
     const second = harness({
       ok: true,
-      context: { ...CONTEXT, projectId: SECOND_PROJECT_ID },
+      context: CONTEXT,
     }, false, {
       intentTable,
       recoveryTable,

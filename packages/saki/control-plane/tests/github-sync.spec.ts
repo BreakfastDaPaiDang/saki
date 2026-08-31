@@ -938,10 +938,8 @@ describe('GitHub synchronization coordinator regressions', () => {
     expect(result).toMatchObject({
       ok: true,
       context: {
-        projectId: PROJECT_A,
         synchronizationRevision: 1,
         mappingRevision: 1,
-        boardGeneration: 1,
         checkpointObservedAt: 10_000,
         configuration: configuration(),
         confirmedBoard: { generation: 1, configurationRevision: 1 },

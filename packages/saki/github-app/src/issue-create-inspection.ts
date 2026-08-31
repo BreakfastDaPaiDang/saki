@@ -3,7 +3,6 @@
 import { z } from 'zod'
 import {
   GitHubProviderError,
-  githubIssueCreateEntryId,
   githubIssueCreateInspectionSchema,
   githubIssueCreateRequestSchema,
   githubIssueId,
@@ -11,12 +10,11 @@ import {
   githubRepositoryId,
 } from '@breakfastdapaidang/saki-github'
 import type {
-  GitHubIssueCreateIncompleteReason,
   GitHubIssueCreateInspection,
   GitHubIssueCreateInspectionOutcome,
-  GitHubIssueCreateMarkerMatch,
   GitHubIssueCreateRequest,
   GitHubIssueCreateSnapshot,
+  GitHubIssueFact,
 } from '@breakfastdapaidang/saki-github'
 import type { ResolvedConfig } from './index.ts'
 import { queryGraphql } from './graphql.ts'
@@ -70,17 +68,17 @@ interface InspectionState {
   readonly repository: RepositoryCoordinates
 }
 
-interface RetainedEntry {
-  readonly nodeId: string
-  readonly number: number
-  readonly match: GitHubIssueCreateMarkerMatch
-}
+type IssueCreateMarkerMatch =
+  | { readonly kind: 'issue'; readonly issue: GitHubIssueFact }
+  | { readonly kind: 'pull-request' }
+
+type IssueCreateHintObservation = 'marker-removed' | 'identity-conflict'
 
 interface Traversal {
-  readonly entries: readonly RetainedEntry[]
-  readonly matches: readonly GitHubIssueCreateMarkerMatch[]
+  readonly firstMarkerMatch: IssueCreateMarkerMatch | undefined
+  readonly hintObservation: IssueCreateHintObservation | undefined
   readonly markerOccurrences: number
-  readonly incompleteReason?: GitHubIssueCreateIncompleteReason | undefined
+  readonly completed: boolean
 }
 
 /**
@@ -90,7 +88,7 @@ interface Traversal {
  * @param config - validated pagination and HTTP limits.
  * @param signal - operation lifetime.
  * @param queue - per-installation interactive request scheduler.
- * @returns durable-safe marker classification or typed incomplete evidence.
+ * @returns durable-safe marker classification.
  */
 export async function inspectIssueCreate(
   request: GitHubIssueCreateRequest,
@@ -153,11 +151,11 @@ async function readRepositoryCoordinates(
 }
 
 async function readIssues(state: InspectionState): Promise<Traversal> {
-  const entries: RetainedEntry[] = []
-  const matches: GitHubIssueCreateMarkerMatch[] = []
   const numericIds = new Set<number>()
   const nodeIds = new Set<string>()
   const numbers = new Set<number>()
+  let firstMarkerMatch: IssueCreateMarkerMatch | undefined
+  let hintObservation: IssueCreateHintObservation | undefined
   let markerOccurrences = 0
   for (let page = 1; ; page += 1) {
     const response = await state.session.installation.request('GET /repos/{owner}/{repo}/issues', {
@@ -173,20 +171,34 @@ async function readIssues(state: InspectionState): Promise<Traversal> {
     })
     const pageEntries = restIssuePageSchema.parse(response.data)
     for (const entry of pageEntries) {
-      if (entries.length >= state.config.maxItems) {
-        return finishTraversal('item-limit')
+      if (numericIds.size >= state.config.maxItems) {
+        return finishTraversal(false)
       }
       if (numericIds.has(entry.id) || nodeIds.has(entry.node_id) || numbers.has(entry.number)) {
-        return finishTraversal('duplicate-entry')
+        return finishTraversal(false)
       }
       numericIds.add(entry.id)
       nodeIds.add(entry.node_id)
       numbers.add(entry.number)
-      const retained = retainEntry(state.request, entry)
-      entries.push(retained)
-      if (retained.match.markerOccurrences > 0) {
-        matches.push(retained.match)
-        markerOccurrences += retained.match.markerOccurrences
+      const updatedAt = timestamp(entry.updated_at)
+      timestamp(entry.created_at)
+      const occurrences = countOccurrences(
+        entry.body ?? '',
+        `<!-- saki-work-item:${state.request.markerId} -->`,
+      )
+      if (occurrences > 0) {
+        firstMarkerMatch ??= markerMatch(state.request, entry, updatedAt)
+        markerOccurrences += occurrences
+      }
+      const hint = state.request.inspectionHint
+      if (hint !== undefined) {
+        const sameId = entry.node_id === hint.issueId
+        const sameNumber = entry.number === hint.issueNumber
+        if (sameId && sameNumber && entry.pull_request === undefined) {
+          hintObservation = 'marker-removed'
+        } else if ((sameId || sameNumber) && hintObservation === undefined) {
+          hintObservation = 'identity-conflict'
+        }
       }
     }
     const nextPage = parseNextPage(
@@ -196,34 +208,31 @@ async function readIssues(state: InspectionState): Promise<Traversal> {
       state.repository,
       state.request.repositoryDatabaseId,
     )
-    if (nextPage === 'invalid') return finishTraversal('pagination')
+    if (nextPage === 'invalid') return finishTraversal(false)
     if (nextPage === null) return finishTraversal()
-    if (page >= state.config.maxPages) return finishTraversal('page-limit')
+    if (page >= state.config.maxPages) return finishTraversal(false)
   }
 
   function finishTraversal(
-    incompleteReason?: GitHubIssueCreateIncompleteReason,
+    completed = true,
   ): Traversal {
     return {
-      entries,
-      matches,
+      firstMarkerMatch,
+      hintObservation,
       markerOccurrences,
-      ...(incompleteReason === undefined ? {} : { incompleteReason }),
+      completed,
     }
   }
 }
 
-function retainEntry(
+function markerMatch(
   request: GitHubIssueCreateRequest,
   entry: z.infer<typeof restIssueEntrySchema>,
-): RetainedEntry {
-  const body = entry.body
-  const occurrences = countOccurrences(body ?? '', `<!-- saki-work-item:${request.markerId} -->`)
-  const updatedAt = timestamp(entry.updated_at)
-  timestamp(entry.created_at)
+  updatedAt: number,
+): IssueCreateMarkerMatch {
   const repositoryId = githubRepositoryId(request.repositoryId)
   const repositoryDatabaseId = githubRepositoryDatabaseId(request.repositoryDatabaseId)
-  const match: GitHubIssueCreateMarkerMatch = entry.pull_request === undefined
+  return entry.pull_request === undefined
     ? {
       kind: 'issue',
       issue: {
@@ -236,82 +245,37 @@ function retainEntry(
         url: entry.html_url,
         updatedAt,
       },
-      markerOccurrences: occurrences,
     }
-    : {
-      kind: 'pull-request',
-      pullRequest: {
-        id: githubIssueCreateEntryId(entry.node_id),
-        repositoryId,
-        repositoryDatabaseId,
-        number: entry.number,
-        state: entry.state,
-        title: entry.title,
-        url: entry.html_url,
-        updatedAt,
-      },
-      markerOccurrences: occurrences,
-    }
-  return {
-    nodeId: entry.node_id,
-    number: entry.number,
-    match,
-  }
+    : { kind: 'pull-request' }
 }
 
 function classifyOutcome(
   request: GitHubIssueCreateRequest,
   traversal: Traversal,
 ): GitHubIssueCreateInspectionOutcome {
-  if (traversal.incompleteReason !== undefined) {
-    return incompleteOutcome(traversal.incompleteReason, traversal)
+  if (!traversal.completed) {
+    return { state: 'incomplete' }
   }
   if (traversal.markerOccurrences >= 2) {
-    return {
-      state: 'multiple-matches',
-      matchCount: traversal.markerOccurrences,
-      matches: traversal.matches.slice(0, 2),
-    }
+    return { state: 'multiple-matches' }
   }
-  const markerMatch = traversal.matches[0]
+  const markerMatch = traversal.firstMarkerMatch
   if (markerMatch !== undefined) {
     if (markerMatch.kind === 'pull-request') {
-      return { state: 'pull-request-marker-match', pullRequest: markerMatch.pullRequest }
+      return { state: 'pull-request-marker-match' }
     }
     const hint = request.inspectionHint
     if (hint !== undefined
       && (markerMatch.issue.id !== hint.issueId || markerMatch.issue.number !== hint.issueNumber)) {
-      return { state: 'identity-conflict', hint, observed: markerMatch }
+      return { state: 'identity-conflict' }
     }
     return { state: 'unique-issue', issue: markerMatch.issue }
   }
   const hint = request.inspectionHint
   if (hint === undefined) return { state: 'absent-complete' }
-  const exact = traversal.entries.find(entry => entry.nodeId === hint.issueId
-    && entry.number === hint.issueNumber
-    && entry.match.kind === 'issue')
-  if (exact !== undefined && exact.match.kind === 'issue') {
-    return { state: 'marker-removed', hint, issue: exact.match.issue }
-  }
-  const conflicting = traversal.entries.find(
-    entry => entry.nodeId === hint.issueId || entry.number === hint.issueNumber,
-  )
-  if (conflicting !== undefined) {
-    return { state: 'identity-conflict', hint, observed: conflicting.match }
-  }
-  return { state: 'known-issue-absent', hint }
-}
-
-function incompleteOutcome(
-  reason: GitHubIssueCreateIncompleteReason,
-  traversal: Traversal,
-): GitHubIssueCreateInspectionOutcome {
-  return {
-    state: 'incomplete',
-    reason,
-    observedMatchCount: traversal.markerOccurrences,
-    observedMatches: traversal.matches.slice(0, 2),
-  }
+  return traversal.hintObservation === undefined
+    ? { state: 'known-issue-absent' }
+    : { state: traversal.hintObservation }
 }
 
 function countOccurrences(value: string, marker: string): number {

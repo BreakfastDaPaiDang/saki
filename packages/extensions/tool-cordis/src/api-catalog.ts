@@ -3724,14 +3724,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitHubInstallationReadRequest {\n    readonly kind: \'installation\';\n    readonly installation: GitHubInstallationProfile;\n}',
   },
   {
-    name: 'GitHubIssueCreateEntryId',
-    declaration: 'export type GitHubIssueCreateEntryId = Branded<\'GitHubIssueCreateEntryId\'>;',
-  },
-  {
-    name: 'GitHubIssueCreateIncompleteReason',
-    declaration: 'export type GitHubIssueCreateIncompleteReason = \'page-limit\' | \'item-limit\' | \'pagination\' | \'duplicate-entry\';',
-  },
-  {
     name: 'GitHubIssueCreateInspection',
     declaration: 'export interface GitHubIssueCreateInspection {\n    readonly snapshot: GitHubIssueCreateSnapshot;\n    readonly observedAt: number;\n}',
   },
@@ -3741,19 +3733,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GitHubIssueCreateInspectionOutcome',
-    declaration: 'export type GitHubIssueCreateInspectionOutcome = {\n    readonly state: \'unique-issue\';\n    readonly issue: GitHubIssueFact;\n} | {\n    readonly state: \'absent-complete\';\n} | {\n    readonly state: \'pull-request-marker-match\';\n    readonly pullRequest: GitHubIssueCreatePullRequestFact;\n} | {\n    readonly state: \'marker-removed\';\n    readonly hint: GitHubIssueCreateInspectionHint;\n    readonly issue: GitHubIssueFact;\n} | {\n    readonly state: \'known-issue-absent\';\n    readonly hint: GitHubIssueCreateInspectionHint;\n} | {\n    readonly state: \'identity-conflict\';\n    readonly hint: GitHubIssueCreateInspectionHint;\n    readonly observed: GitHubIssueCreateMarkerMatch;\n} | {\n    readonly state: \'multiple-matches\';\n    readonly matchCount: number;\n    readonly matches: readonly GitHubIssueCreateMarkerMatch[];\n} | {\n    readonly state: \'incomplete\';\n    readonly reason: GitHubIssueCreateIncompleteReason;\n    readonly observedMatchCount: number;\n    readonly observedMatches: readonly GitHubIssueCreateMarkerMatch[];\n};',
+    declaration: 'export type GitHubIssueCreateInspectionOutcome = {\n    readonly state: \'unique-issue\';\n    readonly issue: GitHubIssueFact;\n} | {\n    readonly state: \'absent-complete\';\n} | {\n    readonly state: \'pull-request-marker-match\';\n} | {\n    readonly state: \'marker-removed\';\n} | {\n    readonly state: \'known-issue-absent\';\n} | {\n    readonly state: \'identity-conflict\';\n} | {\n    readonly state: \'multiple-matches\';\n} | {\n    readonly state: \'incomplete\';\n};',
   },
   {
     name: 'GitHubIssueCreateMarkerId',
     declaration: 'export type GitHubIssueCreateMarkerId = Branded<\'GitHubIssueCreateMarkerId\'>;',
-  },
-  {
-    name: 'GitHubIssueCreateMarkerMatch',
-    declaration: 'export type GitHubIssueCreateMarkerMatch = {\n    readonly kind: \'issue\';\n    readonly issue: GitHubIssueFact;\n    readonly markerOccurrences: number;\n} | {\n    readonly kind: \'pull-request\';\n    readonly pullRequest: GitHubIssueCreatePullRequestFact;\n    readonly markerOccurrences: number;\n};',
-  },
-  {
-    name: 'GitHubIssueCreatePullRequestFact',
-    declaration: 'export interface GitHubIssueCreatePullRequestFact {\n    readonly id: GitHubIssueCreateEntryId;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly number: number;\n    readonly state: \'open\' | \'closed\';\n    readonly title: string;\n    readonly url: string;\n    readonly updatedAt: number;\n}',
   },
   {
     name: 'GitHubIssueCreateRequest',

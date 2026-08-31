@@ -9,7 +9,6 @@ import type {
   GitHubInstallationId,
   GitHubIssueId,
   GitHubIssueCreateMarkerId,
-  GitHubIssueCreateEntryId,
   GitHubProjectFieldId,
   GitHubProjectId,
   GitHubProjectItemId,
@@ -49,8 +48,6 @@ export const githubIssueIdSchema = nodeId<GitHubIssueId>()
 export const githubIssueCreateMarkerIdSchema = z.string()
   .regex(/^work-item-marker-[0-9a-f]{64}$/)
   .transform(value => value as GitHubIssueCreateMarkerId)
-/** Strict REST Issues collection entry node-id schema. */
-export const githubIssueCreateEntryIdSchema = nodeId<GitHubIssueCreateEntryId>()
 /** Strict GitHub pull-request node-id schema. */
 export const githubPullRequestIdSchema = nodeId<GitHubPullRequestId>()
 /** Strict annotated-tag object-id schema. */
@@ -129,11 +126,6 @@ export const githubIssueId = (value: string): GitHubIssueId => githubIssueIdSche
  * @returns validated branded marker id.
  */
 export const githubIssueCreateMarkerId = (value: string): GitHubIssueCreateMarkerId => githubIssueCreateMarkerIdSchema.parse(value)
-/** Brand one validated REST Issues collection entry node id.
- * @param value - raw entry node id.
- * @returns validated branded entry id.
- */
-export const githubIssueCreateEntryId = (value: string): GitHubIssueCreateEntryId => githubIssueCreateEntryIdSchema.parse(value)
 /** Brand one validated pull-request node id.
  * @param value - raw pull-request node id.
  * @returns validated branded id.

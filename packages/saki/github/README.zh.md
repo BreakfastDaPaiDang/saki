@@ -16,7 +16,7 @@ Saki 私有 GitHub Service Definition 注册 `ctx.sakiGitHub`。它拥有提供�
 
 ## 安全值与失败
 
-GitHub App、installation、account、Repository、Project、field、option、item、Issue、REST Issues entry、Issue-create marker、pull request、tag object、Release、Commit 和 external operation 身份均带 brand。Database id 保持为经过验证的正十进制字符串；Provider 只有在证明 SDK 数字是安全整数后才转换它。原始事实保留平台 ownership、visibility、Issue state、Project membership、Status option、archive state、API 顺序、update observation、不含凭据的 HTTPS URL、安全 request id 和 rate-limit timing。它们排除 authorization header、token、private key、JWT、raw error、pagination cursor 和 SDK object。
+GitHub App、installation、account、Repository、Project、field、option、item、Issue、Issue-create marker、pull request、tag object、Release、Commit 和 external operation 身份均带 brand。Database id 保持为经过验证的正十进制字符串；Provider 只有在证明 SDK 数字是安全整数后才转换它。原始事实保留平台 ownership、visibility、Issue state、Project membership、Status option、archive state、API 顺序、update observation、不含凭据的 HTTPS URL、安全 request id 和 rate-limit timing。它们排除 authorization header、token、private key、JWT、raw error、pagination cursor 和 SDK object。
 
 Provider 抛出 `GitHubProviderError`；其 `failure` 只有以下闭合分支：取消、认证不可用、权限不匹配、可归因的 Status 映射不匹配、未找到、外部响应无效、primary rate limit、secondary rate limit、临时传输故障或永久拒绝。映射不匹配会标识精确的已配置 Status field 或非空的缺失必需 option id 集合，但不携带 Saki Status 语义。只有安全的 request、retry、reset、resource、operation、permission、外部 id 和 HTTP status observation 可以进入该值。因此，除非响应事实能证明类型化 rate-limit 失败，否则 GraphQL field error 或 partial data 会成为 `invalid-external-response`；不存在部分 candidate。
 
@@ -28,7 +28,7 @@ Provider 抛出 `GitHubProviderError`；其 `failure` 只有以下闭合分支�
 
 Targeted inspection 保留对应 mutation 所需的精确 Issue、Project membership、Status、archive state、相关 API-order neighbor 或 Issue open state。Project membership inspection 区分 absent、unique 和 duplicate membership。Position inspection 保留已观测的 moving membership 与请求 predecessor 的 observation（包括缺失 anchor），但不回显 request target。Targeted observation 绝不声称或推进完整 Board scan checkpoint。
 
-Issue-create inspection 使用已持久化的精确隐藏 marker，区分唯一真实 Issue、完整缺失、pull-request 命中、已知 Issue marker 被移除、已知 Issue 缺失、身份冲突、多次出现，以及有界或不一致遍历。可选的已知 Issue hint 仅用于 inspection，不改变已持久化的 `operationId`。完整缺失只是证据，不授予 Provider 再次创建的权限；`effectPossible` 决策属于 Consumer。
+Issue-create inspection 使用已持久化的精确隐藏 marker，区分唯一真实 Issue、完整缺失、pull-request 命中、已知 Issue marker 被移除、已知 Issue 缺失、身份冲突、多次出现，以及有界或不一致遍历。唯一结果携带 Issue fact；每个非成功结果仅携带分类状态。可选的已知 Issue hint 仅用于 inspection，不改变已持久化的 `operationId`。完整缺失只是证据，不授予 Provider 再次创建的权限；`effectPossible` 决策属于 Consumer。
 
 ## Service Provider 约定
 

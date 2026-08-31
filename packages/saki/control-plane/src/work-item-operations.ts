@@ -96,10 +96,9 @@ interface GitHubWorkItemOperationsOptions {
   readonly lifetime: AbortSignal
 }
 
-/** Fully parsed Work Item saga and targeted-recovery state. */
+/** Fully parsed Work Item saga state after targeted-recovery validation. */
 export interface ValidatedGitHubWorkItemState {
   readonly intents: readonly GitHubWorkItemIntentRecord[]
-  readonly recoveries: readonly GitHubWorkItemRecoveryRecord[]
 }
 
 class IntentCasConflict extends Error {}
@@ -172,7 +171,7 @@ export class GitHubWorkItemOperations {
   /**
    * Validate every durable record and owned cross-table relationship without effects.
    * @param otherIntentIds - ids already retained by other Control Intent kinds.
-   * @returns detached records in deterministic recovery order.
+   * @returns detached Intents in deterministic recovery order.
    */
   validateDurableState(otherIntentIds: ReadonlySet<SakiControlIntentId>): ValidatedGitHubWorkItemState {
     const intents = [...this.options.intentTable.entries()].map(([key, value]) => {
@@ -267,7 +266,6 @@ export class GitHubWorkItemOperations {
     }
     return {
       intents: intents.toSorted(compareIntentOrder),
-      recoveries: recoveries.toSorted((left, right) => String(left.id).localeCompare(String(right.id))),
     }
   }
 

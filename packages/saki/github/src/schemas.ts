@@ -22,7 +22,6 @@ import {
   githubInstallationIdSchema,
   githubIssueIdSchema,
   githubIssueCreateMarkerIdSchema,
-  githubIssueCreateEntryIdSchema,
   githubProjectFieldIdSchema,
   githubProjectIdSchema,
   githubProjectItemIdSchema,
@@ -820,64 +819,15 @@ export const githubIssueStateSetInspectionSchema = z.object({
   observedAt: safeTimestamp,
 }).strict()
 
-/** Strict safe pull-request fact admitted from the REST Issues collection. */
-const githubIssueCreatePullRequestFactSchema = z.object({
-  id: githubIssueCreateEntryIdSchema,
-  repositoryId: githubRepositoryIdSchema,
-  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
-  number: positiveInteger,
-  state: z.enum(['open', 'closed']),
-  title: safeText,
-  url: safeUrl,
-  updatedAt: safeTimestamp,
-}).strict()
-
-/** Strict exact-marker REST Issues match schema. */
-const githubIssueCreateMarkerMatchSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('issue'),
-    issue: githubIssueFactSchema,
-    markerOccurrences: safeInteger,
-  }).strict(),
-  z.object({
-    kind: z.literal('pull-request'),
-    pullRequest: githubIssueCreatePullRequestFactSchema,
-    markerOccurrences: safeInteger,
-  }).strict(),
-])
-
 const githubIssueCreateInspectionOutcomeSchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('unique-issue'), issue: githubIssueFactSchema }).strict(),
   z.object({ state: z.literal('absent-complete') }).strict(),
-  z.object({
-    state: z.literal('pull-request-marker-match'),
-    pullRequest: githubIssueCreatePullRequestFactSchema,
-  }).strict(),
-  z.object({
-    state: z.literal('marker-removed'),
-    hint: githubIssueCreateInspectionHintSchema,
-    issue: githubIssueFactSchema,
-  }).strict(),
-  z.object({
-    state: z.literal('known-issue-absent'),
-    hint: githubIssueCreateInspectionHintSchema,
-  }).strict(),
-  z.object({
-    state: z.literal('identity-conflict'),
-    hint: githubIssueCreateInspectionHintSchema,
-    observed: githubIssueCreateMarkerMatchSchema,
-  }).strict(),
-  z.object({
-    state: z.literal('multiple-matches'),
-    matchCount: z.number().int().min(2).max(Number.MAX_SAFE_INTEGER),
-    matches: z.array(githubIssueCreateMarkerMatchSchema).min(1).max(2),
-  }).strict(),
-  z.object({
-    state: z.literal('incomplete'),
-    reason: z.enum(['page-limit', 'item-limit', 'pagination', 'duplicate-entry']),
-    observedMatchCount: safeInteger,
-    observedMatches: z.array(githubIssueCreateMarkerMatchSchema).max(2),
-  }).strict(),
+  z.object({ state: z.literal('pull-request-marker-match') }).strict(),
+  z.object({ state: z.literal('marker-removed') }).strict(),
+  z.object({ state: z.literal('known-issue-absent') }).strict(),
+  z.object({ state: z.literal('identity-conflict') }).strict(),
+  z.object({ state: z.literal('multiple-matches') }).strict(),
+  z.object({ state: z.literal('incomplete') }).strict(),
 ])
 
 /** Strict repository-bound Issue-create marker snapshot schema. */
@@ -886,32 +836,11 @@ const githubIssueCreateSnapshotSchema = z.object({
   repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
   outcome: githubIssueCreateInspectionOutcomeSchema,
 }).strict().superRefine((snapshot, ctx) => {
-  const matches = issueCreateOutcomeMatches(snapshot.outcome)
-  for (const match of matches) {
-    if (issueCreateMatchRepositoryId(match) !== snapshot.repositoryId
-      || issueCreateMatchRepositoryDatabaseId(match) !== snapshot.repositoryDatabaseId) {
-      issue(ctx, 'Issue-create outcome must match the inspected Repository')
-    }
-  }
-  rejectDuplicate(matches.map(issueCreateMatchKey), 'Issue-create outcome match', ctx)
   const outcome = snapshot.outcome
-  if (outcome.state === 'marker-removed'
-    && (outcome.issue.id !== outcome.hint.issueId || outcome.issue.number !== outcome.hint.issueNumber)) {
-    issue(ctx, 'marker-removed evidence must identify the exact hinted Issue')
-  }
-  if (outcome.state === 'marker-removed'
+  if (outcome.state === 'unique-issue'
     && (outcome.issue.repositoryId !== snapshot.repositoryId
       || outcome.issue.repositoryDatabaseId !== snapshot.repositoryDatabaseId)) {
-    issue(ctx, 'marker-removed evidence must match the inspected Repository')
-  }
-  if (outcome.state === 'multiple-matches') {
-    const retainedOccurrences = outcome.matches.reduce((count, match) => count + match.markerOccurrences, 0)
-    if (retainedOccurrences < 2 || outcome.matchCount < retainedOccurrences) {
-      issue(ctx, 'multiple Issue-create matches must retain proof of non-uniqueness and a valid total count')
-    }
-  }
-  if (outcome.state === 'incomplete' && outcome.observedMatchCount < outcome.observedMatches.length) {
-    issue(ctx, 'incomplete Issue-create evidence must retain a valid observed count')
+    issue(ctx, 'unique Issue-create outcome must match the inspected Repository')
   }
 })
 
@@ -920,35 +849,6 @@ export const githubIssueCreateInspectionSchema = z.object({
   snapshot: githubIssueCreateSnapshotSchema,
   observedAt: safeTimestamp,
 }).strict()
-
-function issueCreateOutcomeMatches(
-  outcome: z.infer<typeof githubIssueCreateInspectionOutcomeSchema>,
-): readonly z.infer<typeof githubIssueCreateMarkerMatchSchema>[] {
-  switch (outcome.state) {
-    case 'unique-issue': return [{ kind: 'issue', issue: outcome.issue, markerOccurrences: 1 }]
-    case 'pull-request-marker-match': return [{
-      kind: 'pull-request', pullRequest: outcome.pullRequest, markerOccurrences: 1,
-    }]
-    case 'marker-removed': return []
-    case 'identity-conflict': return [outcome.observed]
-    case 'multiple-matches': return outcome.matches
-    case 'incomplete': return outcome.observedMatches
-    case 'absent-complete':
-    case 'known-issue-absent': return []
-  }
-}
-
-function issueCreateMatchRepositoryId(match: z.infer<typeof githubIssueCreateMarkerMatchSchema>): string {
-  return match.kind === 'issue' ? match.issue.repositoryId : match.pullRequest.repositoryId
-}
-
-function issueCreateMatchRepositoryDatabaseId(match: z.infer<typeof githubIssueCreateMarkerMatchSchema>): string {
-  return match.kind === 'issue' ? match.issue.repositoryDatabaseId : match.pullRequest.repositoryDatabaseId
-}
-
-function issueCreateMatchKey(match: z.infer<typeof githubIssueCreateMarkerMatchSchema>): string {
-  return match.kind === 'issue' ? `issue:${match.issue.id}` : `pull-request:${match.pullRequest.id}`
-}
 
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength

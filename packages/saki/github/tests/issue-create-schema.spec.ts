@@ -93,56 +93,38 @@ it('rejects provider payloads and removed targeted-fingerprint fields', () => {
   }
 })
 
-it('rejects repository, hint, cardinality, and incomplete-outcome contradictions', () => {
-  const hint = { issueId: ISSUE.id, issueNumber: ISSUE.number }
-  const otherIssue = { ...ISSUE, id: 'I_other', number: ISSUE.number + 1 }
-  const markerMatch = { kind: 'issue', issue: ISSUE, markerOccurrences: 1 }
-  const invalidSnapshots = [
-    { ...ISSUE_CREATE_INSPECTION.snapshot, outcome: {
-      state: 'unique-issue', issue: { ...ISSUE, repositoryId: 'R_other' },
-    } },
-    { ...ISSUE_CREATE_INSPECTION.snapshot, outcome: {
-      state: 'marker-removed', hint: { ...hint, issueNumber: hint.issueNumber + 1 }, issue: ISSUE,
-    } },
-    { ...ISSUE_CREATE_INSPECTION.snapshot, outcome: {
-      state: 'marker-removed', hint, issue: otherIssue,
-    } },
-    { ...ISSUE_CREATE_INSPECTION.snapshot, outcome: {
-      state: 'marker-removed', hint, issue: { ...ISSUE, repositoryDatabaseId: '999' },
-    } },
-    { ...ISSUE_CREATE_INSPECTION.snapshot, outcome: {
-      state: 'multiple-matches', matchCount: 2, matches: [markerMatch],
-    } },
-    { ...ISSUE_CREATE_INSPECTION.snapshot, outcome: {
-      state: 'multiple-matches', matchCount: 2, matches: [{ ...markerMatch, markerOccurrences: 3 }],
-    } },
-    { ...ISSUE_CREATE_INSPECTION.snapshot, outcome: {
-      state: 'incomplete', reason: 'page-limit', observedMatchCount: 0, observedMatches: [markerMatch],
-    } },
-  ]
-  for (const snapshot of invalidSnapshots) {
-    expect(githubIssueCreateInspectionSchema.safeParse({
-      ...ISSUE_CREATE_INSPECTION,
-      snapshot,
-    }).success).toBe(false)
-  }
-})
-
-it('admits only the closed bounded-traversal reasons carried by the outcome', () => {
-  for (const reason of ['page-limit', 'item-limit', 'pagination', 'duplicate-entry']) {
-    expect(githubIssueCreateInspectionSchema.safeParse({
+it('admits state-only non-success outcomes and rejects diagnostic payloads', () => {
+  for (const state of [
+    'absent-complete',
+    'pull-request-marker-match',
+    'marker-removed',
+    'known-issue-absent',
+    'identity-conflict',
+    'multiple-matches',
+    'incomplete',
+  ]) {
+    const inspection = {
       ...ISSUE_CREATE_INSPECTION,
       snapshot: {
         ...ISSUE_CREATE_INSPECTION.snapshot,
-        outcome: { state: 'incomplete', reason, observedMatchCount: 0, observedMatches: [] },
+        outcome: { state },
       },
-    }).success).toBe(true)
+    }
+    expect(githubIssueCreateInspectionSchema.parse(inspection)).toEqual(inspection)
+    expect(githubIssueCreateInspectionSchema.safeParse({
+      ...inspection,
+      snapshot: {
+        ...inspection.snapshot,
+        outcome: { state, diagnostic: 'provider-private' },
+      },
+    }).success).toBe(false)
   }
+
   expect(githubIssueCreateInspectionSchema.safeParse({
     ...ISSUE_CREATE_INSPECTION,
     snapshot: {
       ...ISSUE_CREATE_INSPECTION.snapshot,
-      outcome: { state: 'incomplete', reason: 'unstable', observedMatchCount: 0, observedMatches: [] },
+      outcome: { state: 'unique-issue', issue: { ...ISSUE, repositoryId: 'R_other' } },
     },
   }).success).toBe(false)
 })

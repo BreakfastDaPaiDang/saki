@@ -25,8 +25,6 @@ export type GitHubProjectItemId = Branded<'GitHubProjectItemId'>
 export type GitHubIssueId = Branded<'GitHubIssueId'>
 /** Persisted high-entropy identity embedded in one Saki Work Item Issue body. */
 export type GitHubIssueCreateMarkerId = Branded<'GitHubIssueCreateMarkerId'>
-/** Opaque node identity of one REST Issues collection entry. */
-export type GitHubIssueCreateEntryId = Branded<'GitHubIssueCreateEntryId'>
 /** Opaque GitHub pull-request node identity retained as raw item content. */
 export type GitHubPullRequestId = Branded<'GitHubPullRequestId'>
 /** Opaque annotated-tag object identity. */
@@ -521,63 +519,16 @@ export interface GitHubIssueCreateRequest {
   readonly inspectionHint?: GitHubIssueCreateInspectionHint | undefined
 }
 
-/** Pull request returned by the REST Issues collection and classified explicitly. */
-export interface GitHubIssueCreatePullRequestFact {
-  readonly id: GitHubIssueCreateEntryId
-  readonly repositoryId: GitHubRepositoryId
-  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
-  readonly number: number
-  readonly state: 'open' | 'closed'
-  readonly title: string
-  readonly url: string
-  readonly updatedAt: number
-}
-
-/** Marker-bearing REST Issues entry retained without its body or provider payload. */
-export type GitHubIssueCreateMarkerMatch =
-  | { readonly kind: 'issue'; readonly issue: GitHubIssueFact; readonly markerOccurrences: number }
-  | {
-    readonly kind: 'pull-request'
-    readonly pullRequest: GitHubIssueCreatePullRequestFact
-    readonly markerOccurrences: number
-  }
-
 /** Durable-safe classification of one bounded exact-marker inspection. */
 export type GitHubIssueCreateInspectionOutcome =
   | { readonly state: 'unique-issue'; readonly issue: GitHubIssueFact }
   | { readonly state: 'absent-complete' }
-  | { readonly state: 'pull-request-marker-match'; readonly pullRequest: GitHubIssueCreatePullRequestFact }
-  | {
-    readonly state: 'marker-removed'
-    readonly hint: GitHubIssueCreateInspectionHint
-    readonly issue: GitHubIssueFact
-  }
-  | { readonly state: 'known-issue-absent'; readonly hint: GitHubIssueCreateInspectionHint }
-  | {
-    readonly state: 'identity-conflict'
-    readonly hint: GitHubIssueCreateInspectionHint
-    readonly observed: GitHubIssueCreateMarkerMatch
-  }
-  | {
-    readonly state: 'multiple-matches'
-    readonly matchCount: number
-    /** First two API-ordered matches, sufficient to prove non-uniqueness. */
-    readonly matches: readonly GitHubIssueCreateMarkerMatch[]
-  }
-  | {
-    readonly state: 'incomplete'
-    readonly reason: GitHubIssueCreateIncompleteReason
-    readonly observedMatchCount: number
-    /** At most the first two marker matches observed before traversal stopped. */
-    readonly observedMatches: readonly GitHubIssueCreateMarkerMatch[]
-  }
-
-/** Closed reasons why an Issue-create marker traversal cannot prove a result. */
-export type GitHubIssueCreateIncompleteReason =
-  | 'page-limit'
-  | 'item-limit'
-  | 'pagination'
-  | 'duplicate-entry'
+  | { readonly state: 'pull-request-marker-match' }
+  | { readonly state: 'marker-removed' }
+  | { readonly state: 'known-issue-absent' }
+  | { readonly state: 'identity-conflict' }
+  | { readonly state: 'multiple-matches' }
+  | { readonly state: 'incomplete' }
 
 /** Raw repository-bound Issue-create reconciliation facts. */
 export interface GitHubIssueCreateSnapshot {

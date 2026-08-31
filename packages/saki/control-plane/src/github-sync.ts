@@ -93,10 +93,8 @@ export interface GitHubWorkItemRecoveryMemory {
 
 /** Detached active mapping and confirmed Board evidence used to derive one mutation target. */
 export interface GitHubWorkItemMutationContext {
-  readonly projectId: SakiDevelopmentProjectId
   readonly synchronizationRevision: number
   readonly mappingRevision: number
-  readonly boardGeneration: number
   readonly checkpointObservedAt: number
   readonly configuration: GitHubSynchronizationConfiguration
   readonly confirmedBoard: SakiConfirmedBoardProjection
@@ -552,13 +550,11 @@ export class GitHubProjectSynchronization implements SakiGitHubSynchronizationCo
     return {
       ok: true,
       context: {
-        projectId,
         synchronizationRevision: record.revision,
         mappingRevision: record.checkpoint.configurationRevision,
-        boardGeneration: record.confirmedBoard.generation,
         checkpointObservedAt: record.checkpoint.observedAt,
-        configuration: structuredClone(record.active.configuration),
-        confirmedBoard: structuredClone(record.confirmedBoard),
+        configuration: record.active.configuration,
+        confirmedBoard: record.confirmedBoard,
       },
     }
   }

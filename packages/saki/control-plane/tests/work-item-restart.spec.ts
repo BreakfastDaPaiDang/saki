@@ -124,10 +124,8 @@ const UNJOINED_SNAPSHOT = {
 const UNJOINED_REMOTE_FINGERPRINT = targetedBoardRemoteFingerprint(UNJOINED_SNAPSHOT)
 
 const CONTEXT: GitHubWorkItemMutationContext = {
-  projectId: PROJECT_ID,
   synchronizationRevision: 3,
   mappingRevision: 3,
-  boardGeneration: 7,
   checkpointObservedAt: 100,
   configuration: CONFIGURATION,
   confirmedBoard: {

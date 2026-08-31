@@ -70,11 +70,8 @@ it.each([
 ] as const)('classifies %s without dispatching', async (_subject, entries, expectedState) => {
   const { inspection, graphqlBodies } = await runInspection(() => ({ entries: entries() }))
 
-  expect(inspection.snapshot.outcome.state).toBe(expectedState)
+  expect(inspection.snapshot.outcome).toEqual({ state: expectedState })
   expect(graphqlBodies.every(body => !String(body.query).includes('mutation '))).toBe(true)
-  if (inspection.snapshot.outcome.state === 'multiple-matches') {
-    expect(inspection.snapshot.outcome.matchCount).toBe(2)
-  }
 })
 
 it('returns identity-conflict when the marker-bearing Issue reuses the hinted id at another number', async () => {
@@ -86,7 +83,7 @@ it('returns identity-conflict when the marker-bearing Issue reuses the hinted id
     entries: [issueEntry({ number: ISSUE.number + 1 })],
   }), { request })
 
-  expect(inspection.snapshot.outcome.state).toBe('identity-conflict')
+  expect(inspection.snapshot.outcome).toEqual({ state: 'identity-conflict' })
 })
 
 it.each([
@@ -100,37 +97,32 @@ it.each([
   }
   const { inspection } = await runInspection(() => ({ entries: [...entries] }), { request })
 
-  expect(inspection.snapshot.outcome.state).toBe(expectedState)
-  if (inspection.snapshot.outcome.state === 'marker-removed'
-    || inspection.snapshot.outcome.state === 'known-issue-absent'
-    || inspection.snapshot.outcome.state === 'identity-conflict') {
-    expect(inspection.snapshot.outcome.hint).toEqual(request.inspectionHint)
-  }
+  expect(inspection.snapshot.outcome).toEqual({ state: expectedState })
 })
 
 it.each([
   ['page limit', { maxPages: 1, pageSize: 1 }, () => ({
     entries: [issueEntry({ body: null })],
     link: nextLink(2, 1),
-  }), 'page-limit'],
+  })],
   ['item limit', { maxItems: 1 }, () => ({
     entries: [issueEntry({ body: null }), issueEntry({ id: 124, nodeId: 'I_other', number: 28, body: null })],
-  }), 'item-limit'],
+  })],
   ['invalid pagination', {}, () => ({
     entries: [issueEntry({ body: null })],
     link: nextLink(3, 50),
-  }), 'pagination'],
-] as const)('returns typed incomplete evidence at the %s boundary', async (_subject, config, page, reason) => {
+  })],
+] as const)('returns an incomplete classification at the %s boundary', async (_subject, config, page) => {
   const { inspection } = await runInspection(page, { config })
 
-  expect(inspection.snapshot.outcome).toMatchObject({ state: 'incomplete', reason })
+  expect(inspection.snapshot.outcome).toEqual({ state: 'incomplete' })
 })
 
-it('returns duplicate-entry evidence instead of treating repeated REST entries as marker multiplicity', async () => {
+it('classifies a duplicate entry as incomplete instead of marker multiplicity', async () => {
   const duplicate = issueEntry({ body: null })
   const { inspection } = await runInspection(() => ({ entries: [duplicate, duplicate] }))
 
-  expect(inspection.snapshot.outcome).toMatchObject({ state: 'incomplete', reason: 'duplicate-entry' })
+  expect(inspection.snapshot.outcome).toEqual({ state: 'incomplete' })
 })
 
 it('follows only a proved next page while issuing the provider-owned fixed route', async () => {
@@ -179,7 +171,7 @@ it.each([
 ] as const)('returns pagination-incomplete evidence for %s', async (_subject, link) => {
   const { inspection } = await runInspection(() => ({ entries: [], link }))
 
-  expect(inspection.snapshot.outcome).toMatchObject({ state: 'incomplete', reason: 'pagination' })
+  expect(inspection.snapshot.outcome).toEqual({ state: 'incomplete' })
 })
 
 it('uses exact marker matching and does not accept a similar comment', async () => {
