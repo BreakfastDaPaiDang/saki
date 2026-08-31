@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
+import type { KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
@@ -51,8 +52,8 @@ describe('closed Saki generation creation', () => {
 
     await materializeFreshSakiGeneration(databasePath, identity, signal)
 
-    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 5 }, signal))
-      .resolves.toMatchObject({ stateVersion: 5 })
+    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 6 }, signal))
+      .resolves.toMatchObject({ stateVersion: 6 })
   })
 
   it('migrates a different closed v2 database and materializes the current seal', async () => {
@@ -72,16 +73,16 @@ describe('closed Saki generation creation', () => {
     await source.close()
     await context.fiber.dispose()
 
-    await migrateSakiGeneration(sourcePath, targetPath, identity, signal)
+    await migrateSakiGeneration(sourcePath, targetPath, identity, signal, undefined)
 
-    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 5 }, signal))
-      .resolves.toMatchObject({ stateVersion: 5 })
+    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 6 }, signal))
+      .resolves.toMatchObject({ stateVersion: 6 })
   })
 
-  it('migrates an exact retained v3 generation into current v5 state', async () => {
+  it('migrates an exact retained v3 generation into current v6 state', async () => {
     const directory = await root()
     const sourcePath = join(directory, 'source-v3.sqlite')
-    const targetPath = join(directory, 'target-v5.sqlite')
+    const targetPath = join(directory, 'target-v6.sqlite')
     const signal = new AbortController().signal
     const context = new Context()
     await context.plugin(Storage)
@@ -109,10 +110,10 @@ describe('closed Saki generation creation', () => {
     await source.close()
     await context.fiber.dispose()
 
-    await migrateSakiGeneration(sourcePath, targetPath, identity, signal)
+    await migrateSakiGeneration(sourcePath, targetPath, identity, signal, undefined)
 
-    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 5 }, signal)
-    expect(current.stateVersion).toBe(5)
+    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 6 }, signal)
+    expect(current.stateVersion).toBe(6)
     expect(current.controlPlane.table('github_project_sync').size).toBe(0)
     expect(current.controlPlane.table('github_sync_configuration_intents').size).toBe(0)
     expect(current.controlPlane.table('git_operation_intents').size).toBe(0)
@@ -120,10 +121,10 @@ describe('closed Saki generation creation', () => {
     expect(current.hostExecution.table('operations').size).toBe(0)
   })
 
-  it('migrates an exact adjacent v4 generation into current v5 state', async () => {
+  it('migrates an exact retained v4 generation into current v6 state', async () => {
     const directory = await root()
     const sourcePath = join(directory, 'source-v4.sqlite')
-    const targetPath = join(directory, 'target-v5.sqlite')
+    const targetPath = join(directory, 'target-v6.sqlite')
     const signal = new AbortController().signal
     const context = new Context()
     await context.plugin(Storage)
@@ -151,10 +152,10 @@ describe('closed Saki generation creation', () => {
     await source.close()
     await context.fiber.dispose()
 
-    await migrateSakiGeneration(sourcePath, targetPath, identity, signal)
+    await migrateSakiGeneration(sourcePath, targetPath, identity, signal, undefined)
 
-    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 5 }, signal)
-    expect(current.stateVersion).toBe(5)
+    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 6 }, signal)
+    expect(current.stateVersion).toBe(6)
     expect(current.hostExecution.table('operations').size).toBe(0)
   })
 
@@ -205,6 +206,27 @@ describe('closed Saki generation creation', () => {
       join(directory, 'target.sqlite'),
       identity,
       AbortSignal.timeout(2_000),
+      undefined,
     )).rejects.toBe(failure)
+  })
+
+  it('materializes the exact retained Host Operation snapshot during the adjacent v5 upgrade', async () => {
+    const directory = await root()
+    const retainedHostExecution: KvUnitSnapshot = {
+      tables: { operations: { retained: { exact: 'provider-private-evidence' } } },
+      global: null,
+    }
+    vi.spyOn(DomainFacility.prototype, 'migrate').mockResolvedValue(undefined as never)
+    const materialize = vi.spyOn(DomainFacility.prototype, 'materialize').mockResolvedValue(undefined as never)
+
+    await migrateSakiGeneration(
+      join(directory, 'source-v5.sqlite'),
+      join(directory, 'target-v6.sqlite'),
+      identity,
+      AbortSignal.timeout(2_000),
+      retainedHostExecution,
+    )
+
+    expect(materialize.mock.calls[0]?.[1]).toBe(retainedHostExecution)
   })
 })

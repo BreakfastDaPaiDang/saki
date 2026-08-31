@@ -94,6 +94,7 @@ const CONFIRMED_BOARD = {
     url: 'https://github.com/BreakfastDaPaiDang/saki/issues/27',
     issueState: 'open',
     status: 'in-progress',
+    latestNonTerminalStatus: 'in-progress',
     order: 0,
     archived: false,
     notInProject: false,
@@ -120,7 +121,8 @@ const CONFIRMED_BOARD_RESULT = {
     mapping: { state: 'valid', configurationRevision: 1, validatedAt: 110 },
     freshness: { state: 'fresh', confirmedAt: 110, staleAt: 30_110, ageMs: 0 },
     scan: { state: 'idle' },
-    effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+    effectiveMutationAvailability: { available: true, reasons: [] },
+    mutationOverlays: [],
   },
 } as const
 const UNCONFIGURED_SYNCHRONIZATION_EVIDENCE = {
@@ -129,7 +131,7 @@ const UNCONFIGURED_SYNCHRONIZATION_EVIDENCE = {
   scan: { state: 'idle' },
   effectiveMutationAvailability: {
     available: false,
-    reasons: ['synchronization-unconfigured', 'checkpoint-unavailable', 'no-concrete-mutation'],
+    reasons: ['synchronization-unconfigured', 'checkpoint-unavailable'],
   },
 } as const
 const SAVED_SYNCHRONIZATION_EVIDENCE = {
@@ -147,7 +149,6 @@ const SAVED_SYNCHRONIZATION_EVIDENCE = {
       'configuration-not-activated',
       'mapping-revalidation-required',
       'checkpoint-unavailable',
-      'no-concrete-mutation',
     ],
   },
 } as const
@@ -156,7 +157,7 @@ const CONFIRMED_SYNCHRONIZATION_EVIDENCE = {
   mapping: { state: 'valid', configurationRevision: 1, validatedAt: 110 },
   freshness: { state: 'fresh', confirmedAt: 110, staleAt: 30_110, ageMs: 0 },
   scan: { state: 'idle' },
-  effectiveMutationAvailability: { available: false, reasons: ['no-concrete-mutation'] },
+  effectiveMutationAvailability: { available: true, reasons: [] },
 } as const
 
 describe('Saki GitHub Host wire schemas', () => {
@@ -206,6 +207,7 @@ describe('Saki GitHub Host wire schemas', () => {
         state: 'unconfigured',
         synchronizationRevision: 0,
         ...UNCONFIGURED_SYNCHRONIZATION_EVIDENCE,
+        mutationOverlays: [],
       },
     } as const
     expect(sakiBoardResultSchema.parse(unconfigured)).toEqual(unconfigured)
@@ -247,9 +249,9 @@ describe('Saki GitHub Host wire schemas', () => {
             'configuration-not-activated',
             'mapping-revalidation-required',
             'checkpoint-unavailable',
-            'no-concrete-mutation',
           ],
         },
+        mutationOverlays: [],
       },
     } as const
     expect(sakiBoardResultSchema.parse(awaiting)).toEqual(awaiting)
@@ -320,9 +322,9 @@ describe('Saki GitHub Host wire schemas', () => {
           'configuration-not-activated',
           'mapping-revalidation-required',
           'checkpoint-unavailable',
-          'no-concrete-mutation',
         ],
       },
+      mutationOverlays: [],
     } as const
     const parseBoard = (projection: unknown) => sakiBoardResultSchema.safeParse({
       ok: true,
@@ -335,7 +337,7 @@ describe('Saki GitHub Host wire schemas', () => {
       mapping: { state: 'unconfigured' },
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['configuration-not-activated', 'checkpoint-unavailable', 'no-concrete-mutation'],
+        reasons: ['configuration-not-activated', 'checkpoint-unavailable'],
       },
     })).toBe(false)
     expect(parseBoard({
@@ -357,7 +359,7 @@ describe('Saki GitHub Host wire schemas', () => {
       ...awaiting,
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['mapping-revalidation-required', 'checkpoint-unavailable', 'no-concrete-mutation'],
+        reasons: ['mapping-revalidation-required', 'checkpoint-unavailable'],
       },
     })).toBe(false)
     expect(parseBoard({
@@ -372,7 +374,7 @@ describe('Saki GitHub Host wire schemas', () => {
       ...CONFIRMED_BOARD_RESULT.projection,
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['checkpoint-unavailable', 'no-concrete-mutation'],
+        reasons: ['checkpoint-unavailable'],
       },
     })).toBe(false)
   })
@@ -430,14 +432,14 @@ describe('Saki GitHub Host wire schemas', () => {
       mapping: { state: 'revalidation-required', configurationRevision: 1 },
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['mapping-revalidation-required', 'no-concrete-mutation'],
+        reasons: ['mapping-revalidation-required'],
       },
     })).toBe(false)
     expect(mismatch({
       mapping: { state: 'revalidation-required', configurationRevision: 1 },
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['mapping-revalidation-required', 'no-concrete-mutation'],
+        reasons: ['mapping-revalidation-required'],
       },
     })).toBe(false)
     expect(mismatch({
@@ -555,6 +557,7 @@ describe('Saki GitHub Host wire schemas', () => {
       ...item,
       notInProject: true,
       status: 'inbox',
+      latestNonTerminalStatus: 'inbox',
       source: { ...item.source, projectItemId: undefined, apiOrder: undefined },
     })).toBe(true)
     expect(withItem({ ...item, notInProject: true, status: 'inbox' })).toBe(false)
@@ -563,6 +566,7 @@ describe('Saki GitHub Host wire schemas', () => {
       issueState: 'closed',
       notInProject: true,
       status: 'inbox',
+      latestNonTerminalStatus: 'inbox',
       source: { ...item.source, projectItemId: undefined, apiOrder: undefined },
     })).toBe(false)
     expect(withItem({
@@ -615,6 +619,7 @@ describe('Saki GitHub Host wire schemas', () => {
     const unjoined = {
       ...item,
       status: 'inbox',
+      latestNonTerminalStatus: 'inbox',
       notInProject: true,
       source: {
         kind: 'github-issue',
@@ -760,7 +765,7 @@ describe('Saki GitHub Host wire schemas', () => {
             mapping: { state: 'repair-required', configurationRevision: 1, issues: repairIssues },
             effectiveMutationAvailability: {
               available: false,
-              reasons: ['mapping-repair-required', 'no-concrete-mutation'],
+              reasons: ['mapping-repair-required'],
             },
           }),
           failure: { attemptId: ATTEMPT, configurationRevision: 1, failedAt: 200, failure },
@@ -778,7 +783,7 @@ describe('Saki GitHub Host wire schemas', () => {
         failure: { attemptId: ATTEMPT, configurationRevision: 1, failedAt: 200, failure },
         effectiveMutationAvailability: {
           available: false,
-          reasons: ['mapping-repair-required', 'no-concrete-mutation'],
+          reasons: ['mapping-repair-required'],
         },
       },
     }).success
@@ -907,7 +912,7 @@ describe('Saki GitHub Host wire schemas', () => {
         },
         effectiveMutationAvailability: {
           available: false,
-          reasons: ['mapping-repair-required', 'no-concrete-mutation'],
+          reasons: ['mapping-repair-required'],
         },
       },
     }).success).toBe(false)
@@ -935,7 +940,7 @@ describe('Saki GitHub Host wire schemas', () => {
         },
         effectiveMutationAvailability: {
           available: false,
-          reasons: ['mapping-repair-required', 'no-concrete-mutation'],
+          reasons: ['mapping-repair-required'],
         },
       },
     }).success).toBe(false)
@@ -1000,7 +1005,7 @@ describe('Saki GitHub Host wire schemas', () => {
         },
         effectiveMutationAvailability: {
           available: false,
-          reasons: ['mapping-repair-required', 'no-concrete-mutation'],
+          reasons: ['mapping-repair-required'],
         },
       },
     }).success).toBe(false)
@@ -1131,7 +1136,7 @@ describe('Saki GitHub Host wire schemas', () => {
         },
         effectiveMutationAvailability: {
           available: false,
-          reasons: ['mapping-repair-required', 'no-concrete-mutation'],
+          reasons: ['mapping-repair-required'],
         },
       },
     }).success
@@ -1305,7 +1310,6 @@ describe('Saki GitHub Host wire schemas', () => {
               'configuration-not-activated',
               'mapping-revalidation-required',
               'checkpoint-unavailable',
-              'no-concrete-mutation',
             ],
           },
         },
@@ -1329,7 +1333,7 @@ describe('Saki GitHub Host wire schemas', () => {
       ...result.projection.synchronization,
       effectiveMutationAvailability: {
         available: false,
-        reasons: ['configuration-not-activated', 'mapping-revalidation-required', 'checkpoint-unavailable'],
+        reasons: ['configuration-not-activated', 'mapping-revalidation-required'],
       },
     })).toBe(false)
     expect(parseSettings({
@@ -1366,7 +1370,6 @@ describe('Saki GitHub Host wire schemas', () => {
           'configuration-not-activated',
           'mapping-repair-required',
           'checkpoint-unavailable',
-          'no-concrete-mutation',
         ],
       },
     })).toBe(false)
@@ -1396,7 +1399,6 @@ describe('Saki GitHub Host wire schemas', () => {
             'configuration-not-activated',
             'mapping-repair-required',
             'checkpoint-unavailable',
-            'no-concrete-mutation',
           ],
         },
       })).toBe(false)
@@ -1427,7 +1429,6 @@ describe('Saki GitHub Host wire schemas', () => {
           'configuration-not-activated' as const,
           'mapping-repair-required' as const,
           'checkpoint-unavailable' as const,
-          'no-concrete-mutation' as const,
         ],
       },
     })
@@ -1470,7 +1471,6 @@ describe('Saki GitHub Host wire schemas', () => {
             'configuration-not-activated',
             'mapping-repair-required',
             'checkpoint-unavailable',
-            'no-concrete-mutation',
           ],
         },
       })).toBe(false)
@@ -1518,7 +1518,6 @@ describe('Saki GitHub Host wire schemas', () => {
               'configuration-not-activated',
               'mapping-revalidation-required',
               'checkpoint-unavailable',
-              'no-concrete-mutation',
             ],
           },
         },
@@ -1757,7 +1756,6 @@ describe('Saki GitHub Host wire schemas', () => {
             reasons: [
               'configuration-not-activated',
               'mapping-revalidation-required',
-              'no-concrete-mutation',
             ],
           },
         },
@@ -1789,7 +1787,6 @@ describe('Saki GitHub Host wire schemas', () => {
             reasons: [
               'configuration-not-activated',
               'mapping-revalidation-required',
-              'no-concrete-mutation',
             ],
           },
         },
@@ -1812,7 +1809,6 @@ describe('Saki GitHub Host wire schemas', () => {
             reasons: [
               'configuration-not-activated',
               'mapping-revalidation-required',
-              'no-concrete-mutation',
             ],
           },
         },
@@ -1834,7 +1830,6 @@ describe('Saki GitHub Host wire schemas', () => {
             reasons: [
               'configuration-not-activated',
               'mapping-revalidation-required',
-              'no-concrete-mutation',
             ],
           },
         },
@@ -1864,7 +1859,6 @@ describe('Saki GitHub Host wire schemas', () => {
             reasons: [
               'configuration-not-activated',
               'mapping-revalidation-required',
-              'no-concrete-mutation',
             ],
           },
         },

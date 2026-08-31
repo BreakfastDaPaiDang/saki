@@ -2,7 +2,7 @@
 
 [English](saki.md) | 中文
 
-Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现接口建立一个稳定的本地 Installation、一个已登记的 Saki Host、一个具备当前 Host Operator Grant 的人类 Principal、一条带版本的 Installation Access 聚合记录、包含可恢复首次登记 Intent 的 Development Project Registry，以及面向已绑定 Project 的可恢复直接结构化 Git Intent。版本化的置备所有者与各自带修订号的实体表会在启动中断后保留这些身份与 operation evidence。[Saki 后端架构](../saki/architecture/0.1.0-backend.zh.md)定义了更完整的控制面与执行面划分；本页是已实现 Cordis 服务的参考。
+Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现接口建立一个稳定的本地 Installation、一个已登记的 Saki Host、一个具备当前 Host Operator Grant 的人类 Principal、一条带版本的 Installation Access 聚合记录、包含可恢复首次登记 Intent 的 Development Project Registry、面向已绑定 Project 的可恢复直接结构化 Git Intent，以及由 GitHub 支持的可恢复 Create/Move Work Item Intent。版本化的置备所有者与各自带修订号的实体表会在启动中断后保留这些身份与 operation evidence。[Saki 后端架构](../saki/architecture/0.1.0-backend.zh.md)定义了更完整的控制面与执行面划分；本页是已实现 Cordis 服务的参考。
 
 ## Installation 访问
 
@@ -24,9 +24,15 @@ Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现
 
 Local Host 会通过 alternate index 构建 stage 与 unstage result，持久化位于同一目录的随机 pin，并在 publication 前以不覆盖既有文件的方式将该 pin 链接为绑定 index lock。它还会从已观察 index tree 创建确定性、无 hook 且无签名的 Commit。Attached-HEAD publication 会固定目标 branch、在副作用前立即重新验证 HEAD，并只对该 target 执行 compare-and-set。Detached HEAD 仍可用于 inspection、Diff、stage 与 unstage；但 CreateCommit 不可用，因为 Git 2.45 无法在 compare-and-set object id 的同时原子证明 `HEAD` 始终是 direct ref。Git 2.45 是最低版本。随机 scratch cleanup 要求精确 owner marker；index-lock cleanup 要求 operation-owned path、file identity 与 digest；而且无法证明结果的 attempted publication 绝不会自动重试。Automated dispatch 与 Agent Run source 仍属于后续工作。
 
+## GitHub Board 与 Work Item 操作
+
+完整 GitHub Project scan 会原子发布一份已确认 Board 与 checkpoint。每个投影 Work Item 保留可为 null 的 `latestNonTerminalStatus` memory，让后续外部 Issue reopen 具有确定的 repair 目标；archived item 保持 Canceled，不会暴露无法执行的 reopen action。非终态 Status 下的 closed Issue 与终态 Status 下的 open Issue 会产生窄化的 `move-with-actor` repair overlay，而不会形成第二套 repair 状态机。
+
+`create-work-item` 会持久分阶段执行带 marker 的 Issue 创建、Project membership 与 Inbox 分配。`move-work-item` 会按需分阶段执行 membership、Status、可选 API position，以及匹配的 Issue close 或 reopen 转换。控制面会在每个外部 effect 前记录 Intent 与 stage target，不允许 Provider 内部重试，并使用定向 inspection 与每 Work Item recovery evidence，在回复缺失或重启后判定 success、conflict、从准确 effect 前状态出发且已证明安全的再次尝试，或 reconciliation。Targeted overlay 会弥合下次完整 Board scan 前的间隔，但不声称 exactly-once 行为。
+
 ## Host 传输
 
-[`saki-host-api`](../../packages/saki/host-api/README.zh.md) 在逻辑 `/saki` [Connection](../../packages/client/connection/README.zh.md) 通道上拥有严格的端点 schema。Host 适配器在解码前拒绝 URL 查询参数，在 JSON 外提取 Cookie 和请求头，构造不进入协议载荷的 `SakiAuthenticationContext`，并在 RPC 结果之外返回 `Set-Cookie`。每个 Saki 响应都使用 `Cache-Control: no-store`，每项传输或 RPC 故障都使用同一种固定且不透明的内部错误。其受保护操作为检查、Project-index、Development-Workspace、首次登记、Project Changes、Project Diff、stage、unstage 与 Commit 调用关联准确的请求和结果类型；严格的出站验证会在序列化前拒绝含有意外权限、路径、凭据或 Projection 字段的实现结果。
+[`saki-host-api`](../../packages/saki/host-api/README.zh.md) 在逻辑 `/saki` [Connection](../../packages/client/connection/README.zh.md) 通道上拥有严格的端点 schema。Host 适配器在解码前拒绝 URL 查询参数，在 JSON 外提取 Cookie 和请求头，构造不进入协议载荷的 `SakiAuthenticationContext`，并在 RPC 结果之外返回 `Set-Cookie`。每个 Saki 响应都使用 `Cache-Control: no-store`，每项传输或 RPC 故障都使用同一种固定且不透明的内部错误。其受保护操作为检查、Project-index、Development-Workspace、首次登记、Project Changes、Project Diff、Board、Project Settings、stage、unstage、Commit、CreateWorkItem 与 MoveWorkItem 调用关联准确的请求和结果类型；严格的出站验证会在序列化前拒绝含有意外权限、路径、凭据或 Projection 字段的实现结果。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -84,7 +90,7 @@ Source: [`packages/saki/control-plane/src/service.ts`](../../packages/saki/contr
 
 ### `ctx.sakiGitHub` — `SakiGitHub` (abstract seam)
 
-GitHub capability. Providers own authentication, pagination, response admission, and rate observations. Consumers receive only complete detached facts or a GitHubProviderError.
+GitHub capability. Providers own authentication, pagination, response admission, and scan rate observations. Consumers receive only complete detached facts and mutation results, or a GitHubProviderError.
 
 ```ts cordis-catalog
 /**
@@ -102,6 +108,22 @@ abstract read<K extends keyof GitHubReadMap>( request: GitHubReadMap[K]['request
  * @returns one detached complete validated scan candidate.
  */
 abstract scan<K extends keyof GitHubScanMap>( request: GitHubScanMap[K]['request'], signal: AbortSignal, ): Promise<GitHubScanMap[K]['result']>
+
+/**
+ * Dispatch one atomic GitHub mutation without provider retries.
+ * @param request - declaration-map mutation request with a caller-persisted operation id.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns the declaration-map result after one validated external call.
+ */
+abstract dispatch<K extends keyof GitHubMutationMap>( request: GitHubMutationMap[K]['request'], signal: AbortSignal, ): Promise<GitHubMutationMap[K]['result']>
+
+/**
+ * Inspect the exact external target of one mutation without publishing a complete scan.
+ * @param request - the immutable request originally recorded for dispatch.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns detached targeted facts; provider failures reject with {@link GitHubProviderError}.
+ */
+abstract inspectMutation<K extends keyof GitHubMutationMap>( request: GitHubMutationMap[K]['request'], signal: AbortSignal, ): Promise<GitHubMutationMap[K]['inspection']>
 ```
 
 Source: [`packages/saki/github/src/index.ts`](../../packages/saki/github/src/index.ts)

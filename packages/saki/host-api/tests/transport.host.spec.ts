@@ -89,7 +89,7 @@ async function start(): Promise<RunningHost> {
     databasePath: join(directory, 'saki.sqlite'),
     installationId: INSTALLATION_ID,
     storageGenerationId: STORAGE_GENERATION_ID,
-    stateVersion: 5,
+    stateVersion: 6,
     createdByBuildId: BUILD_ID,
     promoteToReady: () => Promise.resolve(),
   })
@@ -964,6 +964,67 @@ describe('Saki /saki Host transport', () => {
       })).message.result).toEqual(OPAQUE_ERROR_RESULT)
     }
     expect(submit).toHaveBeenCalledTimes(5)
+    await host.close()
+  })
+
+  it('routes Work Item Intents through their exact safe receipt schemas', async () => {
+    const host = await start()
+    const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
+    const exchange = await rpc(host, 'access/exchange', { secret })
+    const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
+    const token = (exchange.message.result as { value: { access: { requestToken: string } } }).value.access.requestToken
+    const projectId = 'project-22222222-2222-4222-8222-222222222222'
+    const createIntent = {
+      type: 'create-work-item',
+      intentId: 'intent-11111111-1111-4111-8111-111111111111',
+      projectId,
+      expected: { projectRevision: 3, synchronizationRevision: 4, mappingRevision: 4 },
+      title: 'Host-routed Work Item',
+      intendedOutcome: 'A durable Issue-backed Work Item exists.',
+      acceptanceCriteria: ['The targeted observation confirms the Issue.'],
+    } as const
+    const moveIntent = {
+      type: 'move-work-item',
+      intentId: 'intent-22222222-2222-4222-8222-222222222222',
+      projectId,
+      workItemId: `work-item-${'3'.repeat(64)}`,
+      expectedRemoteFingerprint: `remote-fingerprint-${'4'.repeat(64)}`,
+      targetStatus: 'in-review',
+    } as const
+    const createOutcome = {
+      ok: true,
+      receipt: {
+        id: 'receipt-11111111-1111-4111-8111-111111111111',
+        intentId: createIntent.intentId,
+        type: createIntent.type,
+        projectId,
+        state: 'succeeded',
+        workItemId: `work-item-${'3'.repeat(64)}`,
+        issueNumber: 28,
+        url: 'https://github.com/BreakfastDaPaiDang/saki/issues/28',
+        remoteFingerprint: `remote-fingerprint-${'5'.repeat(64)}`,
+      },
+    } as const
+    const submit = vi.spyOn(host.context.sakiControlPlane, 'submit')
+      .mockResolvedValueOnce(createOutcome as never)
+      .mockResolvedValueOnce({ ok: false, reason: 'unavailable' } as never)
+
+    expect((await rpc(host, 'control/submit', createIntent, {
+      cookie,
+      'x-saki-request-token': token,
+    })).message.result).toEqual({ ok: true, value: createOutcome })
+    expect((await rpc(host, 'control/submit', moveIntent, {
+      cookie,
+      'x-saki-request-token': token,
+    })).message.result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
+    expect((await rpc(host, 'control/submit', {
+      ...moveIntent,
+      projectItemId: 'PVTI_browser_authority',
+    }, {
+      cookie,
+      'x-saki-request-token': token,
+    })).message.result).toEqual(OPAQUE_ERROR_RESULT)
+    expect(submit).toHaveBeenCalledTimes(2)
     await host.close()
   })
 

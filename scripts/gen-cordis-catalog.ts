@@ -376,6 +376,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   SakiQueryResult: 'saki.md',
   GitHubReadMap: 'saki.md',
   GitHubScanMap: 'saki.md',
+  GitHubMutationMap: 'saki.md',
   TerminalBackend: 'terminal.md',
   TerminalReadRequest: 'terminal.md',
   TerminalReadResult: 'terminal.md',

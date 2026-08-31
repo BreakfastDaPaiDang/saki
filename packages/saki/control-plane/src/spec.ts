@@ -2,22 +2,30 @@
 
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
+import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { workspaceIdSchema } from '@deepseek-ai/dsh-workspace'
 import {
   githubAccountIdSchema,
   githubAppIdSchema,
+  githubExternalOperationId,
+  githubExternalOperationIdSchema,
   githubFailureSchema,
   githubInstallationIdSchema,
   githubIssueIdSchema,
+  githubIssueStateSnapshotSchema,
+  githubInstallationProfileSchema,
   githubProjectBoardFingerprintSchema,
   githubProjectFieldIdSchema,
   githubProjectIdSchema,
   githubProjectItemIdSchema,
+  githubProjectItemAddSnapshotSchema,
+  githubProjectItemPositionSnapshotSchema,
   githubProjectOptionIdSchema,
   githubRepositoryDatabaseIdSchema,
   githubRepositoryIdSchema,
+  type GitHubExternalOperationId,
 } from '@breakfastdapaidang/saki-github'
 import {
   hostOperationPreparationSchema,
@@ -60,7 +68,16 @@ import {
   sakiPrincipalIdSchema as principalId,
   sakiResourceBindingIdSchema as resourceBindingId,
   sakiStorageGenerationIdSchema as storageGenerationId,
+  sakiWorkItemRecoveryIdSchema as workItemRecoveryId,
 } from './ids.ts'
+import {
+  boardWorkItemId as deriveBoardWorkItemId,
+  targetedBoardRemoteFingerprint,
+} from './work-item-mapping.ts'
+import {
+  githubWorkItemIssueBodyWithinLimit,
+  renderGitHubWorkItemIssueBody,
+} from './work-item-issue.ts'
 import type {
   SakiGrantId,
   SakiHostId,
@@ -68,12 +85,14 @@ import type {
   SakiInstallationId,
   SakiPrincipalId,
   SakiControlIntentId,
+  SakiBoardWorkItemId,
   SakiDevelopmentProjectId,
   SakiResourceBindingId,
   SakiGitHubScanFailure,
   CreateCommitIntent,
   GitMutationExpectation,
   StageFilesIntent,
+  SakiWorkItemRecoveryId,
   UnstageFilesIntent,
 } from './types.ts'
 
@@ -185,14 +204,21 @@ export const V4_HOST_OPERATOR_ACTIONS = [
   'github-synchronization:configure',
 ] as const
 
-/** Current Host Operator actions, including structured Project change operations. */
-export const HOST_OPERATOR_ACTIONS = [
+/** Exact Host Operator action vocabulary retained by v5 Grant records. */
+export const V5_HOST_OPERATOR_ACTIONS = [
   ...V4_HOST_OPERATOR_ACTIONS,
   'project-changes:read',
   'project-diff:read',
   'project-changes:stage',
   'project-changes:unstage',
   'project-commit:create',
+] as const
+
+/** Current Host Operator actions, including Work Item mutations. */
+export const HOST_OPERATOR_ACTIONS = [
+  ...V5_HOST_OPERATOR_ACTIONS,
+  'work-item:create',
+  'work-item:move',
 ] as const
 
 const grantRecordSharedShape = {
@@ -217,6 +243,12 @@ export const historicalGrantRecordSchema = z.object({
 export const v4GrantRecordSchema = z.object({
   ...grantRecordSharedShape,
   actions: z.array(z.enum(V4_HOST_OPERATOR_ACTIONS)),
+}).strict()
+
+/** Exact independently revisioned v5 Host Operator Grant entity. */
+export const v5GrantRecordSchema = z.object({
+  ...grantRecordSharedShape,
+  actions: z.array(z.enum(V5_HOST_OPERATOR_ACTIONS)),
 }).strict()
 
 /** Independently revisioned current Host Operator Grant entity. */
@@ -808,6 +840,814 @@ const boardStatusSchema = z.enum([
   'canceled',
 ])
 
+const nonTerminalBoardStatusSchema = z.enum([
+  'inbox',
+  'backlog',
+  'ready',
+  'in-progress',
+  'in-review',
+])
+
+const workItemExpectedRevisionsSchema = z.object({
+  projectRevision: revision,
+  synchronizationRevision: positiveRevision,
+  mappingRevision: positiveRevision,
+}).strict()
+
+const workItemPositionSchema = z.union([
+  z.object({ afterWorkItemId: z.null() }).strict(),
+  z.object({
+    afterWorkItemId: boardWorkItemId,
+    expectedAfterRemoteFingerprint: boardRemoteFingerprint,
+  }).strict(),
+])
+
+/** Strict browser-facing Work Item creation Intent without provider authority ids. */
+export const createWorkItemIntentSchema = z.object({
+  type: z.literal('create-work-item'),
+  intentId: controlIntentId,
+  projectId: developmentProjectId,
+  expected: workItemExpectedRevisionsSchema,
+  title: projectTitle,
+  intendedOutcome: githubSafeText,
+  acceptanceCriteria: z.array(githubSafeText).min(1).max(50),
+}).strict().superRefine((value, context) => {
+  if (!githubWorkItemIssueBodyWithinLimit(value)) {
+    context.addIssue({
+      code: 'custom',
+      message: 'generated GitHub Issue body exceeds the UTF-8 byte limit',
+      path: ['acceptanceCriteria'],
+    })
+  }
+})
+
+/** Strict browser-facing Work Item move Intent without provider authority ids. */
+export const moveWorkItemIntentSchema = z.object({
+  type: z.literal('move-work-item'),
+  intentId: controlIntentId,
+  projectId: developmentProjectId,
+  workItemId: boardWorkItemId,
+  expectedRemoteFingerprint: boardRemoteFingerprint,
+  targetStatus: boardStatusSchema,
+  position: workItemPositionSchema.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.position?.afterWorkItemId === value.workItemId) {
+    context.addIssue({ code: 'custom', message: 'Work Item cannot be positioned after itself' })
+  }
+})
+
+const githubWorkItemIntentSchema = z.discriminatedUnion('type', [
+  createWorkItemIntentSchema,
+  moveWorkItemIntentSchema,
+])
+
+/** Server-generated high-entropy identity used only to derive the hidden Issue-body marker. */
+export type SakiWorkItemMarkerId = Branded<'SakiWorkItemMarkerId'>
+
+const createMarkerIdSchema = z.string()
+  .regex(/^work-item-marker-[0-9a-f]{64}$/u)
+  .transform(value => value as SakiWorkItemMarkerId)
+
+const createWorkItemTargetSchema = z.object({
+  kind: z.literal('create-work-item'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  projectId: githubProjectIdSchema,
+  statusFieldId: githubProjectFieldIdSchema,
+  desiredStatusOptionId: githubProjectOptionIdSchema,
+  markerId: createMarkerIdSchema,
+}).strict()
+
+const moveWorkItemTargetSchema = z.object({
+  kind: z.literal('move-work-item'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  projectId: githubProjectIdSchema,
+  issueId: githubIssueIdSchema,
+  projectItemId: githubProjectItemIdSchema.optional(),
+  source: z.discriminatedUnion('membership', [
+    z.object({
+      membership: z.literal('absent'),
+      issueState: z.literal('open'),
+      status: z.literal('inbox'),
+    }).strict(),
+    z.object({
+      membership: z.literal('present'),
+      issueState: z.enum(['open', 'closed']),
+      status: boardStatusSchema,
+      projectItemId: githubProjectItemIdSchema,
+      archived: z.boolean(),
+    }).strict(),
+  ]),
+  statusFieldId: githubProjectFieldIdSchema,
+  desiredStatusOptionId: githubProjectOptionIdSchema,
+  position: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('top') }).strict(),
+    z.object({
+      kind: z.literal('after'),
+      workItemId: boardWorkItemId,
+      projectItemId: githubProjectItemIdSchema,
+      expectedRemoteFingerprint: boardRemoteFingerprint,
+    }).strict(),
+  ]).optional(),
+}).strict()
+
+const githubWorkItemTargetSchema = z.discriminatedUnion('kind', [
+  createWorkItemTargetSchema,
+  moveWorkItemTargetSchema,
+])
+
+const workItemMutationStageKindSchema = z.enum([
+  'issue-create',
+  'project-item-add',
+  'project-item-status-set',
+  'project-item-position-set',
+  'issue-state-set',
+])
+type WorkItemMutationStageKind = z.infer<typeof workItemMutationStageKindSchema>
+
+const workItemResolvedTargetBaseSchema = z.object({
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+}).strict()
+
+const workItemResolvedStageTargetSchema = z.discriminatedUnion('kind', [
+  workItemResolvedTargetBaseSchema.extend({
+    kind: z.literal('issue-create'),
+    markerId: createMarkerIdSchema,
+    titleDigest: digest,
+    bodyDigest: digest,
+  }).strict(),
+  workItemResolvedTargetBaseSchema.extend({
+    kind: z.literal('project-item-add'),
+    projectId: githubProjectIdSchema,
+    issueId: githubIssueIdSchema,
+  }).strict(),
+  workItemResolvedTargetBaseSchema.extend({
+    kind: z.literal('project-item-status-set'),
+    projectId: githubProjectIdSchema,
+    issueId: githubIssueIdSchema,
+    projectItemId: githubProjectItemIdSchema,
+    statusFieldId: githubProjectFieldIdSchema,
+    desiredStatusOptionId: githubProjectOptionIdSchema,
+  }).strict(),
+  workItemResolvedTargetBaseSchema.extend({
+    kind: z.literal('project-item-position-set'),
+    projectId: githubProjectIdSchema,
+    issueId: githubIssueIdSchema,
+    projectItemId: githubProjectItemIdSchema,
+    statusFieldId: githubProjectFieldIdSchema,
+    afterItemId: githubProjectItemIdSchema.nullable(),
+  }).strict(),
+  workItemResolvedTargetBaseSchema.extend({
+    kind: z.literal('issue-state-set'),
+    issueId: githubIssueIdSchema,
+    desiredState: z.enum(['open', 'closed']),
+  }).strict(),
+])
+
+/**
+ * Derive one stable external operation id for a durable Work Item stage.
+ * @param intentId - owning Control Intent identity.
+ * @param kind - atomic mutation stage kind.
+ * @returns stage identity stable across retries and restart.
+ */
+export function githubWorkItemStageMutationId(
+  intentId: SakiControlIntentId,
+  kind: WorkItemMutationStageKind,
+): GitHubExternalOperationId {
+  const suffix = kind === 'issue-create'
+    ? 'issue'
+    : kind === 'project-item-add'
+      ? 'membership'
+      : kind === 'project-item-status-set'
+        ? 'status'
+        : kind === 'project-item-position-set'
+          ? 'position'
+          : 'issue-state'
+  return githubExternalOperationId(`work-item:${intentId}:${suffix}`)
+}
+
+/**
+ * Derive the durable recovery identity for one Work Item inside one Development Project.
+ * @param projectId - owning Development Project identity.
+ * @param workItemId - stable GitHub-backed Work Item identity.
+ * @returns project-scoped recovery identity.
+ */
+export function githubWorkItemRecoveryId(
+  projectId: SakiDevelopmentProjectId,
+  workItemId: SakiBoardWorkItemId,
+): SakiWorkItemRecoveryId {
+  return `work-item-recovery-${canonicalDigest('saki/work-item-recovery/v1', {
+    projectId,
+    workItemId,
+  })}` as SakiWorkItemRecoveryId
+}
+
+const workItemMutationStageSchema = z.object({
+  mutationId: githubExternalOperationIdSchema,
+  kind: workItemMutationStageKindSchema,
+  resolvedTarget: workItemResolvedStageTargetSchema.optional(),
+  state: z.enum(['prepared', 'dispatching', 'confirmed', 'failed']),
+  effectPossible: z.boolean(),
+  failure: githubFailureSchema.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.resolvedTarget !== undefined && value.resolvedTarget.kind !== value.kind) {
+    context.addIssue({ code: 'custom', message: 'mutation target kind disagrees with its stage' })
+  }
+  if (value.state === 'prepared') {
+    if (value.effectPossible || value.failure !== undefined) {
+      context.addIssue({ code: 'custom', message: 'prepared mutation stage contains effect evidence' })
+    }
+    return
+  }
+  if (value.resolvedTarget === undefined) {
+    context.addIssue({ code: 'custom', message: 'started mutation stage lacks a concrete target' })
+  }
+  if (value.state !== 'confirmed' && value.state !== 'failed' && !value.effectPossible) {
+    context.addIssue({ code: 'custom', message: 'started mutation stage must admit a possible effect' })
+  }
+  if (value.state === 'failed' && value.failure === undefined) {
+    context.addIssue({ code: 'custom', message: 'failed mutation stage lacks failure evidence' })
+  }
+  if (value.state !== 'failed' && value.failure !== undefined) {
+    context.addIssue({ code: 'custom', message: 'non-failed mutation stage contains failure evidence' })
+  }
+})
+
+const workItemTargetedIssueFactSchema = z.object({
+  id: githubIssueIdSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  number: z.number().int().positive(),
+  state: z.enum(['open', 'closed']),
+  title: githubSafeText,
+  url: githubSafeUrl,
+  updatedAt: timestamp,
+}).strict()
+
+const workItemTargetedProjectItemFactSchema = z.object({
+  id: githubProjectItemIdSchema,
+  projectId: githubProjectIdSchema,
+  issueId: githubIssueIdSchema,
+  statusOptionId: githubProjectOptionIdSchema.optional(),
+  archived: z.boolean(),
+  apiOrder: ordinal,
+  previousItemId: githubProjectItemIdSchema.nullable(),
+  nextItemId: githubProjectItemIdSchema.nullable(),
+  totalCount: z.number().int().positive(),
+  updatedAt: timestamp,
+}).strict().superRefine((item, context) => {
+  if (item.apiOrder >= item.totalCount) {
+    context.addIssue({ code: 'custom', message: 'Project item order exceeds the complete connection' })
+  }
+  if ((item.apiOrder === 0) !== (item.previousItemId === null)) {
+    context.addIssue({ code: 'custom', message: 'Project item previous neighbor disagrees with its complete position' })
+  }
+  if ((item.apiOrder === item.totalCount - 1) !== (item.nextItemId === null)) {
+    context.addIssue({ code: 'custom', message: 'Project item next neighbor disagrees with its complete position' })
+  }
+  if (item.previousItemId === item.id || item.nextItemId === item.id
+    || (item.previousItemId !== null && item.previousItemId === item.nextItemId)) {
+    context.addIssue({ code: 'custom', message: 'Project item neighbors must be distinct' })
+  }
+})
+
+const workItemTargetedFactsSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  projectId: githubProjectIdSchema,
+  statusFieldId: githubProjectFieldIdSchema,
+  issue: workItemTargetedIssueFactSchema,
+  membership: z.discriminatedUnion('state', [
+    z.object({ state: z.literal('present'), item: workItemTargetedProjectItemFactSchema }).strict(),
+    z.object({ state: z.literal('absent') }).strict(),
+  ]),
+}).strict().superRefine((facts, context) => {
+  if (facts.issue.repositoryId !== facts.repositoryId
+    || facts.issue.repositoryDatabaseId !== facts.repositoryDatabaseId) {
+    context.addIssue({ code: 'custom', message: 'targeted Issue ownership disagrees with Repository facts' })
+  }
+  if (facts.membership.state === 'present'
+    && (facts.membership.item.projectId !== facts.projectId
+      || facts.membership.item.issueId !== facts.issue.id)) {
+    context.addIssue({ code: 'custom', message: 'targeted membership ownership disagrees with Work Item facts' })
+  }
+})
+
+const githubWorkItemTargetedObservationSchema = z.object({
+  stageMutationId: githubExternalOperationIdSchema,
+  stageKind: z.literal('project-item-status-set'),
+  workItemId: boardWorkItemId,
+  remoteFingerprint: boardRemoteFingerprint,
+  facts: workItemTargetedFactsSchema,
+  observedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  if (value.workItemId !== deriveBoardWorkItemId(value.facts.repositoryId, value.facts.issue.id)) {
+    context.addIssue({ code: 'custom', message: 'targeted Work Item id disagrees with observed Issue identity' })
+  }
+  if (value.remoteFingerprint !== targetedBoardRemoteFingerprint(value.facts)) {
+    context.addIssue({ code: 'custom', message: 'targeted Work Item remote fingerprint is stale' })
+  }
+})
+
+/** Parsed complete targeted observation used by a Status stage or final Board confirmation. */
+export type GitHubWorkItemTargetedObservation = z.infer<typeof githubWorkItemTargetedObservationSchema>
+
+const githubWorkItemPositionObservationSchema = z.object({
+  stageMutationId: githubExternalOperationIdSchema,
+  stageKind: z.literal('project-item-position-set'),
+  workItemId: boardWorkItemId,
+  facts: githubProjectItemPositionSnapshotSchema,
+  observedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  if (value.workItemId !== deriveBoardWorkItemId(value.facts.repositoryId, value.facts.issue.id)) {
+    context.addIssue({ code: 'custom', message: 'position Work Item id disagrees with observed Issue identity' })
+  }
+})
+
+/** Parsed API-position observation retained in one stage prefix. */
+export type GitHubWorkItemPositionObservation = z.infer<typeof githubWorkItemPositionObservationSchema>
+
+const githubWorkItemPositionBoardObservationSchema = githubWorkItemPositionObservationSchema.superRefine(
+  (observation, context) => {
+    if (observation.facts.membership.state === 'duplicate-conflict') {
+      context.addIssue({ code: 'custom', message: 'position Board evidence has duplicate Project memberships' })
+    }
+  },
+)
+
+const githubWorkItemBoardObservationSchema = z.union([
+  githubWorkItemTargetedObservationSchema,
+  githubWorkItemPositionBoardObservationSchema,
+])
+
+/** Complete targeted Board evidence produced by a Status or API-position inspection. */
+export type GitHubWorkItemBoardObservation = z.infer<typeof githubWorkItemBoardObservationSchema>
+
+const githubWorkItemIssueStateObservationSchema = z.object({
+  stageMutationId: githubExternalOperationIdSchema,
+  stageKind: z.literal('issue-state-set'),
+  workItemId: boardWorkItemId,
+  facts: githubIssueStateSnapshotSchema,
+  observedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  if (value.workItemId !== deriveBoardWorkItemId(value.facts.issue.repositoryId, value.facts.issue.id)) {
+    context.addIssue({ code: 'custom', message: 'Issue-state Work Item id disagrees with observed Issue identity' })
+  }
+})
+
+const githubWorkItemMembershipObservationSchema = z.object({
+  stageMutationId: githubExternalOperationIdSchema,
+  stageKind: z.literal('project-item-add'),
+  workItemId: boardWorkItemId,
+  facts: githubProjectItemAddSnapshotSchema,
+  observedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  if (value.workItemId !== deriveBoardWorkItemId(value.facts.repositoryId, value.facts.issue.id)) {
+    context.addIssue({ code: 'custom', message: 'membership Work Item id disagrees with observed Issue identity' })
+  }
+})
+
+const githubWorkItemIssueCreateObservationSchema = z.object({
+  stageMutationId: githubExternalOperationIdSchema,
+  stageKind: z.literal('issue-create'),
+  workItemId: boardWorkItemId,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  markerId: createMarkerIdSchema,
+  issue: workItemTargetedIssueFactSchema,
+  observedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  if (value.issue.repositoryId !== value.repositoryId
+    || value.issue.repositoryDatabaseId !== value.repositoryDatabaseId
+    || value.workItemId !== deriveBoardWorkItemId(value.repositoryId, value.issue.id)) {
+    context.addIssue({ code: 'custom', message: 'Issue-create observation ownership is inconsistent' })
+  }
+})
+
+const githubWorkItemObservationSchema = z.discriminatedUnion('stageKind', [
+  githubWorkItemIssueCreateObservationSchema,
+  githubWorkItemMembershipObservationSchema,
+  githubWorkItemTargetedObservationSchema,
+  githubWorkItemPositionObservationSchema,
+  githubWorkItemIssueStateObservationSchema,
+])
+
+const workItemTerminalEvidenceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('succeeded'),
+    confirmedObservation: githubWorkItemBoardObservationSchema,
+    confirmedAt: timestamp,
+  }).strict(),
+  z.object({
+    kind: z.literal('conflict'),
+    reason: z.enum(['expected-revision', 'stale-remote', 'mapping-repair-required']),
+    confirmedObservation: githubWorkItemObservationSchema.optional(),
+    confirmedAt: timestamp.optional(),
+  }).strict().superRefine((value, context) => {
+    const needsObservation = value.reason === 'stale-remote' || value.reason === 'mapping-repair-required'
+    if (needsObservation !== (value.confirmedObservation !== undefined)
+      || (value.confirmedObservation !== undefined) !== (value.confirmedAt !== undefined)) {
+      context.addIssue({ code: 'custom', message: 'Work Item conflict evidence disagrees with reason' })
+    }
+  }),
+  z.object({
+    kind: z.literal('reconciliation-required'),
+    reason: z.enum(['effect-unknown', 'evidence-conflict', 'marker-ambiguous']),
+    stageMutationId: githubExternalOperationIdSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('canceled'),
+    reason: z.literal('authority-revoked'),
+  }).strict(),
+])
+
+/** Strict durable create/move Work Item Intent with server-derived authority targets. */
+export const githubWorkItemIntentRecordSchema = z.object({
+  id: controlIntentId,
+  schemaVersion: z.literal(1),
+  revision,
+  receiptId: intentReceiptId,
+  payloadDigest: digest,
+  payload: z.object({
+    intent: githubWorkItemIntentSchema,
+    actor: controlIntentActorSchema,
+  }).strict(),
+  target: githubWorkItemTargetSchema,
+  phase: z.enum([
+    'prepared',
+    'running',
+    'partial-failure',
+    'succeeded',
+    'conflict',
+    'reconciliation-required',
+    'canceled',
+  ]),
+  stages: z.array(workItemMutationStageSchema).min(1).max(4),
+  observedPrefix: z.array(githubWorkItemObservationSchema).max(4),
+  terminalEvidence: workItemTerminalEvidenceSchema.optional(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  refineDurableIntentIdentity(value, context)
+  if (canonicalDigest('saki/github-work-item-intent/v1', value.payload) !== value.payloadDigest) {
+    context.addIssue({ code: 'custom', message: 'Work Item Intent payload digest is stale', path: ['payloadDigest'] })
+  }
+  if (value.updatedAt < value.createdAt) {
+    context.addIssue({ code: 'custom', message: 'Work Item Intent time evidence is inconsistent' })
+  }
+  if (value.payload.intent.type !== value.target.kind) {
+    context.addIssue({ code: 'custom', message: 'server-derived Work Item target disagrees with Intent kind' })
+  }
+  if (value.payload.intent.type === 'move-work-item') {
+    /* v8 ignore next -- the preceding kind correlation already rejects a non-Move target. */
+    if (value.target.kind !== 'move-work-item') return
+    const intentPosition = value.payload.intent.position
+    const targetPosition = value.target.position
+    const positionsAgree = intentPosition === undefined
+      ? targetPosition === undefined
+      : intentPosition.afterWorkItemId === null
+        ? targetPosition?.kind === 'top'
+        : targetPosition?.kind === 'after'
+          && targetPosition.workItemId === intentPosition.afterWorkItemId
+          && targetPosition.expectedRemoteFingerprint === intentPosition.expectedAfterRemoteFingerprint
+    if (!positionsAgree) {
+      context.addIssue({ code: 'custom', message: 'server-derived position disagrees with Saki Intent' })
+    }
+  }
+  const expectedStageKinds: readonly WorkItemMutationStageKind[] = (() => {
+    if (value.target.kind === 'create-work-item') {
+      return ['issue-create', 'project-item-add', 'project-item-status-set']
+    }
+    if (value.payload.intent.type !== 'move-work-item') return []
+    const kinds: WorkItemMutationStageKind[] = []
+    if (value.target.source.membership === 'absent') kinds.push('project-item-add')
+    const desiredIssueState = value.payload.intent.targetStatus === 'done'
+      || value.payload.intent.targetStatus === 'canceled'
+      ? 'closed'
+      : 'open'
+    if (value.target.source.issueState === 'closed' && desiredIssueState === 'open') {
+      kinds.push('issue-state-set')
+    }
+    kinds.push('project-item-status-set')
+    if (value.target.position !== undefined) kinds.push('project-item-position-set')
+    if (value.target.source.issueState === 'open' && desiredIssueState === 'closed') {
+      kinds.push('issue-state-set')
+    }
+    return kinds
+  })()
+  if (!isDeepStrictEqual(value.stages.map(stage => stage.kind), expectedStageKinds)) {
+    context.addIssue({ code: 'custom', message: 'Work Item stages disagree with the frozen mutation topology' })
+  }
+  const issueObservation = value.observedPrefix.find(observation => observation.stageKind === 'issue-create')
+  const membershipObservation = value.observedPrefix.find(observation => observation.stageKind === 'project-item-add')
+  const observedMembership = membershipObservation?.stageKind === 'project-item-add'
+    && membershipObservation.facts.membership.state === 'present'
+    ? membershipObservation.facts.membership.item
+    : undefined
+  if (value.target.kind === 'move-work-item') {
+    if (value.target.source.membership === 'present') {
+      if (value.target.projectItemId !== value.target.source.projectItemId) {
+        context.addIssue({ code: 'custom', message: 'joined move target disagrees with its source Project item' })
+      }
+    } else {
+      const confirmedItemId = observedMembership?.id
+      if (value.target.projectItemId !== confirmedItemId) {
+        context.addIssue({ code: 'custom', message: 'unjoined move target materializes without membership evidence' })
+      }
+    }
+  }
+  value.stages.forEach((stage) => {
+    if (stage.mutationId !== githubWorkItemStageMutationId(value.id, stage.kind)) {
+      context.addIssue({ code: 'custom', message: 'Work Item stage mutation id is not stable' })
+    }
+    const resolved = stage.resolvedTarget
+    if (resolved === undefined) return
+    if (!isDeepStrictEqual(resolved.installation, value.target.installation)
+      || resolved.repositoryId !== value.target.repositoryId
+      || resolved.repositoryDatabaseId !== value.target.repositoryDatabaseId) {
+      context.addIssue({ code: 'custom', message: 'resolved mutation target disagrees with the frozen provider target' })
+      return
+    }
+    if (resolved.kind === 'issue-create') {
+      if (value.target.kind !== 'create-work-item' || resolved.markerId !== value.target.markerId) {
+        context.addIssue({ code: 'custom', message: 'resolved Issue-create target disagrees with create material' })
+      }
+      if (value.payload.intent.type !== 'create-work-item'
+        || resolved.titleDigest !== canonicalDigest('saki/work-item-issue-title/v1', {
+          title: value.payload.intent.title,
+        })
+        || resolved.bodyDigest !== canonicalDigest('saki/work-item-issue-body/v1', {
+          body: renderGitHubWorkItemIssueBody({
+            intendedOutcome: value.payload.intent.intendedOutcome,
+            acceptanceCriteria: value.payload.intent.acceptanceCriteria,
+            markerId: resolved.markerId,
+          }),
+        })) {
+        context.addIssue({ code: 'custom', message: 'resolved Issue-create content digest is stale' })
+      }
+      return
+    }
+    if (resolved.kind === 'project-item-add') {
+      const expectedIssueId = value.target.kind === 'move-work-item'
+        ? value.target.issueId
+        : issueObservation?.stageKind === 'issue-create' ? issueObservation.issue.id : undefined
+      if (resolved.projectId !== value.target.projectId || resolved.issueId !== expectedIssueId) {
+        context.addIssue({ code: 'custom', message: 'resolved membership target lacks its confirmed Issue input' })
+      }
+      return
+    }
+    if (resolved.kind === 'project-item-status-set') {
+      const expectedIssueId = value.target.kind === 'move-work-item'
+        ? value.target.issueId
+        : issueObservation?.stageKind === 'issue-create' ? issueObservation.issue.id : undefined
+      const expectedProjectItemId = value.target.kind === 'move-work-item' && value.target.projectItemId !== undefined
+        ? value.target.projectItemId
+        : observedMembership?.id
+      if (resolved.projectId !== value.target.projectId
+        || resolved.issueId !== expectedIssueId
+        || resolved.projectItemId !== expectedProjectItemId
+        || resolved.statusFieldId !== value.target.statusFieldId
+        || resolved.desiredStatusOptionId !== value.target.desiredStatusOptionId) {
+        context.addIssue({ code: 'custom', message: 'resolved Status target lacks its confirmed stage inputs' })
+      }
+      return
+    }
+    if (resolved.kind === 'project-item-position-set') {
+      if (value.target.kind !== 'move-work-item' || resolved.projectId !== value.target.projectId
+        || resolved.issueId !== value.target.issueId || resolved.projectItemId !== value.target.projectItemId
+        || resolved.statusFieldId !== value.target.statusFieldId
+        || resolved.afterItemId !== (value.target.position?.kind === 'after'
+          ? value.target.position.projectItemId
+          : null)) {
+        context.addIssue({ code: 'custom', message: 'resolved position target disagrees with move material' })
+      }
+      return
+    }
+    if (value.target.kind !== 'move-work-item' || resolved.issueId !== value.target.issueId) {
+      context.addIssue({ code: 'custom', message: 'resolved Issue-state target disagrees with move material' })
+    }
+  })
+  const mutationIds = value.stages.map(stage => stage.mutationId)
+  if (new Set(mutationIds).size !== mutationIds.length) {
+    context.addIssue({ code: 'custom', message: 'Work Item mutation ids must not repeat' })
+  }
+  value.observedPrefix.forEach((observation, index) => {
+    const stage = value.stages[index]
+    if (stage === undefined || stage.mutationId !== observation.stageMutationId
+      || stage.kind !== observation.stageKind || stage.state !== 'confirmed') {
+      context.addIssue({ code: 'custom', message: 'observed prefix does not match confirmed mutation stages' })
+      return
+    }
+    const resolved = stage.resolvedTarget
+    if (resolved === undefined) return
+    if (observation.stageKind === 'issue-create') {
+      if (resolved.kind !== 'issue-create' || observation.repositoryId !== resolved.repositoryId
+        || observation.repositoryDatabaseId !== resolved.repositoryDatabaseId
+        || observation.markerId !== resolved.markerId) {
+        context.addIssue({ code: 'custom', message: 'Issue-create observation disagrees with its target' })
+      }
+      return
+    }
+    if (observation.stageKind === 'project-item-add') {
+      const membership = observation.facts.membership
+      const item = membership.state === 'present' ? membership.item : undefined
+      if (resolved.kind !== 'project-item-add'
+        || observation.facts.projectId !== resolved.projectId
+        || observation.facts.issue.id !== resolved.issueId
+        || item === undefined) {
+        context.addIssue({ code: 'custom', message: 'membership observation does not confirm one exact Project item' })
+      }
+      return
+    }
+    if (observation.stageKind === 'project-item-status-set') {
+      const facts = observation.facts
+      const item = facts.membership.state === 'present' ? facts.membership.item : undefined
+      /* v8 ignore next -- the stage schema already rejects a resolved target whose kind differs from its stage. */
+      if (resolved.kind !== 'project-item-status-set') return
+      const precedingIssueState = value.stages.slice(0, index)
+        .find(candidate => candidate.resolvedTarget?.kind === 'issue-state-set')
+        ?.resolvedTarget
+      const expectedIssueState = precedingIssueState?.kind === 'issue-state-set'
+        ? precedingIssueState.desiredState
+        : value.target.kind === 'move-work-item'
+          ? value.target.source.issueState
+          : 'open'
+      if (facts.projectId !== resolved.projectId || facts.issue.id !== resolved.issueId
+        || facts.issue.state !== expectedIssueState || item?.id !== resolved.projectItemId
+        || item.archived || item.statusOptionId !== resolved.desiredStatusOptionId) {
+        context.addIssue({ code: 'custom', message: 'Status observation does not confirm the desired Work Item state' })
+      }
+      return
+    }
+    if (observation.stageKind === 'project-item-position-set') {
+      const facts = observation.facts
+      const item = facts.membership.state === 'present' ? facts.membership.item : undefined
+      /* v8 ignore next -- the stage schema already rejects a resolved target whose kind differs from its stage. */
+      if (resolved.kind !== 'project-item-position-set') return
+      const predecessorMatches = resolved.afterItemId === null
+        ? facts.after.state === 'top'
+        : facts.after.state === 'present' && facts.after.item.id === resolved.afterItemId
+      if (facts.projectId !== resolved.projectId || facts.issue.id !== resolved.issueId
+        || facts.statusFieldId !== resolved.statusFieldId
+        || item?.id !== resolved.projectItemId || item.previousItemId !== resolved.afterItemId
+        || item.archived || !predecessorMatches) {
+        context.addIssue({ code: 'custom', message: 'position observation does not confirm the requested API position' })
+      }
+      return
+    }
+    if (resolved.kind !== 'issue-state-set'
+      || observation.facts.issue.id !== resolved.issueId
+      || observation.facts.issue.state !== resolved.desiredState) {
+      context.addIssue({ code: 'custom', message: 'Issue-state observation does not confirm the requested state' })
+    }
+  })
+  if (value.stages.slice(value.observedPrefix.length).some(stage => stage.state === 'confirmed')) {
+    context.addIssue({ code: 'custom', message: 'confirmed mutation stages must form the observed prefix' })
+  }
+  const frontier = value.stages[value.observedPrefix.length]
+  if (value.stages.slice(value.observedPrefix.length + 1).some(stage => stage.state !== 'prepared')) {
+    context.addIssue({ code: 'custom', message: 'Work Item stages after the active frontier must remain prepared' })
+  }
+  if (value.stages.some(stage => stage.kind === 'issue-create'
+    && stage.state === 'confirmed' && !stage.effectPossible)) {
+    context.addIssue({ code: 'custom', message: 'Issue creation cannot be confirmed before its effect became possible' })
+  }
+  const activeStages = value.stages.filter(stage => stage.state === 'dispatching')
+  const failedStages = value.stages.filter(stage => stage.state === 'failed')
+  if (activeStages.length > 1 || failedStages.length > 1 || activeStages.length + failedStages.length > 1) {
+    context.addIssue({ code: 'custom', message: 'Work Item mutation topology has multiple active frontiers' })
+  }
+  if (value.phase === 'prepared') {
+    if (frontier?.state !== 'prepared' || activeStages.length > 0 || failedStages.length > 0
+      || value.terminalEvidence !== undefined) {
+      context.addIssue({ code: 'custom', message: 'prepared Work Item Intent lacks one safe stage frontier' })
+    }
+  } else if (value.phase === 'running') {
+    if (frontier?.state !== 'dispatching' || activeStages.length !== 1
+      || failedStages.length > 0 || value.terminalEvidence !== undefined) {
+      context.addIssue({ code: 'custom', message: 'running Work Item Intent lacks one active stage' })
+    }
+  } else if (value.phase === 'partial-failure') {
+    if (frontier?.state !== 'failed' || failedStages.length !== 1
+      || activeStages.length > 0 || value.terminalEvidence !== undefined) {
+      context.addIssue({ code: 'custom', message: 'partial Work Item failure disagrees with failed stage' })
+    }
+  } else {
+    if (value.terminalEvidence?.kind !== value.phase) {
+      context.addIssue({ code: 'custom', message: 'terminal Work Item evidence disagrees with phase' })
+    }
+    if (value.phase === 'succeeded') {
+      const finalObservation = value.observedPrefix.at(-1)
+      const confirmedObservation = value.terminalEvidence?.kind === 'succeeded'
+        ? value.terminalEvidence.confirmedObservation
+        : undefined
+      const finalEvidenceCurrent = finalObservation?.stageKind === 'project-item-status-set'
+        || finalObservation?.stageKind === 'project-item-position-set'
+        ? isDeepStrictEqual(finalObservation, confirmedObservation)
+        : finalObservation !== undefined && confirmedObservation !== undefined
+          && finalObservation.workItemId === confirmedObservation.workItemId
+          && confirmedObservation.observedAt >= finalObservation.observedAt
+      const moveFinalStateCurrent = (() => {
+        if (value.target.kind !== 'move-work-item' || value.payload.intent.type !== 'move-work-item') return true
+        if (confirmedObservation === undefined) return false
+        const facts = confirmedObservation.facts
+        const item = facts.membership.state === 'present' ? facts.membership.item : undefined
+        if (item === undefined) return false
+        const expectedIssueState = value.payload.intent.targetStatus === 'done'
+          || value.payload.intent.targetStatus === 'canceled'
+          ? 'closed'
+          : 'open'
+        if (confirmedObservation.workItemId !== value.payload.intent.workItemId
+          || facts.repositoryId !== value.target.repositoryId
+          || facts.repositoryDatabaseId !== value.target.repositoryDatabaseId
+          || facts.projectId !== value.target.projectId
+          || facts.statusFieldId !== value.target.statusFieldId
+          || facts.issue.id !== value.target.issueId
+          || facts.issue.state !== expectedIssueState
+          || item.id !== value.target.projectItemId
+          || item.archived
+          || item.statusOptionId !== value.target.desiredStatusOptionId) return false
+        const position = value.target.position
+        if (position === undefined) return confirmedObservation.stageKind === 'project-item-status-set'
+        if (confirmedObservation.stageKind !== 'project-item-position-set') return false
+        if (position.kind === 'top') {
+          return confirmedObservation.facts.after.state === 'top'
+            && item.apiOrder === 0
+            && item.previousItemId === null
+        }
+        const after = confirmedObservation.facts.after
+        return after.state === 'present'
+          && after.item.id === position.projectItemId
+          && !after.item.archived
+          && after.item.statusOptionId === value.target.desiredStatusOptionId
+          && item.previousItemId === after.item.id
+          && after.item.nextItemId === item.id
+          && item.apiOrder === after.item.apiOrder + 1
+          && item.totalCount === after.item.totalCount
+      })()
+      if (value.stages.some(stage => stage.state !== 'confirmed')
+        || value.observedPrefix.length !== value.stages.length
+        || value.terminalEvidence?.kind !== 'succeeded'
+        || !finalEvidenceCurrent
+        || !moveFinalStateCurrent
+        || value.terminalEvidence.confirmedAt < value.terminalEvidence.confirmedObservation.observedAt) {
+        context.addIssue({ code: 'custom', message: 'succeeded Work Item Intent lacks final confirmed evidence' })
+      }
+    }
+    if (value.phase === 'reconciliation-required'
+      && value.terminalEvidence?.kind === 'reconciliation-required') {
+      const { stageMutationId } = value.terminalEvidence
+      const stage = value.stages.find(candidate => candidate.mutationId === stageMutationId)
+      const markerAmbiguousBeforeDispatch = value.terminalEvidence.reason === 'marker-ambiguous'
+        && stage?.kind === 'issue-create'
+      if (stage === undefined || (!markerAmbiguousBeforeDispatch && !stage.effectPossible)) {
+        context.addIssue({ code: 'custom', message: 'reconciliation does not identify an effect-possible stage' })
+      }
+    }
+  }
+})
+
+/** Parsed durable Work Item Intent. */
+export type GitHubWorkItemIntentRecord = z.infer<typeof githubWorkItemIntentRecordSchema>
+
+/** Strict per-Work-Item targeted recovery state, separate from complete Board checkpoints. */
+export const githubWorkItemRecoveryRecordSchema = z.object({
+  id: workItemRecoveryId,
+  workItemId: boardWorkItemId,
+  schemaVersion: z.literal(1),
+  revision,
+  projectId: developmentProjectId,
+  latestNonTerminalStatus: nonTerminalBoardStatusSchema.nullable(),
+  confirmed: z.object({
+    sourceIntentId: controlIntentId,
+    observation: githubWorkItemBoardObservationSchema,
+    confirmedAt: timestamp,
+  }).strict(),
+  updatedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  const confirmed = value.confirmed
+  if (value.id !== githubWorkItemRecoveryId(value.projectId, value.workItemId)) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Work Item recovery id disagrees with its Development Project scope',
+      path: ['id'],
+    })
+  }
+  if (confirmed.observation.workItemId !== value.workItemId
+    || confirmed.confirmedAt < confirmed.observation.observedAt
+    || confirmed.confirmedAt > value.updatedAt) {
+    context.addIssue({ code: 'custom', message: 'confirmed recovery observation is inconsistent' })
+  }
+})
+
+/** Parsed per-Work-Item targeted recovery record. */
+export type GitHubWorkItemRecoveryRecord = z.infer<typeof githubWorkItemRecoveryRecordSchema>
+
 /** Strict attributed GitHub mapping defect retained without display-name guessing. */
 export const sakiGitHubMappingIssueSchema = z.discriminatedUnion('reason', [
   z.object({
@@ -908,6 +1748,7 @@ const boardWorkItemSchema = z.object({
   url: githubSafeUrl,
   issueState: z.enum(['open', 'closed']),
   status: boardStatusSchema,
+  latestNonTerminalStatus: nonTerminalBoardStatusSchema.nullable(),
   order: z.number().int().nonnegative(),
   archived: z.boolean(),
   notInProject: z.boolean(),
@@ -946,6 +1787,10 @@ const boardWorkItemSchema = z.object({
   }
   if (value.archived && value.status !== 'canceled') {
     context.addIssue({ code: 'custom', message: 'archived Work Item must be Canceled' })
+  }
+  if (value.status !== 'done' && value.status !== 'canceled'
+    && value.latestNonTerminalStatus !== value.status) {
+    context.addIssue({ code: 'custom', message: 'non-terminal Work Item must remember its current Status' })
   }
 })
 
@@ -1034,7 +1879,7 @@ const currentGitHubScanFailureSchema = z.object({
 /** One bounded, independently revisioned GitHub synchronization aggregate per Development Project. */
 export const githubProjectSyncRecordSchema = z.object({
   id: developmentProjectId,
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   revision,
   installationId,
   nextCandidateRevision: z.number().int().positive(),
@@ -1504,7 +2349,7 @@ export type BindingWriteAdmissionRecord = z.infer<typeof bindingWriteAdmissionRe
 /** Exact Saki control-plane domain declaration. */
 export const sakiControlPlaneDomainSpec = defineDomain({
   name: 'saki_control_plane',
-  version: 5,
+  version: 6,
   tables: {
     control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
     installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
@@ -1527,5 +2372,11 @@ export const sakiControlPlaneDomainSpec = defineDomain({
       SakiResourceBindingId,
       BindingWriteAdmissionRecord
     >(bindingWriteAdmissionRecordSchema),
+    github_work_item_intents: domainTable<SakiControlIntentId, GitHubWorkItemIntentRecord>(
+      githubWorkItemIntentRecordSchema,
+    ),
+    github_work_item_recovery: domainTable<SakiWorkItemRecoveryId, GitHubWorkItemRecoveryRecord>(
+      githubWorkItemRecoveryRecordSchema,
+    ),
   },
 })

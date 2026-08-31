@@ -17,6 +17,7 @@ import {
   sakiControlPlaneV2DomainSpec,
   sakiControlPlaneV3DomainSpec,
   sakiControlPlaneV4DomainSpec,
+  sakiControlPlaneV5DomainSpec,
 } from '../src/migration.ts'
 import {
   v4GitHubConfigurationIntentRecordSchema,
@@ -322,7 +323,198 @@ function expectSchemaIssue(result: SchemaParseResult, message: string, variant: 
   expect(result.error.issues.map(issue => issue.message), variant).toContain(message)
 }
 
+function v5GitHubSyncRecord() {
+  const repositoryId = 'R_saki_migration_repository'
+  const projectNodeId = 'PVT_saki_migration_project'
+  const statusFieldId = 'PVTSSF_saki_migration_status'
+  const configuration = {
+    appId: '12345',
+    githubInstallationId: '12345678',
+    accountNodeId: 'O_saki_migration_account',
+    repositoryNodeId: repositoryId,
+    repositoryDatabaseId: '87654321',
+    projectNodeId,
+    credentialRef: 'SAKI_GITHUB_APP_PRIVATE_KEY',
+    statusFieldNodeId: statusFieldId,
+    statusOptionNodeIds: {
+      inbox: 'option-inbox',
+      backlog: 'option-backlog',
+      ready: 'option-ready',
+      inProgress: 'option-in-progress',
+      inReview: 'option-in-review',
+      done: 'option-done',
+      canceled: 'option-canceled',
+    },
+    activePollIntervalMs: 30_000,
+    backgroundPollIntervalMs: 300_000,
+    rateLimitReserve: 500,
+  }
+  const item = (number: number, status: 'ready' | 'done') => {
+    const issueId = `I_saki_migration_issue_${number}`
+    return {
+      id: `work-item-${canonicalDigest('saki/board-work-item/v1', { repositoryId, issueId })}`,
+      title: `Migration Issue ${number}`,
+      issueNumber: number,
+      url: `https://github.example.invalid/saki/issues/${number}`,
+      issueState: status === 'done' ? 'closed' as const : 'open' as const,
+      status,
+      order: number - 1,
+      archived: false,
+      notInProject: false,
+      updatedAt: 10,
+      source: {
+        kind: 'github-issue' as const,
+        repositoryId,
+        issueId,
+        projectItemId: `PVTI_saki_migration_item_${number}`,
+        apiOrder: number - 1,
+      },
+      remoteFingerprint: `remote-fingerprint-${String(number).repeat(64)}`,
+    }
+  }
+  return v4GitHubProjectSyncRecordSchema.parse({
+    id: PROJECT_ID,
+    schemaVersion: 1,
+    revision: 1,
+    installationId: INSTALLATION_ID,
+    nextCandidateRevision: 2,
+    nextBoardGeneration: 2,
+    active: {
+      revision: 1,
+      configuration,
+      acceptedIntentId: INTENT_ID,
+      receiptId: INTENT_ID.replace(/^intent-/u, 'receipt-'),
+      activatedAt: 12,
+    },
+    confirmedBoard: {
+      generation: 1,
+      configurationRevision: 1,
+      repository: {
+        id: repositoryId,
+        nameWithOwner: 'BreakfastDaPaiDang/saki',
+        url: 'https://github.example.invalid/BreakfastDaPaiDang/saki',
+      },
+      project: {
+        id: projectNodeId,
+        title: 'Saki',
+        url: 'https://github.example.invalid/orgs/BreakfastDaPaiDang/projects/1',
+      },
+      items: [item(1, 'ready'), item(2, 'done')],
+    },
+    checkpoint: {
+      generation: 1,
+      configurationRevision: 1,
+      attemptId: 'scan-attempt-00000000-0000-4000-8000-000000000001',
+      installationId: configuration.githubInstallationId,
+      repositoryId,
+      projectId: projectNodeId,
+      statusFieldId,
+      sourceFingerprint: { version: 1, digest: '3'.repeat(64) },
+      observedAt: 10,
+      confirmedAt: 11,
+      rateLimit: { state: 'unobserved' },
+    },
+  })
+}
+
 describe('Saki control-plane retained migrations', () => {
+  it('adds empty Work Item state and upgrades only the Host Operator across the adjacent v5-to-v6 step', () => {
+    const v3 = sakiControlPlaneMigrationPlan.steps[0]!.migrate({
+      global: null,
+      tables: parsedHistoricalTables(historicalSnapshot()),
+    })
+    const v4 = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3)
+    const v5 = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4)
+    const operatorGrant = sakiControlPlaneV5DomainSpec.tables.grants.valueSchema.parse(
+      v5.tables['grants']![GRANT_ID],
+    )
+    const retainedGrant = sakiControlPlaneV5DomainSpec.tables.grants.valueSchema.parse({
+      ...operatorGrant,
+      id: OTHER_GRANT_ID,
+      revision: 2,
+    })
+    const v5Sync = v5GitHubSyncRecord()
+
+    const v6 = sakiControlPlaneMigrationPlan.steps[3]!.migrate({
+      ...v5,
+      tables: {
+        ...v5.tables,
+        grants: { ...v5.tables['grants'], [OTHER_GRANT_ID]: retainedGrant },
+        github_project_sync: { [PROJECT_ID]: v5Sync },
+      },
+    })
+    const activeSync = v5Sync.active
+    if (activeSync === undefined) throw new Error('activated v5 synchronization fixture is missing')
+    const neverScannedSync = v4GitHubProjectSyncRecordSchema.parse({
+      id: PROJECT_ID,
+      schemaVersion: 1,
+      revision: 1,
+      installationId: INSTALLATION_ID,
+      nextCandidateRevision: 2,
+      nextBoardGeneration: 1,
+      pending: {
+        revision: 1,
+        state: 'saved',
+        configuration: activeSync.configuration,
+        changedFields: ['credentialRef'],
+        acceptedIntentId: activeSync.acceptedIntentId,
+        receiptId: activeSync.receiptId,
+        savedAt: activeSync.activatedAt,
+      },
+    })
+    const v6WithoutBoard = sakiControlPlaneMigrationPlan.steps[3]!.migrate({
+      ...v5,
+      tables: {
+        ...v5.tables,
+        github_project_sync: { [PROJECT_ID]: neverScannedSync },
+      },
+    })
+
+    expect(sakiControlPlaneV5DomainSpec.version).toBe(5)
+    expect(sakiControlPlaneDomainSpec.version).toBe(6)
+    expect(sakiControlPlaneMigrationPlan.steps[3]).toMatchObject({
+      from: { name: 'saki_control_plane', version: 5 },
+      to: { name: 'saki_control_plane', version: 6 },
+    })
+    expect(v6.tables['github_work_item_intents']).toEqual({})
+    expect(v6.tables['github_work_item_recovery']).toEqual({})
+    expect(v6.tables['github_project_sync']![PROJECT_ID]).toMatchObject({
+      schemaVersion: 2,
+      confirmedBoard: {
+        items: [
+          { status: 'ready', latestNonTerminalStatus: 'ready' },
+          { status: 'done', latestNonTerminalStatus: null },
+        ],
+      },
+    })
+    const migratedNeverScannedSync = v6WithoutBoard.tables['github_project_sync']![PROJECT_ID]
+    expect(migratedNeverScannedSync).toMatchObject({ schemaVersion: 2 })
+    expect(migratedNeverScannedSync).not.toHaveProperty('confirmedBoard')
+    expect(sakiControlPlaneDomainSpec.tables.github_project_sync.valueSchema.parse(migratedNeverScannedSync))
+      .toEqual(migratedNeverScannedSync)
+    expect(sakiControlPlaneV5DomainSpec.tables.github_project_sync.valueSchema.safeParse(v5Sync).success).toBe(true)
+    expect(sakiControlPlaneV5DomainSpec.tables.github_project_sync.valueSchema.safeParse(
+      v6.tables['github_project_sync']![PROJECT_ID],
+    ).success).toBe(false)
+    expect(sakiControlPlaneDomainSpec.tables.github_project_sync.valueSchema.safeParse(v5Sync).success).toBe(false)
+    expect(v6.tables['grants']![OTHER_GRANT_ID]).toEqual(retainedGrant)
+    expect(v6.tables['grants']![GRANT_ID]).toEqual({
+      ...operatorGrant,
+      revision: operatorGrant.revision + 1,
+      actions: [...operatorGrant.actions, 'work-item:create', 'work-item:move'],
+    })
+    expect(sakiControlPlaneV5DomainSpec.tables.grants.valueSchema.safeParse(
+      v6.tables['grants']![GRANT_ID],
+    ).success).toBe(false)
+    expect(sakiControlPlaneV5DomainSpec.tables.grants.valueSchema.safeParse({
+      ...operatorGrant,
+      futureCurrentAction: true,
+    }).success).toBe(false)
+    for (const [table, spec] of Object.entries(sakiControlPlaneDomainSpec.tables)) {
+      for (const value of Object.values(v6.tables[table] ?? {})) spec.valueSchema.parse(value)
+    }
+  })
+
   it('moves generation ownership out of the Foundation while preserving the source UUID in retained references', () => {
     const source = historicalSnapshot()
     const migrated = sakiControlPlaneMigrationPlan.steps[0]!.migrate({
@@ -499,12 +691,13 @@ describe('Saki control-plane retained migrations', () => {
     }).toThrow('deterministic bootstrap completion evidence')
   })
 
-  it('declares strict adjacent v2 through current v5 steps and keeps historical action vocabularies frozen', () => {
+  it('declares strict adjacent v2 through current v6 steps and keeps historical action vocabularies frozen', () => {
     expect(sakiControlPlaneV2DomainSpec.version).toBe(2)
     expect(sakiControlPlaneV3DomainSpec.version).toBe(3)
     expect(sakiControlPlaneV4DomainSpec.version).toBe(4)
-    expect(sakiControlPlaneDomainSpec.version).toBe(5)
-    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(3)
+    expect(sakiControlPlaneV5DomainSpec.version).toBe(5)
+    expect(sakiControlPlaneDomainSpec.version).toBe(6)
+    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(4)
     expect(sakiControlPlaneMigrationPlan.steps[0]).toMatchObject({
       from: { name: 'saki_control_plane', version: 2 },
       to: { name: 'saki_control_plane', version: 3 },
@@ -517,15 +710,24 @@ describe('Saki control-plane retained migrations', () => {
       from: { name: 'saki_control_plane', version: 4 },
       to: { name: 'saki_control_plane', version: 5 },
     })
+    expect(sakiControlPlaneMigrationPlan.steps[3]).toMatchObject({
+      from: { name: 'saki_control_plane', version: 5 },
+      to: { name: 'saki_control_plane', version: 6 },
+    })
     expect(Object.keys(sakiControlPlaneV2DomainSpec.tables).sort()).toEqual(
       Object.keys(sakiControlPlaneV3DomainSpec.tables).sort(),
     )
-    expect(Object.keys(sakiControlPlaneDomainSpec.tables).sort()).toEqual([
+    expect(Object.keys(sakiControlPlaneV5DomainSpec.tables).sort()).toEqual([
       ...Object.keys(sakiControlPlaneV3DomainSpec.tables),
       'github_project_sync',
       'github_sync_configuration_intents',
       'git_operation_intents',
       'binding_write_admissions',
+    ].sort())
+    expect(Object.keys(sakiControlPlaneDomainSpec.tables).sort()).toEqual([
+      ...Object.keys(sakiControlPlaneV5DomainSpec.tables),
+      'github_work_item_intents',
+      'github_work_item_recovery',
     ].sort())
 
     const source = historicalSnapshot()
@@ -583,13 +785,13 @@ describe('Saki control-plane retained migrations', () => {
       for (const value of Object.values(v4.tables[table] ?? {})) spec.valueSchema.parse(value)
     }
     const v5 = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4)
-    const migratedRegistry = sakiControlPlaneDomainSpec.tables.development_project_registry.valueSchema.parse(
+    const migratedRegistry = sakiControlPlaneV5DomainSpec.tables.development_project_registry.valueSchema.parse(
       v5.tables['development_project_registry']!['development-project-registry'],
     )
     expect(migratedRegistry.resourceBindings[0]?.registrationInspection.projection.head).toMatchObject({
       kind: 'commit', symbolicRef: 'refs/heads/main',
     })
-    const migratedIntent = sakiControlPlaneDomainSpec.tables.registration_intents.valueSchema.parse(
+    const migratedIntent = sakiControlPlaneV5DomainSpec.tables.registration_intents.valueSchema.parse(
       v5.tables['registration_intents']![INTENT_ID],
     )
     expect(migratedIntent.payload.intent.confirmedFingerprint).toEqual(
@@ -608,7 +810,7 @@ describe('Saki control-plane retained migrations', () => {
         updatedAt: migratedRegistry.resourceBindings[0]!.observedAt,
       },
     })
-    const migratedGrant = sakiControlPlaneDomainSpec.tables.grants.valueSchema.parse(
+    const migratedGrant = sakiControlPlaneV5DomainSpec.tables.grants.valueSchema.parse(
       v5.tables['grants']![GRANT_ID],
     )
     expect(migratedGrant).toMatchObject({ revision: 7 })
@@ -629,8 +831,17 @@ describe('Saki control-plane retained migrations', () => {
     expect(sakiControlPlaneV4DomainSpec.tables.grants.valueSchema.safeParse(
       v5.tables['grants']![GRANT_ID],
     ).success).toBe(false)
-    for (const [table, spec] of Object.entries(sakiControlPlaneDomainSpec.tables)) {
+    for (const [table, spec] of Object.entries(sakiControlPlaneV5DomainSpec.tables)) {
       for (const value of Object.values(v5.tables[table] ?? {})) spec.valueSchema.parse(value)
+    }
+    const v6 = sakiControlPlaneMigrationPlan.steps[3]!.migrate(v5)
+    expect(v6.tables['github_work_item_intents']).toEqual({})
+    expect(v6.tables['github_work_item_recovery']).toEqual({})
+    expect(sakiControlPlaneDomainSpec.tables.grants.valueSchema.parse(
+      v6.tables['grants']![GRANT_ID],
+    ).actions).toEqual([...migratedGrant.actions, 'work-item:create', 'work-item:move'])
+    for (const [table, spec] of Object.entries(sakiControlPlaneDomainSpec.tables)) {
+      for (const value of Object.values(v6.tables[table] ?? {})) spec.valueSchema.parse(value)
     }
   })
 

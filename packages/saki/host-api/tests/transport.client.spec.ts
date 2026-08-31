@@ -6,6 +6,8 @@ import SakiHostClientService from '../src/client/index.ts'
 import {
   sakiConfigureGitHubSynchronizationIntentSchema,
   sakiCreateCommitIntentSchema,
+  sakiCreateWorkItemIntentSchema,
+  sakiMoveWorkItemIntentSchema,
   sakiQueryRequestSchema,
   sakiRegisterDevelopmentProjectIntentSchema,
   sakiStageFilesIntentSchema,
@@ -25,6 +27,45 @@ const PROJECT_ID = parsedProjectQuery.projectId
 describe('Saki browser Host client', () => {
   it('requires an active Connection carrier', () => {
     expect(() => new SakiHostClientService(new Context())).toThrow('active Connection carrier')
+  })
+
+  it('submits create and move Work Item Intents with the mutation request token', async () => {
+    const call = vi.fn().mockResolvedValue({ ok: true, value: { ok: false, reason: 'unavailable' } })
+    const ctx = new Context()
+    ctx.provide('connection', { rpc: { call } } as unknown as ConnectionHandle)
+    const fiber = await ctx.plugin(SakiHostClientService)
+    const createIntent = sakiCreateWorkItemIntentSchema.parse({
+      type: 'create-work-item',
+      intentId: 'intent-11111111-1111-4111-8111-111111111111',
+      projectId: PROJECT_ID,
+      expected: { projectRevision: 2, synchronizationRevision: 3, mappingRevision: 3 },
+      title: 'Client Work Item',
+      intendedOutcome: 'The Work Item is created.',
+      acceptanceCriteria: ['The targeted observation confirms it.'],
+    })
+    const moveIntent = sakiMoveWorkItemIntentSchema.parse({
+      type: 'move-work-item',
+      intentId: 'intent-22222222-2222-4222-8222-222222222222',
+      projectId: PROJECT_ID,
+      workItemId: `work-item-${'3'.repeat(64)}`,
+      expectedRemoteFingerprint: `remote-fingerprint-${'4'.repeat(64)}`,
+      targetStatus: 'done',
+    })
+
+    await ctx.sakiHostClient.createWorkItem(createIntent, 'work-item-token')
+    await ctx.sakiHostClient.moveWorkItem(moveIntent, 'work-item-token')
+
+    expect(call.mock.calls).toEqual([
+      ['/saki', 'control/submit', createIntent, {
+        credentials: 'same-origin',
+        headers: { 'x-saki-request-token': 'work-item-token' },
+      }],
+      ['/saki', 'control/submit', moveIntent, {
+        credentials: 'same-origin',
+        headers: { 'x-saki-request-token': 'work-item-token' },
+      }],
+    ])
+    await fiber.dispose()
   })
 
   it('uses same-origin credentials and sends request tokens only on mutations', async () => {

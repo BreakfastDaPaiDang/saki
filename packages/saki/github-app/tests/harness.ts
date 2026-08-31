@@ -83,7 +83,28 @@ export const expectedReadPermissions = {
   organization_projects: 'read',
   pull_requests: 'read',
   statuses: 'read',
-}
+} as const
+
+export const expectedProjectWritePermissions = {
+  metadata: 'read',
+  organization_projects: 'write',
+} as const
+
+export const expectedIssueWritePermissions = {
+  issues: 'write',
+  metadata: 'read',
+} as const
+
+export const expectedIssueReadPermissions = {
+  issues: 'read',
+  metadata: 'read',
+} as const
+
+export const expectedProjectReadPermissions = {
+  issues: 'read',
+  metadata: 'read',
+  organization_projects: 'read',
+} as const
 
 export function json(data: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers)

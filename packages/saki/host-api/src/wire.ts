@@ -32,6 +32,7 @@ import {
 import type {
   AccessProjection,
   ConfigureGitHubSynchronizationIntent,
+  CreateWorkItemIntent,
   CreateCommitIntent,
   GitMutationExpectation,
   GitHubAccountId,
@@ -48,6 +49,7 @@ import type {
   RegisterDevelopmentProjectIntent,
   SakiControlIntentId,
   SakiBoardProjection,
+  SakiBoardMutationOverlayProjection,
   SakiBoardRemoteFingerprint,
   SakiBoardStatus,
   SakiBoardWorkItemId,
@@ -59,7 +61,7 @@ import type {
   SakiIntentReceipt,
   SakiIntentInput,
   SakiIntentReceiptId,
-  SakiIntentReceiptMap,
+  SakiWorkItemIntentReceipt,
   SakiGitHubMappingHealthProjection,
   SakiGitHubMappingIssue,
   SakiGitHubRateLimitProjection,
@@ -84,6 +86,7 @@ import type {
   SakiResourceBindingId,
   StageFilesIntent,
   UnstageFilesIntent,
+  MoveWorkItemIntent,
 } from '@breakfastdapaidang/saki-control-plane'
 
 const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -130,6 +133,15 @@ const scanAttemptId = z.string().regex(new RegExp(`^scan-attempt-${UUID_PATTERN}
   .transform(value => value as SakiGitHubScanAttemptId)
 const boardRemoteFingerprint = z.string().regex(/^remote-fingerprint-[0-9a-f]{64}$/u)
   .transform(value => value as SakiBoardRemoteFingerprint)
+const sakiBoardStatusSchema = z.enum([
+  'inbox',
+  'backlog',
+  'ready',
+  'in-progress',
+  'in-review',
+  'done',
+  'canceled',
+]) satisfies z.ZodType<SakiBoardStatus>
 function boundedArray<T extends z.ZodType>(element: T, minimum: number, maximum: number) {
   return z.custom<unknown[]>(value => Array.isArray(value)
     && value.length >= minimum
@@ -319,6 +331,46 @@ export const sakiCreateCommitIntentSchema = z.object({
   message: sakiCommitMessageSchema,
 }).strict() satisfies z.ZodType<CreateCommitIntent>
 
+const sakiCreateWorkItemExpectationSchema = z.object({
+  projectRevision: revision,
+  synchronizationRevision: positiveRevision,
+  mappingRevision: positiveRevision,
+}).strict()
+
+/** Strict Work Item creation Intent without GitHub authority or marker fields. */
+export const sakiCreateWorkItemIntentSchema = z.object({
+  type: z.literal('create-work-item'),
+  intentId,
+  projectId,
+  expected: sakiCreateWorkItemExpectationSchema,
+  title: projectTitle,
+  intendedOutcome: safeText,
+  acceptanceCriteria: boundedArray(safeText, 1, 50),
+}).strict() satisfies z.ZodType<CreateWorkItemIntent>
+
+const sakiMoveWorkItemPositionSchema = z.union([
+  z.object({ afterWorkItemId: z.null() }).strict(),
+  z.object({
+    afterWorkItemId: boardWorkItemId,
+    expectedAfterRemoteFingerprint: boardRemoteFingerprint,
+  }).strict(),
+])
+
+/** Strict Work Item movement Intent with only Saki-relative placement authority. */
+export const sakiMoveWorkItemIntentSchema = z.object({
+  type: z.literal('move-work-item'),
+  intentId,
+  projectId,
+  workItemId: boardWorkItemId,
+  expectedRemoteFingerprint: boardRemoteFingerprint,
+  targetStatus: sakiBoardStatusSchema,
+  position: sakiMoveWorkItemPositionSchema.optional(),
+}).strict().superRefine((intent, context) => {
+  if (intent.position?.afterWorkItemId === intent.workItemId) {
+    context.addIssue({ code: 'custom', message: 'Work Item cannot be positioned after itself' })
+  }
+}) satisfies z.ZodType<MoveWorkItemIntent>
+
 /** Closed Control Intent request union. */
 export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
   sakiRegisterDevelopmentProjectIntentSchema,
@@ -326,6 +378,8 @@ export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
   sakiStageFilesIntentSchema,
   sakiUnstageFilesIntentSchema,
   sakiCreateCommitIntentSchema,
+  sakiCreateWorkItemIntentSchema,
+  sakiMoveWorkItemIntentSchema,
 ]) satisfies z.ZodType<SakiIntentInput>
 
 /** Authenticated member of the Access Projection schema. */
@@ -623,16 +677,6 @@ export const sakiProjectDiffProjectionSchema = z.object({
   result: readProjectDiffResultSchema,
 }).strict() satisfies z.ZodType<SakiProjectDiffProjection>
 
-const sakiBoardStatusSchema = z.enum([
-  'inbox',
-  'backlog',
-  'ready',
-  'in-progress',
-  'in-review',
-  'done',
-  'canceled',
-]) satisfies z.ZodType<SakiBoardStatus>
-
 const githubMappingIssueSchema = z.discriminatedUnion('reason', [
   z.object({
     reason: z.literal('status-field-missing'),
@@ -895,13 +939,18 @@ const boardMutationUnavailableReason = z.enum([
   'mapping-revalidation-required',
   'mapping-repair-required',
   'checkpoint-unavailable',
-  'no-concrete-mutation',
+  'provider-unavailable',
+  'action-denied',
 ])
-const boardMutationAvailabilitySchema = z.object({
-  available: z.literal(false),
-  reasons: z.array(boardMutationUnavailableReason).min(1).max(6)
-    .refine(reasons => new Set(reasons).size === reasons.length),
-}).strict()
+/** Exact effective Work Item mutation availability exposed to the browser. */
+export const sakiBoardMutationAvailabilitySchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(true), reasons: z.tuple([]) }).strict(),
+  z.object({
+    available: z.literal(false),
+    reasons: z.array(boardMutationUnavailableReason).min(1).max(7)
+      .refine(reasons => new Set(reasons).size === reasons.length),
+  }).strict(),
+]) satisfies z.ZodType<SakiBoardProjection['effectiveMutationAvailability']>
 
 type MappingState = SakiGitHubMappingHealthProjection['state']
 type MutationReason = z.infer<typeof boardMutationUnavailableReason>
@@ -917,17 +966,27 @@ function expectedMutationUnavailableReasons(
   if (mapping === 'revalidation-required') reasons.push('mapping-revalidation-required')
   if (mapping === 'repair-required') reasons.push('mapping-repair-required')
   if (!hasCheckpoint) reasons.push('checkpoint-unavailable')
-  reasons.push('no-concrete-mutation')
   return reasons
 }
 
-function validateMutationUnavailableReasons(
-  actual: readonly MutationReason[],
+function validateMutationAvailability(
+  actual: SakiBoardProjection['effectiveMutationAvailability'],
   expected: readonly MutationReason[],
   context: z.RefinementCtx,
 ): void {
-  const actualSet = new Set(actual)
-  if (actualSet.size !== expected.length || expected.some(reason => !actualSet.has(reason))) {
+  if (actual.available) {
+    if (expected.length === 0) return
+    context.addIssue({
+      code: 'custom',
+      message: 'effective mutation reasons disagree with synchronization evidence',
+      path: ['effectiveMutationAvailability'],
+    })
+    return
+  }
+  const actualSet = new Set(actual.reasons)
+  const operationalReasons = new Set<MutationReason>(['provider-unavailable', 'action-denied'])
+  const unexpected = actual.reasons.some(reason => !expected.includes(reason) && !operationalReasons.has(reason))
+  if (unexpected || expected.some(reason => !actualSet.has(reason))) {
     context.addIssue({
       code: 'custom',
       message: 'effective mutation reasons disagree with synchronization evidence',
@@ -1127,6 +1186,7 @@ const boardWorkItemWireSchema = z.object({
   url: safeUrl,
   issueState: z.enum(['open', 'closed']),
   status: sakiBoardStatusSchema,
+  latestNonTerminalStatus: z.enum(['inbox', 'backlog', 'ready', 'in-progress', 'in-review']).nullable(),
   order: safeInteger,
   archived: z.boolean(),
   notInProject: z.boolean(),
@@ -1164,6 +1224,10 @@ const boardWorkItemWireSchema = z.object({
   }
   if (item.archived && item.status !== 'canceled') {
     context.addIssue({ code: 'custom', message: 'archived Project item must be canceled' })
+  }
+  if (item.status !== 'done' && item.status !== 'canceled'
+    && item.latestNonTerminalStatus !== item.status) {
+    context.addIssue({ code: 'custom', message: 'non-terminal Work Item must remember its current Status' })
   }
 }) satisfies z.ZodType<SakiBoardWorkItemProjection>
 
@@ -1216,11 +1280,82 @@ const confirmedBoardSchema = z.object({
   }
 })
 
+const workItemMutationStageKindSchema = z.enum([
+  'issue-create',
+  'project-item-add',
+  'project-item-status-set',
+  'project-item-position-set',
+  'issue-state-set',
+])
+const workItemRecoveryActionSchema = z.union([
+  z.object({ kind: z.literal('inspect-before-retry') }).strict(),
+  z.object({ kind: z.literal('resume-intent') }).strict(),
+  z.object({ kind: z.literal('repair-mapping'), reason: safeText }).strict(),
+])
+
+/** Strict browser-safe state layered over one complete confirmed Board. */
+export const sakiBoardMutationOverlaySchema: z.ZodType<SakiBoardMutationOverlayProjection> = z.union([
+  z.object({
+    state: z.literal('optimistic'),
+    intentId,
+    type: z.literal('create-work-item'),
+    title: projectTitle,
+    targetStatus: z.literal('inbox'),
+  }).strict(),
+  z.object({
+    state: z.literal('optimistic'),
+    intentId,
+    type: z.literal('move-work-item'),
+    workItemId: boardWorkItemId,
+    targetStatus: sakiBoardStatusSchema,
+    position: sakiMoveWorkItemPositionSchema.optional(),
+  }).strict(),
+  z.object({
+    state: z.literal('targeted-confirmed'),
+    intentId,
+    type: z.enum(['create-work-item', 'move-work-item']),
+    workItem: boardWorkItemWireSchema,
+    confirmedAt: safeInteger,
+  }).strict(),
+  z.object({
+    state: z.literal('conflict'),
+    intentId,
+    type: z.enum(['create-work-item', 'move-work-item']),
+    reason: z.enum(['expected-revision', 'stale-remote', 'mapping-repair-required']),
+    workItem: boardWorkItemWireSchema.optional(),
+    confirmedAt: safeInteger.optional(),
+  }).strict(),
+  z.object({
+    state: z.literal('partial-failure'),
+    intentId,
+    type: z.enum(['create-work-item', 'move-work-item']),
+    workItemId: boardWorkItemId.optional(),
+    stage: workItemMutationStageKindSchema,
+    recoveryAction: workItemRecoveryActionSchema,
+  }).strict(),
+  z.object({
+    state: z.literal('reconciliation-required'),
+    intentId,
+    type: z.enum(['create-work-item', 'move-work-item']),
+    workItemId: boardWorkItemId.optional(),
+    stage: workItemMutationStageKindSchema,
+    reason: z.enum(['effect-unknown', 'evidence-conflict', 'marker-ambiguous']),
+  }).strict(),
+  z.object({
+    state: z.literal('repair-required'),
+    workItemId: boardWorkItemId,
+    reason: z.enum(['external-close', 'external-reopen']),
+    action: z.literal('move-with-actor'),
+    suggestedStatus: sakiBoardStatusSchema,
+  }).strict(),
+])
+
 const boardProjectionSharedShape = {
   type: z.literal('board'),
   projectId,
   synchronizationRevision: revision,
-  effectiveMutationAvailability: boardMutationAvailabilitySchema,
+  effectiveMutationAvailability: sakiBoardMutationAvailabilitySchema,
+  mutationOverlays: boundedArray(sakiBoardMutationOverlaySchema, 0, SAKI_BOARD_WORK_ITEM_LIMIT),
 } as const
 
 const unconfiguredBoardProjectionSchema = z.object({
@@ -1231,8 +1366,8 @@ const unconfiguredBoardProjectionSchema = z.object({
   freshness: boardUnavailableFreshnessSchema,
   scan: githubIdleScanSchema,
 }).strict().superRefine((projection, context) => {
-  validateMutationUnavailableReasons(
-    projection.effectiveMutationAvailability.reasons,
+  validateMutationAvailability(
+    projection.effectiveMutationAvailability,
     expectedMutationUnavailableReasons('unconfigured', 'unconfigured', false),
     context,
   )
@@ -1255,8 +1390,8 @@ const awaitingBoardProjectionSchema = z.object({
     projection.scan,
     context,
   )
-  validateMutationUnavailableReasons(
-    projection.effectiveMutationAvailability.reasons,
+  validateMutationAvailability(
+    projection.effectiveMutationAvailability,
     expectedMutationUnavailableReasons('not-activated', projection.mapping.state, false),
     context,
   )
@@ -1326,8 +1461,8 @@ const confirmedBoardProjectionSchema = z.object({
     context.addIssue({ code: 'custom', message: 'Board freshness and checkpoint confirmation disagree' })
   }
   validateFreshness(projection.freshness, context)
-  validateMutationUnavailableReasons(
-    projection.effectiveMutationAvailability.reasons,
+  validateMutationAvailability(
+    projection.effectiveMutationAvailability,
     expectedMutationUnavailableReasons(
       currentRevision === projection.checkpoint.configurationRevision ? 'activated' : 'not-activated',
       projection.mapping.state,
@@ -1372,7 +1507,7 @@ export const sakiProjectSettingsProjectionSchema = z.object({
     failure: githubSynchronizationFailureProjectionSchema.optional(),
     freshness: boardFreshnessSchema,
     scan: githubScanStateSchema,
-    effectiveMutationAvailability: boardMutationAvailabilitySchema,
+    effectiveMutationAvailability: sakiBoardMutationAvailabilitySchema,
   }).strict().superRefine((synchronization, context) => {
     const { active, checkpoint, failure, freshness, mapping, pending, scan, state } = synchronization
     if (state === 'unconfigured' && (synchronization.revision !== 0
@@ -1387,8 +1522,8 @@ export const sakiProjectSettingsProjectionSchema = z.object({
       return
     }
     if (state === 'unconfigured') {
-      validateMutationUnavailableReasons(
-        synchronization.effectiveMutationAvailability.reasons,
+      validateMutationAvailability(
+        synchronization.effectiveMutationAvailability,
         expectedMutationUnavailableReasons('unconfigured', 'unconfigured', false),
         context,
       )
@@ -1442,8 +1577,8 @@ export const sakiProjectSettingsProjectionSchema = z.object({
     if (state === 'saved' && (failure !== undefined || scan.state === 'in-flight')) {
       context.addIssue({ code: 'custom', message: 'saved configuration contains activation attempt evidence' })
     }
-    validateMutationUnavailableReasons(
-      synchronization.effectiveMutationAvailability.reasons,
+    validateMutationAvailability(
+      synchronization.effectiveMutationAvailability,
       expectedMutationUnavailableReasons(
         state === 'activated' ? 'activated' : 'not-activated',
         mapping.state,
@@ -1689,6 +1824,40 @@ const gitOperationFailedReason = z.enum([
   'unsupported-state',
 ])
 
+function validateIntentResultReceiptIdentity(
+  result: { readonly ok: boolean; readonly receipt?: { readonly id: string; readonly intentId: string } },
+  context: z.RefinementCtx,
+): void {
+  const receipt = result.receipt
+  if (receipt === undefined) return
+  if (receipt.id !== receipt.intentId.replace(/^intent-/u, 'receipt-')) {
+    context.addIssue({ code: 'custom', message: 'receipt id disagrees with Intent id', path: ['receipt', 'id'] })
+  }
+}
+
+function createSharedIntentResultSchemas<
+  S extends z.ZodType,
+  N extends z.ZodType,
+  C extends z.ZodType,
+  R extends z.ZodType,
+>(succeeded: S, nonterminal: N, conflict: C, reconciliationRequired: R) {
+  return {
+    prefix: [
+      z.object({ ok: z.literal(true), receipt: succeeded }).strict(),
+      deniedIntentResultSchema,
+      unavailableIntentResultSchema,
+      z.object({ ok: z.literal(false), reason: z.literal('unavailable'), receipt: nonterminal }).strict(),
+      plainConflictIntentResultSchema,
+      z.object({ ok: z.literal(false), reason: z.literal('conflict'), receipt: conflict }).strict(),
+    ] as const,
+    reconciliationRequired: z.object({
+      ok: z.literal(false),
+      reason: z.literal('reconciliation-required'),
+      receipt: reconciliationRequired,
+    }).strict(),
+  } as const
+}
+
 function createGitOperationResultSchema<
   T extends 'stage-files' | 'unstage-files' | 'create-commit',
   H extends 'stage-files' | 'unstage-files' | 'commit',
@@ -1756,26 +1925,18 @@ function createGitOperationResultSchema<
     operation: z.object({ ...operationBase, state: z.literal('reconciliation-required') }).strict(),
   }).strict()
   const nonterminal = z.union([prepared, admissionReserved, hostPrepared, accepted])
+  const sharedResults = createSharedIntentResultSchemas(
+    succeeded,
+    nonterminal,
+    conflict,
+    reconciliationRequired,
+  )
   return z.union([
-    z.object({ ok: z.literal(true), receipt: succeeded }).strict(),
-    deniedIntentResultSchema,
-    unavailableIntentResultSchema,
-    z.object({ ok: z.literal(false), reason: z.literal('unavailable'), receipt: nonterminal }).strict(),
-    plainConflictIntentResultSchema,
-    z.object({ ok: z.literal(false), reason: z.literal('conflict'), receipt: conflict }).strict(),
+    ...sharedResults.prefix,
     z.object({ ok: z.literal(false), reason: z.literal('failure'), receipt: failed }).strict(),
     z.object({ ok: z.literal(false), reason: z.literal('canceled'), receipt: canceled }).strict(),
-    z.object({
-      ok: z.literal(false),
-      reason: z.literal('reconciliation-required'),
-      receipt: reconciliationRequired,
-    }).strict(),
-  ]).superRefine((value, context) => {
-    if ('receipt' in value
-      && value.receipt.id !== value.receipt.intentId.replace(/^intent-/u, 'receipt-')) {
-      context.addIssue({ code: 'custom', message: 'receipt id disagrees with Intent id', path: ['receipt', 'id'] })
-    }
-  })
+    sharedResults.reconciliationRequired,
+  ]).superRefine(validateIntentResultReceiptIdentity)
 }
 
 /** StageFiles business-result schema with a safe Host Operation Projection. */
@@ -1799,6 +1960,81 @@ export const sakiCreateCommitResultSchema = createGitOperationResultSchema(
   commitHostOperationResultSchema,
 ) satisfies z.ZodType<SakiGitOperationIntentReceipt<'create-commit'>>
 
+function createWorkItemResultSchema<T extends 'create-work-item' | 'move-work-item'>(intentType: T) {
+  const base = {
+    ...receiptIdentity,
+    type: z.literal(intentType),
+    projectId,
+  } as const
+  const prepared = z.object({
+    ...base,
+    state: z.literal('prepared'),
+    workItemId: boardWorkItemId.optional(),
+  }).strict()
+  const running = z.object({
+    ...base,
+    state: z.literal('running'),
+    workItemId: boardWorkItemId.optional(),
+  }).strict()
+  const partialFailure = z.object({
+    ...base,
+    state: z.literal('partial-failure'),
+    workItemId: boardWorkItemId.optional(),
+    stage: workItemMutationStageKindSchema,
+    recoveryAction: workItemRecoveryActionSchema,
+  }).strict()
+  const succeeded = z.object({
+    ...base,
+    state: z.literal('succeeded'),
+    workItemId: boardWorkItemId,
+    issueNumber: positiveInteger,
+    url: safeUrl,
+    remoteFingerprint: boardRemoteFingerprint,
+  }).strict()
+  const conflict = z.object({
+    ...base,
+    state: z.literal('conflict'),
+    reason: z.enum(['expected-revision', 'stale-remote', 'mapping-repair-required']),
+    workItemId: boardWorkItemId.optional(),
+    remoteFingerprint: boardRemoteFingerprint.optional(),
+  }).strict()
+  const reconciliationRequired = z.object({
+    ...base,
+    state: z.literal('reconciliation-required'),
+    reason: z.enum(['effect-unknown', 'evidence-conflict', 'marker-ambiguous']),
+    workItemId: boardWorkItemId.optional(),
+    stage: workItemMutationStageKindSchema,
+  }).strict()
+  const canceled = z.object({
+    ...base,
+    state: z.literal('canceled'),
+    reason: z.literal('authority-revoked'),
+    workItemId: boardWorkItemId.optional(),
+  }).strict()
+  const nonterminal = z.union([prepared, running, partialFailure])
+  const sharedResults = createSharedIntentResultSchemas(
+    succeeded,
+    nonterminal,
+    conflict,
+    reconciliationRequired,
+  )
+  return z.union([
+    ...sharedResults.prefix,
+    sharedResults.reconciliationRequired,
+    z.object({ ok: z.literal(false), reason: z.literal('canceled'), receipt: canceled }).strict(),
+  ]).superRefine(validateIntentResultReceiptIdentity)
+}
+
+/** CreateWorkItem business-result schema with only browser-safe saga evidence. */
+export const sakiCreateWorkItemResultSchema = createWorkItemResultSchema(
+  'create-work-item',
+) satisfies z.ZodType<SakiWorkItemIntentReceipt<'create-work-item'>>
+
+/** MoveWorkItem business-result schema with only browser-safe saga evidence. */
+export const sakiMoveWorkItemResultSchema = createWorkItemResultSchema(
+  'move-work-item',
+) satisfies z.ZodType<SakiWorkItemIntentReceipt<'move-work-item'>>
+
 /** Union schema retained for callers that intentionally handle every Control Intent result. */
 export const sakiIntentResultSchema = z.union([
   sakiRegisterDevelopmentProjectResultSchema,
@@ -1806,7 +2042,9 @@ export const sakiIntentResultSchema = z.union([
   sakiStageFilesResultSchema,
   sakiUnstageFilesResultSchema,
   sakiCreateCommitResultSchema,
-]) satisfies z.ZodType<SakiIntentReceipt<keyof SakiIntentReceiptMap>>
+  sakiCreateWorkItemResultSchema,
+  sakiMoveWorkItemResultSchema,
+]) satisfies z.ZodType<SakiIntentReceipt>
 
 /** Browser Access Projection inferred from the strict wire schema. */
 export type SakiWireAccessProjection = z.infer<typeof sakiAccessProjectionSchema>
@@ -1864,6 +2102,14 @@ export type SakiWireUnstageFilesResult = z.infer<typeof sakiUnstageFilesResultSc
 export type SakiWireCreateCommitIntent = z.infer<typeof sakiCreateCommitIntentSchema>
 /** Browser CreateCommit result inferred from its exact safe receipt schema. */
 export type SakiWireCreateCommitResult = z.infer<typeof sakiCreateCommitResultSchema>
+/** Browser CreateWorkItem Intent inferred from its strict authority-free schema. */
+export type SakiWireCreateWorkItemIntent = z.infer<typeof sakiCreateWorkItemIntentSchema>
+/** Browser CreateWorkItem result inferred from its exact safe receipt schema. */
+export type SakiWireCreateWorkItemResult = z.infer<typeof sakiCreateWorkItemResultSchema>
+/** Browser MoveWorkItem Intent inferred from its strict Saki-relative schema. */
+export type SakiWireMoveWorkItemIntent = z.infer<typeof sakiMoveWorkItemIntentSchema>
+/** Browser MoveWorkItem result inferred from its exact safe receipt schema. */
+export type SakiWireMoveWorkItemResult = z.infer<typeof sakiMoveWorkItemResultSchema>
 /** Branded Host id accepted by the browser client. */
 export type SakiWireHostId = SakiHostId
 /** Branded Project id accepted by the browser client. */

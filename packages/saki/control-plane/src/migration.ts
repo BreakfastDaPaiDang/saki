@@ -22,8 +22,10 @@ import { sakiStorageGenerationIdSchema } from './ids.ts'
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
+  bindingWriteAdmissionRecordSchema,
   controlStateRecordSchema,
   developmentProjectRegistryRecordSchema,
+  gitOperationIntentRecordSchema,
   HOST_OPERATOR_ACTIONS,
   historicalGrantRecordSchema,
   historicalRegistrationActorSchema,
@@ -36,10 +38,14 @@ import {
   principalRecordSchema,
   registrationIntentRecordSchema,
   sakiControlPlaneDomainSpec,
+  V5_HOST_OPERATOR_ACTIONS,
+  v5GrantRecordSchema,
 } from './spec.ts'
 import type {
+  BindingWriteAdmissionRecord,
   ControlStateRecord,
   DevelopmentProjectRegistryRecord,
+  GitOperationIntentRecord,
   GrantRecord,
   HostRecord,
   InstallationAccessRecord,
@@ -56,6 +62,7 @@ import type {
   SakiInstallationGenerationId,
   SakiInstallationId,
   SakiPrincipalId,
+  SakiResourceBindingId,
   SakiStorageGenerationId,
 } from './types.ts'
 
@@ -598,6 +605,38 @@ export const sakiControlPlaneV4DomainSpec = defineDomain({
   },
 })
 
+/** Exact v5 control-plane schema retained as the adjacent v6 migration source. */
+export const sakiControlPlaneV5DomainSpec = defineDomain({
+  name: 'saki_control_plane',
+  version: 5,
+  tables: {
+    control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
+    installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
+    hosts: domainTable<SakiHostId, HostRecord>(hostRecordSchema),
+    principals: domainTable<SakiPrincipalId, PrincipalRecord>(principalRecordSchema),
+    grants: domainTable<SakiGrantId, z.infer<typeof v5GrantRecordSchema>>(v5GrantRecordSchema),
+    installation_access: domainTable<SakiInstallationAccessId, InstallationAccessRecord>(
+      installationAccessRecordSchema,
+    ),
+    development_project_registry: domainTable<
+      typeof DEVELOPMENT_PROJECT_REGISTRY_KEY,
+      DevelopmentProjectRegistryRecord
+    >(developmentProjectRegistryRecordSchema),
+    registration_intents: domainTable<SakiControlIntentId, RegistrationIntentRecord>(registrationIntentRecordSchema),
+    github_project_sync: domainTable<SakiDevelopmentProjectId, z.infer<typeof v4GitHubProjectSyncRecordSchema>>(
+      v4GitHubProjectSyncRecordSchema,
+    ),
+    github_sync_configuration_intents: domainTable<
+      SakiControlIntentId,
+      z.infer<typeof v4GitHubConfigurationIntentRecordSchema>
+    >(v4GitHubConfigurationIntentRecordSchema),
+    git_operation_intents: domainTable<SakiControlIntentId, GitOperationIntentRecord>(gitOperationIntentRecordSchema),
+    binding_write_admissions: domainTable<SakiResourceBindingId, BindingWriteAdmissionRecord>(
+      bindingWriteAdmissionRecordSchema,
+    ),
+  },
+})
+
 function sourceTable<T>(snapshot: DomainMigrationSnapshot, name: string): Readonly<Record<string, T>> {
   return snapshot.tables[name] as Readonly<Record<string, T>>
 }
@@ -684,9 +723,21 @@ function migrateGrantsToV4(snapshot: DomainMigrationSnapshot): Record<string, Gr
   }))
 }
 
-function migrateGrantsToV5(snapshot: DomainMigrationSnapshot): Record<string, GrantRecord> {
+function migrateGrantsToV5(
+  snapshot: DomainMigrationSnapshot,
+): Record<string, z.infer<typeof v5GrantRecordSchema>> {
   const control = sourceTable<V4ControlStateRecord>(snapshot, 'control_state')[V4_CONTROL_STATE_KEY]
   return Object.fromEntries(Object.entries(sourceTable<V4GrantRecord>(snapshot, 'grants')).map(([key, value]) => {
+    if (key !== control?.hostOperatorGrantId) return [key, value]
+    return [key, { ...value, revision: value.revision + 1, actions: [...V5_HOST_OPERATOR_ACTIONS] }]
+  }))
+}
+
+function migrateGrantsToV6(snapshot: DomainMigrationSnapshot): Record<string, GrantRecord> {
+  const control = sourceTable<ControlStateRecord>(snapshot, 'control_state')[CONTROL_STATE_KEY]
+  return Object.fromEntries(Object.entries(
+    sourceTable<z.infer<typeof v5GrantRecordSchema>>(snapshot, 'grants'),
+  ).map(([key, value]) => {
     if (key !== control?.hostOperatorGrantId) return [key, value]
     return [key, { ...value, revision: value.revision + 1, actions: [...HOST_OPERATOR_ACTIONS] }]
   }))
@@ -766,7 +817,32 @@ function migrateV4BindingWriteAdmissions(
   }]))
 }
 
-/** Pure retained migration chain from exact B03 v2 media through frozen v3/v4 to current v5 records. */
+function migrateGitHubProjectSyncToV6(
+  snapshot: DomainMigrationSnapshot,
+): Record<string, Record<string, unknown>> {
+  return mapTable(
+    sourceTable<z.infer<typeof v4GitHubProjectSyncRecordSchema>>(snapshot, 'github_project_sync'),
+    record => ({
+      ...record,
+      schemaVersion: 2,
+      ...(record.confirmedBoard === undefined
+        ? {}
+        : {
+          confirmedBoard: {
+            ...record.confirmedBoard,
+            items: record.confirmedBoard.items.map(item => ({
+              ...item,
+              latestNonTerminalStatus: item.status === 'done' || item.status === 'canceled'
+                ? null
+                : item.status,
+            })),
+          },
+        }),
+    }),
+  )
+}
+
+/** Pure retained migration chain from exact B03 v2 media through frozen v3/v4/v5 to current v6 records. */
 export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
   current: sakiControlPlaneDomainSpec,
   steps: [
@@ -824,7 +900,7 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
     },
     {
       from: sakiControlPlaneV4DomainSpec,
-      to: sakiControlPlaneDomainSpec,
+      to: sakiControlPlaneV5DomainSpec,
       migrate: snapshot => ({
         global: snapshot.global,
         tables: {
@@ -840,6 +916,20 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
           ),
           git_operation_intents: {},
           binding_write_admissions: migrateV4BindingWriteAdmissions(snapshot),
+        },
+      }),
+    },
+    {
+      from: sakiControlPlaneV5DomainSpec,
+      to: sakiControlPlaneDomainSpec,
+      migrate: snapshot => ({
+        global: snapshot.global,
+        tables: {
+          ...snapshot.tables,
+          grants: migrateGrantsToV6(snapshot),
+          github_project_sync: migrateGitHubProjectSyncToV6(snapshot),
+          github_work_item_intents: {},
+          github_work_item_recovery: {},
         },
       }),
     },

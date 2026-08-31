@@ -4,15 +4,32 @@ import {
   computeGitHubProjectBoardFingerprint,
   githubFailureSchema,
   githubInstallationFactSchema,
+  githubIssueStateSetInspectionSchema,
+  githubIssueCreateInspectionHintSchema,
+  githubIssueCreateInspectionSchema,
   githubProjectBoardScanCandidateSchema,
   githubProjectFieldId,
+  githubProjectItemAddInspectionSchema,
+  githubProjectItemPositionSetInspectionSchema,
+  githubProjectItemStatusSetInspectionSchema,
   githubProjectOptionId,
 } from '../src/index.ts'
 import type {
   GitHubInstallationFact,
   GitHubInstallationReadRequest,
+  GitHubIssueStateSetInspection,
+  GitHubIssueStateSetRequest,
+  GitHubIssueCreateInspectionHint,
+  GitHubIssueCreateInspection,
+  GitHubIssueCreateRequest,
   GitHubProjectBoardScanCandidate,
   GitHubProjectBoardScanRequest,
+  GitHubProjectItemAddInspection,
+  GitHubProjectItemAddRequest,
+  GitHubProjectItemPositionSetInspection,
+  GitHubProjectItemPositionSetRequest,
+  GitHubProjectItemStatusSetInspection,
+  GitHubProjectItemStatusSetRequest,
   SakiGitHub,
 } from '../src/index.ts'
 
@@ -23,6 +40,17 @@ export interface GitHubProviderContractHarness {
   readonly scanRequest: GitHubProjectBoardScanRequest
   readonly expectedInstallation: GitHubInstallationFact
   readonly expectedScan: GitHubProjectBoardScanCandidate
+  readonly projectItemAddRequest: GitHubProjectItemAddRequest
+  readonly expectedProjectItemAddInspection: GitHubProjectItemAddInspection
+  readonly positionRequest: GitHubProjectItemPositionSetRequest
+  readonly expectedPositionInspection: GitHubProjectItemPositionSetInspection
+  readonly issueStateRequest: GitHubIssueStateSetRequest
+  readonly expectedIssueStateInspection: GitHubIssueStateSetInspection
+  readonly issueCreateRequest: GitHubIssueCreateRequest
+  readonly expectedIssueCreateResult: GitHubIssueCreateInspectionHint
+  readonly expectedIssueCreateInspection: GitHubIssueCreateInspection
+  readonly mutationRequest: GitHubProjectItemStatusSetRequest
+  readonly expectedMutationInspection: GitHubProjectItemStatusSetInspection
   readonly dispose: () => Promise<void>
 }
 
@@ -87,6 +115,174 @@ export function runGitHubProviderContract(
           new AbortController().signal,
         ))
           .resolves.toEqual(harness.expectedScan)
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('dispatches one Status call and returns void', async () => {
+      const harness = await create()
+      try {
+        await expect(harness.github.dispatch<'project-item-status-set'>(
+          harness.mutationRequest,
+          new AbortController().signal,
+        )).resolves.toBeUndefined()
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('dispatches one Project membership call and returns void', async () => {
+      const harness = await create()
+      try {
+        await expect(harness.github.dispatch<'project-item-add'>(
+          harness.projectItemAddRequest,
+          new AbortController().signal,
+        )).resolves.toBeUndefined()
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('dispatches one Project-item position call and returns void', async () => {
+      const harness = await create()
+      try {
+        await expect(harness.github.dispatch<'project-item-position-set'>(
+          harness.positionRequest,
+          new AbortController().signal,
+        )).resolves.toBeUndefined()
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('dispatches one Issue-state call and returns void', async () => {
+      const harness = await create()
+      try {
+        await expect(harness.github.dispatch<'issue-state-set'>(
+          harness.issueStateRequest,
+          new AbortController().signal,
+        )).resolves.toBeUndefined()
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('dispatches one Issue-create call and returns a detached inspection hint', async () => {
+      const harness = await create()
+      try {
+        const result = await harness.github.dispatch<'issue-create'>(
+          harness.issueCreateRequest,
+          new AbortController().signal,
+        )
+        expect(githubIssueCreateInspectionHintSchema.parse(result)).toEqual(harness.expectedIssueCreateResult)
+        ;(result as { issueNumber: number }).issueNumber += 1
+        await expect(harness.github.dispatch<'issue-create'>(
+          harness.issueCreateRequest,
+          new AbortController().signal,
+        )).resolves.toEqual(harness.expectedIssueCreateResult)
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('returns one strict detached targeted inspection without scan state', async () => {
+      const harness = await create()
+      try {
+        const inspection = await harness.github.inspectMutation<'project-item-status-set'>(
+          harness.mutationRequest,
+          new AbortController().signal,
+        )
+        expect(githubProjectItemStatusSetInspectionSchema.parse(inspection))
+          .toEqual(harness.expectedMutationInspection)
+        expect(JSON.stringify(inspection)).not.toMatch(/checkpoint|generation|cursor/u)
+        ;(inspection.snapshot.issue as { title: string }).title = 'borrowed mutation'
+        await expect(harness.github.inspectMutation<'project-item-status-set'>(
+          harness.mutationRequest,
+          new AbortController().signal,
+        )).resolves.toEqual(harness.expectedMutationInspection)
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('returns one strict detached Project membership inspection without scan state', async () => {
+      const harness = await create()
+      try {
+        const inspection = await harness.github.inspectMutation<'project-item-add'>(
+          harness.projectItemAddRequest,
+          new AbortController().signal,
+        )
+        expect(githubProjectItemAddInspectionSchema.parse(inspection))
+          .toEqual(harness.expectedProjectItemAddInspection)
+        expect(JSON.stringify(inspection)).not.toMatch(/checkpoint|generation|cursor/u)
+        ;(inspection.snapshot.issue as { title: string }).title = 'borrowed mutation'
+        await expect(harness.github.inspectMutation<'project-item-add'>(
+          harness.projectItemAddRequest,
+          new AbortController().signal,
+        )).resolves.toEqual(harness.expectedProjectItemAddInspection)
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('returns one strict detached Project-item position inspection without scan state', async () => {
+      const harness = await create()
+      try {
+        const inspection = await harness.github.inspectMutation<'project-item-position-set'>(
+          harness.positionRequest,
+          new AbortController().signal,
+        )
+        expect(githubProjectItemPositionSetInspectionSchema.parse(inspection))
+          .toEqual(harness.expectedPositionInspection)
+        expect(JSON.stringify(inspection)).not.toMatch(/checkpoint|generation|cursor/u)
+        ;(inspection.snapshot.issue as { title: string }).title = 'borrowed mutation'
+        await expect(harness.github.inspectMutation<'project-item-position-set'>(
+          harness.positionRequest,
+          new AbortController().signal,
+        )).resolves.toEqual(harness.expectedPositionInspection)
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('returns one strict detached Issue-state inspection without scan state', async () => {
+      const harness = await create()
+      try {
+        const inspection = await harness.github.inspectMutation<'issue-state-set'>(
+          harness.issueStateRequest,
+          new AbortController().signal,
+        )
+        expect(githubIssueStateSetInspectionSchema.parse(inspection))
+          .toEqual(harness.expectedIssueStateInspection)
+        expect(JSON.stringify(inspection)).not.toMatch(/checkpoint|generation|cursor/u)
+        ;(inspection.snapshot.issue as { title: string }).title = 'borrowed mutation'
+        await expect(harness.github.inspectMutation<'issue-state-set'>(
+          harness.issueStateRequest,
+          new AbortController().signal,
+        )).resolves.toEqual(harness.expectedIssueStateInspection)
+      } finally {
+        await harness.dispose()
+      }
+    })
+
+    it('returns one strict detached Issue-create marker inspection without provider payloads', async () => {
+      const harness = await create()
+      try {
+        const inspection = await harness.github.inspectMutation<'issue-create'>(
+          harness.issueCreateRequest,
+          new AbortController().signal,
+        )
+        expect(githubIssueCreateInspectionSchema.parse(inspection))
+          .toEqual(harness.expectedIssueCreateInspection)
+        expect(JSON.stringify(inspection)).not.toMatch(/body|header|cursor|token/u)
+        if (inspection.snapshot.outcome.state === 'unique-issue') {
+          ;(inspection.snapshot.outcome.issue as { title: string }).title = 'borrowed mutation'
+        }
+        await expect(harness.github.inspectMutation<'issue-create'>(
+          harness.issueCreateRequest,
+          new AbortController().signal,
+        )).resolves.toEqual(harness.expectedIssueCreateInspection)
       } finally {
         await harness.dispose()
       }

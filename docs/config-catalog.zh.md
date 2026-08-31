@@ -94,7 +94,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/saki/github-app/src/index.ts:57`](../packages/saki/github-app/src/index.ts)
+来源：[`packages/saki/github-app/src/index.ts:64`](../packages/saki/github-app/src/index.ts)
 
 <a id="deepseek-aidsh-acp"></a>
 

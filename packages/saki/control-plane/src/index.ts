@@ -26,15 +26,18 @@ export {
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
+  sakiStorageGenerationV3DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationSealRecordSchema,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
+  storageGenerationV3SealRecordSchema,
 } from './state-version.ts'
 export type {
   StorageGenerationSealRecord,
   StorageGenerationV1SealRecord,
   StorageGenerationV2SealRecord,
+  StorageGenerationV3SealRecord,
 } from './state-version.ts'
 export {
   validateCurrentSakiState,
@@ -49,6 +52,12 @@ export type {
   SakiControlPlaneModule,
 } from './service.ts'
 export type { SakiAuthenticationContext } from './authentication.ts'
+export type {
+  CreateWorkItemIntent,
+  MoveWorkItemIntent,
+  SakiBoardMutationOverlayProjection,
+  SakiWorkItemIntentReceipt,
+} from './types.ts'
 export type {
   AccessProjection,
   SakiAccessExchangeResult,
@@ -151,6 +160,7 @@ export {
   sakiControlPlaneV2DomainSpec,
   sakiControlPlaneV3DomainSpec,
   sakiControlPlaneV4DomainSpec,
+  sakiControlPlaneV5DomainSpec,
 } from './migration.ts'
 export { SakiBootstrapHandoff } from './secrets.ts'
 

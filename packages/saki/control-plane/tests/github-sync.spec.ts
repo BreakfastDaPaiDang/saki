@@ -19,6 +19,7 @@ import {
   SakiGitHub,
   type GitHubIssueFact,
   type GitHubIssueId,
+  type GitHubMutationMap,
   type GitHubProjectBoardFingerprintSource,
   type GitHubProjectBoardScanCandidate,
   type GitHubProjectItemId,
@@ -29,6 +30,7 @@ import {
 import { describe, expect, it, vi } from 'vitest'
 import type {
   ConfigureGitHubSynchronizationIntent,
+  SakiBoardWorkItemId,
   GitHubSynchronizationConfiguration,
   SakiControlIntentId,
   SakiDevelopmentProjectId,
@@ -40,6 +42,7 @@ import {
 } from '../src/index.ts'
 import {
   GitHubProjectSynchronization,
+  type GitHubWorkItemRecoveryMemory,
   GitHubSynchronizationConsumer,
   type GitHubProjectSyncTable,
   type GitHubSynchronizationConfigurationIntentTable,
@@ -164,28 +167,65 @@ interface SafeParser<T> {
 function withHistoricalSchemaParity<T>(
   current: SafeParser<T>,
   historical: SafeParser<unknown>,
+  projectHistorical: (value: unknown) => unknown = value => value,
 ): SafeParser<T> {
   return {
     parse(value) {
       const currentValue = current.parse(value)
-      expect(historical.parse(value)).toEqual(currentValue)
+      const projected = projectHistorical(currentValue)
+      expect(historical.parse(projected)).toEqual(projected)
       return currentValue
     },
     safeParse(value) {
       const currentResult = current.safeParse(value)
-      const historicalResult = historical.safeParse(value)
+      const historicalResult = historical.safeParse(projectHistorical(value))
       expect(historicalResult.success).toBe(currentResult.success)
       if (currentResult.success) {
-        if (historicalResult.success) expect(historicalResult.data).toEqual(currentResult.data)
+        if (historicalResult.success) {
+          expect(historicalResult.data).toEqual(projectHistorical(currentResult.data))
+        }
       }
       return currentResult
     },
   }
 }
 
+function projectGitHubProjectSyncRecordToV4(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const sourceBoard = (value as Record<string, unknown>)['confirmedBoard']
+  if (typeof sourceBoard === 'object' && sourceBoard !== null && !Array.isArray(sourceBoard)) {
+    const sourceItems = (sourceBoard as Record<string, unknown>)['items']
+    if (Array.isArray(sourceItems) && sourceItems.length > SAKI_BOARD_WORK_ITEM_LIMIT) {
+      const projected = { ...(value as Record<string, unknown>) }
+      if (projected['schemaVersion'] === 2) projected['schemaVersion'] = 1
+      return {
+        ...projected,
+        confirmedBoard: { ...(sourceBoard as Record<string, unknown>), items: sourceItems },
+      }
+    }
+  }
+  const projected = structuredClone(value as Record<string, unknown>)
+  if (projected['schemaVersion'] === 2) projected['schemaVersion'] = 1
+  const confirmedBoard = projected['confirmedBoard']
+  if (typeof confirmedBoard !== 'object' || confirmedBoard === null || Array.isArray(confirmedBoard)) {
+    return projected
+  }
+  const historicalBoard = confirmedBoard as Record<string, unknown>
+  const items = historicalBoard['items']
+  if (!Array.isArray(items)) return projected
+  historicalBoard['items'] = (items as unknown[]).map((item: unknown) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return item
+    const historicalItem = { ...item } as Record<string, unknown>
+    Reflect.deleteProperty(historicalItem, 'latestNonTerminalStatus')
+    return historicalItem
+  })
+  return projected
+}
+
 const githubProjectSyncRecordSchema = withHistoricalSchemaParity(
   currentGitHubProjectSyncRecordSchema,
   v4GitHubProjectSyncRecordSchema,
+  projectGitHubProjectSyncRecordToV4,
 )
 const githubSynchronizationConfigurationIntentRecordSchema = withHistoricalSchemaParity(
   currentGitHubSynchronizationConfigurationIntentRecordSchema,
@@ -199,6 +239,10 @@ const sakiGitHubScanFailureSchema = withHistoricalSchemaParity(
 function synchronizationHarness(
   projects: readonly SakiDevelopmentProjectId[] = [PROJECT_A],
   authorityCurrent: (actor: RegistrationActor) => boolean = () => true,
+  workItemRecovery: (
+    projectId: SakiDevelopmentProjectId,
+    workItemId: SakiBoardWorkItemId,
+  ) => GitHubWorkItemRecoveryMemory | undefined = () => undefined,
 ): SynchronizationHarness {
   const syncTable = new MemoryTable<
     SakiDevelopmentProjectId,
@@ -215,6 +259,7 @@ function synchronizationHarness(
     synchronization: new GitHubProjectSynchronization({
       syncTable,
       intentTable,
+      workItemRecovery,
       installationId: TEST_SAKI_INSTALLATION_STATE.installationId,
       projectExists: projectId => projectIds.has(projectId),
       authorityCurrent,
@@ -439,7 +484,7 @@ function mutableRecord(record: GitHubProjectSyncRecord): Mutable<GitHubProjectSy
 function emptySyncRecord(projectId: SakiDevelopmentProjectId = PROJECT_A): GitHubProjectSyncRecord {
   return githubProjectSyncRecordSchema.parse({
     id: projectId,
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     installationId: TEST_SAKI_INSTALLATION_STATE.installationId,
     nextCandidateRevision: 1,
@@ -499,6 +544,14 @@ class UnusedGitHub extends SakiGitHub {
   override async scan<K extends keyof GitHubScanMap>(): Promise<GitHubScanMap[K]['result']> {
     throw new Error('future synchronization work must not call the Provider')
   }
+
+  override async dispatch<K extends keyof GitHubMutationMap>(): Promise<GitHubMutationMap[K]['result']> {
+    throw new Error('future synchronization work must not call the Provider')
+  }
+
+  override async inspectMutation<K extends keyof GitHubMutationMap>(): Promise<GitHubMutationMap[K]['inspection']> {
+    throw new Error('future synchronization work must not call the Provider')
+  }
 }
 
 type ScanOutcome = GitHubProjectBoardScanCandidate | Error | ((signal: AbortSignal) => Promise<GitHubProjectBoardScanCandidate>)
@@ -526,6 +579,14 @@ class ScriptedGitHub extends SakiGitHub {
     if (typeof outcome === 'function') return await outcome(signal)
     if (outcome instanceof Error) throw outcome
     return structuredClone(outcome)
+  }
+
+  override async dispatch<K extends keyof GitHubMutationMap>(): Promise<GitHubMutationMap[K]['result']> {
+    throw new Error('scan-only fake must not dispatch a GitHub mutation')
+  }
+
+  override async inspectMutation<K extends keyof GitHubMutationMap>(): Promise<GitHubMutationMap[K]['inspection']> {
+    throw new Error('scan-only fake must not inspect a GitHub mutation')
   }
 }
 
@@ -868,7 +929,6 @@ describe('GitHub synchronization coordinator regressions', () => {
           'configuration-not-activated',
           'mapping-revalidation-required',
           'checkpoint-unavailable',
-          'no-concrete-mutation',
         ],
       },
     })
@@ -887,6 +947,8 @@ describe('GitHub synchronization coordinator regressions', () => {
         state: 'confirmed',
         freshness: { state: 'fresh', ageMs: 1 },
         scan: { state: 'scheduled' },
+        effectiveMutationAvailability: { available: true, reasons: [] },
+        mutationOverlays: [],
       })
       expect(confirmed.synchronization.projectSettings(PROJECT_A)).toMatchObject({
         synchronization: { state: 'activated' },
@@ -898,6 +960,39 @@ describe('GitHub synchronization coordinator regressions', () => {
     } finally {
       date.mockRestore()
     }
+  })
+
+  it('resolves one detached mutation context only from an active confirmed mapping', async () => {
+    const unconfigured = synchronizationHarness()
+    expect(unconfigured.synchronization.mutationContext(PROJECT_A)).toEqual({
+      ok: false,
+      reason: 'unavailable',
+      reasons: ['synchronization-unconfigured', 'checkpoint-unavailable'],
+    })
+    expect(unconfigured.synchronization.mutationContext(PROJECT_B)).toEqual({
+      ok: false,
+      reason: 'not-found',
+    })
+
+    const confirmed = await confirmedHarness()
+    const result = confirmed.synchronization.mutationContext(PROJECT_A)
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        synchronizationRevision: 1,
+        mappingRevision: 1,
+        checkpointObservedAt: 10_000,
+        configuration: configuration(),
+        confirmedBoard: { generation: 1, configurationRevision: 1 },
+      },
+    })
+    if (!result.ok) throw new Error('confirmed mutation context is unavailable')
+    const second = confirmed.synchronization.mutationContext(PROJECT_A)
+    if (!second.ok) throw new Error('second confirmed mutation context is unavailable')
+    expect(result.context.confirmedBoard.items).not.toBe(second.context.confirmedBoard.items)
+    expect(confirmed.synchronization.board(PROJECT_A)).toMatchObject({
+      confirmed: { items: [{ issueNumber: 27 }] },
+    })
   })
 
   it('sleeps in bounded timer segments for a durable wake far beyond the Node timer limit', async () => {
@@ -1660,6 +1755,159 @@ describe('GitHub synchronization coordinator regressions', () => {
     expect(harness.syncTable.get(PROJECT_A)?.confirmedBoard?.items).toEqual([])
   })
 
+  it('retains the latest non-terminal Status across complete Board generations', async () => {
+    const recoveries: GitHubWorkItemRecoveryMemory[] = []
+    const harness = synchronizationHarness([PROJECT_A], () => true, () => recoveries.at(-1))
+    const githubConfiguration = configuration()
+    await saveConfiguration(harness)
+
+    const firstLease = await begin(harness)
+    expect(await harness.synchronization.publishScan(
+      PROJECT_A,
+      firstLease.attemptId,
+      boardCandidate(githubConfiguration),
+      new AbortController().signal,
+    )).toMatchObject({ state: 'published', generation: 1 })
+    expect(harness.syncTable.get(PROJECT_A)?.confirmedBoard?.items[0])
+      .toMatchObject({ status: 'ready', latestNonTerminalStatus: 'ready' })
+
+    const base = boardCandidate(githubConfiguration)
+    const closedIssue = issue(27, githubConfiguration, 'closed')
+    const terminal = refingerprintCandidate(base, {
+      items: [{
+        ...base.items[0]!,
+        content: { kind: 'issue', issue: closedIssue },
+        statusOptionId: githubConfiguration.statusOptionNodeIds.done,
+        updatedAt: 10_000,
+      }],
+      openIssues: [],
+      fences: {
+        before: { ...base.fences.before, openIssueCount: 0 },
+        after: { ...base.fences.after, openIssueCount: 0 },
+      },
+    })
+    const secondLease = await begin(harness)
+    expect(await harness.synchronization.publishScan(
+      PROJECT_A,
+      secondLease.attemptId,
+      terminal,
+      new AbortController().signal,
+    )).toMatchObject({ state: 'published', generation: 2 })
+    expect(harness.syncTable.get(PROJECT_A)?.confirmedBoard?.items[0])
+      .toMatchObject({ status: 'done', latestNonTerminalStatus: 'ready' })
+
+    recoveries.push({
+      latestNonTerminalStatus: 'in-review',
+      observedAt: 10_001,
+      repositoryId: githubConfiguration.repositoryNodeId,
+      repositoryDatabaseId: githubConfiguration.repositoryDatabaseId,
+      projectId: githubConfiguration.projectNodeId,
+      statusFieldId: githubConfiguration.statusFieldNodeId,
+    })
+    const thirdLease = await begin(harness)
+    expect(await harness.synchronization.publishScan(
+      PROJECT_A,
+      thirdLease.attemptId,
+      refingerprintCandidate(terminal, { observedAt: 10_002 }),
+      new AbortController().signal,
+    )).toMatchObject({ state: 'published', generation: 3 })
+    expect(harness.syncTable.get(PROJECT_A)?.confirmedBoard?.items[0])
+      .toMatchObject({ status: 'done', latestNonTerminalStatus: 'in-review' })
+  })
+
+  it('ignores stale, future, or differently bound targeted Status memory during a complete scan', async () => {
+    let recovery: GitHubWorkItemRecoveryMemory | undefined
+    const harness = synchronizationHarness([PROJECT_A], () => true, () => recovery)
+    const githubConfiguration = configuration()
+    await saveConfiguration(harness)
+
+    const firstLease = await begin(harness)
+    await harness.synchronization.publishScan(
+      PROJECT_A,
+      firstLease.attemptId,
+      boardCandidate(githubConfiguration),
+      new AbortController().signal,
+    )
+    const workItemId = harness.syncTable.get(PROJECT_A)?.confirmedBoard?.items[0]?.id
+    if (workItemId === undefined) throw new Error('confirmed Work Item fixture is missing')
+    const base = boardCandidate(githubConfiguration)
+    const terminal = refingerprintCandidate(base, {
+      items: [{
+        ...base.items[0]!,
+        content: { kind: 'issue', issue: issue(27, githubConfiguration, 'closed') },
+        statusOptionId: githubConfiguration.statusOptionNodeIds.done,
+      }],
+      openIssues: [],
+      fences: {
+        before: { ...base.fences.before, openIssueCount: 0 },
+        after: { ...base.fences.after, openIssueCount: 0 },
+      },
+    })
+    const memory = {
+      latestNonTerminalStatus: 'in-review',
+      repositoryId: githubConfiguration.repositoryNodeId,
+      repositoryDatabaseId: githubConfiguration.repositoryDatabaseId,
+      projectId: githubConfiguration.projectNodeId,
+      statusFieldId: githubConfiguration.statusFieldNodeId,
+    } as const
+
+    recovery = { ...memory, observedAt: 9_999 }
+    const staleLease = await begin(harness)
+    await harness.synchronization.publishScan(
+      PROJECT_A,
+      staleLease.attemptId,
+      refingerprintCandidate(terminal, { observedAt: 10_002 }),
+      new AbortController().signal,
+    )
+    expect(harness.syncTable.get(PROJECT_A)?.confirmedBoard?.items.find(item => item.id === workItemId))
+      .toMatchObject({ latestNonTerminalStatus: 'ready' })
+
+    recovery = { ...memory, observedAt: 10_005 }
+    const futureLease = await begin(harness)
+    await harness.synchronization.publishScan(
+      PROJECT_A,
+      futureLease.attemptId,
+      refingerprintCandidate(terminal, { observedAt: 10_004 }),
+      new AbortController().signal,
+    )
+    expect(harness.syncTable.get(PROJECT_A)?.confirmedBoard?.items.find(item => item.id === workItemId))
+      .toMatchObject({ latestNonTerminalStatus: 'ready' })
+
+    recovery = { ...memory, observedAt: 10_005, projectId: githubProjectId('PVT_saki_other_project') }
+    const reboundLease = await begin(harness)
+    await harness.synchronization.publishScan(
+      PROJECT_A,
+      reboundLease.attemptId,
+      refingerprintCandidate(terminal, { observedAt: 10_006 }),
+      new AbortController().signal,
+    )
+    expect(harness.syncTable.get(PROJECT_A)?.confirmedBoard?.items.find(item => item.id === workItemId))
+      .toMatchObject({ latestNonTerminalStatus: 'ready' })
+  })
+
+  it('records no invented non-terminal Status for a terminal first observation', async () => {
+    const harness = synchronizationHarness()
+    const githubConfiguration = configuration()
+    await saveConfiguration(harness)
+    const base = boardCandidate(githubConfiguration)
+    const terminal = refingerprintCandidate(base, {
+      items: [{
+        ...base.items[0]!,
+        statusOptionId: githubConfiguration.statusOptionNodeIds.canceled,
+      }],
+    })
+
+    const lease = await begin(harness)
+    expect(await harness.synchronization.publishScan(
+      PROJECT_A,
+      lease.attemptId,
+      terminal,
+      new AbortController().signal,
+    )).toMatchObject({ state: 'published', generation: 1 })
+    expect(harness.syncTable.get(PROJECT_A)?.confirmedBoard?.items[0])
+      .toMatchObject({ status: 'canceled', latestNonTerminalStatus: null })
+  })
+
   it('rejects invalid aggregate revisions and empty pending changes at the owning schemas', async () => {
     const revisedEmpty = mutableRecord(emptySyncRecord())
     revisedEmpty.revision = 1
@@ -1877,6 +2125,21 @@ describe('GitHub synchronization coordinator regressions', () => {
     archivedNotCanceled.confirmedBoard!.items[0]!.archived = true
     expect(issueMessages(githubProjectSyncRecordSchema.safeParse(archivedNotCanceled)))
       .toContain('archived Work Item must be Canceled')
+
+    const staleLatestStatus = mutableRecord(record)
+    staleLatestStatus.confirmedBoard!.items[0]!.latestNonTerminalStatus = 'backlog'
+    expect(issueMessages(currentGitHubProjectSyncRecordSchema.safeParse(staleLatestStatus)))
+      .toContain('non-terminal Work Item must remember its current Status')
+
+    const { latestNonTerminalStatus: _latestNonTerminalStatus, ...itemWithoutLatestStatus }
+      = structuredClone(record.confirmedBoard.items[0]!)
+    const missingLatestStatus = currentGitHubProjectSyncRecordSchema.safeParse({
+      ...record,
+      confirmedBoard: { ...record.confirmedBoard, items: [itemWithoutLatestStatus] },
+    })
+    expect(issuePaths(missingLatestStatus)).toContainEqual([
+      'confirmedBoard', 'items', '0', 'latestNonTerminalStatus',
+    ])
 
     const closedUnjoined = mutableRecord(record)
     const closedItem = closedUnjoined.confirmedBoard!.items[0]!
@@ -2826,14 +3089,23 @@ describe('GitHub synchronization coordinator regressions', () => {
     if (record?.confirmedBoard === undefined) throw new Error('confirmed fixture is incomplete')
 
     const boardItems = unreadableArray(SAKI_BOARD_WORK_ITEM_LIMIT + 1)
-    const boardResult = githubProjectSyncRecordSchema.safeParse({
+    const oversizedRecord = {
       ...record,
       confirmedBoard: {
         ...record.confirmedBoard,
         items: boardItems.value,
       },
-    })
+    }
+    const boardResult = githubProjectSyncRecordSchema.safeParse(oversizedRecord)
+    const historicalBoardResult = v4GitHubProjectSyncRecordSchema.safeParse(
+      projectGitHubProjectSyncRecordToV4(oversizedRecord),
+    )
     expect(boardResult.success).toBe(false)
+    expect(historicalBoardResult.success).toBe(false)
+    if (boardResult.success || historicalBoardResult.success) throw new Error('oversized Board fixture was accepted')
+    expect(boardResult.error.issues).toContainEqual(expect.objectContaining({ path: ['confirmedBoard', 'items'] }))
+    expect(historicalBoardResult.error.issues)
+      .toContainEqual(expect.objectContaining({ path: ['confirmedBoard', 'items'] }))
     expect(boardItems.elementReads()).toBe(0)
 
     const mappingIssues = unreadableArray(SAKI_GITHUB_MAPPING_ISSUE_LIMIT + 1)

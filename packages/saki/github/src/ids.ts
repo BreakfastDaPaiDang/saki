@@ -8,7 +8,7 @@ import type {
   GitHubExternalOperationId,
   GitHubInstallationId,
   GitHubIssueId,
-  GitHubMutationKind,
+  GitHubIssueCreateMarkerId,
   GitHubProjectFieldId,
   GitHubProjectId,
   GitHubProjectItemId,
@@ -44,6 +44,10 @@ export const githubProjectOptionIdSchema = nodeId<GitHubProjectOptionId>()
 export const githubProjectItemIdSchema = nodeId<GitHubProjectItemId>()
 /** Strict GitHub Issue node-id schema. */
 export const githubIssueIdSchema = nodeId<GitHubIssueId>()
+/** Strict persisted Saki Work Item marker-id schema. */
+export const githubIssueCreateMarkerIdSchema = z.string()
+  .regex(/^work-item-marker-[0-9a-f]{64}$/)
+  .transform(value => value as GitHubIssueCreateMarkerId)
 /** Strict GitHub pull-request node-id schema. */
 export const githubPullRequestIdSchema = nodeId<GitHubPullRequestId>()
 /** Strict annotated-tag object-id schema. */
@@ -67,12 +71,6 @@ export const githubExternalOperationIdSchema = z.string()
   .max(200)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
   .transform(value => value as GitHubExternalOperationId)
-/** Strict merge-extensible mutation-kind schema. */
-export const githubMutationKindSchema = z.string()
-  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/)
-  .max(100)
-  .transform(value => value as GitHubMutationKind)
-
 /** Brand one validated App id.
  * @param value - raw App id.
  * @returns validated branded id.
@@ -123,6 +121,11 @@ export const githubProjectItemId = (value: string): GitHubProjectItemId => githu
  * @returns validated branded id.
  */
 export const githubIssueId = (value: string): GitHubIssueId => githubIssueIdSchema.parse(value)
+/** Brand one validated persisted Work Item marker id.
+ * @param value - raw marker id.
+ * @returns validated branded marker id.
+ */
+export const githubIssueCreateMarkerId = (value: string): GitHubIssueCreateMarkerId => githubIssueCreateMarkerIdSchema.parse(value)
 /** Brand one validated pull-request node id.
  * @param value - raw pull-request node id.
  * @returns validated branded id.
@@ -153,8 +156,3 @@ export const githubReleaseTagName = (value: string): GitHubReleaseTagName => git
  * @returns validated branded id.
  */
 export const githubExternalOperationId = (value: string): GitHubExternalOperationId => githubExternalOperationIdSchema.parse(value)
-/** Brand one validated mutation-kind id.
- * @param value - raw mutation-kind id.
- * @returns validated branded kind.
- */
-export const githubMutationKind = (value: string): GitHubMutationKind => githubMutationKindSchema.parse(value)

@@ -23,6 +23,8 @@ export type GitHubProjectOptionId = Branded<'GitHubProjectOptionId'>
 export type GitHubProjectItemId = Branded<'GitHubProjectItemId'>
 /** Opaque GitHub Issue node identity. */
 export type GitHubIssueId = Branded<'GitHubIssueId'>
+/** Persisted high-entropy identity embedded in one Saki Work Item Issue body. */
+export type GitHubIssueCreateMarkerId = Branded<'GitHubIssueCreateMarkerId'>
 /** Opaque GitHub pull-request node identity retained as raw item content. */
 export type GitHubPullRequestId = Branded<'GitHubPullRequestId'>
 /** Opaque annotated-tag object identity. */
@@ -33,10 +35,8 @@ export type GitHubReleaseId = Branded<'GitHubReleaseId'>
 export type GitHubCommitId = Branded<'GitHubCommitId'>
 /** Exact Saki release-tag name without the `refs/tags/` prefix. */
 export type GitHubReleaseTagName = Branded<'GitHubReleaseTagName'>
-/** Provider-neutral identity assigned before a future GitHub mutation begins. */
+/** Provider-neutral identity assigned before a GitHub mutation begins. */
 export type GitHubExternalOperationId = Branded<'GitHubExternalOperationId'>
-/** Merge-extensible mutation-kind identity without a concrete B05 mutation member. */
-export type GitHubMutationKind = Branded<'GitHubMutationKind'>
 
 /** Caller-selected installation credentials and expected target account. */
 export interface GitHubInstallationProfile {
@@ -440,6 +440,230 @@ export interface GitHubProjectBoardScanRequest {
   readonly rateLimitReserve: number
 }
 
+/** Add one exact Issue to one Project without assuming a Project item id. */
+export interface GitHubProjectItemAddRequest {
+  readonly kind: 'project-item-add'
+  /** Caller-assigned id persisted before dispatch. */
+  readonly operationId: GitHubExternalOperationId
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly projectId: GitHubProjectId
+  readonly issueId: GitHubIssueId
+}
+
+/** Set one Project item's persisted single-select Status option. */
+export interface GitHubProjectItemStatusSetRequest {
+  readonly kind: 'project-item-status-set'
+  /** Caller-assigned id persisted before dispatch. */
+  readonly operationId: GitHubExternalOperationId
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly projectId: GitHubProjectId
+  readonly issueId: GitHubIssueId
+  readonly projectItemId: GitHubProjectItemId
+  readonly statusFieldId: GitHubProjectFieldId
+  readonly desiredStatusOptionId: GitHubProjectOptionId
+}
+
+/** Move one exact Project item after another API-position item, or to the top. */
+export interface GitHubProjectItemPositionSetRequest {
+  readonly kind: 'project-item-position-set'
+  /** Caller-assigned id persisted before dispatch. */
+  readonly operationId: GitHubExternalOperationId
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly projectId: GitHubProjectId
+  readonly issueId: GitHubIssueId
+  readonly projectItemId: GitHubProjectItemId
+  /** Persisted single-select Status field whose raw option is retained for the predecessor. */
+  readonly statusFieldId: GitHubProjectFieldId
+  /** Project item after which the moving item is placed; `null` means the top. */
+  readonly afterItemId: GitHubProjectItemId | null
+}
+
+/** Set one exact repository Issue to open or closed. */
+export interface GitHubIssueStateSetRequest {
+  readonly kind: 'issue-state-set'
+  /** Caller-assigned id persisted before dispatch. */
+  readonly operationId: GitHubExternalOperationId
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly issueId: GitHubIssueId
+  readonly desiredState: 'open' | 'closed'
+}
+
+/** Exact Issue identity returned by create and optionally supplied to reconcile that attempt. */
+export interface GitHubIssueCreateInspectionHint {
+  /** Expected Issue node id. */
+  readonly issueId: GitHubIssueId
+  /** Expected repository-local Issue number. */
+  readonly issueNumber: number
+}
+
+/** Create one Issue whose complete deterministic body carries one persisted marker. */
+export interface GitHubIssueCreateRequest {
+  readonly kind: 'issue-create'
+  /** Caller-assigned id persisted before dispatch. */
+  readonly operationId: GitHubExternalOperationId
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly title: string
+  readonly body: string
+  readonly markerId: GitHubIssueCreateMarkerId
+  /** Reconciliation-only evidence; never sent by dispatch. */
+  readonly inspectionHint?: GitHubIssueCreateInspectionHint | undefined
+}
+
+/** Durable-safe classification of one bounded exact-marker inspection. */
+export type GitHubIssueCreateInspectionOutcome =
+  | { readonly state: 'unique-issue'; readonly issue: GitHubIssueFact }
+  | { readonly state: 'absent-complete' }
+  | { readonly state: 'pull-request-marker-match' }
+  | { readonly state: 'marker-removed' }
+  | { readonly state: 'known-issue-absent' }
+  | { readonly state: 'identity-conflict' }
+  | { readonly state: 'multiple-matches' }
+  | { readonly state: 'incomplete' }
+
+/** Raw repository-bound Issue-create reconciliation facts. */
+export interface GitHubIssueCreateSnapshot {
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly outcome: GitHubIssueCreateInspectionOutcome
+}
+
+/** Targeted exact-marker observation for one Issue-create mutation. */
+export interface GitHubIssueCreateInspection {
+  readonly snapshot: GitHubIssueCreateSnapshot
+  readonly observedAt: number
+}
+
+/** Issue-backed Project item retained to identify one API-position predecessor. */
+export interface GitHubProjectItemPositionAnchorFact {
+  readonly id: GitHubProjectItemId
+  readonly projectId: GitHubProjectId
+  readonly issue: GitHubIssueFact
+  readonly statusOptionId?: GitHubProjectOptionId | undefined
+  readonly archived: boolean
+  readonly apiOrder: number
+  readonly totalCount: number
+  readonly previousItemId: GitHubProjectItemId | null
+  readonly nextItemId: GitHubProjectItemId | null
+  readonly updatedAt: number
+}
+
+/** Observed membership and predecessor facts for one API-position mutation. */
+interface GitHubProjectItemPositionSnapshot {
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly projectId: GitHubProjectId
+  readonly statusFieldId: GitHubProjectFieldId
+  readonly issue: GitHubIssueFact
+  readonly membership: GitHubProjectItemPositionMembership
+  readonly after:
+    | { readonly state: 'top' }
+    | { readonly state: 'present'; readonly item: GitHubProjectItemPositionAnchorFact }
+    | { readonly state: 'absent'; readonly itemId: GitHubProjectItemId }
+}
+
+/** Targeted post-dispatch observation for one API-position mutation. */
+export interface GitHubProjectItemPositionSetInspection {
+  readonly snapshot: GitHubProjectItemPositionSnapshot
+  readonly observedAt: number
+}
+
+/** Raw exact Issue facts used to reconcile one Issue-state mutation. */
+interface GitHubIssueStateSnapshot {
+  readonly issue: GitHubIssueFact
+}
+
+/** Targeted post-dispatch observation for one Issue-state mutation. */
+export interface GitHubIssueStateSetInspection {
+  readonly snapshot: GitHubIssueStateSnapshot
+  readonly observedAt: number
+}
+
+/** One Project membership observed in API position order. */
+export interface GitHubTargetedProjectItemFact {
+  readonly id: GitHubProjectItemId
+  readonly projectId: GitHubProjectId
+  readonly issueId: GitHubIssueId
+  readonly statusOptionId?: GitHubProjectOptionId | undefined
+  readonly archived: boolean
+  readonly apiOrder: number
+  /** Cardinality of the completely traversed Project-item connection. */
+  readonly totalCount: number
+  readonly previousItemId: GitHubProjectItemId | null
+  readonly nextItemId: GitHubProjectItemId | null
+  readonly updatedAt: number
+}
+
+/** Minimal Project membership identity observed before or after an add attempt. */
+export interface GitHubProjectMembershipItemFact {
+  readonly id: GitHubProjectItemId
+  readonly projectId: GitHubProjectId
+  readonly issueId: GitHubIssueId
+  readonly archived: boolean
+}
+
+/** Current Project membership for one exact Issue. */
+type GitHubTargetedWorkItemMembership =
+  | { readonly state: 'present'; readonly item: GitHubTargetedProjectItemFact }
+  | { readonly state: 'absent' }
+
+/** Position-target membership, including conflicting duplicate Issue memberships. */
+export type GitHubProjectItemPositionMembership =
+  | GitHubTargetedWorkItemMembership
+  | {
+    readonly state: 'duplicate-conflict'
+    readonly items: readonly GitHubTargetedProjectItemFact[]
+  }
+
+/** Raw targeted facts used to reconcile one Work Item without a Board checkpoint. */
+export interface GitHubTargetedWorkItemSnapshot {
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly projectId: GitHubProjectId
+  readonly statusFieldId: GitHubProjectFieldId
+  readonly issue: GitHubIssueFact
+  readonly membership: GitHubTargetedWorkItemMembership
+}
+
+/** Targeted post-dispatch observation for one Status mutation. */
+export interface GitHubProjectItemStatusSetInspection {
+  readonly snapshot: GitHubTargetedWorkItemSnapshot
+  readonly observedAt: number
+}
+
+/** Project membership observed by Issue identity before or after an add attempt. */
+export type GitHubProjectItemAddMembership =
+  | { readonly state: 'absent' }
+  | { readonly state: 'present'; readonly item: GitHubProjectMembershipItemFact }
+  | {
+    readonly state: 'duplicate-conflict'
+    readonly items: readonly GitHubProjectMembershipItemFact[]
+  }
+
+/** Raw targeted facts used to reconcile one Project membership mutation. */
+interface GitHubProjectItemAddSnapshot {
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly projectId: GitHubProjectId
+  readonly issue: GitHubIssueFact
+  readonly membership: GitHubProjectItemAddMembership
+}
+
+/** Targeted observation for one Project membership mutation. */
+export interface GitHubProjectItemAddInspection {
+  readonly snapshot: GitHubProjectItemAddSnapshot
+  readonly observedAt: number
+}
+
 /** Declaration-merge operation map for provider-neutral GitHub reads. */
 export interface GitHubReadMap {
   installation: { readonly request: GitHubInstallationReadRequest; readonly result: GitHubInstallationFact }
@@ -461,8 +685,34 @@ export interface GitHubScanMap {
   }
 }
 
-/** Declaration-merge vocabulary reserved for later mutation Service Definitions. */
-export interface GitHubMutationMap {}
+/** Declaration-merge operation map for atomic GitHub mutations. */
+export interface GitHubMutationMap {
+  'issue-create': {
+    readonly request: GitHubIssueCreateRequest
+    readonly result: GitHubIssueCreateInspectionHint
+    readonly inspection: GitHubIssueCreateInspection
+  }
+  'project-item-add': {
+    readonly request: GitHubProjectItemAddRequest
+    readonly result: void
+    readonly inspection: GitHubProjectItemAddInspection
+  }
+  'project-item-status-set': {
+    readonly request: GitHubProjectItemStatusSetRequest
+    readonly result: void
+    readonly inspection: GitHubProjectItemStatusSetInspection
+  }
+  'project-item-position-set': {
+    readonly request: GitHubProjectItemPositionSetRequest
+    readonly result: void
+    readonly inspection: GitHubProjectItemPositionSetInspection
+  }
+  'issue-state-set': {
+    readonly request: GitHubIssueStateSetRequest
+    readonly result: void
+    readonly inspection: GitHubIssueStateSetInspection
+  }
+}
 
 /** Union of every registered read request. */
 export type GitHubReadRequest = GitHubReadMap[keyof GitHubReadMap]['request']
@@ -472,8 +722,7 @@ export type GitHubReadResult = GitHubReadMap[keyof GitHubReadMap]['result']
 export type GitHubScanRequest = GitHubScanMap[keyof GitHubScanMap]['request']
 /** Union of every registered scan result. */
 export type GitHubScanResult = GitHubScanMap[keyof GitHubScanMap]['result']
-
-/** Closed safe failure codes shared by GitHub reads and scans. */
+/** Closed safe failure codes shared by GitHub reads, scans, and mutations. */
 export type GitHubFailureCode =
   | 'cancelled'
   | 'auth-unavailable'
@@ -514,23 +763,3 @@ export type GitHubFailure =
   | { readonly code: 'secondary-rate-limit'; readonly retryAfterMs?: number | undefined; readonly requestId?: string | undefined }
   | { readonly code: 'transient-transport'; readonly retryAfterMs?: number | undefined; readonly requestId?: string | undefined }
   | { readonly code: 'permanent-rejection'; readonly status?: number | undefined; readonly requestId?: string | undefined }
-
-/** Identity recorded before a future provider mutation begins. */
-export interface GitHubMutationIdentity {
-  readonly operationId: GitHubExternalOperationId
-  readonly kind: GitHubMutationKind
-  readonly targetFingerprint: string
-}
-
-/** Provider-neutral post-crash observation vocabulary for a future mutation. */
-export type GitHubMutationInspection =
-  | { readonly state: 'pending'; readonly identity: GitHubMutationIdentity; readonly observedAt: number }
-  | { readonly state: 'observed'; readonly identity: GitHubMutationIdentity; readonly observedAt: number }
-  | { readonly state: 'absent'; readonly identity: GitHubMutationIdentity; readonly observedAt: number }
-  | { readonly state: 'unknown'; readonly identity: GitHubMutationIdentity; readonly observedAt: number }
-  | {
-    readonly state: 'error'
-    readonly identity: GitHubMutationIdentity
-    readonly failure: GitHubFailure
-    readonly observedAt: number
-  }

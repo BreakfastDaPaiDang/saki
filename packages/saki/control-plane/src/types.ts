@@ -89,6 +89,8 @@ export type SakiDevelopmentProjectId = Branded<'SakiDevelopmentProjectId'>
 export type SakiIntentReceiptId = Branded<'SakiIntentReceiptId'>
 /** Stable identity of one GitHub-backed Work Item across Project membership changes. */
 export type SakiBoardWorkItemId = Branded<'SakiBoardWorkItemId'>
+/** Durable recovery identity scoped to one Development Project and Work Item. */
+export type SakiWorkItemRecoveryId = Branded<'SakiWorkItemRecoveryId'>
 /** Durable identity fencing one complete GitHub scan attempt. */
 export type SakiGitHubScanAttemptId = Branded<'SakiGitHubScanAttemptId'>
 /** Deterministic fingerprint of one Work Item's confirmed remote mutation inputs. */
@@ -599,6 +601,8 @@ export interface SakiBoardWorkItemProjection {
   readonly url: string
   readonly issueState: 'open' | 'closed'
   readonly status: SakiBoardStatus
+  /** Last confirmed non-terminal Status, or `null` when no such observation exists. */
+  readonly latestNonTerminalStatus: Exclude<SakiBoardStatus, 'done' | 'canceled'> | null
   readonly order: number
   readonly archived: boolean
   readonly notInProject: boolean
@@ -637,13 +641,69 @@ export type SakiBoardMutationUnavailableReason =
   | 'mapping-revalidation-required'
   | 'mapping-repair-required'
   | 'checkpoint-unavailable'
-  | 'no-concrete-mutation'
+  | 'provider-unavailable'
+  | 'action-denied'
 
-/** Effective mutation availability for the current read-only Board release. */
-export interface SakiBoardMutationAvailabilityProjection {
-  readonly available: false
-  readonly reasons: readonly SakiBoardMutationUnavailableReason[]
-}
+/** Effective create/move availability after mapping, provider, and authority checks. */
+export type SakiBoardMutationAvailabilityProjection =
+  | { readonly available: true; readonly reasons: readonly [] }
+  | { readonly available: false; readonly reasons: readonly SakiBoardMutationUnavailableReason[] }
+
+/** Durable local state layered over the last complete confirmed Board. */
+export type SakiBoardMutationOverlayProjection =
+  | {
+    readonly state: 'optimistic'
+    readonly intentId: SakiControlIntentId
+    readonly type: 'create-work-item'
+    readonly title: string
+    readonly targetStatus: 'inbox'
+  }
+  | {
+    readonly state: 'optimistic'
+    readonly intentId: SakiControlIntentId
+    readonly type: 'move-work-item'
+    readonly workItemId: SakiBoardWorkItemId
+    readonly targetStatus: SakiBoardStatus
+    readonly position?: MoveWorkItemPosition | undefined
+  }
+  | {
+    readonly state: 'targeted-confirmed'
+    readonly intentId: SakiControlIntentId
+    readonly type: 'create-work-item' | 'move-work-item'
+    readonly workItem: SakiBoardWorkItemProjection
+    readonly confirmedAt: number
+  }
+  | {
+    readonly state: 'conflict'
+    readonly intentId: SakiControlIntentId
+    readonly type: 'create-work-item' | 'move-work-item'
+    readonly reason: 'expected-revision' | 'stale-remote' | 'mapping-repair-required'
+    readonly workItem?: SakiBoardWorkItemProjection | undefined
+    readonly confirmedAt?: number | undefined
+  }
+  | {
+    readonly state: 'partial-failure'
+    readonly intentId: SakiControlIntentId
+    readonly type: 'create-work-item' | 'move-work-item'
+    readonly workItemId?: SakiBoardWorkItemId | undefined
+    readonly stage: SakiWorkItemMutationStageKind
+    readonly recoveryAction: SakiWorkItemRecoveryAction
+  }
+  | {
+    readonly state: 'reconciliation-required'
+    readonly intentId: SakiControlIntentId
+    readonly type: 'create-work-item' | 'move-work-item'
+    readonly workItemId?: SakiBoardWorkItemId | undefined
+    readonly stage: SakiWorkItemMutationStageKind
+    readonly reason: 'effect-unknown' | 'evidence-conflict' | 'marker-ambiguous'
+  }
+  | {
+    readonly state: 'repair-required'
+    readonly workItemId: SakiBoardWorkItemId
+    readonly reason: 'external-close' | 'external-reopen'
+    readonly action: 'move-with-actor'
+    readonly suggestedStatus: SakiBoardStatus
+  }
 
 /** Read-only confirmed Board and its synchronization evidence. */
 export interface SakiBoardProjection {
@@ -658,6 +718,7 @@ export interface SakiBoardProjection {
   readonly freshness: SakiBoardFreshnessProjection
   readonly scan: SakiGitHubScanStateProjection
   readonly effectiveMutationAvailability: SakiBoardMutationAvailabilityProjection
+  readonly mutationOverlays: readonly SakiBoardMutationOverlayProjection[]
 }
 
 /** Safe Project Settings state for the selected Project's GitHub synchronization. */
@@ -806,6 +867,46 @@ export interface CreateCommitIntent {
 /** Browser-originated structured Git mutation Intent. */
 export type SakiGitOperationIntent = StageFilesIntent | UnstageFilesIntent | CreateCommitIntent
 
+/** Revisions that fence a new Work Item against Project and mapping changes. */
+interface CreateWorkItemExpectation {
+  readonly projectRevision: number
+  readonly synchronizationRevision: number
+  readonly mappingRevision: number
+}
+
+/** Create one GitHub-backed Work Item through the configured Project mapping. */
+export interface CreateWorkItemIntent {
+  readonly type: 'create-work-item'
+  readonly intentId: SakiControlIntentId
+  readonly projectId: SakiDevelopmentProjectId
+  readonly expected: CreateWorkItemExpectation
+  readonly title: string
+  readonly intendedOutcome: string
+  readonly acceptanceCriteria: readonly string[]
+}
+
+/** API-native predecessor placement expressed only with Saki Work Item identities. */
+type MoveWorkItemPosition =
+  | { readonly afterWorkItemId: null }
+  | {
+    readonly afterWorkItemId: SakiBoardWorkItemId
+    readonly expectedAfterRemoteFingerprint: SakiBoardRemoteFingerprint
+  }
+
+/** Move one confirmed Work Item with an exact remote-state precondition. */
+export interface MoveWorkItemIntent {
+  readonly type: 'move-work-item'
+  readonly intentId: SakiControlIntentId
+  readonly projectId: SakiDevelopmentProjectId
+  readonly workItemId: SakiBoardWorkItemId
+  readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint
+  readonly targetStatus: SakiBoardStatus
+  readonly position?: MoveWorkItemPosition | undefined
+}
+
+/** Browser-originated create or move Work Item Intent. */
+type SakiWorkItemIntent = CreateWorkItemIntent | MoveWorkItemIntent
+
 /** Control-plane Intent request map. */
 export interface SakiIntentMap {
   readonly 'register-development-project': RegisterDevelopmentProjectIntent
@@ -813,6 +914,8 @@ export interface SakiIntentMap {
   readonly 'stage-files': StageFilesIntent
   readonly 'unstage-files': UnstageFilesIntent
   readonly 'create-commit': CreateCommitIntent
+  readonly 'create-work-item': CreateWorkItemIntent
+  readonly 'move-work-item': MoveWorkItemIntent
 }
 
 /** Control Intent union derived from the request map. */
@@ -1003,6 +1106,94 @@ export type SakiGitOperationIntentReceipt<T extends SakiGitOperationIntent['type
     readonly receipt: Extract<SakiGitOperationReceipt<T>, { readonly state: 'reconciliation-required' }>
   }
 
+/** Provider-neutral atomic stage names safe to expose in Work Item recovery. */
+export type SakiWorkItemMutationStageKind =
+  | 'issue-create'
+  | 'project-item-add'
+  | 'project-item-status-set'
+  | 'project-item-position-set'
+  | 'issue-state-set'
+
+/** Browser-safe next action for a partially completed Work Item saga. */
+export type SakiWorkItemRecoveryAction =
+  | { readonly kind: 'inspect-before-retry' }
+  | { readonly kind: 'resume-intent' }
+  | { readonly kind: 'repair-mapping'; readonly reason: string }
+
+interface SakiWorkItemReceiptBase<T extends SakiWorkItemIntent['type']> {
+  readonly id: SakiIntentReceiptId
+  readonly intentId: SakiControlIntentId
+  readonly type: T
+  readonly projectId: SakiDevelopmentProjectId
+}
+
+/** Durable browser-safe lifecycle of one create or move Work Item saga. */
+export type SakiWorkItemReceipt<T extends SakiWorkItemIntent['type'] = SakiWorkItemIntent['type']> =
+  | (SakiWorkItemReceiptBase<T> & {
+    readonly state: 'prepared' | 'running'
+    readonly workItemId?: SakiBoardWorkItemId | undefined
+  })
+  | (SakiWorkItemReceiptBase<T> & {
+    readonly state: 'partial-failure'
+    readonly workItemId?: SakiBoardWorkItemId | undefined
+    readonly stage: SakiWorkItemMutationStageKind
+    readonly recoveryAction: SakiWorkItemRecoveryAction
+  })
+  | (SakiWorkItemReceiptBase<T> & {
+    readonly state: 'succeeded'
+    readonly workItemId: SakiBoardWorkItemId
+    readonly issueNumber: number
+    readonly url: string
+    readonly remoteFingerprint: SakiBoardRemoteFingerprint
+  })
+  | (SakiWorkItemReceiptBase<T> & {
+    readonly state: 'conflict'
+    readonly reason: 'expected-revision' | 'stale-remote' | 'mapping-repair-required'
+    readonly workItemId?: SakiBoardWorkItemId | undefined
+    readonly remoteFingerprint?: SakiBoardRemoteFingerprint | undefined
+  })
+  | (SakiWorkItemReceiptBase<T> & {
+    readonly state: 'reconciliation-required'
+    readonly reason: 'effect-unknown' | 'evidence-conflict' | 'marker-ambiguous'
+    readonly workItemId?: SakiBoardWorkItemId | undefined
+    readonly stage: SakiWorkItemMutationStageKind
+  })
+  | (SakiWorkItemReceiptBase<T> & {
+    readonly state: 'canceled'
+    readonly reason: 'authority-revoked'
+    readonly workItemId?: SakiBoardWorkItemId | undefined
+  })
+
+/** Submit result shared by Work Item creation and movement. */
+export type SakiWorkItemIntentReceipt<T extends SakiWorkItemIntent['type']> =
+  | {
+    readonly ok: true
+    readonly receipt: Extract<SakiWorkItemReceipt<T>, { readonly state: 'succeeded' }>
+  }
+  | { readonly ok: false; readonly reason: 'denied'; readonly receipt?: never }
+  | {
+    readonly ok: false
+    readonly reason: 'unavailable'
+    readonly receipt?: Extract<SakiWorkItemReceipt<T>, {
+      readonly state: 'prepared' | 'running' | 'partial-failure'
+    }> | undefined
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'conflict'
+    readonly receipt?: Extract<SakiWorkItemReceipt<T>, { readonly state: 'conflict' }> | undefined
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'reconciliation-required'
+    readonly receipt: Extract<SakiWorkItemReceipt<T>, { readonly state: 'reconciliation-required' }>
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'canceled'
+    readonly receipt: Extract<SakiWorkItemReceipt<T>, { readonly state: 'canceled' }>
+  }
+
 /** Intent-correlated receipt result map. */
 export interface SakiIntentReceiptMap {
   readonly 'register-development-project':
@@ -1049,11 +1240,13 @@ export interface SakiIntentReceiptMap {
   readonly 'stage-files': SakiGitOperationIntentReceipt<'stage-files'>
   readonly 'unstage-files': SakiGitOperationIntentReceipt<'unstage-files'>
   readonly 'create-commit': SakiGitOperationIntentReceipt<'create-commit'>
+  readonly 'create-work-item': SakiWorkItemIntentReceipt<'create-work-item'>
+  readonly 'move-work-item': SakiWorkItemIntentReceipt<'move-work-item'>
 }
 
 /** Stable terminal or recoverable result of submitting a Control Intent. */
-export type SakiIntentReceipt<K extends keyof SakiIntentReceiptMap = 'register-development-project'> =
-  K extends keyof SakiIntentReceiptMap ? SakiIntentReceiptMap[K] : never
+export type SakiIntentReceipt<K extends keyof SakiIntentReceiptMap = keyof SakiIntentReceiptMap> =
+  SakiIntentReceiptMap[K]
 
 /** Projection key invalidated after a committed access or authority change. */
 export type SakiProjectionKey = 'access' | 'project-index' | 'development-workspace' | 'project-changes' | 'project-settings' | 'board'

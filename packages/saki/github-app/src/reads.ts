@@ -8,7 +8,6 @@ import {
   githubCommitFactSchema,
   githubCommitId,
   githubIssueFactSchema,
-  githubIssueId,
   githubProjectFactSchema,
   githubProjectId,
   githubReleaseByTagObservationSchema,
@@ -41,6 +40,7 @@ import type {
 } from '@breakfastdapaidang/saki-github'
 import type { ResolvedConfig } from './index.ts'
 import {
+  graphqlIssueFact,
   graphqlIssueNodeSchema,
   graphqlProjectNodeSchema,
   graphqlRepositoryNodeSchema,
@@ -541,16 +541,7 @@ async function repositoryFromSession(
 }
 
 function issueFact(node: NonNullable<z.infer<typeof issueDataSchema>['node']>): GitHubIssueFact {
-  return {
-    id: githubIssueId(node.id),
-    repositoryId: githubRepositoryId(node.repository.id),
-    repositoryDatabaseId: githubRepositoryDatabaseId(node.repository.databaseId),
-    number: node.number,
-    state: node.state === 'OPEN' ? 'open' : 'closed',
-    title: node.title,
-    url: node.url,
-    updatedAt: timestamp(node.updatedAt),
-  }
+  return graphqlIssueFact(node, 'issue')
 }
 
 function tagTarget(type: 'tag' | 'commit', id: string): GitHubTagTarget {

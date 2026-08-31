@@ -1,6 +1,6 @@
 /** Deterministic keyless GitHub Provider for the assembled Saki Board snapshot. */
 
-import { readFile } from 'node:fs/promises'
+import { readFile, rename, writeFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import {
@@ -21,9 +21,13 @@ import {
 import type {
   GitHubInstallationFact,
   GitHubIssueFact,
+  GitHubMutationMap,
   GitHubProjectBoardFingerprintSource,
   GitHubProjectBoardScanRequest,
+  GitHubProjectItemStatusSetInspection,
+  GitHubProjectItemStatusSetRequest,
   GitHubProjectFact,
+  GitHubProjectOptionId,
   GitHubReadMap,
   GitHubRepositoryFact,
   GitHubScanMap,
@@ -46,6 +50,69 @@ const STATUS_OPTIONS = {
   done: githubProjectOptionId('option-done'),
   canceled: githubProjectOptionId('option-canceled'),
 } as const
+
+interface SakiBoardSnapshotMutationState {
+  readonly statusOptionId: GitHubProjectOptionId
+  readonly dispatchCount: number
+}
+
+const initialMutationState = (): SakiBoardSnapshotMutationState => ({
+  statusOptionId: STATUS_OPTIONS.ready,
+  dispatchCount: 0,
+})
+let inMemoryMutationState = initialMutationState()
+
+function mutationStatePath(providerStatePath: string): string {
+  return `${providerStatePath}.mutation.json`
+}
+
+/**
+ * Read fake-remote evidence without relying on one child process's memory.
+ * @param providerStatePath - scan-admission path whose sidecar owns mutation state.
+ * @returns validated status and dispatch evidence retained across restarts.
+ */
+export async function readSakiBoardSnapshotMutationState(
+  providerStatePath: string,
+): Promise<SakiBoardSnapshotMutationState> {
+  let raw: string
+  try {
+    raw = await readFile(mutationStatePath(providerStatePath), 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return initialMutationState()
+    throw error
+  }
+  const value = JSON.parse(raw) as Partial<SakiBoardSnapshotMutationState>
+  const statusOptionId = value.statusOptionId
+  const dispatchCount = value.dispatchCount
+  if (typeof statusOptionId !== 'string'
+    || !Object.values(STATUS_OPTIONS).some(option => option === statusOptionId)
+    || typeof dispatchCount !== 'number' || !Number.isSafeInteger(dispatchCount) || dispatchCount < 0) {
+    throw new Error('Saki Board snapshot mutation state is invalid')
+  }
+  return {
+    statusOptionId: githubProjectOptionId(statusOptionId),
+    dispatchCount,
+  }
+}
+
+async function readProviderMutationState(): Promise<SakiBoardSnapshotMutationState> {
+  const path = process.env.SAKI_BOARD_SNAPSHOT_PROVIDER_STATE
+  return path === undefined
+    ? structuredClone(inMemoryMutationState)
+    : await readSakiBoardSnapshotMutationState(path)
+}
+
+async function writeProviderMutationState(state: SakiBoardSnapshotMutationState): Promise<void> {
+  const path = process.env.SAKI_BOARD_SNAPSHOT_PROVIDER_STATE
+  if (path === undefined) {
+    inMemoryMutationState = structuredClone(state)
+    return
+  }
+  const target = mutationStatePath(path)
+  const temporary = `${target}.next`
+  await writeFile(temporary, `${JSON.stringify(state)}\n`)
+  await rename(temporary, target)
+}
 
 /** Credential-value-free synchronization Intent fields shared with the Board snapshot runner. */
 export const SAKI_BOARD_SNAPSHOT_CONFIGURATION = Object.freeze({
@@ -129,7 +196,7 @@ const READY_ISSUE = issue(27, 'open', 'Publish a read-only GitHub Board Projecti
 const CANCELED_ISSUE = issue(29, 'closed', 'Retired synchronization experiment')
 const INBOX_ISSUE = issue(30, 'open', 'Unplanned repository issue')
 
-function scanSource(): GitHubProjectBoardFingerprintSource {
+function scanSource(statusOptionId: GitHubProjectOptionId = STATUS_OPTIONS.ready): GitHubProjectBoardFingerprintSource {
   const observedAt = Date.now()
   const installation = installationFact(observedAt)
   const repository = repositoryFact(observedAt)
@@ -152,7 +219,7 @@ function scanSource(): GitHubProjectBoardFingerprintSource {
         id: githubProjectItemId('PVTI_saki_ready'),
         projectId: PROJECT_ID,
         content: { kind: 'issue', issue: READY_ISSUE },
-        statusOptionId: STATUS_OPTIONS.ready,
+        statusOptionId,
         archived: false,
         apiOrder: 0,
         updatedAt: REVISION_AT + 27,
@@ -221,6 +288,38 @@ function capacityScanSource(): GitHubProjectBoardFingerprintSource {
   }
 }
 
+function targetedStatusInspection(
+  statusOptionId: GitHubProjectOptionId,
+): GitHubProjectItemStatusSetInspection {
+  const observedAt = Date.now()
+  const snapshot = {
+    repositoryId: REPOSITORY_ID,
+    repositoryDatabaseId: REPOSITORY_DATABASE_ID,
+    projectId: PROJECT_ID,
+    statusFieldId: STATUS_FIELD_ID,
+    issue: READY_ISSUE,
+    membership: {
+      state: 'present' as const,
+      item: {
+        id: githubProjectItemId('PVTI_saki_ready'),
+        projectId: PROJECT_ID,
+        issueId: READY_ISSUE.id,
+        statusOptionId,
+        archived: false,
+        apiOrder: 0,
+        totalCount: 2,
+        previousItemId: null,
+        nextItemId: githubProjectItemId('PVTI_saki_canceled'),
+        updatedAt: REVISION_AT + 27,
+      },
+    },
+  }
+  return {
+    snapshot,
+    observedAt,
+  }
+}
+
 function cancelled(signal: AbortSignal): void {
   if (signal.aborted) throw new GitHubProviderError({ code: 'cancelled' })
 }
@@ -278,6 +377,26 @@ function assertScanRequest(request: GitHubProjectBoardScanRequest): void {
   }
 }
 
+function assertStatusMutationRequest(request: GitHubProjectItemStatusSetRequest): void {
+  const matches = request.installation.appId === SAKI_BOARD_SNAPSHOT_CONFIGURATION.appId
+    && request.installation.installationId === SAKI_BOARD_SNAPSHOT_CONFIGURATION.githubInstallationId
+    && request.installation.accountId === SAKI_BOARD_SNAPSHOT_CONFIGURATION.accountNodeId
+    && request.installation.privateKeyRef === SAKI_BOARD_SNAPSHOT_CONFIGURATION.credentialRef
+    && request.repositoryId === REPOSITORY_ID
+    && request.repositoryDatabaseId === REPOSITORY_DATABASE_ID
+    && request.projectId === PROJECT_ID
+    && request.issueId === READY_ISSUE.id
+    && request.projectItemId === githubProjectItemId('PVTI_saki_ready')
+    && request.statusFieldId === STATUS_FIELD_ID
+    && Object.values(STATUS_OPTIONS).includes(request.desiredStatusOptionId)
+  if (!matches) {
+    throw new GitHubProviderError({
+      code: 'invalid-external-response',
+      operation: 'saki-board-snapshot-status-mutation-request',
+    })
+  }
+}
+
 /** Loader-mounted deterministic Provider that replaces only the external GitHub boundary. */
 export class SakiBoardSnapshotGitHub extends SakiGitHub {
   /** @inheritdoc */
@@ -305,12 +424,55 @@ export class SakiBoardSnapshotGitHub extends SakiGitHub {
     cancelled(signal)
     assertScanRequest(request)
     const admission = await waitForFixtureAdmission(signal)
-    const source = admission === 'capacity' ? capacityScanSource() : scanSource()
+    const mutationState = await readProviderMutationState()
+    const source = admission === 'capacity'
+      ? capacityScanSource()
+      : scanSource(mutationState.statusOptionId)
     const candidate = githubProjectBoardScanCandidateSchema.parse({
       ...source,
       fingerprint: computeGitHubProjectBoardFingerprint(source),
     })
     return structuredClone(candidate)
+  }
+
+  /** @inheritdoc */
+  override async dispatch<K extends keyof GitHubMutationMap>(
+    request: GitHubMutationMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<GitHubMutationMap[K]['result']> {
+    cancelled(signal)
+    if (request.kind !== 'project-item-status-set') {
+      throw new GitHubProviderError({
+        code: 'invalid-external-response',
+        operation: 'saki-board-snapshot-unsupported-mutation',
+      })
+    }
+    assertStatusMutationRequest(request)
+    const current = await readProviderMutationState()
+    await writeProviderMutationState({
+      statusOptionId: request.desiredStatusOptionId,
+      dispatchCount: current.dispatchCount + 1,
+    })
+    return undefined
+  }
+
+  /** @inheritdoc */
+  override async inspectMutation<K extends keyof GitHubMutationMap>(
+    request: GitHubMutationMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<GitHubMutationMap[K]['inspection']> {
+    cancelled(signal)
+    if (request.kind !== 'project-item-status-set') {
+      throw new GitHubProviderError({
+        code: 'invalid-external-response',
+        operation: 'saki-board-snapshot-unsupported-mutation-inspection',
+      })
+    }
+    assertStatusMutationRequest(request)
+    const current = await readProviderMutationState()
+    return structuredClone(
+      targetedStatusInspection(current.statusOptionId),
+    )
   }
 }
 

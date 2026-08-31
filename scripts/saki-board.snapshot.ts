@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import {
   sakiBoardResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
+  sakiMoveWorkItemResultSchema,
   sakiProjectSettingsResultSchema,
 } from '@breakfastdapaidang/saki-host-api'
 import type {
@@ -15,7 +16,10 @@ import type {
   SakiQueryResult,
 } from '@breakfastdapaidang/saki-control-plane'
 import { describe, expect, it } from 'vitest'
-import { SAKI_BOARD_SNAPSHOT_CONFIGURATION } from './fixtures/saki-board-fake-github.ts'
+import {
+  SAKI_BOARD_SNAPSHOT_CONFIGURATION,
+  readSakiBoardSnapshotMutationState,
+} from './fixtures/saki-board-fake-github.ts'
 import {
   cleanupSnapshot,
   createRepository,
@@ -274,6 +278,7 @@ async function transcript(): Promise<string> {
       .toEqual(SAKI_BOARD_SNAPSHOT_CONFIGURATION)
     const initialConfirmed = structuredClone(initialBoard.confirmed)
     const initialCheckpoint = structuredClone(initialBoard.checkpoint)
+    expect(initialBoard.mutationOverlays).toEqual([])
     records.push(
       {
         step: 'configuration-activated',
@@ -300,6 +305,54 @@ async function transcript(): Promise<string> {
     )
 
     await setProviderState(providerStatePath, 'hold')
+    const movingItem = initialBoard.confirmed.items.find(item => item.issueNumber === 27)
+    if (movingItem === undefined) throw new Error('Saki Board snapshot has no movable Issue')
+    const moveIntent = {
+      type: 'move-work-item',
+      intentId: 'intent-33333333-3333-4333-8333-333333333333',
+      projectId: registration.receipt.projectId,
+      workItemId: movingItem.id,
+      expectedRemoteFingerprint: movingItem.remoteFingerprint,
+      targetStatus: 'in-review',
+    } as const
+    const moveResponse = await rpc(port, 'control/submit', moveIntent, {
+      cookie,
+      requestToken: exchangeValue.access.requestToken,
+    })
+    const moveResult = sakiMoveWorkItemResultSchema.parse(moveResponse.value)
+    if (!moveResult.ok) throw new Error(`Saki Board snapshot move failed: ${moveResult.reason}`)
+    const targetedBoard = await waitForConfirmedBoard(
+      port,
+      cookie,
+      registration.receipt.projectId,
+      projection => projection.scan.state === 'in-flight'
+        && projection.mutationOverlays.some(overlay => overlay.state === 'targeted-confirmed'),
+    )
+    const targetedOverlay = targetedBoard.mutationOverlays.find(
+      overlay => overlay.state === 'targeted-confirmed' && overlay.intentId === moveIntent.intentId,
+    )
+    if (targetedOverlay?.state !== 'targeted-confirmed') {
+      throw new Error('Saki Board snapshot did not expose targeted mutation evidence')
+    }
+    const dispatchedState = await readSakiBoardSnapshotMutationState(providerStatePath)
+    expect(targetedBoard.confirmed).toEqual(initialConfirmed)
+    expect(targetedBoard.checkpoint).toEqual(initialCheckpoint)
+    expect(dispatchedState.dispatchCount).toBe(1)
+    records.push({
+      step: 'targeted-move-confirmed',
+      result: {
+        receiptState: moveResult.receipt.state,
+        targetStatus: targetedOverlay.workItem.status,
+        issueNumber: targetedOverlay.workItem.issueNumber,
+        dispatchCount: dispatchedState.dispatchCount,
+        sameConfirmedBoard: true,
+        sameCheckpoint: true,
+        generation: targetedBoard.checkpoint.generation,
+        overlayState: targetedOverlay.state,
+        scan: summarizeScan(targetedBoard.scan),
+      },
+    })
+
     await second.stop()
     second = undefined
     third = await startSaki(driver, databasePath, port, true, runtimeRoot, { boardProviderStatePath: providerStatePath })
@@ -307,10 +360,14 @@ async function transcript(): Promise<string> {
       port,
       cookie,
       registration.receipt.projectId,
-      projection => projection.scan.state === 'in-flight',
+      projection => projection.scan.state === 'in-flight'
+        && projection.scan.priority === 'interactive'
+        && projection.mutationOverlays.some(overlay => overlay.state === 'targeted-confirmed'),
     )
     expect(restoredBoard.confirmed).toEqual(initialConfirmed)
     expect(restoredBoard.checkpoint).toEqual(initialCheckpoint)
+    const beforeReplay = await readSakiBoardSnapshotMutationState(providerStatePath)
+    expect(beforeReplay.dispatchCount).toBe(1)
     records.push({
       step: 'restart-restoration',
       result: {
@@ -320,6 +377,8 @@ async function transcript(): Promise<string> {
         sameConfirmedBoard: true,
         sameCheckpoint: true,
         provider: 'held-during-startup-scan',
+        dispatchCount: beforeReplay.dispatchCount,
+        mutationOverlay: restoredBoard.mutationOverlays[0]?.state,
         mapping: summarizeMapping(restoredBoard.mapping),
         freshness: summarizeFreshness(restoredBoard),
         scan: summarizeScan(restoredBoard.scan),
@@ -327,7 +386,51 @@ async function transcript(): Promise<string> {
       },
     })
 
+    const replayResponse = await rpc(port, 'control/submit', moveIntent, {
+      cookie,
+      requestToken: exchangeValue.access.requestToken,
+    })
+    const replayResult = sakiMoveWorkItemResultSchema.parse(replayResponse.value)
+    expect(replayResult).toEqual(moveResult)
+    const afterReplay = await readSakiBoardSnapshotMutationState(providerStatePath)
+    expect(afterReplay.dispatchCount).toBe(1)
+    records.push({
+      step: 'exact-move-replay',
+      result: {
+        receiptState: replayResult.ok ? replayResult.receipt.state : replayResult.reason,
+        sameReceipt: true,
+        dispatchCount: afterReplay.dispatchCount,
+        scan: summarizeScan(restoredBoard.scan),
+      },
+    })
+
+    await setProviderState(providerStatePath, 'complete')
+    const convergedBoard = await waitForConfirmedBoard(
+      port,
+      cookie,
+      registration.receipt.projectId,
+      projection => projection.checkpoint.generation > initialCheckpoint.generation
+        && projection.mutationOverlays.length === 0
+        && projection.confirmed.items.some(item => item.id === movingItem.id && item.status === 'in-review'),
+    )
+    const convergedItem = convergedBoard.confirmed.items.find(item => item.id === movingItem.id)
+    if (convergedItem === undefined) throw new Error('Saki Board snapshot lost its moved Work Item')
+    const convergedConfirmed = structuredClone(convergedBoard.confirmed)
+    const convergedCheckpoint = structuredClone(convergedBoard.checkpoint)
+    records.push({
+      step: 'complete-scan-retires-move-overlay',
+      result: {
+        generationBefore: initialCheckpoint.generation,
+        generationAfter: convergedBoard.checkpoint.generation,
+        status: convergedItem.status,
+        mutationOverlays: convergedBoard.mutationOverlays,
+        dispatchCount: (await readSakiBoardSnapshotMutationState(providerStatePath)).dispatchCount,
+        checkpointAdvanced: true,
+      },
+    })
+
     await setProviderState(providerStatePath, 'transient-transport')
+    await queryBoard(port, cookie, registration.receipt.projectId, 'interactive')
     const failedBoard = await waitForConfirmedBoard(
       port,
       cookie,
@@ -337,8 +440,8 @@ async function transcript(): Promise<string> {
         && projection.scan.state === 'scheduled'
         && projection.scan.reason === 'retry',
     )
-    expect(failedBoard.confirmed).toEqual(initialConfirmed)
-    expect(failedBoard.checkpoint).toEqual(initialCheckpoint)
+    expect(failedBoard.confirmed).toEqual(convergedConfirmed)
+    expect(failedBoard.checkpoint).toEqual(convergedCheckpoint)
     if (failedBoard.failure?.failure.kind !== 'provider') {
       throw new Error('Saki Board snapshot did not retain a provider failure')
     }
@@ -373,8 +476,8 @@ async function transcript(): Promise<string> {
         && projection.scan.state === 'scheduled'
         && projection.scan.reason === 'retry',
     )
-    expect(capacityBoard.confirmed).toEqual(initialConfirmed)
-    expect(capacityBoard.checkpoint).toEqual(initialCheckpoint)
+    expect(capacityBoard.confirmed).toEqual(convergedConfirmed)
+    expect(capacityBoard.checkpoint).toEqual(convergedCheckpoint)
     if (capacityBoard.failure?.failure.kind !== 'capacity') {
       throw new Error('Saki Board snapshot did not retain a capacity failure')
     }
@@ -414,7 +517,7 @@ async function verify(): Promise<void> {
 }
 
 describe('assembled Saki GitHub Board snapshot', () => {
-  it('stages, activates, restores, and retains a complete Board through provider and capacity failures', async () => {
+  it('recovers a targeted Work Item move without advancing its complete Board early', async () => {
     await verify()
   })
 })
