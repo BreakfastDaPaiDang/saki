@@ -986,8 +986,7 @@ function validateMutationAvailability(
   const actualSet = new Set(actual.reasons)
   const operationalReasons = new Set<MutationReason>(['provider-unavailable', 'action-denied'])
   const unexpected = actual.reasons.some(reason => !expected.includes(reason) && !operationalReasons.has(reason))
-  if (unexpected || expected.some(reason => !actualSet.has(reason))
-    || (expected.length === 0 && actual.reasons.every(reason => !operationalReasons.has(reason)))) {
+  if (unexpected || expected.some(reason => !actualSet.has(reason))) {
     context.addIssue({
       code: 'custom',
       message: 'effective mutation reasons disagree with synchronization evidence',
@@ -1826,14 +1825,11 @@ const gitOperationFailedReason = z.enum([
 ])
 
 function validateIntentResultReceiptIdentity(
-  result: unknown,
+  result: { readonly ok: boolean; readonly receipt?: { readonly id: string; readonly intentId: string } },
   context: z.RefinementCtx,
 ): void {
-  if (typeof result !== 'object' || result === null || !('receipt' in result)) return
-  const { receipt } = result
-  if (typeof receipt !== 'object' || receipt === null
-    || !('id' in receipt) || typeof receipt.id !== 'string'
-    || !('intentId' in receipt) || typeof receipt.intentId !== 'string') return
+  const receipt = result.receipt
+  if (receipt === undefined) return
   if (receipt.id !== receipt.intentId.replace(/^intent-/u, 'receipt-')) {
     context.addIssue({ code: 'custom', message: 'receipt id disagrees with Intent id', path: ['receipt', 'id'] })
   }

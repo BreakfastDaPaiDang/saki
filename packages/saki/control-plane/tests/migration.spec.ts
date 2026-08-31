@@ -443,6 +443,32 @@ describe('Saki control-plane retained migrations', () => {
         github_project_sync: { [PROJECT_ID]: v5Sync },
       },
     })
+    const activeSync = v5Sync.active
+    if (activeSync === undefined) throw new Error('activated v5 synchronization fixture is missing')
+    const neverScannedSync = v4GitHubProjectSyncRecordSchema.parse({
+      id: PROJECT_ID,
+      schemaVersion: 1,
+      revision: 1,
+      installationId: INSTALLATION_ID,
+      nextCandidateRevision: 2,
+      nextBoardGeneration: 1,
+      pending: {
+        revision: 1,
+        state: 'saved',
+        configuration: activeSync.configuration,
+        changedFields: ['credentialRef'],
+        acceptedIntentId: activeSync.acceptedIntentId,
+        receiptId: activeSync.receiptId,
+        savedAt: activeSync.activatedAt,
+      },
+    })
+    const v6WithoutBoard = sakiControlPlaneMigrationPlan.steps[3]!.migrate({
+      ...v5,
+      tables: {
+        ...v5.tables,
+        github_project_sync: { [PROJECT_ID]: neverScannedSync },
+      },
+    })
 
     expect(sakiControlPlaneV5DomainSpec.version).toBe(5)
     expect(sakiControlPlaneDomainSpec.version).toBe(6)
@@ -461,6 +487,11 @@ describe('Saki control-plane retained migrations', () => {
         ],
       },
     })
+    const migratedNeverScannedSync = v6WithoutBoard.tables['github_project_sync']![PROJECT_ID]
+    expect(migratedNeverScannedSync).toMatchObject({ schemaVersion: 2 })
+    expect(migratedNeverScannedSync).not.toHaveProperty('confirmedBoard')
+    expect(sakiControlPlaneDomainSpec.tables.github_project_sync.valueSchema.parse(migratedNeverScannedSync))
+      .toEqual(migratedNeverScannedSync)
     expect(sakiControlPlaneV5DomainSpec.tables.github_project_sync.valueSchema.safeParse(v5Sync).success).toBe(true)
     expect(sakiControlPlaneV5DomainSpec.tables.github_project_sync.valueSchema.safeParse(
       v6.tables['github_project_sync']![PROJECT_ID],

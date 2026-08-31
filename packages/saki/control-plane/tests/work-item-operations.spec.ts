@@ -4109,7 +4109,7 @@ describe('GitHub Work Item operations', () => {
     if (retained === undefined || confirmed?.stageKind !== 'project-item-position-set') {
       throw new Error('terminal position fixture is missing')
     }
-    expect(githubWorkItemIntentRecordSchema.safeParse({
+    const invalidPositionEvidence = githubWorkItemIntentRecordSchema.safeParse({
       ...retained,
       terminalEvidence: {
         ...retained.terminalEvidence,
@@ -4121,7 +4121,37 @@ describe('GitHub Work Item operations', () => {
           },
         },
       },
-    }).success).toBe(false)
+    })
+    expect(invalidPositionEvidence.success).toBe(false)
+    if (!invalidPositionEvidence.success) {
+      expect(invalidPositionEvidence.error.issues.map(issue => issue.message))
+        .toContain('succeeded Work Item Intent lacks final confirmed evidence')
+    }
+    const statusObservation = retained.observedPrefix[0]
+    if (statusObservation?.stageKind !== 'project-item-status-set'
+      || confirmed.facts.membership.state !== 'present') {
+      throw new Error('terminal Status fixture is missing')
+    }
+    const membership = confirmed.facts.membership
+    const { after: _after, membership: _membership, ...sharedFacts } = confirmed.facts
+    const statusFacts = { ...sharedFacts, membership }
+    const invalidStatusEvidence = githubWorkItemIntentRecordSchema.safeParse({
+      ...retained,
+      terminalEvidence: {
+        ...retained.terminalEvidence,
+        confirmedObservation: {
+          ...statusObservation,
+          facts: statusFacts,
+          remoteFingerprint: targetedBoardRemoteFingerprint(statusFacts),
+          observedAt: confirmed.observedAt,
+        },
+      },
+    })
+    expect(invalidStatusEvidence.success).toBe(false)
+    if (!invalidStatusEvidence.success) {
+      expect(invalidStatusEvidence.error.issues.map(issue => issue.message))
+        .toContain('succeeded Work Item Intent lacks final confirmed evidence')
+    }
   })
 
   it('accepts an externally reached predecessor position without dispatching it again', async () => {

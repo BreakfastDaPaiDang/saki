@@ -21,6 +21,7 @@ import {
   computeGitHubProjectBoardFingerprint,
   GitHubProviderError,
   githubAppId,
+  githubProjectItemStatusSetInspectionSchema,
   SakiGitHub,
   type GitHubIssueId,
   type GitHubMutationMap,
@@ -30,6 +31,7 @@ import {
   type GitHubProjectItemId,
   type GitHubProjectOptionId,
   type GitHubScanMap,
+  type GitHubTargetedWorkItemSnapshot,
 } from '@breakfastdapaidang/saki-github'
 import {
   canonicalDigest,
@@ -98,8 +100,9 @@ interface DurablePaths {
 class FakeBoardGitHub extends SakiGitHub {
   readonly requests: GitHubScanMap['project-board']['request'][] = []
   nextFailure: Error | undefined
+  nextMutationFailure: Error | undefined
 
-  constructor(ctx: Context, private readonly candidate: GitHubProjectBoardScanCandidate) {
+  constructor(ctx: Context, private candidate: GitHubProjectBoardScanCandidate) {
     super(ctx)
   }
 
@@ -123,12 +126,71 @@ class FakeBoardGitHub extends SakiGitHub {
     return structuredClone(this.candidate)
   }
 
-  override async dispatch<K extends keyof GitHubMutationMap>(): Promise<GitHubMutationMap[K]['result']> {
-    throw new Error('scan-only fake must not dispatch a GitHub mutation')
+  override async dispatch<K extends keyof GitHubMutationMap>(
+    request: GitHubMutationMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<GitHubMutationMap[K]['result']> {
+    signal.throwIfAborted()
+    if (request.kind !== 'project-item-status-set') throw new Error(`unexpected mutation ${request.kind}`)
+    if (this.nextMutationFailure !== undefined) {
+      const failure = this.nextMutationFailure
+      this.nextMutationFailure = undefined
+      throw failure
+    }
+    this.setStatusOption(request.desiredStatusOptionId)
+    return undefined
   }
 
-  override async inspectMutation<K extends keyof GitHubMutationMap>(): Promise<GitHubMutationMap[K]['inspection']> {
-    throw new Error('scan-only fake must not inspect a GitHub mutation')
+  setStatusOption(statusOptionId: GitHubProjectOptionId): void {
+    const { fingerprint: _fingerprint, ...source } = this.candidate
+    const revised: GitHubProjectBoardFingerprintSource = {
+      ...source,
+      observedAt: Math.max(Date.now(), source.observedAt + 1),
+      items: source.items.map((item, index) => index === 0
+        ? { ...item, statusOptionId }
+        : item),
+    }
+    this.candidate = { ...revised, fingerprint: computeGitHubProjectBoardFingerprint(revised) }
+  }
+
+  override async inspectMutation<K extends keyof GitHubMutationMap>(
+    request: GitHubMutationMap[K]['request'],
+    signal: AbortSignal,
+  ): Promise<GitHubMutationMap[K]['inspection']> {
+    signal.throwIfAborted()
+    if (request.kind !== 'project-item-status-set') throw new Error(`unexpected inspection ${request.kind}`)
+    return githubProjectItemStatusSetInspectionSchema.parse({
+      snapshot: this.targetedSnapshot(request.projectItemId),
+      observedAt: Date.now(),
+    })
+  }
+
+  private targetedSnapshot(projectItemId: GitHubProjectItemId): GitHubTargetedWorkItemSnapshot {
+    const itemIndex = this.candidate.items.findIndex(candidate => candidate.id === projectItemId)
+    const item = this.candidate.items[itemIndex]
+    if (item === undefined || item.content.kind !== 'issue') throw new Error('targeted Issue fixture is missing')
+    return {
+      repositoryId: this.candidate.repository.id,
+      repositoryDatabaseId: this.candidate.repository.databaseId,
+      projectId: this.candidate.project.id,
+      statusFieldId: this.candidate.statusFieldId,
+      issue: item.content.issue,
+      membership: {
+        state: 'present',
+        item: {
+          id: item.id,
+          projectId: item.projectId,
+          issueId: item.content.issue.id,
+          ...(item.statusOptionId === undefined ? {} : { statusOptionId: item.statusOptionId }),
+          archived: item.archived,
+          apiOrder: item.apiOrder,
+          totalCount: this.candidate.items.length,
+          previousItemId: this.candidate.items[itemIndex - 1]?.id ?? null,
+          nextItemId: this.candidate.items[itemIndex + 1]?.id ?? null,
+          updatedAt: item.updatedAt,
+        },
+      },
+    }
   }
 }
 
@@ -309,6 +371,7 @@ function githubSynchronization(harness: Harness): GitHubProjectSynchronization {
 async function waitForConfirmedBoard(
   harness: Harness,
   projectId: SakiDevelopmentProjectId,
+  minimumGeneration = 1,
 ): Promise<SakiBoardProjection> {
   for (let attempt = 0; attempt < 200; attempt++) {
     const result = await harness.control.query<'board'>(harness.authentication, {
@@ -316,7 +379,8 @@ async function waitForConfirmedBoard(
       projectId,
       refresh: 'cached',
     }, new AbortController().signal)
-    if (result.ok && result.projection.state === 'confirmed') return result.projection
+    if (result.ok && result.projection.state === 'confirmed'
+      && (result.projection.confirmed?.generation ?? 0) >= minimumGeneration) return result.projection
     await new Promise<void>(resolve => setTimeout(resolve, 0))
   }
   throw new Error('GitHub synchronization Consumer did not publish a confirmed Board')
@@ -396,6 +460,7 @@ function githubSynchronizationConfiguration(): GitHubSynchronizationConfiguratio
 
 function githubBoardCandidate(
   configuration: GitHubSynchronizationConfiguration,
+  statusOptionId = configuration.statusOptionNodeIds.ready,
 ): GitHubProjectBoardScanCandidate {
   const statusOptions = [
     configuration.statusOptionNodeIds.inbox,
@@ -459,7 +524,7 @@ function githubBoardCandidate(
       id: 'PVTI_saki_test_item' as GitHubProjectItemId,
       projectId: configuration.projectNodeId,
       content: { kind: 'issue', issue },
-      statusOptionId: configuration.statusOptionNodeIds.ready,
+      statusOptionId,
       archived: false,
       apiOrder: 0,
       updatedAt: 9_000,
@@ -1131,6 +1196,167 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     )
     await providerFiber.dispose()
     await harness.close()
+  })
+
+  it('wires Work Item mutation, projection, and retained-startup callbacks through the durable control plane', async () => {
+    const durable = await paths()
+    const repo = await repository(durable.root, 'work-item-control-route')
+    const configuration = githubSynchronizationConfiguration()
+    const ctx = await context(durable)
+    let github: FakeBoardGitHub | undefined
+    const providerFiber = await ctx.plugin((providerContext: Context) => {
+      github = new FakeBoardGitHub(
+        providerContext,
+        githubBoardCandidate(configuration, configuration.statusOptionNodeIds.done),
+      )
+    })
+    const harness = await mountControlPlane(ctx)
+    const registrationIntentId = 'intent-30303030-3030-4030-8030-303030303030' as SakiControlIntentId
+    const registered = await harness.control.submit(harness.authentication, intent(
+      registrationIntentId,
+      'Work Item control route',
+      repo,
+      0,
+      await inspected(harness, repo),
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    const configurationIntentId = 'intent-31313131-3131-4131-8131-313131313131' as SakiControlIntentId
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: configurationIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: configuration,
+    }, new AbortController().signal)).toMatchObject({ ok: true, receipt: { state: 'saved' } })
+
+    const firstBoard = await waitForConfirmedBoard(harness, registered.receipt.projectId)
+    expect(firstBoard.confirmed?.items[0]).toMatchObject({ status: 'done', latestNonTerminalStatus: null })
+    if (github === undefined) throw new Error('GitHub Provider fixture did not start')
+    github.setStatusOption(configuration.statusOptionNodeIds.ready)
+    expect(await harness.control.query(harness.authentication, {
+      type: 'board',
+      projectId: registered.receipt.projectId,
+      refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    const board = await waitForConfirmedBoard(harness, registered.receipt.projectId, 2)
+    const item = board.confirmed?.items[0]
+    if (item === undefined || board.mapping.state !== 'valid') throw new Error('confirmed Work Item fixture is missing')
+    const changedKeys: string[][] = []
+    const disposeChanged = harness.control.onChanged((keys) => { changedKeys.push([...keys]) })
+    await setGrantActions(harness, ['board:read', 'work-item:move'])
+    const expected = {
+      projectRevision: 0,
+      synchronizationRevision: board.synchronizationRevision,
+      mappingRevision: board.mapping.configurationRevision,
+    }
+    const deniedCreateId = 'intent-32323232-3232-4232-8232-323232323232' as SakiControlIntentId
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'create-work-item',
+      intentId: deniedCreateId,
+      projectId: registered.receipt.projectId,
+      expected,
+      title: 'Denied Work Item',
+      intendedOutcome: 'The denied request leaves no durable mutation.',
+      acceptanceCriteria: ['No GitHub write is attempted.'],
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(liveSakiDomain(harness.ctx).table('github_work_item_intents').get(deniedCreateId)).toBeUndefined()
+
+    const move = {
+      type: 'move-work-item' as const,
+      projectId: registered.receipt.projectId,
+      workItemId: item.id,
+      expectedRemoteFingerprint: item.remoteFingerprint,
+      targetStatus: 'in-progress' as const,
+    }
+    expect(await harness.control.submit(harness.authentication, {
+      ...move,
+      intentId: registrationIntentId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+    const moveIntentId = 'intent-33333333-3333-4333-8333-333333333333' as SakiControlIntentId
+    expect(await harness.control.submit(harness.authentication, {
+      ...move,
+      intentId: moveIntentId,
+    }, new AbortController().signal)).toMatchObject({
+      ok: true,
+      receipt: { state: 'succeeded', type: 'move-work-item', workItemId: item.id },
+    })
+
+    const movedBoard = await waitForConfirmedBoard(harness, registered.receipt.projectId, 3)
+    const movedItem = movedBoard.confirmed?.items.find(candidate => candidate.id === item.id)
+    const movedGeneration = movedBoard.confirmed?.generation
+    if (movedItem === undefined || movedGeneration === undefined) throw new Error('moved Work Item fixture is missing')
+    expect(movedItem.status).toBe('in-progress')
+    expect(changedKeys).toContainEqual(['project-settings', 'board'])
+
+    github.setStatusOption(configuration.statusOptionNodeIds.done)
+    expect(await harness.control.query<'board'>(harness.authentication, {
+      type: 'board',
+      projectId: registered.receipt.projectId,
+      refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    const terminalBoard = await waitForConfirmedBoard(harness, registered.receipt.projectId, movedGeneration + 1)
+    const terminalItem = terminalBoard.confirmed?.items[0]
+    expect(terminalItem).toMatchObject({ status: 'done', latestNonTerminalStatus: 'in-progress' })
+    if (terminalItem === undefined) throw new Error('terminal Work Item fixture is missing')
+
+    await providerFiber.dispose()
+    const pendingIntentId = 'intent-34343434-3434-4434-8434-343434343434' as SakiControlIntentId
+    expect(await harness.control.submit(harness.authentication, {
+      ...move,
+      intentId: pendingIntentId,
+      expectedRemoteFingerprint: terminalItem.remoteFingerprint,
+      targetStatus: 'in-progress',
+    }, new AbortController().signal)).toMatchObject({
+      ok: false,
+      reason: 'unavailable',
+      receipt: { state: 'prepared', type: 'move-work-item' },
+    })
+    disposeChanged()
+    await harness.close()
+
+    const restarted = await context(durable)
+    const diagnostic = vi.spyOn(restarted.logger, 'error').mockImplementation(() => restarted.logger)
+    await restarted.plugin((providerContext: Context) => {
+      const provider = new FakeBoardGitHub(
+        providerContext,
+        githubBoardCandidate(configuration, configuration.statusOptionNodeIds.done),
+      )
+      provider.nextMutationFailure = new Error('injected retained Work Item recovery failure')
+    })
+    const restartedHarness = await mountControlPlane(restarted)
+    for (let attempt = 0; attempt < 200 && diagnostic.mock.calls.length === 0; attempt++) {
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+    }
+    expect(diagnostic).toHaveBeenCalledWith(
+      'Saki GitHub Work Item recovery failed: Error: injected retained Work Item recovery failure',
+    )
+    await restartedHarness.close()
+
+    await editSaki(durable, async (domain) => {
+      const registryTable = domain.table('development_project_registry')
+      const registry = registryTable.get('development-project-registry')
+      if (registry === undefined) throw new Error('Development Project Registry fixture is missing')
+      await registryTable.put('development-project-registry', {
+        ...registry,
+        revision: registry.revision + 1,
+        projects: [],
+        resourceBindings: [],
+        canonicalWorktreeIndex: [],
+        gitDirectoryIndex: [],
+        intentMappings: [],
+      })
+      for (const tableName of ['registration_intents', 'github_sync_configuration_intents', 'github_project_sync'] as const) {
+        const table = domain.table(tableName)
+        for (const key of [...table.keys()]) await table.delete(key)
+      }
+    })
+    const orphaned = await context(durable)
+    try {
+      await expect(orphaned.plugin(SakiControlPlane, CONTROL_CONFIG))
+        .rejects.toThrow('GitHub Work Item Intent targets a missing Development Project')
+    } finally {
+      await orphaned.fiber.dispose()
+    }
   })
 
   it('atomically publishes one confirmed Board checkpoint and activates its saved configuration', async () => {

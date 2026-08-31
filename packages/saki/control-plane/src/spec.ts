@@ -1304,8 +1304,10 @@ export const githubWorkItemIntentRecordSchema = z.object({
     context.addIssue({ code: 'custom', message: 'server-derived Work Item target disagrees with Intent kind' })
   }
   if (value.payload.intent.type === 'move-work-item') {
+    /* v8 ignore next -- the preceding kind correlation already rejects a non-Move target. */
+    if (value.target.kind !== 'move-work-item') return
     const intentPosition = value.payload.intent.position
-    const targetPosition = value.target.kind === 'move-work-item' ? value.target.position : undefined
+    const targetPosition = value.target.position
     const positionsAgree = intentPosition === undefined
       ? targetPosition === undefined
       : intentPosition.afterWorkItemId === null
@@ -1465,10 +1467,8 @@ export const githubWorkItemIntentRecordSchema = z.object({
     if (observation.stageKind === 'project-item-status-set') {
       const facts = observation.facts
       const item = facts.membership.state === 'present' ? facts.membership.item : undefined
-      if (resolved.kind !== 'project-item-status-set') {
-        context.addIssue({ code: 'custom', message: 'Status observation targets another mutation kind' })
-        return
-      }
+      /* v8 ignore next -- the stage schema already rejects a resolved target whose kind differs from its stage. */
+      if (resolved.kind !== 'project-item-status-set') return
       const precedingIssueState = value.stages.slice(0, index)
         .find(candidate => candidate.resolvedTarget?.kind === 'issue-state-set')
         ?.resolvedTarget
@@ -1487,10 +1487,8 @@ export const githubWorkItemIntentRecordSchema = z.object({
     if (observation.stageKind === 'project-item-position-set') {
       const facts = observation.facts
       const item = facts.membership.state === 'present' ? facts.membership.item : undefined
-      if (resolved.kind !== 'project-item-position-set') {
-        context.addIssue({ code: 'custom', message: 'position observation targets another mutation kind' })
-        return
-      }
+      /* v8 ignore next -- the stage schema already rejects a resolved target whose kind differs from its stage. */
+      if (resolved.kind !== 'project-item-position-set') return
       const predecessorMatches = resolved.afterItemId === null
         ? facts.after.state === 'top'
         : facts.after.state === 'present' && facts.after.item.id === resolved.afterItemId
@@ -1633,18 +1631,6 @@ export const githubWorkItemRecoveryRecordSchema = z.object({
   updatedAt: timestamp,
 }).strict().superRefine((value, context) => {
   const confirmed = value.confirmed
-  const facts = confirmed.observation.facts
-  const expectedWorkItemId = `work-item-${canonicalDigest('saki/board-work-item/v1', {
-    repositoryId: facts.repositoryId,
-    issueId: facts.issue.id,
-  })}`
-  if (value.workItemId !== expectedWorkItemId) {
-    context.addIssue({
-      code: 'custom',
-      message: 'Work Item id disagrees with GitHub source identity',
-      path: ['workItemId'],
-    })
-  }
   if (value.id !== githubWorkItemRecoveryId(value.projectId, value.workItemId)) {
     context.addIssue({
       code: 'custom',

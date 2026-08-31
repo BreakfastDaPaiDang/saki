@@ -528,14 +528,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         authorityCurrent: (actor, action) => this.intentAuthorityCurrent(actor, action),
         validateActorReference: (actor) => { this.validateRegistrationActorReference(actor) },
         requestScan: async (projectId) => {
-          const scheduled = await this.githubSynchronization.requestScan(
+          await this.githubSynchronization.requestScan(
             projectId,
             'interactive',
             'interactive',
             Date.now(),
             this.lifetime.signal,
           )
-          if (scheduled === 'scheduled') this.githubSynchronizationConsumer?.wake()
+          this.githubSynchronizationConsumer?.wake()
         },
         notifyChanged: () => { this.notify(['project-settings', 'board']) },
         reportUnexpectedFailure: (error) => {

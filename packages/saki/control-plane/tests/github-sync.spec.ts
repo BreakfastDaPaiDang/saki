@@ -57,6 +57,7 @@ import {
 import {
   sakiGitHubScanFailureSchema as v4SakiGitHubScanFailureSchema,
   v4GitHubConfigurationIntentRecordSchema,
+  v4GitHubProjectSyncRecordSchema,
 } from '../src/migration-v4-github.ts'
 import {
   sakiBoardWorkItemIdSchema,
@@ -166,26 +167,66 @@ interface SafeParser<T> {
 function withHistoricalSchemaParity<T>(
   current: SafeParser<T>,
   historical: SafeParser<unknown>,
+  projectHistorical: (value: unknown) => unknown = value => value,
 ): SafeParser<T> {
   return {
     parse(value) {
       const currentValue = current.parse(value)
-      expect(historical.parse(value)).toEqual(currentValue)
+      const projected = projectHistorical(currentValue)
+      expect(historical.parse(projected)).toEqual(projected)
       return currentValue
     },
     safeParse(value) {
       const currentResult = current.safeParse(value)
-      const historicalResult = historical.safeParse(value)
+      const historicalResult = historical.safeParse(projectHistorical(value))
       expect(historicalResult.success).toBe(currentResult.success)
       if (currentResult.success) {
-        if (historicalResult.success) expect(historicalResult.data).toEqual(currentResult.data)
+        if (historicalResult.success) {
+          expect(historicalResult.data).toEqual(projectHistorical(currentResult.data))
+        }
       }
       return currentResult
     },
   }
 }
 
-const githubProjectSyncRecordSchema = currentGitHubProjectSyncRecordSchema
+function projectGitHubProjectSyncRecordToV4(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const sourceBoard = (value as Record<string, unknown>)['confirmedBoard']
+  if (typeof sourceBoard === 'object' && sourceBoard !== null && !Array.isArray(sourceBoard)) {
+    const sourceItems = (sourceBoard as Record<string, unknown>)['items']
+    if (Array.isArray(sourceItems) && sourceItems.length > SAKI_BOARD_WORK_ITEM_LIMIT) {
+      const projected = { ...(value as Record<string, unknown>) }
+      if (projected['schemaVersion'] === 2) projected['schemaVersion'] = 1
+      return {
+        ...projected,
+        confirmedBoard: { ...(sourceBoard as Record<string, unknown>), items: sourceItems },
+      }
+    }
+  }
+  const projected = structuredClone(value as Record<string, unknown>)
+  if (projected['schemaVersion'] === 2) projected['schemaVersion'] = 1
+  const confirmedBoard = projected['confirmedBoard']
+  if (typeof confirmedBoard !== 'object' || confirmedBoard === null || Array.isArray(confirmedBoard)) {
+    return projected
+  }
+  const historicalBoard = confirmedBoard as Record<string, unknown>
+  const items = historicalBoard['items']
+  if (!Array.isArray(items)) return projected
+  historicalBoard['items'] = (items as unknown[]).map((item: unknown) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return item
+    const historicalItem = { ...item } as Record<string, unknown>
+    Reflect.deleteProperty(historicalItem, 'latestNonTerminalStatus')
+    return historicalItem
+  })
+  return projected
+}
+
+const githubProjectSyncRecordSchema = withHistoricalSchemaParity(
+  currentGitHubProjectSyncRecordSchema,
+  v4GitHubProjectSyncRecordSchema,
+  projectGitHubProjectSyncRecordToV4,
+)
 const githubSynchronizationConfigurationIntentRecordSchema = withHistoricalSchemaParity(
   currentGitHubSynchronizationConfigurationIntentRecordSchema,
   v4GitHubConfigurationIntentRecordSchema,
@@ -2087,15 +2128,18 @@ describe('GitHub synchronization coordinator regressions', () => {
 
     const staleLatestStatus = mutableRecord(record)
     staleLatestStatus.confirmedBoard!.items[0]!.latestNonTerminalStatus = 'backlog'
-    expect(issueMessages(githubProjectSyncRecordSchema.safeParse(staleLatestStatus)))
+    expect(issueMessages(currentGitHubProjectSyncRecordSchema.safeParse(staleLatestStatus)))
       .toContain('non-terminal Work Item must remember its current Status')
 
     const { latestNonTerminalStatus: _latestNonTerminalStatus, ...itemWithoutLatestStatus }
       = structuredClone(record.confirmedBoard.items[0]!)
-    expect(githubProjectSyncRecordSchema.safeParse({
+    const missingLatestStatus = currentGitHubProjectSyncRecordSchema.safeParse({
       ...record,
       confirmedBoard: { ...record.confirmedBoard, items: [itemWithoutLatestStatus] },
-    }).success).toBe(false)
+    })
+    expect(issuePaths(missingLatestStatus)).toContainEqual([
+      'confirmedBoard', 'items', '0', 'latestNonTerminalStatus',
+    ])
 
     const closedUnjoined = mutableRecord(record)
     const closedItem = closedUnjoined.confirmedBoard!.items[0]!
@@ -3045,14 +3089,23 @@ describe('GitHub synchronization coordinator regressions', () => {
     if (record?.confirmedBoard === undefined) throw new Error('confirmed fixture is incomplete')
 
     const boardItems = unreadableArray(SAKI_BOARD_WORK_ITEM_LIMIT + 1)
-    const boardResult = githubProjectSyncRecordSchema.safeParse({
+    const oversizedRecord = {
       ...record,
       confirmedBoard: {
         ...record.confirmedBoard,
         items: boardItems.value,
       },
-    })
+    }
+    const boardResult = githubProjectSyncRecordSchema.safeParse(oversizedRecord)
+    const historicalBoardResult = v4GitHubProjectSyncRecordSchema.safeParse(
+      projectGitHubProjectSyncRecordToV4(oversizedRecord),
+    )
     expect(boardResult.success).toBe(false)
+    expect(historicalBoardResult.success).toBe(false)
+    if (boardResult.success || historicalBoardResult.success) throw new Error('oversized Board fixture was accepted')
+    expect(boardResult.error.issues).toContainEqual(expect.objectContaining({ path: ['confirmedBoard', 'items'] }))
+    expect(historicalBoardResult.error.issues)
+      .toContainEqual(expect.objectContaining({ path: ['confirmedBoard', 'items'] }))
     expect(boardItems.elementReads()).toBe(0)
 
     const mappingIssues = unreadableArray(SAKI_GITHUB_MAPPING_ISSUE_LIMIT + 1)
