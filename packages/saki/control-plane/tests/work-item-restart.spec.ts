@@ -197,11 +197,6 @@ function membershipSnapshot(inProject: boolean): GitHubMutationMap['project-item
           projectId: INITIAL_SNAPSHOT.projectId,
           issueId: INITIAL_SNAPSHOT.issue.id,
           archived: false,
-          apiOrder: 0,
-          totalCount: 1,
-          previousItemId: null,
-          nextItemId: null,
-          updatedAt: 100,
         },
       }
       : { state: 'absent' },

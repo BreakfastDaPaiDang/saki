@@ -78,7 +78,7 @@ type WorkItemAction = 'work-item:create' | 'work-item:move'
 type WorkItemActionAvailability = Readonly<Record<WorkItemAction, boolean>>
 
 /** Work Item state layered over the synchronization-owned confirmed Board. */
-export interface GitHubWorkItemOperationsProjection {
+interface GitHubWorkItemOperationsProjection {
   readonly effectiveMutationAvailability: SakiBoardMutationAvailabilityProjection
   readonly mutationOverlays: readonly SakiBoardMutationOverlayProjection[]
 }
@@ -97,7 +97,7 @@ interface GitHubWorkItemOperationsOptions {
 }
 
 /** Fully parsed Work Item saga state after targeted-recovery validation. */
-export interface ValidatedGitHubWorkItemState {
+interface ValidatedGitHubWorkItemState {
   readonly intents: readonly GitHubWorkItemIntentRecord[]
 }
 
@@ -124,6 +124,10 @@ type GitHubWorkItemFailedStage = GitHubWorkItemStage & {
 }
 type GitHubWorkItemMembershipItem = Extract<
   GitHubWorkItemMembershipObservation['facts']['membership'],
+  { state: 'present' }
+>['item']
+type GitHubWorkItemPositionItem = Extract<
+  GitHubWorkItemPositionObservation['facts']['membership'],
   { state: 'present' }
 >['item']
 type GitHubWorkItemMoveTarget = Extract<GitHubWorkItemIntentRecord['target'], { kind: 'move-work-item' }>
@@ -2534,7 +2538,7 @@ function positionObservation(
 function positionIsDesired(
   request: GitHubProjectItemPositionSetRequest,
   snapshot: GitHubProjectItemPositionSetInspection['snapshot'],
-  item: GitHubWorkItemMembershipItem,
+  item: GitHubWorkItemPositionItem,
 ): boolean {
   if (request.afterItemId === null) {
     return snapshot.after.state === 'top' && item.apiOrder === 0 && item.previousItemId === null

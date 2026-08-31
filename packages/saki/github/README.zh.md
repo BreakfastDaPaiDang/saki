@@ -26,7 +26,7 @@ Provider 抛出 `GitHubProviderError`；其 `failure` 只有以下闭合分支�
 
 `computeGitHubProjectBoardFingerprint()` 生成版本 `1` 的指纹。它覆盖外部 source id、Issue state 与 revision、Project membership 与 Status、archive state、API 顺序与相邻 item，以及 update fence。field 枚举会规范化，而 Project item 与 open Issue 的 API 顺序保持权威。Provider observation time、rate timing、label、URL 和分页机制不会改变语义身份。
 
-Targeted inspection 保留对应 mutation 所需的精确 Issue、Project membership、Status、archive state、相关 API-order neighbor 或 Issue open state。Project membership inspection 区分 absent、unique 和 duplicate membership。Position inspection 保留已观测的 moving membership 与请求 predecessor 的 observation（包括缺失 anchor），但不回显 request target。Targeted observation 绝不声称或推进完整 Board scan checkpoint。
+Targeted inspection 只保留对应 mutation 所需的事实。Project membership inspection 区分 absent、unique 和 duplicate membership，并且只公开 membership identity 与 archive state。Status 和 position inspection 保留精确 Issue、Status、API order 与相关 neighbor；position 还保留请求 predecessor 的 observation（包括缺失 anchor），但不回显 request target。Issue-state inspection 保留精确的 open 或 closed Issue fact。Targeted observation 绝不声称或推进完整 Board scan checkpoint。
 
 Issue-create inspection 使用已持久化的精确隐藏 marker，区分唯一真实 Issue、完整缺失、pull-request 命中、已知 Issue marker 被移除、已知 Issue 缺失、身份冲突、多次出现，以及有界或不一致遍历。唯一结果携带 Issue fact；每个非成功结果仅携带分类状态。可选的已知 Issue hint 仅用于 inspection，不改变已持久化的 `operationId`。完整缺失只是证据，不授予 Provider 再次创建的权限；`effectPossible` 决策属于 Consumer。
 

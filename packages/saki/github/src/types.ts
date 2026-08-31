@@ -603,8 +603,13 @@ export interface GitHubTargetedProjectItemFact {
   readonly updatedAt: number
 }
 
-/** Project membership facts that do not claim a Status field was inspected. */
-export type GitHubProjectMembershipItemFact = Omit<GitHubTargetedProjectItemFact, 'statusOptionId'>
+/** Minimal Project membership identity observed before or after an add attempt. */
+export interface GitHubProjectMembershipItemFact {
+  readonly id: GitHubProjectItemId
+  readonly projectId: GitHubProjectId
+  readonly issueId: GitHubIssueId
+  readonly archived: boolean
+}
 
 /** Current Project membership for one exact Issue. */
 type GitHubTargetedWorkItemMembership =

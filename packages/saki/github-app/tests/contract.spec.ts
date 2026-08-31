@@ -260,11 +260,6 @@ const PROJECT_ITEM_ADD_SNAPSHOT: GitHubProjectItemAddInspection['snapshot'] = {
       projectId: PROJECT_ITEM_ADD_REQUEST.projectId,
       issueId: PROJECT_ITEM_ADD_REQUEST.issueId,
       archived: false,
-      apiOrder: 0,
-      totalCount: 1,
-      previousItemId: null,
-      nextItemId: null,
-      updatedAt: UPDATED_AT,
     },
   },
 }

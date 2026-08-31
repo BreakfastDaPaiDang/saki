@@ -214,11 +214,6 @@ describe('durable GitHub Work Item state', () => {
           projectId: targetedSnapshot.membership.item.projectId,
           issueId: targetedSnapshot.membership.item.issueId,
           archived: targetedSnapshot.membership.item.archived,
-          apiOrder: targetedSnapshot.membership.item.apiOrder,
-          previousItemId: targetedSnapshot.membership.item.previousItemId,
-          nextItemId: targetedSnapshot.membership.item.nextItemId,
-          totalCount: targetedSnapshot.membership.item.totalCount,
-          updatedAt: targetedSnapshot.membership.item.updatedAt,
         },
       },
     } as const

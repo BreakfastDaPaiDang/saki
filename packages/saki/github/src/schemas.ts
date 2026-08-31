@@ -603,6 +603,10 @@ const projectMembershipItemFactShape = {
   projectId: githubProjectIdSchema,
   issueId: githubIssueIdSchema,
   archived: z.boolean(),
+} as const
+
+const projectPositionItemFactShape = {
+  ...projectMembershipItemFactShape,
   apiOrder: safeInteger,
   totalCount: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   previousItemId: githubProjectItemIdSchema.nullable(),
@@ -612,11 +616,11 @@ const projectMembershipItemFactShape = {
 
 /** Strict Project membership fact without an implied Status-field read. */
 const githubProjectMembershipItemFactSchema = z.object(projectMembershipItemFactShape)
-  .strict().superRefine(validateProjectMembershipItem)
+  .strict()
 
 /** Strict Project membership fact retained by a Status inspection. */
 const githubTargetedProjectItemFactSchema = z.object({
-  ...projectMembershipItemFactShape,
+  ...projectPositionItemFactShape,
   statusOptionId: githubProjectOptionIdSchema.optional(),
 }).strict().superRefine(validateProjectMembershipItem)
 
@@ -726,12 +730,6 @@ export const githubProjectItemAddSnapshotSchema = z.object({
   }
   if (snapshot.membership.state === 'duplicate-conflict') {
     rejectDuplicate(items.map(item => item.id), 'duplicate membership item id', ctx)
-    rejectDuplicate(items.map(item => String(item.apiOrder)), 'duplicate membership API order', ctx)
-    const totalCount = items[0]?.totalCount
-    if (items.some((item, index) => item.totalCount !== totalCount
-      || (index > 0 && item.apiOrder <= (items[index - 1]?.apiOrder ?? Number.MAX_SAFE_INTEGER)))) {
-      issue(ctx, 'duplicate memberships must retain one complete ordered connection')
-    }
   }
 })
 

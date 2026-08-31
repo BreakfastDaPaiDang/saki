@@ -320,11 +320,6 @@ export const PROJECT_ITEM_ADD_SNAPSHOT: GitHubProjectItemAddInspection['snapshot
       projectId: PROJECT_ID,
       issueId: ISSUE_ID,
       archived: false,
-      apiOrder: 0,
-      totalCount: 1,
-      previousItemId: null,
-      nextItemId: null,
-      updatedAt: OBSERVED_AT - 500,
     },
   },
 }

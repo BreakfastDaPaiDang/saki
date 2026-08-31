@@ -47,7 +47,7 @@ query SakiProjectItemAddInspection(
       items(first: $first, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED], orderBy: { field: POSITION, direction: ASC }) {
         totalCount
         nodes {
-          __typename id isArchived updatedAt
+          __typename id isArchived
           project { id updatedAt owner { id } }
           content {
             __typename
@@ -71,7 +71,7 @@ query SakiProjectItemAddInspection(
   }
 }`
 
-const positionItemSchema = graphqlProjectItemPositionSchema.extend({
+const positionItemSchema = graphqlProjectItemPositionSchema.omit({ updatedAt: true }).extend({
   content: z.object({
     __typename: z.string().min(1),
     id: z.string().min(1).optional(),
@@ -97,7 +97,6 @@ interface RetainedPosition {
   readonly id: ReturnType<typeof githubProjectItemId>
   readonly issueId?: ReturnType<typeof githubIssueId> | undefined
   readonly archived: boolean
-  readonly updatedAt: number
 }
 
 /**
@@ -184,7 +183,6 @@ async function readProjectMembership(
           ? { issueId: githubIssueId(item.content.id) }
           : {}),
         archived: item.isArchived,
-        updatedAt: timestamp(item.updatedAt),
       })
       if (positions.length > state.config.maxItems) invalid('project-item-add-membership')
     }
@@ -194,9 +192,8 @@ async function readProjectMembership(
   }
   if (positions.length !== totalCount) invalid('project-item-add-membership')
   const matches = positions
-    .map((position, apiOrder) => ({ position, apiOrder }))
-    .filter(({ position }) => position.issueId === state.request.issueId)
-    .map(({ position, apiOrder }) => projectMembershipFact(state.request, positions, position, apiOrder, totalCount))
+    .filter(position => position.issueId === state.request.issueId)
+    .map(position => projectMembershipFact(state.request, position))
   let membership: GitHubProjectItemAddMembership
   const [first, ...remaining] = matches
   if (first === undefined) {
@@ -261,21 +258,13 @@ function validatePositionItem(
 
 function projectMembershipFact(
   request: GitHubProjectItemAddRequest,
-  positions: readonly RetainedPosition[],
   position: RetainedPosition,
-  apiOrder: number,
-  totalCount: number,
 ): GitHubProjectMembershipItemFact {
   return {
     id: position.id,
     projectId: request.projectId,
     issueId: request.issueId,
     archived: position.archived,
-    apiOrder,
-    totalCount,
-    previousItemId: positions[apiOrder - 1]?.id ?? null,
-    nextItemId: positions[apiOrder + 1]?.id ?? null,
-    updatedAt: position.updatedAt,
   }
 }
 

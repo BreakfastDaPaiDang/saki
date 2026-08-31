@@ -4,7 +4,6 @@ import { z } from 'zod'
 import {
   GitHubProviderError,
   githubIssueCreateInspectionHintSchema,
-  githubIssueCreateRequestSchema,
 } from '@breakfastdapaidang/saki-github'
 import type {
   GitHubIssueStateSetRequest,
@@ -176,11 +175,10 @@ export async function createIssue(
   signal: AbortSignal,
   queue: InstallationPriorityQueue,
 ): Promise<GitHubIssueCreateInspectionHint> {
-  const admitted = githubIssueCreateRequestSchema.parse(request)
   const session = await GitHubOperationSession.create(
-    admitted.installation,
+    request.installation,
     privateKey,
-    admitted.repositoryDatabaseId,
+    request.repositoryDatabaseId,
     config,
     signal,
     queue,
@@ -191,23 +189,23 @@ export async function createIssue(
     session.installation,
     ISSUE_CREATE_MUTATION,
     {
-      repositoryId: admitted.repositoryId,
-      title: admitted.title,
-      body: admitted.body,
-      clientMutationId: admitted.operationId,
+      repositoryId: request.repositoryId,
+      title: request.title,
+      body: request.body,
+      clientMutationId: request.operationId,
     },
     signal,
-    admitted.kind,
+    request.kind,
   ))
   const issue = data.issueCreate.issue
-  if (data.issueCreate.clientMutationId !== admitted.operationId
+  if (data.issueCreate.clientMutationId !== request.operationId
     || issue.state !== 'OPEN'
-    || issue.title !== admitted.title
-    || issue.body !== admitted.body
-    || issue.repository.id !== admitted.repositoryId
-    || String(issue.repository.databaseId) !== admitted.repositoryDatabaseId
-    || issue.repository.owner.id !== admitted.installation.accountId) {
-    throw new GitHubProviderError({ code: 'invalid-external-response', operation: admitted.kind })
+    || issue.title !== request.title
+    || issue.body !== request.body
+    || issue.repository.id !== request.repositoryId
+    || String(issue.repository.databaseId) !== request.repositoryDatabaseId
+    || issue.repository.owner.id !== request.installation.accountId) {
+    throw new GitHubProviderError({ code: 'invalid-external-response', operation: request.kind })
   }
   return githubIssueCreateInspectionHintSchema.parse({
     issueId: issue.id,

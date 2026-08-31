@@ -4,7 +4,6 @@ import { z } from 'zod'
 import {
   GitHubProviderError,
   githubIssueCreateInspectionSchema,
-  githubIssueCreateRequestSchema,
   githubIssueId,
   githubRepositoryDatabaseId,
   githubRepositoryId,
@@ -48,7 +47,6 @@ const restIssueEntrySchema = z.object({
     .refine(value => value.isWellFormed()),
   body: z.string().refine(value => value.isWellFormed()).nullable(),
   html_url: z.url(),
-  created_at: z.iso.datetime(),
   updated_at: z.iso.datetime(),
   pull_request: z.object({}).loose().optional(),
 }).loose()
@@ -97,24 +95,23 @@ export async function inspectIssueCreate(
   signal: AbortSignal,
   queue: InstallationPriorityQueue,
 ): Promise<GitHubIssueCreateInspection> {
-  const admitted = githubIssueCreateRequestSchema.parse(request)
   const session = await GitHubOperationSession.create(
-    admitted.installation,
+    request.installation,
     privateKey,
-    admitted.repositoryDatabaseId,
+    request.repositoryDatabaseId,
     config,
     signal,
     queue,
     'interactive',
     'issue-create-inspection',
   )
-  const repository = await readRepositoryCoordinates(admitted, session, signal)
-  const state: InspectionState = { request: admitted, session, config, signal, repository }
+  const repository = await readRepositoryCoordinates(request, session, signal)
+  const state: InspectionState = { request, session, config, signal, repository }
   const traversal = await readIssues(state)
-  const outcome = classifyOutcome(admitted, traversal)
+  const outcome = classifyOutcome(request, traversal)
   const snapshot: GitHubIssueCreateSnapshot = {
-    repositoryId: admitted.repositoryId,
-    repositoryDatabaseId: admitted.repositoryDatabaseId,
+    repositoryId: request.repositoryId,
+    repositoryDatabaseId: request.repositoryDatabaseId,
     outcome,
   }
   return githubIssueCreateInspectionSchema.parse({
@@ -181,7 +178,6 @@ async function readIssues(state: InspectionState): Promise<Traversal> {
       nodeIds.add(entry.node_id)
       numbers.add(entry.number)
       const updatedAt = timestamp(entry.updated_at)
-      timestamp(entry.created_at)
       const occurrences = countOccurrences(
         entry.body ?? '',
         `<!-- saki-work-item:${state.request.markerId} -->`,

@@ -12,7 +12,6 @@ import { expectedProjectReadPermissions, json, privateKey, TestCredentials } fro
 
 const OBSERVED_AT = 1_800_000_000_000
 const PROJECT_UPDATED_AT = new Date(OBSERVED_AT - 500).toISOString()
-const ITEM_UPDATED_AT = new Date(OBSERVED_AT - 400).toISOString()
 afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -77,7 +76,7 @@ it('inspects absent Project membership once without a Project item id', async ()
   }
 })
 
-it('retains the unique active membership and its Project-order neighbors', async () => {
+it('retains the unique active membership identity and archive state', async () => {
   const nodes = [
     positionItem('PVTI_before', 'I_before'),
     positionItem('PVTI_target', PROJECT_ITEM_ADD_REQUEST.issueId),
@@ -93,11 +92,6 @@ it('retains the unique active membership and its Project-order neighbors', async
       projectId: PROJECT_ITEM_ADD_REQUEST.projectId,
       issueId: PROJECT_ITEM_ADD_REQUEST.issueId,
       archived: false,
-      apiOrder: 1,
-      totalCount: 3,
-      previousItemId: 'PVTI_before',
-      nextItemId: 'PVTI_after',
-      updatedAt: Date.parse(ITEM_UPDATED_AT),
     },
   })
 })
@@ -113,8 +107,8 @@ it('returns a typed conflict when one Project contains duplicate Issue membershi
   expect(inspection.snapshot.membership).toMatchObject({
     state: 'duplicate-conflict',
     items: [
-      { id: 'PVTI_duplicate_a', apiOrder: 0, nextItemId: 'PVTI_duplicate_b' },
-      { id: 'PVTI_duplicate_b', apiOrder: 1, previousItemId: 'PVTI_duplicate_a' },
+      { id: 'PVTI_duplicate_a' },
+      { id: 'PVTI_duplicate_b' },
     ],
   })
 })
@@ -136,10 +130,6 @@ it('traverses every Project position page once', async () => {
     state: 'present',
     item: {
       id: 'PVTI_target',
-      apiOrder: 1,
-      totalCount: 3,
-      previousItemId: 'PVTI_before',
-      nextItemId: 'PVTI_after',
     },
   })
 })
@@ -374,7 +364,6 @@ function positionItem(id: string, issueId: string): Record<string, unknown> {
     __typename: 'ProjectV2Item',
     id,
     isArchived: false,
-    updatedAt: ITEM_UPDATED_AT,
     project: {
       id: PROJECT_ITEM_ADD_REQUEST.projectId,
       updatedAt: PROJECT_UPDATED_AT,

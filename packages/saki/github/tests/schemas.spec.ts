@@ -693,17 +693,10 @@ describe('closed failures, mutation vocabulary, and invariant companion', () => 
     if (PROJECT_ITEM_ADD_SNAPSHOT.membership.state !== 'present') {
       throw new Error('expected present Project membership fixture')
     }
-    const first = {
-      ...PROJECT_ITEM_ADD_SNAPSHOT.membership.item,
-      totalCount: 2,
-      nextItemId: githubProjectItemId('PVTI_duplicate'),
-    }
+    const first = PROJECT_ITEM_ADD_SNAPSHOT.membership.item
     const second = {
       ...first,
       id: githubProjectItemId('PVTI_duplicate'),
-      apiOrder: 1,
-      previousItemId: first.id,
-      nextItemId: null,
     }
     const snapshots = [
       { ...PROJECT_ITEM_ADD_SNAPSHOT, membership: { state: 'absent' as const } },
@@ -719,7 +712,6 @@ describe('closed failures, mutation vocabulary, and invariant companion', () => 
     for (const membership of [
       { state: 'duplicate-conflict' as const, items: [first] },
       { state: 'duplicate-conflict' as const, items: [first, { ...second, id: first.id }] },
-      { state: 'duplicate-conflict' as const, items: [second, first] },
       {
         state: 'duplicate-conflict' as const,
         items: [first, { ...second, projectId: githubProjectId('P_other') }],

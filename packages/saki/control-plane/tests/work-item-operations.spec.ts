@@ -356,11 +356,6 @@ function membershipSnapshot(
     projectId: current.projectId,
     issueId: current.issue.id,
     archived: false,
-    apiOrder: 0,
-    totalCount: duplicate ? 2 : 1,
-    previousItemId: null,
-    nextItemId: duplicate ? DUPLICATE_ITEM_ID : null,
-    updatedAt: 100,
   }
   return {
     repositoryId: current.repositoryId,
@@ -373,9 +368,6 @@ function membershipSnapshot(
         items: [firstItem, {
           ...firstItem,
           id: DUPLICATE_ITEM_ID,
-          apiOrder: 1,
-          previousItemId: ITEM_ID,
-          nextItemId: null,
         }],
       }
       : inProject

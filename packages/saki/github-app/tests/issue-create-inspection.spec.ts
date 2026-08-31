@@ -197,9 +197,9 @@ it.each([
   expect(inspection.snapshot.outcome.state).toBe('identity-conflict')
 })
 
-it('rejects a pre-epoch REST Issue timestamp', async () => {
-  const entry = issueEntry() as { created_at: string }
-  entry.created_at = '0000-01-01T00:00:00.000Z'
+it('rejects a pre-epoch REST Issue update timestamp', async () => {
+  const entry = issueEntry() as { updated_at: string }
+  entry.updated_at = '0000-01-01T00:00:00.000Z'
 
   await expect(runInspection(() => ({ entries: [entry] }))).rejects.toMatchObject({
     failure: { code: 'invalid-external-response', operation: 'issue-create-inspection' },
