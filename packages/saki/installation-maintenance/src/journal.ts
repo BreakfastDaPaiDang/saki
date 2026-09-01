@@ -177,7 +177,7 @@ export const backupOperationJournalSchema = z.object({
 export const upgradeOperationJournalSchema = z.object({
   ...operationJournalSharedShape,
   kind: z.literal('upgrade'),
-  sourceStateVersion: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+  sourceStateVersion: z.union([z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6)]),
   sourceStorageGenerationId: sakiStorageGenerationIdSchema,
   sourceBuildId: sakiBuildIdSchema,
   backupId: sakiRecoveryBackupIdSchema,
@@ -237,7 +237,7 @@ export interface UpgradeOperationJournalRequest {
   /** Installation retained by backup and candidate. */
   readonly installationId: SakiInstallationId
   /** Exact retained state format that the Recovery Backup must preserve. */
-  readonly sourceStateVersion: 2 | 3 | 4 | 5
+  readonly sourceStateVersion: 2 | 3 | 4 | 5 | 6
   /** Physical source generation that the Recovery Backup must preserve. */
   readonly sourceStorageGenerationId: SakiStorageGenerationId
   /** Source-build provenance that the Recovery Backup must repeat. */

@@ -7,6 +7,7 @@ import {
   sakiConfigureGitHubSynchronizationIntentSchema,
   sakiCreateCommitIntentSchema,
   sakiCreateWorkItemIntentSchema,
+  sakiGiveWorkItemToAgentIntentSchema,
   sakiMoveWorkItemIntentSchema,
   sakiQueryRequestSchema,
   sakiRegisterDevelopmentProjectIntentSchema,
@@ -29,7 +30,7 @@ describe('Saki browser Host client', () => {
     expect(() => new SakiHostClientService(new Context())).toThrow('active Connection carrier')
   })
 
-  it('submits create and move Work Item Intents with the mutation request token', async () => {
+  it('submits Work Item and manual Agent Intents with the mutation request token', async () => {
     const call = vi.fn().mockResolvedValue({ ok: true, value: { ok: false, reason: 'unavailable' } })
     const ctx = new Context()
     ctx.provide('connection', { rpc: { call } } as unknown as ConnectionHandle)
@@ -51,9 +52,18 @@ describe('Saki browser Host client', () => {
       expectedRemoteFingerprint: `remote-fingerprint-${'4'.repeat(64)}`,
       targetStatus: 'done',
     })
+    const giveIntent = sakiGiveWorkItemToAgentIntentSchema.parse({
+      type: 'give-work-item-to-agent',
+      intentId: 'intent-33333333-3333-4333-8333-333333333333',
+      projectId: PROJECT_ID,
+      workItemId: `work-item-${'3'.repeat(64)}`,
+      expectedProjectRevision: 2,
+      expectedRemoteFingerprint: `remote-fingerprint-${'4'.repeat(64)}`,
+    })
 
     await ctx.sakiHostClient.createWorkItem(createIntent, 'work-item-token')
     await ctx.sakiHostClient.moveWorkItem(moveIntent, 'work-item-token')
+    await ctx.sakiHostClient.giveWorkItemToAgent(giveIntent, 'work-item-token')
 
     expect(call.mock.calls).toEqual([
       ['/saki', 'control/submit', createIntent, {
@@ -61,6 +71,10 @@ describe('Saki browser Host client', () => {
         headers: { 'x-saki-request-token': 'work-item-token' },
       }],
       ['/saki', 'control/submit', moveIntent, {
+        credentials: 'same-origin',
+        headers: { 'x-saki-request-token': 'work-item-token' },
+      }],
+      ['/saki', 'control/submit', giveIntent, {
         credentials: 'same-origin',
         headers: { 'x-saki-request-token': 'work-item-token' },
       }],

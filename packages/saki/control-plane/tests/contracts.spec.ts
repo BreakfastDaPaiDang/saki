@@ -10,6 +10,7 @@ import {
   SAKI_ACCESS_FIXTURES,
   SAKI_ACCESS_LIFECYCLE_FIXTURES,
   SAKI_ACCESS_RESULT_FIXTURES,
+  SAKI_AGENT_RUN_PROJECTION_FIXTURES,
   SAKI_BOARD_MUTATION_OVERLAY_FIXTURES,
   SAKI_BOARD_PROJECTION_FIXTURES,
   SAKI_CONTROL_RESULT_FIXTURES,
@@ -25,6 +26,7 @@ import {
   SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES,
   SAKI_SECURITY_RECORD_FIXTURES,
   SAKI_WORK_ITEM_RESULT_FIXTURES,
+  SAKI_WORK_ITEM_DETAIL_PROJECTION_FIXTURE,
 } from '../src/fixtures.ts'
 import {
   resolveSakiAuthentication,
@@ -141,6 +143,7 @@ describe('Saki control-plane public contracts', () => {
     const serialized = JSON.stringify([
       SAKI_ACCESS_FIXTURES,
       SAKI_ACCESS_RESULT_FIXTURES,
+      SAKI_AGENT_RUN_PROJECTION_FIXTURES,
       SAKI_BOARD_PROJECTION_FIXTURES,
       SAKI_CONTROL_RESULT_FIXTURES,
       SAKI_GIT_CHANGES_PROJECTION_FIXTURES,
@@ -154,11 +157,46 @@ describe('Saki control-plane public contracts', () => {
       SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES,
       SAKI_ACCESS_LIFECYCLE_FIXTURES,
       SAKI_SECURITY_RECORD_FIXTURES,
+      SAKI_WORK_ITEM_DETAIL_PROJECTION_FIXTURE,
     ])
     expect(serialized).not.toMatch(/bootstrapSecret|cookieDigest|requestTokenDerivation/)
     expect(serialized).not.toMatch(/privateKey|installationToken|accessToken|-----BEGIN [A-Z ]*PRIVATE KEY-----/)
     expect(serialized).not.toMatch(/canonicalWorktreePath|canonicalGitDirectory|canonicalCommonGitDirectory/)
     expect(serialized).not.toContain('/fixture/repository')
+  })
+
+  it('publishes one assigned Work Item with current and recent browser-safe Agent Runs', () => {
+    expect(SAKI_WORK_ITEM_DETAIL_PROJECTION_FIXTURE).toMatchObject({
+      type: 'work-item-detail',
+      definition: { number: 27, status: 'in-progress', blockage: [] },
+      assignment: { state: 'active' },
+      primaryWorkSession: { state: 'open' },
+      currentAgentRun: { state: 'running', recovery: { state: 'resumable' } },
+    })
+    expect(SAKI_WORK_ITEM_DETAIL_PROJECTION_FIXTURE.recentAgentRuns.map(run => [
+      run.state,
+      run.recovery.state,
+    ])).toEqual([
+      ['reconciliation-required', 'required'],
+      ['canceled', 'terminal'],
+    ])
+    expect(Object.values(SAKI_AGENT_RUN_PROJECTION_FIXTURES).map(run => run.state)).toEqual([
+      'running',
+      'canceled',
+      'reconciliation-required',
+    ])
+
+    const serialized = JSON.stringify({
+      runs: SAKI_AGENT_RUN_PROJECTION_FIXTURES,
+      detail: SAKI_WORK_ITEM_DETAIL_PROJECTION_FIXTURE,
+    })
+    expect(serialized).not.toMatch(
+      /canonicalWorktreePath|canonicalGitDirectory|canonicalCommonGitDirectory|operationSnapshot/u,
+    )
+    expect(serialized).not.toMatch(
+      /credential|privateKey|installationToken|accessToken|-----BEGIN [A-Z ]*PRIVATE KEY-----/iu,
+    )
+    expect(serialized).not.toMatch(/(?:"[A-Za-z]:[\\/]|\/fixture\/repository)/u)
   })
 
   it('publishes typed Changes, bounded Diff, and terminal operation fixtures for every B07 state', () => {

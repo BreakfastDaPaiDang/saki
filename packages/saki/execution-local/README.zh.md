@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ctx.workspaceRegistry`、`ctx.storageDomain` 与同一 Host 的文件系统元数据实现 [`ctx.sakiHostExecution`](../execution/README.zh.md)。它检查不可信的本地目录选择与带 revision 的已绑定 Project 状态、读取有界 Diff，并执行结构化 Git 修改。它拥有 Service Provider 私有的持久 Host Operation 记录，但不拥有 Project 策略、Resource Binding、Workspace 创建流程或控制面 Intent。
+Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ctx.workspaceRegistry`、`ctx.storageDomain`、DSH Agent 与 Session 服务，以及同一 Host 的文件系统元数据实现 [`ctx.sakiHostExecution`](../execution/README.zh.md)。它检查不可信的本地目录选择与带 revision 的已绑定 Project 状态、读取有界 Diff、执行结构化 Git 修改，并创建或恢复精确 Agent Run。它拥有 Service Provider 私有的持久 Host Operation 记录，但不拥有 Project 策略、Resource Binding、Workspace 创建流程或控制面 Intent。
 
 ## 检查行为
 
@@ -24,6 +24,14 @@ Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ct
 - **清理与终态持久化**：终态清理会在已记录临时路径验证 scratch 证据，把外层目录 rename 到由持久证据确定性派生的同父隔离路径，将 owner marker 移出 payload，并重新验证外层与 payload 身份。系统不会请求递归删除：进入真实目录和对其执行 `rmdir` 前会复核身份；文件、symlink 与 junction 则经 `lstat` 复核并仅 unlink link 本身，不会跟随 link target。随后系统会非递归删除空外壳与外置 marker；部分删除或 acknowledgement 丢失仍会留下足够的确定性所有权证据供终态 replay 使用，而外来 replacement 会被保留，恢复到已记录路径仅作 best-effort 尝试。对于具有持久 pin plan 的 operation，Local Host 会在持久化 `succeeded`、`failed`、`canceled` 或 `reconciliation-required` 前，精确移除其 operation-owned blocking `index.lock` 或证明该 link 已不存在，同步 index 目录并再次检查。POSIX 会传播 scratch、source-object、index、ref 与 reflog barrier 的目录同步错误。Windows 不向该 Service Provider 暴露受支持的目录 `fsync`，因此其持久性保证覆盖已刷写文件、Git 配置的文件同步和平台原子发布，但不覆盖崩溃时的目录项。Acknowledgement 丢失不会让外部看到一条仍保留自有 blocking lock 的终态记录。非阻塞 pin 与 scratch 目录只在终态持久化后按精确 owner 幂等清理，每次终态 replay 都会重试。若进程在 plan 持久化前崩溃或遇到文件系统 failure，且精确清理无法完成，可能留下随机非阻塞 pin 或仅 owner 可访问的 scratch 外壳；恢复绝不会扫描这类未记录 residue。
 
 应用 bootstrap 环境是 Git 可执行文件与普通继承进程变量的权威来源。Service Provider 会移除仓库或浏览器可控制的 Git 执行变量，但不会把已受损的父进程环境当作需要隔离的子进程沙箱。文件系统元数据取消遵循 FileSystem provider 在探测前后协作检查的约定；常规文件内容流会由取消信号销毁，Service Provider dispose 会等待全部调用收敛。
+
+## Agent Run operation
+
+`start-agent-run` Host Operation 会在接触 DSH 前保存一份 v2 `agent-run` effect plan。它的精确 replay 会挂载已固定 Agent Preset、应用已固定 Model Route，并在 Binding 的规范 worktree cwd 创建或恢复预分配 Session。物理 Session header 必须证明该 cwd 与 preset，live Agent option 也必须匹配 route。任何不匹配、同一 Session id 下的其他 live Agent，或冲突的 message-source evidence 都会成为 conflict，而不会产生另一个 Run。
+
+Provider 会通过完整 snapshot 与 event-history 读取，分离读取精确输入 MessageId 的物理 Session persistence。只有完全不存在时才允许插入一次原始 `next-turn`。获取 live Agent 后，Provider 会在插入该输入前，以及后续唤醒 pending 输入前立即重新验证可写 Git world。插入后会 flush 并重新检查；只有该输入仍为 pending 时才使用确定性 `next-step` wake，Agent-scoped pre-step listener 会在模型组装前移除这些 wake message。已 recorded 的原始输入证明 Host 成功。Canceled、removed、replaced、claimed-without-record、attempt 后缺失及 conflicting evidence 会被取消或进入对账，而且不会重发原始输入。
+
+Inspection 绝不创建、恢复或唤醒 Agent。启动 resume 是一项独立 operation，它要求精确的 succeeded Host result、匹配的物理 Session header 与输入，以及匹配且可用的 live Agent；Host 会在对外服务前恢复该 Agent，并使其保持 model-idle。因此，持久 `not-started` plan 可以在不归因无关 Session 的情况下证明取消；publishing 或终态 replay 会重新检查精确持久输入与 id。取消会在终态持久化前停止并排空所拥有的 live Agent。disposal 失败时，Host 会继续跟踪 handle，并让 operation 保持可重试。Host 成功只报告 Run 与输入已经持久存在，并不表示模型执行完成。
 
 ## 配置
 
@@ -52,19 +60,19 @@ Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ct
 
 ## 模型体验
 
-### Local Host 检查
+### Local Host 检查与 Agent 启动
 
 #### 模型看到什么
 
-什么也看不到。`ctx.sakiHostExecution` 提供 Host 侧 Saki Projection 与可信观察，但不注册模型可见输入。
+Inspection 与结构化 Git operation 不会增加模型可见内容。`start-agent-run` 会在精确固定的纯文本 user message 持久化后交付它；恢复 wake message 会在模型看到前被过滤。
 
 #### Token 影响
 
-每次请求直接增加零个 token。
+Inspection 与结构化 Git operation 直接增加零个 token。Agent start 可能调用已固定 Model Route，因此 token 取决于原始输入与组装后的 preset context；replay 不会加入重复的原始 message，启动 resume 也不会增加 wake 或模型请求。
 
 #### KV Cache 影响
 
-与模型请求相互独立：检查既不组装也不更改请求前缀。
+Inspection 与模型请求相互独立。Agent start 会在可复用 prefix 外加入一个 user turn；恢复 wake 在组装前被移除，因此没有 KV Cache 影响。
 
 ## 已知限制与暂缓事项
 

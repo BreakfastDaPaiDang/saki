@@ -89,11 +89,14 @@ async function start(): Promise<RunningHost> {
     databasePath: join(directory, 'saki.sqlite'),
     installationId: INSTALLATION_ID,
     storageGenerationId: STORAGE_GENERATION_ID,
-    stateVersion: 6,
+    stateVersion: 7,
     createdByBuildId: BUILD_ID,
     promoteToReady: () => Promise.resolve(),
   })
+  context.provide('agentPresets', {} as never)
+  context.provide('agents', {} as never)
   context.provide('sessionPersistence', { list: () => Promise.resolve([]) } as never)
+  context.provide('sessions', { list: () => [] } as never)
   await context.plugin(WorkspaceRegistry)
   await context.plugin(LocalFileSystem, { cwd: directory })
   await context.plugin(LocalSubprocessRuntime)
@@ -1025,6 +1028,54 @@ describe('Saki /saki Host transport', () => {
       'x-saki-request-token': token,
     })).message.result).toEqual(OPAQUE_ERROR_RESULT)
     expect(submit).toHaveBeenCalledTimes(2)
+    await host.close()
+  })
+
+  it('routes only the minimal Give-to-Agent Intent without browser execution authority', async () => {
+    const host = await start()
+    const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
+    const exchange = await rpc(host, 'access/exchange', { secret })
+    const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
+    const token = (exchange.message.result as { value: { access: { requestToken: string } } }).value.access.requestToken
+    const intent = {
+      type: 'give-work-item-to-agent',
+      intentId: 'intent-33333333-3333-4333-8333-333333333333',
+      projectId: 'project-22222222-2222-4222-8222-222222222222',
+      workItemId: `work-item-${'4'.repeat(64)}`,
+      expectedProjectRevision: 5,
+      expectedRemoteFingerprint: `remote-fingerprint-${'6'.repeat(64)}`,
+    } as const
+    const submit = vi.spyOn(host.context.sakiControlPlane, 'submit')
+      .mockResolvedValue({ ok: false, reason: 'unavailable' } as never)
+
+    expect((await rpc(host, 'control/submit', intent, {
+      cookie,
+      'x-saki-request-token': token,
+    })).message.result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
+    expect(submit.mock.calls[0]?.[1]).toEqual(intent)
+
+    for (const authority of [
+      { actor: { kind: 'human', value: 'authority-sentinel' } },
+      { grant: { revision: 1, value: 'authority-sentinel' } },
+      { hostId: 'host-authority-sentinel' },
+      { resourceBindingId: 'binding-authority-sentinel' },
+      { canonicalWorktreePath: 'D:/authority-sentinel' },
+      { dispatchClaim: { revision: 1, fencingValue: 'authority-sentinel' } },
+      { fencingValue: 'authority-sentinel' },
+      { workSessionId: 'work-session-authority-sentinel' },
+      { agentRunId: 'agent-run-authority-sentinel' },
+      { agentProfileVersionId: 'agent-profile-version-authority-sentinel' },
+      { modelRouteId: 'model-route-authority-sentinel' },
+      { providerAccountProfileId: 'provider-account-profile-authority-sentinel' },
+    ]) {
+      const rejected = await rpc(host, 'control/submit', { ...intent, ...authority }, {
+        cookie,
+        'x-saki-request-token': token,
+      })
+      expect(rejected.message.result).toEqual(OPAQUE_ERROR_RESULT)
+      expect(JSON.stringify(rejected.message)).not.toContain('authority-sentinel')
+    }
+    expect(submit).toHaveBeenCalledTimes(1)
     await host.close()
   })
 

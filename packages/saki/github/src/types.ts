@@ -299,6 +299,39 @@ export interface GitHubIssueReadRequest {
   readonly issueId: GitHubIssueId
 }
 
+/** Read one exact Issue together with its complete bounded Markdown body. */
+export interface GitHubIssueDetailReadRequest {
+  readonly kind: 'issue-detail'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly issueId: GitHubIssueId
+}
+
+/** Exact Issue facts plus the complete current Markdown body. */
+export interface GitHubIssueDetailFact extends GitHubIssueFact {
+  readonly body: string
+}
+
+/** Inspect effective write-safety rules for one exact branch name. */
+export interface GitHubBranchSafetyReadRequest {
+  readonly kind: 'branch-safety'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly branch: string
+}
+
+/** Fail-closed branch safety observation without Administration permission. */
+export type GitHubBranchSafetyFact =
+  | { readonly kind: 'safe'; readonly branchExists: true; readonly observedAt: number }
+  | { readonly kind: 'protected'; readonly branchExists: boolean; readonly observedAt: number }
+  | {
+    readonly kind: 'legacy-protection-unknown'
+    readonly branchExists: false
+    readonly observedAt: number
+  }
+
 /** Read one exact Project v2 identity and update observation. */
 export interface GitHubProjectReadRequest {
   readonly kind: 'project'
@@ -669,6 +702,8 @@ export interface GitHubReadMap {
   installation: { readonly request: GitHubInstallationReadRequest; readonly result: GitHubInstallationFact }
   repository: { readonly request: GitHubRepositoryReadRequest; readonly result: GitHubRepositoryFact }
   issue: { readonly request: GitHubIssueReadRequest; readonly result: GitHubIssueFact }
+  'issue-detail': { readonly request: GitHubIssueDetailReadRequest; readonly result: GitHubIssueDetailFact }
+  'branch-safety': { readonly request: GitHubBranchSafetyReadRequest; readonly result: GitHubBranchSafetyFact }
   project: { readonly request: GitHubProjectReadRequest; readonly result: GitHubProjectFact }
   'tag-reference': { readonly request: GitHubTagReferenceReadRequest; readonly result: GitHubTagReferenceFact }
   'tag-object': { readonly request: GitHubTagObjectReadRequest; readonly result: GitHubTagPeelFact }

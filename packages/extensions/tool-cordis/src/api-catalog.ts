@@ -1248,6 +1248,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the current durable snapshot and whether current admission allowed execution.',
       },
       {
+        signature: 'abstract resumeAgentRun( operation: HostOperationReference<\'start-agent-run\'>, request: StartAgentRunHostOperationRequest, signal: AbortSignal, ): Promise<void>',
+        description: 'Restore the live handle for one control-plane-validated running Agent Run from the exact succeeded Host Operation and durable Session evidence. This recovery never wakes the Agent or submits model input.',
+        parameters: [{ name: 'operation', description: 'exact succeeded StartAgentRun Host Operation reference.' }, { name: 'request', description: 'complete immutable request retained by the validated control plane.' }, { name: 'signal', description: 'required startup lifetime and cancellation.' }],
+        returns: 'after the matching live Agent handle has been restored for the exact Session.',
+        throws: ['when the operation, request, physical Session evidence, or live Agent conflicts or is unavailable.'],
+      },
+      {
         signature: 'abstract inspectOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, signal: AbortSignal, ): Promise<HostOperationSnapshot<K>>',
         description: 'Inspect and recover one durable Host Operation without starting a new external effect.',
         parameters: [{ name: 'operation', description: 'stable Provider-routed reference.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
@@ -1288,7 +1295,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'abstract readonly stateVersion: 6',
+        signature: 'abstract readonly stateVersion: 7',
         description: 'State-format version selected by the Installation manifest.',
         parameters: [],
       },
@@ -3285,7 +3292,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CommitHostOperationRequest',
-    declaration: 'export interface CommitHostOperationRequest {\n    readonly type: \'commit\';\n    readonly source: HostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly message: string;\n}',
+    declaration: 'export interface CommitHostOperationRequest {\n    readonly type: \'commit\';\n    readonly source: ControlIntentHostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly message: string;\n}',
   },
   {
     name: 'CommitHostOperationResult',
@@ -3362,6 +3369,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ContinuableSubagentDescriptorData',
     declaration: 'export interface ContinuableSubagentDescriptorData extends SubagentDescriptorBase {\n    readonly mode: \'continuable\';\n    readonly label: string;\n    readonly agentProvider?: string;\n    readonly agentModel?: string;\n    readonly persona?: string;\n    readonly toolFilter?: ToolRestriction;\n}',
+  },
+  {
+    name: 'ControlIntentHostOperationSource',
+    declaration: 'export interface ControlIntentHostOperationSource {\n    readonly kind: \'control-intent\';\n    readonly intentId: SakiControlIntentId;\n    readonly intentRevision: number;\n    readonly payloadDigest: string;\n}',
   },
   {
     name: 'CordisDynamicPackageId',
@@ -3592,6 +3603,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface EpochHeader {\n    config: LlmCallConfig;\n    adapterDefaults?: LlmCallConfigAdapterDefaults;\n    system?: string;\n    tools?: ToolSchema[];\n}',
   },
   {
+    name: 'ExecutionDispatchHostOperationSource',
+    declaration: 'export interface ExecutionDispatchHostOperationSource {\n    readonly kind: \'execution-dispatch\';\n    readonly dispatchId: SakiExecutionDispatchId;\n    readonly payloadDigest: string;\n}',
+  },
+  {
     name: 'FileDiff',
     declaration: 'export interface FileDiff {\n    path: string;\n    oldText: string | null;\n    newText: string;\n}',
   },
@@ -3676,6 +3691,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type GitHubAppId = Branded<\'GitHubAppId\'>;',
   },
   {
+    name: 'GitHubBranchSafetyFact',
+    declaration: 'export type GitHubBranchSafetyFact = {\n    readonly kind: \'safe\';\n    readonly branchExists: true;\n    readonly observedAt: number;\n} | {\n    readonly kind: \'protected\';\n    readonly branchExists: boolean;\n    readonly observedAt: number;\n} | {\n    readonly kind: \'legacy-protection-unknown\';\n    readonly branchExists: false;\n    readonly observedAt: number;\n};',
+  },
+  {
+    name: 'GitHubBranchSafetyReadRequest',
+    declaration: 'export interface GitHubBranchSafetyReadRequest {\n    readonly kind: \'branch-safety\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly branch: string;\n}',
+  },
+  {
     name: 'GitHubCommitComparisonFact',
     declaration: 'export interface GitHubCommitComparisonFact {\n    readonly repositoryId: GitHubRepositoryId;\n    readonly baseCommitId: GitHubCommitId;\n    readonly headCommitId: GitHubCommitId;\n    readonly status: \'ahead\' | \'behind\' | \'identical\' | \'diverged\';\n    readonly aheadBy: number;\n    readonly behindBy: number;\n    readonly mergeBaseCommitId?: GitHubCommitId | undefined;\n    readonly observedAt: number;\n}',
   },
@@ -3746,6 +3769,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitHubIssueCreateSnapshot',
     declaration: 'export interface GitHubIssueCreateSnapshot {\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly outcome: GitHubIssueCreateInspectionOutcome;\n}',
+  },
+  {
+    name: 'GitHubIssueDetailFact',
+    declaration: 'export interface GitHubIssueDetailFact extends GitHubIssueFact {\n    readonly body: string;\n}',
+  },
+  {
+    name: 'GitHubIssueDetailReadRequest',
+    declaration: 'export interface GitHubIssueDetailReadRequest {\n    readonly kind: \'issue-detail\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly issueId: GitHubIssueId;\n}',
   },
   {
     name: 'GitHubIssueFact',
@@ -3865,7 +3896,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GitHubReadMap',
-    declaration: 'export interface GitHubReadMap {\n    installation: {\n        readonly request: GitHubInstallationReadRequest;\n        readonly result: GitHubInstallationFact;\n    };\n    repository: {\n        readonly request: GitHubRepositoryReadRequest;\n        readonly result: GitHubRepositoryFact;\n    };\n    issue: {\n        readonly request: GitHubIssueReadRequest;\n        readonly result: GitHubIssueFact;\n    };\n    project: {\n        readonly request: GitHubProjectReadRequest;\n        readonly result: GitHubProjectFact;\n    };\n    \'tag-reference\': {\n        readonly request: GitHubTagReferenceReadRequest;\n        readonly result: GitHubTagReferenceFact;\n    };\n    \'tag-object\': {\n        readonly request: GitHubTagObjectReadRequest;\n        readonly result: GitHubTagPeelFact;\n    };\n    \'release-by-tag\': {\n        readonly request: GitHubReleaseByTagReadRequest;\n        readonly result: GitHubReleaseByTagObservation;\n    };\n    commit: {\n        readonly request: GitHubCommitReadRequest;\n        readonly result: GitHubCommitFact;\n    };\n    \'compare-commits\': {\n        readonly request: GitHubCompareCommitsReadRequest;\n        readonly result: GitHubCommitComparisonFact;\n    };\n}',
+    declaration: 'export interface GitHubReadMap {\n    installation: {\n        readonly request: GitHubInstallationReadRequest;\n        readonly result: GitHubInstallationFact;\n    };\n    repository: {\n        readonly request: GitHubRepositoryReadRequest;\n        readonly result: GitHubRepositoryFact;\n    };\n    issue: {\n        readonly request: GitHubIssueReadRequest;\n        readonly result: GitHubIssueFact;\n    };\n    \'issue-detail\': {\n        readonly request: GitHubIssueDetailReadRequest;\n        readonly result: GitHubIssueDetailFact;\n    };\n    \'branch-safety\': {\n        readonly request: GitHubBranchSafetyReadRequest;\n        readonly result: GitHubBranchSafetyFact;\n    };\n    project: {\n        readonly request: GitHubProjectReadRequest;\n        readonly result: GitHubProjectFact;\n    };\n    \'tag-reference\': {\n        readonly request: GitHubTagReferenceReadRequest;\n        readonly result: GitHubTagReferenceFact;\n    };\n    \'tag-object\': {\n        readonly request: GitHubTagObjectReadRequest;\n        readonly result: GitHubTagPeelFact;\n    };\n    \'release-by-tag\': {\n        readonly request: GitHubReleaseByTagReadRequest;\n        readonly result: GitHubReleaseByTagObservation;\n    };\n    commit: {\n        readonly request: GitHubCommitReadRequest;\n        readonly result: GitHubCommitFact;\n    };\n    \'compare-commits\': {\n        readonly request: GitHubCompareCommitsReadRequest;\n        readonly result: GitHubCommitComparisonFact;\n    };\n}',
   },
   {
     name: 'GitHubReleaseByTagObservation',
@@ -3968,6 +3999,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitMutationExpectation {\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n    readonly expectedProjectRevision: number;\n    readonly expectedBinding: {\n        readonly id: SakiResourceBindingId;\n        readonly revision: number;\n    };\n    readonly expectedStatus: ProjectGitStatusFingerprint;\n    readonly expectedHead: ProjectGitHead;\n    readonly expectedIndex: Extract<ProjectGitIndexEvidence, {\n        readonly kind: \'tree\';\n    }>;\n    readonly expectedWorktree: ProjectGitWorktreeFingerprint;\n}',
   },
   {
+    name: 'GiveWorkItemToAgentIntent',
+    declaration: 'export interface GiveWorkItemToAgentIntent {\n    readonly type: \'give-work-item-to-agent\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly workItemId: SakiBoardWorkItemId;\n    readonly expectedProjectRevision: number;\n    readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint;\n}',
+  },
+  {
     name: 'GoalActivation',
     declaration: 'export type GoalActivation = \'armed\' | \'disarmed\';',
   },
@@ -4013,7 +4048,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'HostOperationAdmissionExpectation',
-    declaration: 'export interface HostOperationAdmissionExpectation<K extends HostOperationKind = HostOperationKind> {\n    readonly bindingId: SakiResourceBindingId;\n    readonly bindingRevision: number;\n    readonly preparation: HostOperationPreparation<K>;\n    readonly source: HostOperationSource;\n}',
+    declaration: 'export interface HostOperationAdmissionExpectation<K extends HostOperationKind = HostOperationKind> {\n    readonly bindingId: SakiResourceBindingId;\n    readonly bindingRevision: number;\n    readonly preparation: HostOperationPreparation<K>;\n    readonly source: HostOperationRequest<K>[\'source\'];\n}',
   },
   {
     name: 'HostOperationAdmissionSource',
@@ -4065,7 +4100,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'HostOperationRequestMap',
-    declaration: 'export interface HostOperationRequestMap {\n    readonly \'stage-files\': {\n        readonly request: StageFilesHostOperationRequest;\n        readonly result: StageFilesHostOperationResult;\n    };\n    readonly \'unstage-files\': {\n        readonly request: UnstageFilesHostOperationRequest;\n        readonly result: UnstageFilesHostOperationResult;\n    };\n    readonly commit: {\n        readonly request: CommitHostOperationRequest;\n        readonly result: CommitHostOperationResult;\n    };\n}',
+    declaration: 'export interface HostOperationRequestMap {\n    readonly \'stage-files\': {\n        readonly request: StageFilesHostOperationRequest;\n        readonly result: StageFilesHostOperationResult;\n    };\n    readonly \'unstage-files\': {\n        readonly request: UnstageFilesHostOperationRequest;\n        readonly result: UnstageFilesHostOperationResult;\n    };\n    readonly commit: {\n        readonly request: CommitHostOperationRequest;\n        readonly result: CommitHostOperationResult;\n    };\n    readonly \'start-agent-run\': {\n        readonly request: StartAgentRunHostOperationRequest;\n        readonly result: StartAgentRunHostOperationResult;\n    };\n}',
   },
   {
     name: 'HostOperationResult',
@@ -4074,10 +4109,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'HostOperationSnapshot',
     declaration: 'export type HostOperationSnapshot<K extends HostOperationKind = HostOperationKind> = K extends HostOperationKind ? HostOperationSnapshotBase<K> & ({\n    readonly state: \'prepared\';\n    readonly admission: {\n        readonly kind: \'not-accepted\';\n    };\n} | {\n    readonly state: \'accepted\';\n    readonly admission: Extract<HostOperationAdmissionEvidence, {\n        readonly kind: \'accepted\';\n    }>;\n} | {\n    readonly state: \'planning\';\n    readonly admission: Extract<HostOperationAdmissionEvidence, {\n        readonly kind: \'accepted\';\n    }>;\n    readonly plannedAt: number;\n} | {\n    readonly state: \'publishing\';\n    readonly admission: Extract<HostOperationAdmissionEvidence, {\n        readonly kind: \'accepted\';\n    }>;\n    readonly plannedAt: number;\n    readonly effectPlannedAt: number;\n    readonly publishingAt: number;\n} | {\n    readonly state: \'succeeded\';\n    readonly admission: Extract<HostOperationAdmissionEvidence, {\n        readonly kind: \'accepted\';\n    }>;\n    readonly completedAt: number;\n    readonly result: HostOperationResult<K>;\n} | {\n    readonly state: \'failed\';\n    readonly admission: HostOperationAdmissionEvidence;\n    readonly completedAt: number;\n    readonly failure: HostOperationFailure;\n    readonly effect: \'none\';\n} | {\n    readonly state: \'canceled\';\n    readonly admission: HostOperationAdmissionEvidence;\n    readonly completedAt: number;\n    readonly reason: HostOperationCancellationReason;\n    readonly effect: \'none\';\n} | {\n    readonly state: \'rec /* …truncated — full shape in source */',
-  },
-  {
-    name: 'HostOperationSource',
-    declaration: 'export type HostOperationSource = {\n    readonly kind: \'control-intent\';\n    readonly intentId: SakiControlIntentId;\n    readonly intentRevision: number;\n    readonly payloadDigest: string;\n};',
   },
   {
     name: 'HostOperationStartResult',
@@ -4872,6 +4903,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SakiAccessLogoutResult = {\n    readonly ok: true;\n} | {\n    readonly ok: false;\n    readonly reason: \'unavailable\';\n};',
   },
   {
+    name: 'SakiAgentProfileId',
+    declaration: 'export type SakiAgentProfileId = Branded<\'SakiAgentProfileId\'>;',
+  },
+  {
+    name: 'SakiAgentRunId',
+    declaration: 'export type SakiAgentRunId = Branded<\'SakiAgentRunId\'>;',
+  },
+  {
+    name: 'SakiAgentRunMessageSource',
+    declaration: 'export interface SakiAgentRunMessageSource {\n    readonly kind: \'saki-agent-run\';\n    readonly dispatchId: SakiExecutionDispatchId;\n    readonly agentRunId: SakiAgentRunId;\n    readonly workSessionId: SakiWorkSessionId;\n}',
+  },
+  {
     name: 'SakiAuthenticatedAccessProjection',
     declaration: 'export interface SakiAuthenticatedAccessProjection {\n    readonly kind: \'authenticated\';\n    readonly principal: {\n        readonly id: SakiPrincipalId;\n        readonly displayName: string;\n    };\n    readonly expiresAt: number;\n    readonly requestToken: string;\n}',
   },
@@ -4964,6 +5007,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SakiDevelopmentWorkspaceQuery {\n    readonly type: \'development-workspace\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n}',
   },
   {
+    name: 'SakiExecutionDispatchId',
+    declaration: 'export type SakiExecutionDispatchId = Branded<\'SakiExecutionDispatchId\'>;',
+  },
+  {
     name: 'SakiGitHubMappingHealthProjection',
     declaration: 'export type SakiGitHubMappingHealthProjection = {\n    readonly state: \'unconfigured\';\n} | {\n    readonly state: \'revalidation-required\';\n    readonly configurationRevision: number;\n} | {\n    readonly state: \'valid\';\n    readonly configurationRevision: number;\n    readonly validatedAt: number;\n} | {\n    readonly state: \'repair-required\';\n    readonly configurationRevision: number;\n    readonly issues: readonly SakiGitHubMappingIssue[];\n};',
   },
@@ -5037,7 +5084,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiIntentMap',
-    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n    readonly \'create-work-item\': CreateWorkItemIntent;\n    readonly \'move-work-item\': MoveWorkItemIntent;\n}',
+    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n    readonly \'create-work-item\': CreateWorkItemIntent;\n    readonly \'move-work-item\': MoveWorkItemIntent;\n    readonly \'give-work-item-to-agent\': GiveWorkItemToAgentIntent;\n}',
   },
   {
     name: 'SakiIntentReceipt',
@@ -5118,6 +5165,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SakiUnauthenticatedAccessProjection',
     declaration: 'export type SakiUnauthenticatedAccessProjection = {\n    readonly kind: \'bootstrap-required\';\n    readonly message: \'Local bootstrap is required.\';\n} | {\n    readonly kind: \'session-required\';\n    readonly message: \'A local browser session is required.\';\n} | {\n    readonly kind: \'unavailable\';\n    readonly message: \'Local access is temporarily unavailable.\';\n};',
+  },
+  {
+    name: 'SakiWorkSessionId',
+    declaration: 'export type SakiWorkSessionId = Branded<\'SakiWorkSessionId\'>;',
   },
   {
     name: 'SandboxEnforcement',
@@ -5573,7 +5624,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'StageFilesHostOperationRequest',
-    declaration: 'export interface StageFilesHostOperationRequest {\n    readonly type: \'stage-files\';\n    readonly source: HostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly changes: readonly SelectedProjectGitChange[];\n}',
+    declaration: 'export interface StageFilesHostOperationRequest {\n    readonly type: \'stage-files\';\n    readonly source: ControlIntentHostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly changes: readonly SelectedProjectGitChange[];\n}',
   },
   {
     name: 'StageFilesHostOperationResult',
@@ -5582,6 +5633,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'StageFilesIntent',
     declaration: 'export interface StageFilesIntent {\n    readonly type: \'stage-files\';\n    readonly intentId: SakiControlIntentId;\n    readonly expected: GitMutationExpectation;\n    readonly changes: readonly SelectedProjectGitChange[];\n}',
+  },
+  {
+    name: 'StartAgentRunHostOperationRequest',
+    declaration: 'export interface StartAgentRunHostOperationRequest {\n    readonly type: \'start-agent-run\';\n    readonly source: ExecutionDispatchHostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly run: {\n        readonly agentRunId: SakiAgentRunId;\n        readonly workSessionId: SakiWorkSessionId;\n        readonly sessionId: SessionId;\n        readonly profile: StartAgentRunProfile;\n        readonly input: StartAgentRunInputMessage;\n    };\n}',
+  },
+  {
+    name: 'StartAgentRunHostOperationResult',
+    declaration: 'export interface StartAgentRunHostOperationResult {\n    readonly type: \'start-agent-run\';\n    readonly agentRunId: SakiAgentRunId;\n    readonly workSessionId: SakiWorkSessionId;\n    readonly sessionId: SessionId;\n    readonly inputMessageId: MessageId;\n}',
+  },
+  {
+    name: 'StartAgentRunInputMessage',
+    declaration: 'export type StartAgentRunInputMessage = UserMessage & {\n    readonly id: MessageId;\n    readonly role: \'user\';\n    readonly content: [\n        TextBlock\n    ];\n    readonly source: SakiAgentRunMessageSource;\n};',
+  },
+  {
+    name: 'StartAgentRunProfile',
+    declaration: 'export interface StartAgentRunProfile {\n    readonly id: SakiAgentProfileId;\n    readonly version: number;\n    readonly agentPresetId: string;\n    readonly modelRoute: {\n        readonly provider: string;\n        readonly model: string;\n    };\n}',
   },
   {
     name: 'StorageBackend',
@@ -6073,7 +6140,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'UnstageFilesHostOperationRequest',
-    declaration: 'export interface UnstageFilesHostOperationRequest {\n    readonly type: \'unstage-files\';\n    readonly source: HostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly changes: readonly SelectedProjectGitChange[];\n}',
+    declaration: 'export interface UnstageFilesHostOperationRequest {\n    readonly type: \'unstage-files\';\n    readonly source: ControlIntentHostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly changes: readonly SelectedProjectGitChange[];\n}',
   },
   {
     name: 'UnstageFilesHostOperationResult',

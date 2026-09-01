@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-17-saki-work-sessions-over-dsh-lineage.md
-2026-08-17-saki-work-sessions-over-dsh-lineage.md: 02b8ee88872a1ecbf72059833e3276b467548cd2
-2026-08-17-saki-work-sessions-over-dsh-lineage.zh.md: d70669549046b84a28ef400cfe017b06b539c1f0
+2026-08-17-saki-work-sessions-over-dsh-lineage.md: 5b339337f1a87a5966b3523337488c8bc8ed70a3
+2026-08-17-saki-work-sessions-over-dsh-lineage.zh.md: 821997fe137dd1689e50f1ff56eb7ee2b72158d5

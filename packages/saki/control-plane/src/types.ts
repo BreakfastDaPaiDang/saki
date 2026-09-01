@@ -38,15 +38,28 @@ import type {
   ProjectSelectionProjection,
   ReadProjectDiffRequest,
   ReadProjectDiffResult,
+  SessionId,
+  SakiAgentProfileId,
   SakiControlIntentId,
+  SakiAgentRunId,
+  SakiExecutionDispatchId,
   SakiHostId,
   SakiResourceBindingId,
+  SakiWorkSessionId,
   SelectedProjectGitChange,
   StageFilesHostOperationResult,
   UnstageFilesHostOperationResult,
 } from '@breakfastdapaidang/saki-execution'
 
-export type { SakiControlIntentId, SakiHostId, SakiResourceBindingId } from '@breakfastdapaidang/saki-execution'
+export type {
+  SakiAgentRunId,
+  SakiAgentProfileId,
+  SakiControlIntentId,
+  SakiExecutionDispatchId,
+  SakiHostId,
+  SakiResourceBindingId,
+  SakiWorkSessionId,
+} from '@breakfastdapaidang/saki-execution'
 export type { ProjectGitChangeFingerprint, ProjectGitChangeId, SelectedProjectGitChange }
 export type {
   GitHubAccountId,
@@ -87,6 +100,10 @@ export type SakiBrowserSessionId = Branded<'SakiBrowserSessionId'>
 export type SakiDevelopmentProjectId = Branded<'SakiDevelopmentProjectId'>
 /** Stable receipt identity retained with one accepted Intent. */
 export type SakiIntentReceiptId = Branded<'SakiIntentReceiptId'>
+/** Stable identity of one Work Assignment. */
+export type SakiWorkAssignmentId = Branded<'SakiWorkAssignmentId'>
+/** Stable identity of one short-lived Execution Dispatch claim. */
+export type SakiDispatchClaimId = Branded<'SakiDispatchClaimId'>
 /** Stable identity of one GitHub-backed Work Item across Project membership changes. */
 export type SakiBoardWorkItemId = Branded<'SakiBoardWorkItemId'>
 /** Durable recovery identity scoped to one Development Project and Work Item. */
@@ -721,6 +738,86 @@ export interface SakiBoardProjection {
   readonly mutationOverlays: readonly SakiBoardMutationOverlayProjection[]
 }
 
+interface SakiAgentRunProjectionBase {
+  readonly id: SakiAgentRunId
+  readonly revision: number
+  readonly assignmentId: SakiWorkAssignmentId
+  readonly workSessionId: SakiWorkSessionId
+  readonly sessionId: SessionId
+  readonly source: {
+    readonly kind: 'manual-give-to-agent'
+    readonly intentId: SakiControlIntentId
+    readonly projectId: SakiDevelopmentProjectId
+    readonly workItemId: SakiBoardWorkItemId
+  }
+  readonly profile: {
+    readonly id: SakiAgentProfileId
+    readonly version: number
+    readonly agentPresetId: string
+  }
+  readonly model: {
+    readonly provider: string
+    readonly model: string
+  }
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+type SakiCurrentAgentRunProjection = SakiAgentRunProjectionBase & {
+  readonly state: 'allocated' | 'starting' | 'running'
+  readonly recovery: { readonly state: 'resumable' }
+}
+
+type SakiRecentAgentRunProjection = SakiAgentRunProjectionBase & (
+  | {
+    readonly state: 'canceled'
+    readonly recovery: { readonly state: 'terminal'; readonly reason: 'authority-revoked' }
+  }
+  | {
+    readonly state: 'reconciliation-required'
+    readonly recovery: {
+      readonly state: 'required'
+      readonly reason: 'effect-unknown' | 'evidence-conflict' | 'protocol'
+    }
+  }
+)
+
+/** Browser-safe summary of one current or recent manual Agent Run. */
+export type SakiAgentRunProjection = SakiCurrentAgentRunProjection | SakiRecentAgentRunProjection
+
+/** Browser-safe assigned Work Item definition and its current and recent execution state. */
+export interface SakiWorkItemDetailProjection {
+  readonly type: 'work-item-detail'
+  readonly projectId: SakiDevelopmentProjectId
+  readonly workItemId: SakiBoardWorkItemId
+  readonly definition: {
+    readonly title: string
+    readonly url: string
+    readonly number: number
+    readonly status: SakiBoardStatus
+    readonly intendedOutcome: string
+    readonly acceptanceCriteria: readonly string[]
+    readonly blockage: readonly string[]
+  }
+  readonly assignment: {
+    readonly id: SakiWorkAssignmentId
+    readonly revision: number
+    readonly state: 'assigned' | 'active' | 'canceled' | 'reconciliation-required'
+    readonly primaryWorkSessionId: SakiWorkSessionId
+    readonly createdAt: number
+    readonly updatedAt: number
+  }
+  readonly primaryWorkSession: {
+    readonly id: SakiWorkSessionId
+    readonly revision: number
+    readonly state: 'open' | 'canceled' | 'reconciliation-required'
+    readonly createdAt: number
+    readonly updatedAt: number
+  }
+  readonly currentAgentRun?: SakiCurrentAgentRunProjection | undefined
+  readonly recentAgentRuns: readonly SakiRecentAgentRunProjection[]
+}
+
 /** Safe Project Settings state for the selected Project's GitHub synchronization. */
 export interface SakiProjectSettingsProjection {
   readonly type: 'project-settings'
@@ -904,6 +1001,16 @@ export interface MoveWorkItemIntent {
   readonly position?: MoveWorkItemPosition | undefined
 }
 
+/** Explicit Host-Operator request to start one Work Item's primary Agent Run. */
+export interface GiveWorkItemToAgentIntent {
+  readonly type: 'give-work-item-to-agent'
+  readonly intentId: SakiControlIntentId
+  readonly projectId: SakiDevelopmentProjectId
+  readonly workItemId: SakiBoardWorkItemId
+  readonly expectedProjectRevision: number
+  readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint
+}
+
 /** Browser-originated create or move Work Item Intent. */
 type SakiWorkItemIntent = CreateWorkItemIntent | MoveWorkItemIntent
 
@@ -916,6 +1023,7 @@ export interface SakiIntentMap {
   readonly 'create-commit': CreateCommitIntent
   readonly 'create-work-item': CreateWorkItemIntent
   readonly 'move-work-item': MoveWorkItemIntent
+  readonly 'give-work-item-to-agent': GiveWorkItemToAgentIntent
 }
 
 /** Control Intent union derived from the request map. */
@@ -1194,6 +1302,83 @@ export type SakiWorkItemIntentReceipt<T extends SakiWorkItemIntent['type']> =
     readonly receipt: Extract<SakiWorkItemReceipt<T>, { readonly state: 'canceled' }>
   }
 
+interface SakiGiveWorkItemToAgentReceiptBase {
+  readonly id: SakiIntentReceiptId
+  readonly intentId: SakiControlIntentId
+  readonly type: 'give-work-item-to-agent'
+  readonly projectId: SakiDevelopmentProjectId
+  readonly workItemId: SakiBoardWorkItemId
+  readonly assignmentId: SakiWorkAssignmentId
+  readonly workSessionId: SakiWorkSessionId
+  readonly agentRunId: SakiAgentRunId
+  readonly dispatchId: SakiExecutionDispatchId
+}
+
+/** Durable browser-safe lifecycle for one manual Agent assignment. */
+export type SakiGiveWorkItemToAgentReceipt =
+  | (SakiGiveWorkItemToAgentReceiptBase & {
+    readonly state: 'prepared' | 'admission-reserved' | 'dispatching'
+  })
+  | (SakiGiveWorkItemToAgentReceiptBase & { readonly state: 'started' })
+  | (SakiGiveWorkItemToAgentReceiptBase & {
+    readonly state: 'conflict'
+    readonly reason:
+      | 'expected-revision'
+      | 'stale-remote'
+      | 'work-item-not-ready'
+      | 'work-item-blocked'
+      | 'acceptance-criteria-missing'
+      | 'binding-unavailable'
+      | 'inherited-changes-unsafe'
+      | 'writable-run-active'
+      | 'branch-protected'
+      | 'legacy-protection-unknown'
+  })
+  | (SakiGiveWorkItemToAgentReceiptBase & {
+    readonly state: 'canceled'
+    readonly reason: 'authority-revoked'
+  })
+  | (SakiGiveWorkItemToAgentReceiptBase & {
+    readonly state: 'reconciliation-required'
+    readonly reason: 'effect-unknown' | 'evidence-conflict' | 'protocol'
+  })
+
+/** Stable result of submitting one manual Agent assignment Intent. */
+export type SakiGiveWorkItemToAgentIntentReceipt =
+  | {
+    readonly ok: true
+    readonly receipt: Extract<SakiGiveWorkItemToAgentReceipt, { readonly state: 'started' }>
+  }
+  | { readonly ok: false; readonly reason: 'denied'; readonly receipt?: never }
+  | {
+    readonly ok: false
+    readonly reason: 'unavailable'
+    readonly detail?: (
+      | 'work-item-detail-unavailable'
+      | 'branch-safety-unavailable'
+      | 'agent-profile-unavailable'
+      | 'model-route-unavailable'
+      | 'host-unavailable') | undefined
+    readonly receipt?: Extract<SakiGiveWorkItemToAgentReceipt, {
+      readonly state: 'prepared' | 'admission-reserved' | 'dispatching'
+    }> | undefined
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'conflict'
+    readonly receipt?: Extract<SakiGiveWorkItemToAgentReceipt, { readonly state: 'conflict' }> | undefined
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'canceled'
+    readonly receipt: Extract<SakiGiveWorkItemToAgentReceipt, { readonly state: 'canceled' }>
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'reconciliation-required'
+    readonly receipt: Extract<SakiGiveWorkItemToAgentReceipt, { readonly state: 'reconciliation-required' }>
+  }
+
 /** Intent-correlated receipt result map. */
 export interface SakiIntentReceiptMap {
   readonly 'register-development-project':
@@ -1242,6 +1427,7 @@ export interface SakiIntentReceiptMap {
   readonly 'create-commit': SakiGitOperationIntentReceipt<'create-commit'>
   readonly 'create-work-item': SakiWorkItemIntentReceipt<'create-work-item'>
   readonly 'move-work-item': SakiWorkItemIntentReceipt<'move-work-item'>
+  readonly 'give-work-item-to-agent': SakiGiveWorkItemToAgentIntentReceipt
 }
 
 /** Stable terminal or recoverable result of submitting a Control Intent. */

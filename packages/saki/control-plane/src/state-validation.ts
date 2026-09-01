@@ -1,6 +1,7 @@
 /** Pure validation of opened current and exact B03 Saki state. @module @breakfastdapaidang/saki-control-plane/state-validation */
 
 import type { Domain, KvTable, TableValueOf } from '@deepseek-ai/dsh-storage-domain'
+import { validateAgentOperationsDurableState } from './agent-operations.ts'
 import { recoverBootstrapCompletion } from './bootstrap-completion.ts'
 import { validateGitHubSynchronizationDurableState } from './github-sync.ts'
 import { validateGitOperationsDurableState } from './git-operations.ts'
@@ -95,8 +96,8 @@ interface HistoricalFoundationSnapshot {
  * The operation performs synchronous reads only: it never writes, invokes Host or Workspace
  * capabilities, or changes the active Installation. The caller must exclusively own both
  * domains with no concurrent writers because cross-table reads are not internally serialized.
- * @param controlPlane - opened `saki_control_plane@6` candidate domain.
- * @param storageGeneration - opened `saki_storage_generation@4` candidate domain.
+ * @param controlPlane - opened `saki_control_plane@7` candidate domain.
+ * @param storageGeneration - opened `saki_storage_generation@5` candidate domain.
  * @param expectedInstallationId - Installation identity selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation identity selected by maintenance metadata.
  * @param expectedCreatedByBuildId - generation.json provenance that the seal must repeat.
@@ -689,12 +690,23 @@ function validateProjects(domain: ControlPlaneDomain, foundation: FoundationSnap
     state.registry,
     state.intents,
   )
-  validateGitOperationsDurableState(
+  const git = validateGitOperationsDurableState(
     domain.table('git_operation_intents'),
     domain.table('binding_write_admissions'),
     state.registry,
     otherIntentIds,
     recoverableMissingBindingIds,
+    (actor) => { validateRegistrationActorReference(actor, foundation) },
+  )
+  validateAgentOperationsDurableState(
+    domain.table('agent_operation_intents'),
+    domain.table('work_assignments'),
+    domain.table('work_sessions'),
+    domain.table('agent_runs'),
+    domain.table('execution_dispatches'),
+    domain.table('binding_write_admissions'),
+    state.registry,
+    new Set([...otherIntentIds, ...git.intents.map(intent => intent.id)]),
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
 }

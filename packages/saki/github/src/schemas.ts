@@ -5,6 +5,7 @@ import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 import {
   GITHUB_ISSUE_CREATE_BODY_UTF8_LIMIT,
   GITHUB_ISSUE_CREATE_TITLE_UTF8_LIMIT,
+  GITHUB_ISSUE_DETAIL_BODY_UTF8_LIMIT,
   GITHUB_INSTALLATION_REPOSITORY_LIMIT,
   GITHUB_PROJECT_BOARD_FIELD_LIMIT,
   GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT,
@@ -147,6 +148,20 @@ export const githubIssueFactSchema = z.object({
   title: safeText,
   url: safeUrl,
   updatedAt: safeTimestamp,
+}).strict()
+
+const githubIssueDetailBodySchema = z.string().max(GITHUB_ISSUE_DETAIL_BODY_UTF8_LIMIT)
+  .superRefine((value, ctx) => {
+    if (!value.isWellFormed()) issue(ctx, 'Issue detail body must be well-formed Unicode')
+    if (value.includes('\u0000')) issue(ctx, 'Issue detail body contains a forbidden NUL')
+    if (utf8ByteLength(value) > GITHUB_ISSUE_DETAIL_BODY_UTF8_LIMIT) {
+      issue(ctx, 'Issue detail body exceeds the complete UTF-8 byte limit')
+    }
+  })
+
+/** Strict complete targeted Issue-detail fact schema. */
+export const githubIssueDetailFactSchema = githubIssueFactSchema.extend({
+  body: githubIssueDetailBodySchema,
 }).strict()
 
 /** Strict raw Project-item content union schema. */
@@ -340,6 +355,40 @@ export const githubIssueReadRequestSchema = z.object({
   repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
   issueId: githubIssueIdSchema,
 }).strict()
+
+/** Strict complete Issue-detail read request schema. */
+export const githubIssueDetailReadRequestSchema = z.object({
+  kind: z.literal('issue-detail'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  issueId: githubIssueIdSchema,
+}).strict()
+
+const githubBranchNameSchema = z.string().min(1).max(255).superRefine((value, ctx) => {
+  if (!value.isWellFormed()) issue(ctx, 'branch name must be well-formed Unicode')
+  if (/[\u0000-\u001f\u007f]/u.test(value)) issue(ctx, 'branch name contains a forbidden control character')
+})
+
+/** Strict exact branch-safety read request schema. */
+export const githubBranchSafetyReadRequestSchema = z.object({
+  kind: z.literal('branch-safety'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  branch: githubBranchNameSchema,
+}).strict()
+
+/** Strict fail-closed branch-safety fact schema. */
+export const githubBranchSafetyFactSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('safe'), branchExists: z.literal(true), observedAt: safeTimestamp }).strict(),
+  z.object({ kind: z.literal('protected'), branchExists: z.boolean(), observedAt: safeTimestamp }).strict(),
+  z.object({
+    kind: z.literal('legacy-protection-unknown'),
+    branchExists: z.literal(false),
+    observedAt: safeTimestamp,
+  }).strict(),
+])
 
 /** Strict Project-read request schema. */
 export const githubProjectReadRequestSchema = z.object({

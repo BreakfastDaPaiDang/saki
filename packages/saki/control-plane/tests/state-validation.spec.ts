@@ -182,9 +182,10 @@ function currentFixture(): CurrentFixture {
   })
   const registry = developmentProjectRegistryRecordSchema.parse({
     id: DEVELOPMENT_PROJECT_REGISTRY_KEY,
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     projects: [],
+    agentProfiles: [],
     resourceBindings: [],
     canonicalWorktreeIndex: [],
     gitDirectoryIndex: [],
@@ -359,6 +360,11 @@ function currentDomains(
     github_sync_configuration_intents: readonlyTable(new Map()),
     git_operation_intents: readonlyTable(new Map()),
     binding_write_admissions: readonlyTable(new Map()),
+    agent_operation_intents: readonlyTable(new Map()),
+    work_assignments: readonlyTable(new Map()),
+    work_sessions: readonlyTable(new Map()),
+    agent_runs: readonlyTable(new Map()),
+    execution_dispatches: readonlyTable(new Map()),
   }
   const controlPlane = {
     name: sakiControlPlaneDomainSpec.name,
@@ -625,7 +631,7 @@ function installHistoricalProject(fixture: HistoricalFixture): {
       resourceBindingId: BINDING_ID,
       registryRevision: 1,
     }],
-  } as DevelopmentProjectRegistryRecord
+  } as unknown as DevelopmentProjectRegistryRecord
   fixture.intents.set(intent.id, intent)
   fixture.registries.set(DEVELOPMENT_PROJECT_REGISTRY_KEY, registry)
   return { intent, registry }

@@ -7,6 +7,8 @@ import type {
   CommitHostOperationRequest,
   CommitHostOperationResult,
   CompleteInheritedChangeBaseline,
+  ControlIntentHostOperationSource,
+  ExecutionDispatchHostOperationSource,
   HostGitMutationPrecondition,
   HostOperationChange,
   HostOperationPreparation,
@@ -39,9 +41,17 @@ import type {
   ReadProjectDiffRequest,
   ReadProjectDiffResult,
   SafeGitRemoteObservation,
+  SakiAgentRunId,
+  SakiAgentProfileId,
+  SakiExecutionDispatchId,
+  SakiWorkSessionId,
   SelectedProjectGitChange,
   StageFilesHostOperationRequest,
   StageFilesHostOperationResult,
+  StartAgentRunHostOperationRequest,
+  StartAgentRunHostOperationResult,
+  StartAgentRunInputMessage,
+  StartAgentRunProfile,
   UnstageFilesHostOperationRequest,
   UnstageFilesHostOperationResult,
   WorkspaceId,
@@ -53,6 +63,7 @@ import {
   computeProjectGitStatusFingerprint,
   computeProjectGitStatusSeedDigest,
   computeProjectInspectionFingerprint,
+  computeStartAgentRunPayloadDigest,
   inheritedChangeBaselineIdentityMaterial,
   projectGitStatusSeedMaterial,
 } from './fingerprint.ts'
@@ -80,7 +91,27 @@ const workspaceIdSchema = z.string().transform(value => value as WorkspaceId)
 /** Strict Control Intent identity shared with the Host Operation seam. */
 export const sakiControlIntentIdSchema = z.string()
   .regex(/^intent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
-  .transform(value => value as HostOperationSource['intentId'])
+  .transform(value => value as ControlIntentHostOperationSource['intentId'])
+
+/** Strict Development Agent Profile identity shared with the control plane. */
+export const sakiAgentProfileIdSchema = z.string()
+  .regex(/^agent-profile-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  .transform(value => value as SakiAgentProfileId)
+
+/** Strict Execution Dispatch identity shared with Agent-start Host Operations. */
+export const sakiExecutionDispatchIdSchema = z.string()
+  .regex(/^dispatch-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  .transform(value => value as SakiExecutionDispatchId)
+
+/** Strict Agent Run identity shared with Agent-start Host Operations. */
+export const sakiAgentRunIdSchema = z.string()
+  .regex(/^agent-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  .transform(value => value as SakiAgentRunId)
+
+/** Strict Work Session identity shared with Agent-start Host Operations. */
+export const sakiWorkSessionIdSchema = z.string()
+  .regex(/^work-session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  .transform(value => value as SakiWorkSessionId)
 /** Strict durable Host Operation identity. */
 export const hostOperationIdSchema = z.string()
   .regex(/^host-operation-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
@@ -129,6 +160,8 @@ export const MAX_PROJECT_GIT_DIFF_TOTAL_UTF8_BYTES = 16 * 1024 * 1024
 export const MAX_HOST_OPERATION_SELECTED_CHANGES = MAX_PROJECT_GIT_STATUS_CHANGES
 /** Fixed protocol ceiling for one persisted Commit message. */
 export const MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES = 1024 * 1024
+/** Fixed protocol ceiling for one complete model-visible Agent Run input. */
+export const MAX_START_AGENT_RUN_INPUT_UTF8_BYTES = 256 * 1024
 
 const symbolicHeadRef = z.string().min(1).max(MAX_GIT_REF_CHARS).refine(value =>
   value.startsWith('refs/heads/')
@@ -938,15 +971,28 @@ export const readProjectDiffResultSchema: z.ZodType<ReadProjectDiffResult> = z.d
   }).strict(),
 ])
 
-/** Immutable direct-Control-Intent source of one B07 Host Operation. */
-export const hostOperationSourceSchema: z.ZodType<HostOperationSource> = z.object({
+/** Immutable direct-Control-Intent source of one structured Git Host Operation. */
+export const controlIntentHostOperationSourceSchema = z.object({
   kind: z.literal('control-intent'),
   intentId: sakiControlIntentIdSchema,
   intentRevision: safeNonnegative,
   payloadDigest: digest,
-}).strict()
+}).strict() satisfies z.ZodType<ControlIntentHostOperationSource>
 
-/** Exact complete Git evidence required before a structured mutation. */
+/** Immutable Execution Dispatch source of one Agent-start Host Operation. */
+export const executionDispatchHostOperationSourceSchema = z.object({
+  kind: z.literal('execution-dispatch'),
+  dispatchId: sakiExecutionDispatchIdSchema,
+  payloadDigest: digest,
+}).strict() satisfies z.ZodType<ExecutionDispatchHostOperationSource>
+
+/** Closed current Host Operation source union. */
+export const hostOperationSourceSchema = z.discriminatedUnion('kind', [
+  controlIntentHostOperationSourceSchema,
+  executionDispatchHostOperationSourceSchema,
+]) satisfies z.ZodType<HostOperationSource>
+
+/** Exact complete Git evidence required before one writable Host operation. */
 export const hostGitMutationPreconditionSchema: z.ZodType<HostGitMutationPrecondition> = z.object({
   binding: activeHostProjectBindingSchema,
   status: projectGitStatusFingerprintSchema,
@@ -986,22 +1032,22 @@ const selectedProjectGitChangesSchema = z.custom<unknown[]>(
     }
   })
 
-const hostOperationRequestBaseShape = {
-  source: hostOperationSourceSchema,
+const gitHostOperationRequestBaseShape = {
+  source: controlIntentHostOperationSourceSchema,
   expected: hostGitMutationPreconditionSchema,
 } as const
 
 /** Strict StageFiles request; paths remain Host-resolved. */
 export const stageFilesHostOperationRequestSchema = z.object({
   type: z.literal('stage-files'),
-  ...hostOperationRequestBaseShape,
+  ...gitHostOperationRequestBaseShape,
   changes: selectedProjectGitChangesSchema,
 }).strict() satisfies z.ZodType<StageFilesHostOperationRequest>
 
 /** Strict UnstageFiles request; paths remain Host-resolved. */
 export const unstageFilesHostOperationRequestSchema = z.object({
   type: z.literal('unstage-files'),
-  ...hostOperationRequestBaseShape,
+  ...gitHostOperationRequestBaseShape,
   changes: selectedProjectGitChangesSchema,
 }).strict() satisfies z.ZodType<UnstageFilesHostOperationRequest>
 
@@ -1015,16 +1061,83 @@ const commitMessageSchema = z.string()
 /** Strict deterministic Commit request with no caller identity or ref authority. */
 export const commitHostOperationRequestSchema = z.object({
   type: z.literal('commit'),
-  ...hostOperationRequestBaseShape,
+  ...gitHostOperationRequestBaseShape,
   message: commitMessageSchema,
 }).strict() satisfies z.ZodType<CommitHostOperationRequest>
 
+const productUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+const startAgentRunMessageIdSchema = z.string().regex(productUuid)
+  .transform(value => value as StartAgentRunInputMessage['id'])
+const startAgentRunSessionIdSchema = z.string()
+  .regex(/^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u)
+  .transform(value => value as StartAgentRunHostOperationRequest['run']['sessionId'])
+const startAgentRunTextSchema = z.string()
+  .min(1)
+  .max(MAX_START_AGENT_RUN_INPUT_UTF8_BYTES)
+  .refine(value => value.isWellFormed() && !value.includes('\0'))
+  .refine(value => UTF8.encode(value).byteLength <= MAX_START_AGENT_RUN_INPUT_UTF8_BYTES)
+
+/** Exact provenance carried by one preallocated Agent Run input. */
+export const sakiAgentRunMessageSourceSchema = z.object({
+  kind: z.literal('saki-agent-run'),
+  dispatchId: sakiExecutionDispatchIdSchema,
+  agentRunId: sakiAgentRunIdSchema,
+  workSessionId: sakiWorkSessionIdSchema,
+}).strict()
+
+/** Exact text-only UserMessage delivered by StartAgentRun. */
+export const startAgentRunInputMessageSchema: z.ZodType<StartAgentRunInputMessage> = z.object({
+  id: startAgentRunMessageIdSchema,
+  role: z.literal('user'),
+  content: z.tuple([z.object({ type: z.literal('text'), text: startAgentRunTextSchema }).strict()]),
+  source: sakiAgentRunMessageSourceSchema,
+}).strict()
+
+/** Immutable Development Agent Profile values mounted for one Run. */
+export const startAgentRunProfileSchema: z.ZodType<StartAgentRunProfile> = z.object({
+  id: sakiAgentProfileIdSchema,
+  version: positive,
+  agentPresetId: z.string().min(1).max(200).regex(/^[a-z0-9][a-z0-9-]*$/u),
+  modelRoute: z.object({
+    provider: z.string().min(1).max(200),
+    model: z.string().min(1).max(200),
+  }).strict(),
+}).strict()
+
+/** Strict Agent-start request with full writable preconditions and frozen input. */
+export const startAgentRunHostOperationRequestSchema = z.object({
+  type: z.literal('start-agent-run'),
+  source: executionDispatchHostOperationSourceSchema,
+  expected: hostGitMutationPreconditionSchema,
+  run: z.object({
+    agentRunId: sakiAgentRunIdSchema,
+    workSessionId: sakiWorkSessionIdSchema,
+    sessionId: startAgentRunSessionIdSchema,
+    profile: startAgentRunProfileSchema,
+    input: startAgentRunInputMessageSchema,
+  }).strict(),
+}).strict().superRefine((value, context) => {
+  if (value.run.input.source.dispatchId !== value.source.dispatchId) {
+    context.addIssue({ code: 'custom', message: 'Agent Run input disagrees with its Dispatch', path: ['run', 'input', 'source', 'dispatchId'] })
+  }
+  if (value.run.input.source.agentRunId !== value.run.agentRunId) {
+    context.addIssue({ code: 'custom', message: 'Agent Run input disagrees with its Run', path: ['run', 'input', 'source', 'agentRunId'] })
+  }
+  if (value.run.input.source.workSessionId !== value.run.workSessionId) {
+    context.addIssue({ code: 'custom', message: 'Agent Run input disagrees with its Work Session', path: ['run', 'input', 'source', 'workSessionId'] })
+  }
+  if (computeStartAgentRunPayloadDigest(value.run.input) !== value.source.payloadDigest) {
+    context.addIssue({ code: 'custom', message: 'Agent Run input disagrees with its payload digest', path: ['source', 'payloadDigest'] })
+  }
+}) satisfies z.ZodType<StartAgentRunHostOperationRequest>
+
 /** Closed current Host Operation request union. */
-export const hostOperationRequestSchema: z.ZodType<HostOperationRequest> = z.discriminatedUnion('type', [
+export const hostOperationRequestSchema = z.discriminatedUnion('type', [
   stageFilesHostOperationRequestSchema,
   unstageFilesHostOperationRequestSchema,
   commitHostOperationRequestSchema,
-])
+  startAgentRunHostOperationRequestSchema,
+]) satisfies z.ZodType<HostOperationRequest>
 
 /** One selected change path resolved by the Host after observation matching. */
 export const appliedProjectGitChangeSchema: z.ZodType<AppliedProjectGitChange> = z.object({
@@ -1112,17 +1225,30 @@ export const commitHostOperationResultSchema = z.object({
   }
 }) satisfies z.ZodType<CommitHostOperationResult>
 
+/** Stable evidence that the intended Agent Run and initial input exist. */
+const startAgentRunHostOperationResultObjectSchema = z.object({
+  type: z.literal('start-agent-run'),
+  agentRunId: sakiAgentRunIdSchema,
+  workSessionId: sakiWorkSessionIdSchema,
+  sessionId: startAgentRunSessionIdSchema,
+  inputMessageId: startAgentRunMessageIdSchema,
+}).strict() satisfies z.ZodType<StartAgentRunHostOperationResult>
+/** Strict evidence schema for one durable Agent Run and its exact initial input. */
+export const startAgentRunHostOperationResultSchema: z.ZodType<StartAgentRunHostOperationResult> =
+  startAgentRunHostOperationResultObjectSchema
+
 const hostOperationResultSchema = z.discriminatedUnion('type', [
   stageFilesHostOperationResultSchema,
   unstageFilesHostOperationResultSchema,
   commitHostOperationResultSchema,
+  startAgentRunHostOperationResultObjectSchema,
 ])
 
 /** Stable provider-routed Host Operation reference. */
 export const hostOperationReferenceSchema: z.ZodType<HostOperationReference> = z.object({
   id: hostOperationIdSchema,
   hostId: hostId.transform(value => value as HostOperationReference['hostId']),
-  type: z.enum(['stage-files', 'unstage-files', 'commit']),
+  type: z.enum(['stage-files', 'unstage-files', 'commit', 'start-agent-run']),
 }).strict()
 
 /** Versioned immutable Host Operation request digest. */
@@ -1245,6 +1371,10 @@ export const hostOperationSnapshotSchema: z.ZodType<HostOperationSnapshot> = z.d
   }
   if (value.state === 'succeeded' && value.result.type !== value.operation.type) {
     context.addIssue({ code: 'custom', message: 'Host Operation result type disagrees with its reference', path: ['result'] })
+  }
+  const expectedSourceKind = value.operation.type === 'start-agent-run' ? 'execution-dispatch' : 'control-intent'
+  if (value.source.kind !== expectedSourceKind) {
+    context.addIssue({ code: 'custom', message: 'Host Operation source disagrees with its reference', path: ['source'] })
   }
 }) as unknown as z.ZodType<HostOperationSnapshot>
 

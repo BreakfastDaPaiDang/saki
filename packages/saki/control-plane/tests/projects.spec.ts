@@ -90,6 +90,10 @@ const CONTROL_CONFIG = {
   terminalRetentionMs: 86_400_000,
   cookieName: 'saki_session',
 } as const
+const DEFAULT_AGENT_PROFILE_TEMPLATE = {
+  agentPresetId: 'standard',
+  modelRouteRequest: { provider: 'test-provider', model: 'test-model' },
+} as const
 
 interface DurablePaths {
   readonly root: string
@@ -857,9 +861,9 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const database = new DatabaseSync(durable.sqlite)
     try {
       expect(database.prepare('SELECT name, version FROM units ORDER BY name').all()).toEqual([
-        { name: 'saki_control_plane', version: 6 },
+        { name: 'saki_control_plane', version: 7 },
         { name: 'saki_host_execution', version: 1 },
-        { name: 'saki_storage_generation', version: 4 },
+        { name: 'saki_storage_generation', version: 5 },
       ])
       const tables = database.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
@@ -1861,15 +1865,26 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       } as never,
       authorityCurrent: () => true,
       validateActorReference: () => {},
+      defaultAgentProfileTemplate: DEFAULT_AGENT_PROFILE_TEMPLATE,
     })
 
-    expect(await projects.register(
+    const registration = await projects.register(
       otherRequest,
       { ...firstIntent.payload.actor, hostId: otherHostId },
       otherInspection,
       new AbortController().signal,
-    )).toMatchObject({ ok: true, receipt: { state: 'confirmed', registryRevision: 2 } })
+    )
+    expect(registration).toMatchObject({ ok: true, receipt: { state: 'confirmed', registryRevision: 2 } })
+    if (!registration.ok) throw new Error('second Host registration failed')
     const committed = projects.registry()
+    const otherProject = committed.projects.find(project => project.id === registration.receipt.projectId)
+    const otherProfile = committed.agentProfiles.find(profile => profile.id === otherProject?.defaultAgentProfileId)
+    expect(otherProfile).toMatchObject({
+      projectId: registration.receipt.projectId,
+      version: 1,
+      agentPresetId: 'standard',
+      modelRouteRequest: { provider: 'test-provider', model: 'test-model' },
+    })
     expect(committed.resourceBindings.map(binding => binding.hostId)).toEqual([
       firstIntent.payload.actor.hostId,
       otherHostId,
@@ -3372,13 +3387,18 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       workspaces: harness.ctx.workspaceRegistry,
       authorityCurrent: () => true,
       validateActorReference: () => {},
+      defaultAgentProfileTemplate: DEFAULT_AGENT_PROFILE_TEMPLATE,
     })
     const missingProjectId = 'project-b4b4b4b4-b4b4-44b4-84b4-b4b4b4b4b4b4' as typeof registry.projects[number]['id']
+    const missingAgentProfileId = 'agent-profile-b4b4b4b4-b4b4-44b4-84b4-b4b4b4b4b4b4' as typeof registry.agentProfiles[number]['id']
     const missingBindingId = 'binding-b4b4b4b4-b4b4-44b4-84b4-b4b4b4b4b4b4' as typeof registry.resourceBindings[number]['id']
     const missingHostId = 'host-b4b4b4b4-b4b4-44b4-84b4-b4b4b4b4b4b4' as SakiHostId
     const mutations: readonly [string, (candidate: DevelopmentProjectRegistryRecord) => void][] = [
       ['Saki registry repeats Project identity', (candidate) => {
         candidate.projects.push(structuredClone(candidate.projects[0]!))
+      }],
+      ['Saki registry repeats Agent Profile identity', (candidate) => {
+        candidate.agentProfiles.push(structuredClone(candidate.agentProfiles[0]!))
       }],
       ['Saki registry repeats Resource Binding identity', (candidate) => {
         candidate.resourceBindings.push(structuredClone(candidate.resourceBindings[0]!))
@@ -3437,6 +3457,16 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         const left = candidate.projects[0]!.resourceBindingId
         candidate.projects[0]!.resourceBindingId = candidate.projects[1]!.resourceBindingId
         candidate.projects[1]!.resourceBindingId = left
+      }],
+      ['has an inconsistent default Agent Profile', (candidate) => {
+        candidate.projects[0]!.defaultAgentProfileId = missingAgentProfileId
+      }],
+      ['belongs to an unknown Project', (candidate) => {
+        candidate.agentProfiles.push({
+          ...structuredClone(candidate.agentProfiles[0]!),
+          id: missingAgentProfileId,
+          projectId: missingProjectId,
+        })
       }],
       ['has inconsistent path indices', (candidate) => {
         candidate.canonicalWorktreeIndex[0]!.path = join(durable.root, 'wrong-worktree')
@@ -3594,6 +3624,8 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       ['has no mapping', (candidateRegistry) => {
         const mapping = candidateRegistry.intentMappings.shift()!
         candidateRegistry.projects = candidateRegistry.projects.filter(project => project.id !== mapping.projectId)
+        candidateRegistry.agentProfiles = candidateRegistry.agentProfiles
+          .filter(profile => profile.projectId !== mapping.projectId)
         candidateRegistry.resourceBindings = candidateRegistry.resourceBindings
           .filter(binding => binding.id !== mapping.resourceBindingId)
         candidateRegistry.canonicalWorktreeIndex = candidateRegistry.canonicalWorktreeIndex
@@ -3732,6 +3764,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       workspaces: harness.ctx.workspaceRegistry,
       authorityCurrent: () => authority,
       validateActorReference: () => {},
+      defaultAgentProfileTemplate: DEFAULT_AGENT_PROFILE_TEMPLATE,
     })
 
     authority = false
@@ -3872,6 +3905,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       workspaces: harness.ctx.workspaceRegistry,
       authorityCurrent: () => true,
       validateActorReference: () => {},
+      defaultAgentProfileTemplate: DEFAULT_AGENT_PROFILE_TEMPLATE,
     })
     const race = async (
       firstResult: InspectProjectSelectionResult,

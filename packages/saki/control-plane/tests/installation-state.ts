@@ -20,7 +20,7 @@ class FixedSakiInstallationState extends SakiInstallationState {
   readonly phase: 'provisioning' | 'ready'
   readonly installationId: SakiInstallationId
   readonly storageGenerationId: SakiStorageGenerationId
-  readonly stateVersion = 6 as const
+  readonly stateVersion = 7 as const
   readonly createdByBuildId: SakiBuildId
 
   constructor(ctx: Context, state: TestSakiInstallationState) {
@@ -41,7 +41,7 @@ export const TEST_SAKI_INSTALLATION_STATE: TestSakiInstallationState = Object.fr
   phase: 'provisioning',
   installationId: 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId,
   storageGenerationId: 'storage-generation-00000000-0000-4000-8000-000000000002' as SakiStorageGenerationId,
-  stateVersion: 6,
+  stateVersion: 7,
   createdByBuildId: 'saki-build-test' as SakiBuildId,
 })
 
@@ -56,7 +56,7 @@ export const NEXT_SAKI_INSTALLATION_STATE: TestSakiInstallationState = Object.fr
   phase: 'ready',
   installationId: TEST_SAKI_INSTALLATION_STATE.installationId,
   storageGenerationId: 'storage-generation-00000000-0000-4000-8000-000000000003' as SakiStorageGenerationId,
-  stateVersion: 6,
+  stateVersion: 7,
   createdByBuildId: TEST_SAKI_INSTALLATION_STATE.createdByBuildId,
 })
 

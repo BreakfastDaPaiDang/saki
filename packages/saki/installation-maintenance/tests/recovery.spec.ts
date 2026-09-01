@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path'
 import type { KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
 import { descriptorOf, type DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
-import { sakiHostExecutionDomainSpec } from '@breakfastdapaidang/saki-execution-local'
+import { sakiHostExecutionV1DomainSpec } from '@breakfastdapaidang/saki-execution-local'
 import type {
   SakiBuildId,
   SakiInstallationId,
@@ -50,13 +50,16 @@ import {
   sakiControlPlaneV3DomainSpec,
   sakiControlPlaneV4DomainSpec,
   sakiControlPlaneV5DomainSpec,
+  sakiControlPlaneV6DomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
+  sakiStorageGenerationV4DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
   storageGenerationV3SealRecordSchema,
+  storageGenerationV4SealRecordSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
   captureSqliteArtifactSet,
@@ -108,6 +111,7 @@ const V2_UPGRADE_SOURCE = {
 const V3_UPGRADE_SOURCE = { ...V2_UPGRADE_SOURCE, sourceStateVersion: 3 } as const
 const V4_UPGRADE_SOURCE = { ...V2_UPGRADE_SOURCE, sourceStateVersion: 4 } as const
 const V5_UPGRADE_SOURCE = { ...V2_UPGRADE_SOURCE, sourceStateVersion: 5 } as const
+const V6_UPGRADE_SOURCE = { ...V2_UPGRADE_SOURCE, sourceStateVersion: 6 } as const
 const HOST_ID = 'host-00000000-0000-4000-8000-000000000003'
 const PRINCIPAL_ID = 'principal-00000000-0000-4000-8000-000000000004'
 const GRANT_ID = 'grant-00000000-0000-4000-8000-000000000005'
@@ -240,12 +244,13 @@ async function materializeHistorical(databasePath: string, signal: AbortSignal):
 
 async function materializeHistoricalSealedGeneration(
   databasePath: string,
-  stateVersion: 3 | 4 | 5,
+  stateVersion: 3 | 4 | 5 | 6,
   signal: AbortSignal,
 ): Promise<void> {
   const v3Snapshot = sakiControlPlaneMigrationPlan.steps[0]!.migrate(historicalSnapshot())
   const v4Snapshot = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3Snapshot)
   const v5Snapshot = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4Snapshot)
+  const v6Snapshot = sakiControlPlaneMigrationPlan.steps[3]!.migrate(v5Snapshot)
   const units: readonly { readonly spec: DomainSpec; readonly snapshot: KvUnitSnapshot }[] = [
     stateVersion === 3
       ? { spec: sakiControlPlaneV3DomainSpec, snapshot: v3Snapshot }
@@ -254,7 +259,9 @@ async function materializeHistoricalSealedGeneration(
           spec: sakiControlPlaneV4DomainSpec,
           snapshot: v4Snapshot,
         }
-        : { spec: sakiControlPlaneV5DomainSpec, snapshot: v5Snapshot },
+        : stateVersion === 5
+          ? { spec: sakiControlPlaneV5DomainSpec, snapshot: v5Snapshot }
+          : { spec: sakiControlPlaneV6DomainSpec, snapshot: v6Snapshot },
     stateVersion === 3
       ? {
         spec: sakiStorageGenerationV1DomainSpec,
@@ -291,29 +298,47 @@ async function materializeHistoricalSealedGeneration(
             },
           },
         }
-        : {
-          spec: sakiStorageGenerationV3DomainSpec,
-          snapshot: {
-            global: null,
-            tables: {
-              storage_generation: {
-                [STORAGE_GENERATION_KEY]: storageGenerationV3SealRecordSchema.parse({
-                  schemaVersion: 3,
-                  installationId: INSTALLATION_ID,
-                  storageGenerationId: OLD_STORAGE_GENERATION_ID,
-                  stateVersion: 5,
-                  createdByBuildId: OLD_BUILD_ID,
-                }),
+        : stateVersion === 5
+          ? {
+            spec: sakiStorageGenerationV3DomainSpec,
+            snapshot: {
+              global: null,
+              tables: {
+                storage_generation: {
+                  [STORAGE_GENERATION_KEY]: storageGenerationV3SealRecordSchema.parse({
+                    schemaVersion: 3,
+                    installationId: INSTALLATION_ID,
+                    storageGenerationId: OLD_STORAGE_GENERATION_ID,
+                    stateVersion: 5,
+                    createdByBuildId: OLD_BUILD_ID,
+                  }),
+                },
+              },
+            },
+          }
+          : {
+            spec: sakiStorageGenerationV4DomainSpec,
+            snapshot: {
+              global: null,
+              tables: {
+                storage_generation: {
+                  [STORAGE_GENERATION_KEY]: storageGenerationV4SealRecordSchema.parse({
+                    schemaVersion: 4,
+                    installationId: INSTALLATION_ID,
+                    storageGenerationId: OLD_STORAGE_GENERATION_ID,
+                    stateVersion: 6,
+                    createdByBuildId: OLD_BUILD_ID,
+                  }),
+                },
               },
             },
           },
-        },
-    ...(stateVersion === 5
+    ...(stateVersion === 5 || stateVersion === 6
       ? [{
-        spec: sakiHostExecutionDomainSpec,
+        spec: sakiHostExecutionV1DomainSpec,
         snapshot: {
           global: null,
-          tables: Object.fromEntries(Object.keys(sakiHostExecutionDomainSpec.tables).map(table => [table, {}])),
+          tables: Object.fromEntries(Object.keys(sakiHostExecutionV1DomainSpec.tables).map(table => [table, {}])),
         },
       }]
       : []),
@@ -397,7 +422,7 @@ async function publishHistoricalGeneration(
 
 async function publishHistoricalSealedGeneration(
   root: string,
-  stateVersion: 3 | 4 | 5,
+  stateVersion: 3 | 4 | 5 | 6,
   signal: AbortSignal,
 ): Promise<{ readonly databasePath: string; readonly generationBytes: Buffer }> {
   const generationDirectory = join(root, 'generations', OLD_STORAGE_GENERATION_ID)
@@ -1019,6 +1044,37 @@ describe('active Saki operation recovery', () => {
     await expect(readActiveOperation(root, signal)).resolves.toBeUndefined()
   })
 
+  it('settles an interrupted upgrade while an exact selected v6 source remains authoritative', async () => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(10_000)
+    const selected = await publishHistoricalSealedGeneration(root, 6, signal)
+    const before = await readFile(selected.databasePath)
+    const authorityBefore = await readFile(join(root, 'installation.json'))
+    const journal = createOperationJournal({
+      kind: 'upgrade',
+      operationId: createSakiMaintenanceOperationId(),
+      installationId: INSTALLATION_ID,
+      ...V6_UPGRADE_SOURCE,
+      backupId: createSakiRecoveryBackupId(),
+      candidateStorageGenerationId: CANDIDATE_ID,
+    })
+    if (journal.kind !== 'upgrade') throw new Error('test journal changed kind')
+    await publishActiveOperation(root, journal, signal)
+
+    await recoverActiveSakiOperation(root, join(root, 'unused-legacy.sqlite'), signal)
+
+    expect(await readFile(selected.databasePath)).toEqual(before)
+    expect(await readFile(join(root, 'installation.json'))).toEqual(authorityBefore)
+    await expect(readInstallationManifest(root, signal)).resolves.toMatchObject({
+      value: {
+        phase: 'ready',
+        stateVersion: 6,
+        storageGenerationId: OLD_STORAGE_GENERATION_ID,
+      },
+    })
+    await expect(readActiveOperation(root, signal)).resolves.toBeUndefined()
+  })
+
   it('rolls back an upgrade interrupted before its backup and candidate exist', async () => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(5_000)
@@ -1176,7 +1232,7 @@ describe('active Saki operation recovery', () => {
   it.each([
     ['provisioning', 'provisioning', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
     ['another Installation', 'ready', OTHER_INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
-    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 6],
+    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 7],
     ['the candidate generation', 'ready', INSTALLATION_ID, CANDIDATE_ID, 2],
   ] as const)(
     'retains an upgrade when published authority selects %s',

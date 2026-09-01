@@ -61,6 +61,7 @@ import type {
 
 const PROJECT = SAKI_PROJECT_PROJECTION_FIXTURES.developmentWorkspace.project
 const PROJECT_ID = PROJECT.id
+const AGENT_PROFILE_ID = 'agent-profile-00000000-0000-4000-8000-000000000015' as const
 const BINDING_ID = PROJECT.binding.id
 const HOST_ID = PROJECT.binding.hostId
 const OTHER_HOST_ID = 'host-00000000-0000-4000-8000-000000000099' as typeof HOST_ID
@@ -128,7 +129,7 @@ class TestAcceptance extends HostOperationAcceptance {
 }
 
 interface FakeOperation {
-  readonly request: HostOperationRequest
+  readonly request: HostOperationRequest<'stage-files' | 'unstage-files' | 'commit'>
   admission: HostOperationAdmissionSource
   readonly preparation: HostOperationPreparation
   readonly acceptance: HostOperationAcceptance
@@ -179,6 +180,8 @@ class FakeExecution extends SakiHostExecution {
     return { ok: false, reason: 'unavailable' }
   }
 
+  async resumeAgentRun(): Promise<never> { throw new Error('Git-only test Host cannot resume Agent Runs') }
+
   async prepareOperation<K extends HostOperationKind>(
     request: HostOperationRequest<K>,
     admission: HostOperationAdmissionSource,
@@ -189,8 +192,10 @@ class FakeExecution extends SakiHostExecution {
       ok: false,
       reason: this.prepareMode,
     }
+    if (request.type === 'start-agent-run') return { ok: false, reason: 'source-conflict' }
+    const gitRequest: HostOperationRequest<'stage-files' | 'unstage-files' | 'commit'> = request
     const existing = [...this.operations.values()].find(candidate =>
-      candidate.request.source.intentId === request.source.intentId)
+      candidate.request.source.intentId === gitRequest.source.intentId)
     if (existing !== undefined) {
       existing.admission = admission
       return {
@@ -201,32 +206,32 @@ class FakeExecution extends SakiHostExecution {
       } as HostOperationReceipt<K>
     }
     const operation = {
-      id: `host-operation-${String(request.source.intentId).slice('intent-'.length)}`,
-      hostId: request.expected.binding.hostId,
-      type: request.type,
+      id: `host-operation-${String(gitRequest.source.intentId).slice('intent-'.length)}`,
+      hostId: gitRequest.expected.binding.hostId,
+      type: gitRequest.type,
     } as HostOperationReference<K>
     const preparation = {
       operation,
       preparationRevision: 0,
       requestFingerprint: {
         version: 1 as const,
-        digest: canonicalDigest('saki/test-host-request/v1', request),
+        digest: canonicalDigest('saki/test-host-request/v1', gitRequest),
       },
     }
     const snapshot = {
       operation,
       revision: 0,
-      source: request.source,
+      source: gitRequest.source,
       requestFingerprint: preparation.requestFingerprint,
-      bindingId: request.expected.binding.id,
-      bindingRevision: request.expected.binding.revision,
+      bindingId: gitRequest.expected.binding.id,
+      bindingRevision: gitRequest.expected.binding.revision,
       preparedAt: 10,
       updatedAt: 10,
       state: 'prepared',
       admission: { kind: 'not-accepted' },
     } as HostOperationSnapshot<K>
     const stored: FakeOperation = {
-      request,
+      request: gitRequest,
       admission,
       preparation,
       acceptance: new TestAcceptance(operation.id),
@@ -236,10 +241,10 @@ class FakeExecution extends SakiHostExecution {
     this.afterPrepare?.()
     if (this.probeAdmissionDuringPrepare) {
       const decision = await admission({
-        bindingId: request.expected.binding.id,
-        bindingRevision: request.expected.binding.revision,
+        bindingId: gitRequest.expected.binding.id,
+        bindingRevision: gitRequest.expected.binding.revision,
         preparation,
-        source: request.source,
+        source: gitRequest.source,
       }, new AbortController().signal)
       this.prepareAdmissionDecision = decision.kind
     }
@@ -516,14 +521,23 @@ function statusFixture() {
   })
   const registry = developmentProjectRegistryRecordSchema.parse({
     id: 'development-project-registry',
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 1,
     projects: [{
       id: PROJECT_ID,
       revision: 0,
       projectTitle: 'Fixture project',
       resourceBindingId: BINDING_ID,
+      defaultAgentProfileId: AGENT_PROFILE_ID,
       state: 'active',
+      createdAt: 1,
+    }],
+    agentProfiles: [{
+      id: AGENT_PROFILE_ID,
+      projectId: PROJECT_ID,
+      version: 1,
+      agentPresetId: 'standard',
+      modelRouteRequest: null,
       createdAt: 1,
     }],
     resourceBindings: [resource],
@@ -2908,7 +2922,7 @@ describe('Saki structured Git operations', () => {
       operation.snapshot = {
         ...operation.snapshot,
         source: { ...operation.snapshot.source, payloadDigest: 'f'.repeat(64) },
-      }
+      } as HostOperationSnapshot
     }, 'Host snapshot disagrees with its Saki Git Intent'],
   ] as const)('rejects a Provider receipt with mismatched %s', async (_name, mutate, message) => {
     const test = harness()

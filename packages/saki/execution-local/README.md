@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-The private Local Host Service Provider implements [`ctx.sakiHostExecution`](../execution/README.md) over `ctx.fs`, `ctx.subprocess`, `ctx.workspaceRegistry`, `ctx.storageDomain`, and same-host filesystem metadata. It inspects untrusted local directory selections and revisioned bound-project status, reads bounded diffs, and executes structured Git mutations. It owns provider-private durable Host Operation records but no Project policy, Resource Binding, Workspace creation, or control-plane intent.
+The private Local Host Service Provider implements [`ctx.sakiHostExecution`](../execution/README.md) over `ctx.fs`, `ctx.subprocess`, `ctx.workspaceRegistry`, `ctx.storageDomain`, DSH Agent and Session services, and same-host filesystem metadata. It inspects untrusted local directory selections and revisioned bound-project status, reads bounded diffs, executes structured Git mutations, and creates or resumes exact Agent Runs. It owns provider-private durable Host Operation records but no Project policy, Resource Binding, Workspace creation, or control-plane intent.
 
 ## Inspection behavior
 
@@ -24,6 +24,14 @@ The private Local Host Service Provider implements [`ctx.sakiHostExecution`](../
 - **Cleanup and terminal persistence** — terminal cleanup verifies the scratch evidence at the recorded temporary path, renames the outer directory to a deterministic same-parent quarantine path derived from durable evidence, moves the owner marker outside the payload, and revalidates the outer and payload identities. It enumerates the owned payload without requesting recursive removal: real directories are identity-checked before traversal and `rmdir`, while files, symlinks, and junctions are `lstat`-checked and unlinked without following link targets. The empty outer directory and external marker are then removed non-recursively; a partial removal or acknowledgement loss leaves enough deterministic ownership evidence for terminal replay, while a foreign replacement is preserved and restoration to the recorded path is best-effort. For an operation with a durable pin plan, the Local Host precisely removes its operation-owned blocking `index.lock` or proves that link absent, synchronizes the index directory, and checks again before it persists `succeeded`, `failed`, `canceled`, or `reconciliation-required`. POSIX directory-sync errors at the scratch, source-object, index, ref, and reflog barriers propagate. Windows exposes no supported directory `fsync` to this provider, so its durability claim covers flushed files, Git's configured file synchronization, and atomic platform publication, but not directory entries across a crash. Acknowledgement loss therefore cannot expose a terminal record while its operation-owned blocking lock remains. Exact-owner, idempotent cleanup of the nonblocking pin and scratch directory follows terminal persistence, and every terminal replay retries it. A crash or filesystem failure before the plan is durable may leave a random nonblocking pin or owner-only scratch shell when exact cleanup cannot finish; recovery never sweeps such unrecorded residue.
 
 The application bootstrap environment is the authority for the Git executable and ordinary inherited process variables. The provider removes repository- and browser-controllable Git execution variables; it is not a child-process sandbox for a compromised parent environment. Filesystem metadata cancellation follows the FileSystem provider's cooperative pre/post-probe contract, while regular-file content streams are destroyed by cancellation and provider disposal waits for every call to settle.
+
+## Agent Run operations
+
+A `start-agent-run` Host Operation stores one v2 `agent-run` effect plan before touching DSH. Its exact replay mounts the frozen Agent Preset, applies the frozen Model Route, and creates or resumes the preallocated Session at the Binding's canonical worktree cwd. The physical Session header must prove that cwd and preset, and live Agent options must match the route. A mismatch, another live Agent under the same Session id, or conflicting message-source evidence becomes a conflict rather than another Run.
+
+The Provider reads detached physical Session persistence through complete snapshot and event-history reads for the exact input MessageId. Only complete absence permits one original `next-turn` insertion. After live Agent acquisition it freshly revalidates the writable Git world immediately before that insertion and before any later pending-input wake. It flushes and re-inspects after insertion, then uses a deterministic `next-step` wake only while that input remains pending; an Agent-scoped pre-step listener removes those wake messages before model assembly. A recorded original input proves Host success. Canceled, removed, replaced, claimed-without-record, missing-after-attempt, and conflicting evidence are canceled or reconciled without resending the original input.
+
+Inspection never creates, resumes, or wakes an Agent. Startup resume is a separate operation that requires an exact succeeded Host result, matching physical Session header and input, and a matching available live Agent; it restores that Agent model-idle before the Host serves requests. A durable `not-started` plan can prove cancellation without attributing an unrelated Session; a publishing or terminal replay rechecks the exact durable input and ids. Cancellation stops and drains any owned live Agent before terminal persistence. If disposal fails, the Host keeps the handle tracked and the operation retryable. Host success reports only durable Run and input existence, not model completion.
 
 ## Configuration
 
@@ -52,19 +60,19 @@ Every field resolves to a positive integer. These limits govern observation and 
 
 ## Model Experience
 
-### Local Host inspection
+### Local Host inspection and Agent start
 
 #### What the model sees
 
-Nothing. `ctx.sakiHostExecution` supplies Host-side Saki projections and trusted observations but registers no model-facing input.
+Inspection and structured Git operations add nothing. `start-agent-run` delivers the exact frozen text-only user message after it is durable; recovery wake messages are filtered before the model sees them.
 
 #### Token effect
 
-Zero direct tokens on every request.
+Zero direct tokens for inspection and structured Git operations. Agent start may invoke the frozen Model Route, so tokens depend on the original input and assembled preset context; replay does not add a duplicate original message, and startup resume adds no wake or model request.
 
 #### KV Cache effect
 
-Independent of model requests: inspection neither assembles nor changes a request prefix.
+Inspection is independent of model requests. Agent start adds a user turn outside the reusable prefix, and the recovery wake has no KV Cache effect because it is removed before assembly.
 
 ## Known Limitations and Deferred Work
 

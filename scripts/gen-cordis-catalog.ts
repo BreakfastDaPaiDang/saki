@@ -556,6 +556,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   InspectProjectSelectionResult: 'saki.md',
   ReadProjectDiffRequest: 'saki.md',
   ReadProjectDiffResult: 'saki.md',
+  StartAgentRunHostOperationRequest: '../../packages/saki/execution/README.md',
   Workspace: 'workspace.md',
   WorkspaceId: 'workspace.md',
   WebBootGraph: 'client-modules.md',

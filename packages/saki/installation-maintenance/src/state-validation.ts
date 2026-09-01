@@ -3,12 +3,16 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import {
+  agentRunRecordSchema,
   bindingWriteAdmissionRecordSchema,
+  executionDispatchRecordSchema,
   gitOperationIntentRecordSchema,
   sakiControlPlaneDomainSpec,
   sakiStorageGenerationDomainSpec,
   validateCurrentSakiState,
+  type AgentRunRecord,
   type BindingWriteAdmissionRecord,
+  type ExecutionDispatchRecord,
   type GitOperationIntentRecord,
   type SakiBuildId,
   type SakiInstallationId,
@@ -16,15 +20,31 @@ import {
 } from '@breakfastdapaidang/saki-control-plane'
 import {
   sakiHostExecutionDomainSpec,
+  sakiHostExecutionV1DomainSpec,
+  type LocalHostGitOperationRecordV1,
   type LocalHostOperationRecord,
 } from '@breakfastdapaidang/saki-execution-local'
 
 type CurrentControlPlaneDomain = Domain<typeof sakiControlPlaneDomainSpec>
 type CurrentHostExecutionDomain = Domain<typeof sakiHostExecutionDomainSpec>
+type HistoricalHostExecutionDomain = Domain<typeof sakiHostExecutionV1DomainSpec>
 type CurrentStorageGenerationDomain = Domain<typeof sakiStorageGenerationDomainSpec>
+type CurrentGitHostOperationRecord = Exclude<
+  LocalHostOperationRecord,
+  { readonly request: { readonly type: 'start-agent-run' } }
+>
+type GitHostOperationRecord = LocalHostGitOperationRecordV1 | CurrentGitHostOperationRecord
+type AgentHostOperationRecord = Extract<
+  LocalHostOperationRecord,
+  { readonly request: { readonly type: 'start-agent-run' } }
+>
 
 interface GitOperationControlPlaneDomain {
   table(name: 'git_operation_intents' | 'binding_write_admissions'): KvTable<string, unknown>
+}
+
+interface AgentOperationControlPlaneDomain {
+  table(name: 'agent_runs' | 'execution_dispatches' | 'binding_write_admissions'): KvTable<string, unknown>
 }
 
 /**
@@ -54,6 +74,7 @@ export function validateCurrentSakiProductState(
     expectedCreatedByBuildId,
   )
   validateGitOperationLinks(controlPlane, hostExecution)
+  validateAgentOperationLinks(controlPlane, hostExecution)
 }
 
 /**
@@ -64,7 +85,7 @@ export function validateCurrentSakiProductState(
  */
 export function validateGitOperationLinks(
   controlPlane: GitOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalHostExecutionDomain,
 ): void {
   const intents = new Map([...controlPlane.table('git_operation_intents').entries()].map(([key, value]) => {
     const intent = gitOperationIntentRecordSchema.parse(value)
@@ -76,10 +97,15 @@ export function validateGitOperationLinks(
     if (admission.id !== key) throw new Error('Saki Binding write admission id disagrees with its table key')
     return [key, admission] as const
   }))
-  const operations = new Map([...hostExecution.table('operations').entries()].map(([key, operation]) => {
+  const operations = new Map<
+    GitHostOperationRecord['snapshot']['operation']['id'],
+    GitHostOperationRecord
+  >()
+  for (const [key, operation] of hostExecution.table('operations').entries()) {
     if (operation.snapshot.operation.id !== key) {
       throw new Error('Saki Host Operation id disagrees with its table key')
     }
+    if (!isGitHostOperation(operation)) continue
     const expectedId = operation.request.source.intentId.replace(/^intent-/u, 'host-operation-')
     if (key !== expectedId) throw new Error('Saki Host Operation id disagrees with its Control Intent source')
     const intent = intents.get(operation.request.source.intentId)
@@ -90,12 +116,12 @@ export function validateGitOperationLinks(
       operation,
       admissions.get(operation.request.expected.binding.id),
     )
-    return [key, operation] as const
-  }))
+    operations.set(key, operation)
+  }
 
   for (const intent of intents.values()) {
     const operationId = intent.id.replace(/^intent-/u, 'host-operation-')
-    const operation = operations.get(operationId as LocalHostOperationRecord['snapshot']['operation']['id'])
+    const operation = operations.get(operationId as GitHostOperationRecord['snapshot']['operation']['id'])
     if (sourceConflictedIntent(intent) && operation === undefined) {
       throw new Error('source-conflicted Git Intent has no Host Operation')
     }
@@ -120,13 +146,181 @@ export function validateGitOperationLinks(
   }
 }
 
+/**
+ * Validate current Execution Dispatch, Agent Run, Host Operation, and write-admission links.
+ * Host-first preparation is the sole accepted missing-backlink gap: once a Dispatch retains
+ * preparation or snapshot evidence, the exact provider record must still exist.
+ * @param controlPlane - opened exact current Control Plane domain.
+ * @param hostExecution - opened exact current Host Execution domain.
+ * @returns nothing after every StartAgentRun cross-domain relationship passes.
+ */
+export function validateAgentOperationLinks(
+  controlPlane: AgentOperationControlPlaneDomain,
+  hostExecution: CurrentHostExecutionDomain,
+): void {
+  const runs = identifiedAgentRecords(
+    controlPlane.table('agent_runs'),
+    agentRunRecordSchema,
+    'Agent Run',
+  )
+  const dispatches = identifiedAgentRecords(
+    controlPlane.table('execution_dispatches'),
+    executionDispatchRecordSchema,
+    'Execution Dispatch',
+  )
+  const admissions = identifiedAgentRecords(
+    controlPlane.table('binding_write_admissions'),
+    bindingWriteAdmissionRecordSchema,
+    'Binding write admission',
+  )
+  const operations = new Map<ExecutionDispatchRecord['id'], AgentHostOperationRecord>()
+
+  for (const [key, operation] of hostExecution.table('operations').entries()) {
+    if (operation.snapshot.operation.id !== key) {
+      throw new Error('Saki Host Operation id disagrees with its table key')
+    }
+    if (!isAgentHostOperation(operation)) continue
+    const dispatchId = operation.request.source.dispatchId
+    const expectedId = dispatchId.replace(/^dispatch-/u, 'host-operation-')
+    if (key !== expectedId) {
+      throw new Error('StartAgentRun Host Operation id disagrees with its Execution Dispatch source')
+    }
+    if (operations.has(dispatchId)) {
+      throw new Error('Saki Execution Dispatch has multiple Host Operations')
+    }
+    const dispatch = dispatches.get(dispatchId)
+    if (dispatch === undefined) throw new Error('StartAgentRun Host Operation has no Execution Dispatch')
+    const run = runs.get(dispatch.agentRunId)
+    if (run === undefined) throw new Error('StartAgentRun Host Operation has no Agent Run')
+    if (!isDeepStrictEqual(operation.request, dispatch.hostRequest)) {
+      if (retainedAgentSourceConflict(
+        dispatch,
+        run,
+        admissions.get(dispatch.bindingId),
+      )) {
+        operations.set(dispatchId, operation)
+        continue
+      }
+      throw new Error('StartAgentRun Host Operation request disagrees with its Execution Dispatch')
+    }
+    validateDispatchHostEvidence(dispatch, operation)
+    validateAgentHostAdmission(dispatch, run, operation, admissions.get(dispatch.bindingId))
+    operations.set(dispatchId, operation)
+  }
+
+  for (const dispatch of dispatches.values()) {
+    const operation = operations.get(dispatch.id)
+    if ((dispatch.preparation !== undefined || dispatch.operationSnapshot !== undefined)
+      && operation === undefined) {
+      throw new Error('Saki Execution Dispatch retains evidence for a missing Host Operation')
+    }
+  }
+
+  for (const run of runs.values()) {
+    if (run.state !== 'running') continue
+    const matching = run.dispatchIds.some((dispatchId) => {
+      const dispatch = dispatches.get(dispatchId)
+      const operation = operations.get(dispatchId)
+      return dispatch !== undefined
+        && operation?.snapshot.state === 'succeeded'
+        && dispatch.operationSnapshot?.state === 'succeeded'
+        && isDeepStrictEqual(operation.snapshot, dispatch.operationSnapshot)
+        && isDeepStrictEqual(operation.snapshot.result, run.hostResult)
+    })
+    if (!matching) throw new Error('running Saki Agent Run has no exact succeeded Host Operation')
+  }
+}
+
+function retainedAgentSourceConflict(
+  dispatch: ExecutionDispatchRecord,
+  run: AgentRunRecord,
+  admission: BindingWriteAdmissionRecord | undefined,
+): boolean {
+  return dispatch.state === 'reconciliation-required'
+    && run.state === 'reconciliation-required'
+    && dispatch.preparation === undefined
+    && dispatch.operationSnapshot === undefined
+    && admission?.state === 'agent-run'
+    && admission.originIntentId === dispatch.intentId
+    && admission.agentRunId === dispatch.agentRunId
+    && admission.bindingRevision === dispatch.hostRequest.expected.binding.revision
+    && admission.payloadDigest === dispatch.payloadDigest
+}
+
+function identifiedAgentRecords<K extends string, V extends { readonly id: K }>(
+  table: KvTable<string, unknown>,
+  schema: { parse(value: unknown): V },
+  kind: string,
+): ReadonlyMap<K, V> {
+  return new Map([...table.entries()].map(([key, value]) => {
+    const parsed = schema.parse(value)
+    if (parsed.id !== key) throw new Error(`Saki ${kind} id disagrees with its table key`)
+    return [parsed.id, parsed] as const
+  }))
+}
+
+function isAgentHostOperation(
+  operation: LocalHostOperationRecord,
+): operation is AgentHostOperationRecord {
+  return operation.request.type === 'start-agent-run'
+}
+
+function validateDispatchHostEvidence(
+  dispatch: ExecutionDispatchRecord,
+  operation: AgentHostOperationRecord,
+): void {
+  if (dispatch.preparation !== undefined
+    && !isDeepStrictEqual(dispatch.preparation, operationPreparation(operation))) {
+    throw new Error('Saki Execution Dispatch preparation disagrees with its Host Operation')
+  }
+  const retained = dispatch.operationSnapshot
+  if (retained === undefined) return
+  if (retained.revision > operation.snapshot.revision) {
+    throw new Error('Saki Execution Dispatch retains a future Host Operation revision')
+  }
+  if (retained.revision === operation.snapshot.revision
+    && !isDeepStrictEqual(retained, operation.snapshot)) {
+    throw new Error('Saki Execution Dispatch disagrees with the same Host Operation revision')
+  }
+}
+
+function validateAgentHostAdmission(
+  dispatch: ExecutionDispatchRecord,
+  run: AgentRunRecord,
+  operation: AgentHostOperationRecord,
+  admission: BindingWriteAdmissionRecord | undefined,
+): void {
+  const releasedAfterNoEffect = (operation.snapshot.state === 'failed'
+    || operation.snapshot.state === 'canceled')
+    && dispatch.state === 'canceled' && run.state === 'canceled'
+  if (releasedAfterNoEffect) return
+  if (admission?.state !== 'agent-run'
+    || admission.originIntentId !== dispatch.intentId
+    || admission.agentRunId !== dispatch.agentRunId
+    || admission.bindingRevision !== dispatch.hostRequest.expected.binding.revision
+    || admission.payloadDigest !== dispatch.payloadDigest) {
+    throw new Error('StartAgentRun Host Operation lost its Agent Run write admission')
+  }
+  const evidence = operation.snapshot.admission
+  if (evidence.kind === 'accepted'
+    && (admission.phase !== 'accepted' || admission.revision !== evidence.revision)) {
+    throw new Error('accepted StartAgentRun Host Operation disagrees with its write admission')
+  }
+}
+
+function isGitHostOperation(
+  operation: LocalHostOperationRecord | LocalHostGitOperationRecordV1,
+): operation is GitHostOperationRecord {
+  return operation.request.type !== 'start-agent-run'
+}
+
 function sourceConflictedIntent(intent: GitOperationIntentRecord): boolean {
   return intent.phase === 'conflict' && intent.terminalReason === 'source-conflict'
 }
 
 function validateOperationIntentLink(
   intent: GitOperationIntentRecord,
-  operation: LocalHostOperationRecord,
+  operation: GitHostOperationRecord,
 ): void {
   if (sourceConflictedIntent(intent)) {
     validateSourceConflictHostRecord(intent, operation)
@@ -153,7 +347,7 @@ function validateOperationIntentLink(
 
 function validateSourceConflictHostRecord(
   intent: GitOperationIntentRecord,
-  operation: LocalHostOperationRecord,
+  operation: GitHostOperationRecord,
 ): void {
   if (intent.hostRequest === undefined || isDeepStrictEqual(intent.hostRequest, operation.request)) {
     throw new Error('Saki source-conflicted Git Intent unexpectedly matches its Host Operation')
@@ -167,7 +361,9 @@ function validateSourceConflictHostRecord(
   }
 }
 
-function operationPreparation(operation: LocalHostOperationRecord) {
+function operationPreparation(
+  operation: LocalHostOperationRecord | LocalHostGitOperationRecordV1,
+) {
   return {
     operation: operation.snapshot.operation,
     preparationRevision: operation.preparationRevision,
@@ -177,7 +373,7 @@ function operationPreparation(operation: LocalHostOperationRecord) {
 
 function validatePrePreparationHostRecord(
   intent: GitOperationIntentRecord,
-  operation: LocalHostOperationRecord,
+  operation: GitHostOperationRecord,
 ): void {
   if (sourceConflictedIntent(intent)) return
   const recoverablePhase = intent.phase === 'admission-reserved' || intent.phase === 'canceled'
@@ -188,7 +384,7 @@ function validatePrePreparationHostRecord(
 
 function validateOperationAdmissionLink(
   intent: GitOperationIntentRecord,
-  operation: LocalHostOperationRecord,
+  operation: GitHostOperationRecord,
   admission: BindingWriteAdmissionRecord | undefined,
 ): void {
   if (sourceConflictedIntent(intent)) return
@@ -216,7 +412,7 @@ function validateOperationAdmissionLink(
 
 function validateManualAdmissionMatchesOperation(
   admission: Extract<BindingWriteAdmissionRecord, { readonly state: 'manual-host-operation' }>,
-  operation: LocalHostOperationRecord,
+  operation: GitHostOperationRecord,
 ): void {
   if (admission.id !== operation.request.expected.binding.id
     || admission.bindingRevision !== operation.request.expected.binding.revision
@@ -232,7 +428,7 @@ function acceptedAdmissionMatchesOperation(
     readonly state: 'manual-host-operation'
     readonly phase: 'accepted'
   }>,
-  operation: LocalHostOperationRecord,
+  operation: GitHostOperationRecord,
 ): boolean {
   return admission.id === operation.request.expected.binding.id
     && admission.bindingRevision === operation.request.expected.binding.revision
@@ -241,7 +437,7 @@ function acceptedAdmissionMatchesOperation(
     && isDeepStrictEqual(admission.preparation, operationPreparation(operation))
 }
 
-function actionFor(type: LocalHostOperationRecord['request']['type']):
+function actionFor(type: GitHostOperationRecord['request']['type']):
   'project-changes:stage' | 'project-changes:unstage' | 'project-commit:create' {
   return type === 'stage-files'
     ? 'project-changes:stage'
@@ -258,10 +454,10 @@ function terminalIntent(intent: GitOperationIntentRecord): boolean {
     || intent.phase === 'canceled' || intent.phase === 'reconciliation-required'
 }
 
-const TERMINAL_HOST_OPERATION_STATES: ReadonlySet<LocalHostOperationRecord['snapshot']['state']> = new Set([
+const TERMINAL_HOST_OPERATION_STATES: ReadonlySet<GitHostOperationRecord['snapshot']['state']> = new Set([
   'succeeded', 'failed', 'canceled', 'reconciliation-required',
 ])
 
-function terminalHostOperation(operation: LocalHostOperationRecord): boolean {
+function terminalHostOperation(operation: GitHostOperationRecord): boolean {
   return TERMINAL_HOST_OPERATION_STATES.has(operation.snapshot.state)
 }

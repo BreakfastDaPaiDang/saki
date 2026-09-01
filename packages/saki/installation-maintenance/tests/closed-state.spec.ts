@@ -5,21 +5,34 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
 import { descriptorOf, type DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
-import { sakiHostExecutionDomainSpec } from '@breakfastdapaidang/saki-execution-local'
+import {
+  sakiHostExecutionDomainSpec,
+  sakiHostExecutionV1DomainSpec,
+} from '@breakfastdapaidang/saki-execution-local'
+import {
+  canonicalDigest,
+  computeStartAgentRunPayloadDigest,
+  startAgentRunHostOperationRequestSchema,
+  startAgentRunInputMessageSchema,
+} from '@breakfastdapaidang/saki-execution'
 import {
   createStorageGenerationSeal,
+  agentOperationIntentRecordSchema,
   sakiControlPlaneV2DomainSpec,
   sakiControlPlaneV3DomainSpec,
   sakiControlPlaneV4DomainSpec,
   sakiControlPlaneV5DomainSpec,
+  sakiControlPlaneV6DomainSpec,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
+  sakiStorageGenerationV4DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
   storageGenerationV3SealRecordSchema,
+  storageGenerationV4SealRecordSchema,
   type SakiBuildId,
   type SakiGrantId,
   type SakiHostId,
@@ -28,6 +41,11 @@ import {
   type SakiPrincipalId,
   type SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
+import {
+  SAKI_BOARD_PROJECTION_FIXTURES,
+  SAKI_PROJECT_PROJECTION_FIXTURES,
+  SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES,
+} from '@breakfastdapaidang/saki-control-plane/src/fixtures.ts'
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
@@ -40,6 +58,7 @@ import {
   readClosedSakiV3State,
   readClosedSakiV4State,
   readClosedSakiV5State,
+  readClosedSakiV6State,
 } from '../src/closed-state.ts'
 
 const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId
@@ -145,9 +164,10 @@ function currentControlSnapshot(): KvUnitSnapshot {
       development_project_registry: {
         [DEVELOPMENT_PROJECT_REGISTRY_KEY]: {
           id: DEVELOPMENT_PROJECT_REGISTRY_KEY,
-          schemaVersion: 1,
+          schemaVersion: 2,
           revision: 0,
           projects: [],
+          agentProfiles: [],
           resourceBindings: [],
           canonicalWorktreeIndex: [],
           gitDirectoryIndex: [],
@@ -161,8 +181,146 @@ function currentControlSnapshot(): KvUnitSnapshot {
       binding_write_admissions: {},
       github_work_item_intents: {},
       github_work_item_recovery: {},
+      agent_operation_intents: {},
+      work_assignments: {},
+      work_sessions: {},
+      agent_runs: {},
+      execution_dispatches: {},
     },
   }
+}
+
+function orphanAgentIntentRecord(): unknown {
+  const intentId = 'intent-22222222-2222-4222-8222-222222222222'
+  const assignmentId = 'assignment-11111111-1111-4111-8111-111111111111'
+  const workSessionId = 'work-session-55555555-5555-4555-8555-555555555555'
+  const agentRunId = 'agent-run-66666666-6666-4666-8666-666666666666'
+  const dispatchId = 'dispatch-77777777-7777-4777-8777-777777777777'
+  const projectId = 'project-33333333-3333-4333-8333-333333333333'
+  const bindingId = 'binding-88888888-8888-4888-8888-888888888888'
+  const workItemId = `work-item-${'4'.repeat(64)}`
+  const profile = {
+    id: 'agent-profile-99999999-9999-4999-8999-999999999999',
+    version: 1,
+    agentPresetId: 'standard',
+    modelRoute: { provider: 'fixture', model: 'fixture-model' },
+  } as const
+  const input = startAgentRunInputMessageSchema.parse({
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    role: 'user',
+    content: [{ type: 'text', text: 'Implement the frozen Work Item.' }],
+    source: { kind: 'saki-agent-run', dispatchId, agentRunId, workSessionId },
+  })
+  const baseline = SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline
+  const hostRequest = startAgentRunHostOperationRequestSchema.parse({
+    type: 'start-agent-run',
+    source: {
+      kind: 'execution-dispatch',
+      dispatchId,
+      payloadDigest: computeStartAgentRunPayloadDigest(input),
+    },
+    expected: {
+      binding: {
+        id: bindingId,
+        revision: 0,
+        health: 'active',
+        hostId: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.hostId,
+        workspaceId: 'workspace-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        expectedInspection: {
+          projection: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection,
+          trusted: {
+            canonicalWorktreePath: '/fixture/repository',
+            canonicalGitDirectory: '/fixture/repository/.git',
+            canonicalCommonGitDirectory: '/fixture/repository/.git',
+            gitDirectoryIdentity: { version: 1, digest: '4'.repeat(64) },
+            commonGitDirectoryIdentity: { version: 1, digest: '4'.repeat(64) },
+            comparison: { fileMode: true, symlinks: true, autocrlf: false },
+          },
+        },
+        inheritedChangeBaseline: baseline,
+      },
+      status: { version: 1, digest: '2'.repeat(64) },
+      head: { kind: 'commit', objectId: '3'.repeat(40), symbolicRef: 'refs/heads/main' },
+      index: { kind: 'tree', treeId: '4'.repeat(40) },
+      worktree: { version: 1, digest: '5'.repeat(64) },
+      preEffectBaseline: baseline,
+    },
+    run: {
+      agentRunId,
+      workSessionId,
+      sessionId: 'session-cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      profile,
+      input,
+    },
+  })
+  const item = SAKI_BOARD_PROJECTION_FIXTURES.confirmedStaleFailure.confirmed?.items[0]
+  const active = SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES.activated.synchronization.active
+  if (item === undefined || active === undefined) throw new Error('Agent closed-state fixture is incomplete')
+  const actor = {
+    installationId: INSTALLATION_ID,
+    storageGenerationId: STORAGE_GENERATION_ID,
+    hostId: HOST_ID,
+    principalId: PRINCIPAL_ID,
+    principalRevision: 1,
+    grantId: GRANT_ID,
+    grantRevision: 1,
+  }
+  const intent = {
+    type: 'give-work-item-to-agent' as const,
+    intentId,
+    projectId,
+    workItemId,
+    expectedProjectRevision: 0,
+    expectedRemoteFingerprint: item.remoteFingerprint,
+  }
+  const workItemDefinition = {
+    repositoryId: item.source.repositoryId,
+    repositoryDatabaseId: active.configuration.repositoryDatabaseId,
+    issueId: item.source.issueId,
+    issueNumber: item.issueNumber,
+    issueState: 'open' as const,
+    title: item.title,
+    url: item.url,
+    body: '# Acceptance criteria\n- remains bounded',
+    updatedAt: item.updatedAt,
+    remoteFingerprint: item.remoteFingerprint,
+    intendedOutcome: 'Complete the Work Item.',
+    acceptanceCriteria: ['remains bounded'],
+    blockage: [],
+  }
+  const projectContext = {
+    projectId,
+    projectRevision: 0,
+    projectTitle: 'Orphan fixture',
+    resourceBindingId: bindingId,
+    bindingRevision: 0,
+  }
+  const payload = { intent, actor }
+  return agentOperationIntentRecordSchema.parse({
+    id: intentId,
+    schemaVersion: 1,
+    revision: 0,
+    receiptId: 'receipt-22222222-2222-4222-8222-222222222222',
+    payloadDigest: canonicalDigest('saki/agent-operation-intent/v1', payload),
+    payload,
+    phase: 'prepared',
+    assignmentId,
+    workSessionId,
+    agentRunId,
+    dispatchId,
+    inProgressIntentId: 'intent-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    workItemDefinition,
+    projectContext,
+    profile,
+    contextDigest: canonicalDigest('saki/agent-operation-context/v1', {
+      workItemDefinition,
+      projectContext,
+      profile,
+    }),
+    hostRequest,
+    createdAt: 1,
+    updatedAt: 1,
+  })
 }
 
 function sealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot {
@@ -181,7 +339,7 @@ function sealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot 
 }
 
 function v3ControlSnapshot(): KvUnitSnapshot {
-  const current = currentControlSnapshot()
+  const current = v6ControlSnapshot()
   const tables = { ...current.tables }
   delete tables['github_project_sync']
   delete tables['github_sync_configuration_intents']
@@ -193,7 +351,7 @@ function v3ControlSnapshot(): KvUnitSnapshot {
 }
 
 function v4ControlSnapshot(): KvUnitSnapshot {
-  const current = currentControlSnapshot()
+  const current = v6ControlSnapshot()
   const tables = { ...current.tables }
   delete tables['git_operation_intents']
   delete tables['binding_write_admissions']
@@ -203,11 +361,33 @@ function v4ControlSnapshot(): KvUnitSnapshot {
 }
 
 function v5ControlSnapshot(): KvUnitSnapshot {
-  const current = currentControlSnapshot()
+  const current = v6ControlSnapshot()
   const tables = { ...current.tables }
   delete tables['github_work_item_intents']
   delete tables['github_work_item_recovery']
   return { global: null, tables }
+}
+
+function v6ControlSnapshot(): KvUnitSnapshot {
+  const current = currentControlSnapshot()
+  const registry = current.tables.development_project_registry?.[DEVELOPMENT_PROJECT_REGISTRY_KEY]
+  if (registry === undefined || typeof registry !== 'object') throw new Error('current Registry fixture is missing')
+  const { agentProfiles: _agentProfiles, ...historicalRegistry } = registry as Record<string, unknown>
+  const tables = { ...current.tables }
+  delete tables['agent_operation_intents']
+  delete tables['work_assignments']
+  delete tables['work_sessions']
+  delete tables['agent_runs']
+  delete tables['execution_dispatches']
+  return {
+    global: null,
+    tables: {
+      ...tables,
+      development_project_registry: {
+        [DEVELOPMENT_PROJECT_REGISTRY_KEY]: { ...historicalRegistry, schemaVersion: 1 },
+      },
+    },
+  }
 }
 
 function v1SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot {
@@ -261,6 +441,23 @@ function v3SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapsho
   }
 }
 
+function v4SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot {
+  return {
+    global: null,
+    tables: {
+      storage_generation: {
+        [STORAGE_GENERATION_KEY]: storageGenerationV4SealRecordSchema.parse({
+          schemaVersion: 4,
+          installationId: INSTALLATION_ID,
+          storageGenerationId: STORAGE_GENERATION_ID,
+          stateVersion: 6,
+          createdByBuildId,
+        }),
+      },
+    },
+  }
+}
+
 async function materialize(
   path: string,
   units: readonly { readonly spec: DomainSpec; readonly snapshot: KvUnitSnapshot }[],
@@ -287,8 +484,19 @@ async function materializeV5(
 ): Promise<void> {
   await materialize(path, [
     { spec: sakiControlPlaneV5DomainSpec, snapshot: controlPlaneSnapshot },
-    { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
+    { spec: sakiHostExecutionV1DomainSpec, snapshot: emptySnapshot(sakiHostExecutionV1DomainSpec) },
     { spec: sakiStorageGenerationV3DomainSpec, snapshot: storageGenerationSnapshot },
+  ])
+}
+
+async function materializeV6(
+  path: string,
+  storageGenerationSnapshot: KvUnitSnapshot = v4SealSnapshot(),
+): Promise<void> {
+  await materialize(path, [
+    { spec: sakiControlPlaneV6DomainSpec, snapshot: v6ControlSnapshot() },
+    { spec: sakiHostExecutionV1DomainSpec, snapshot: emptySnapshot(sakiHostExecutionV1DomainSpec) },
+    { spec: sakiStorageGenerationV4DomainSpec, snapshot: storageGenerationSnapshot },
   ])
 }
 
@@ -341,7 +549,7 @@ describe('closed Saki state reads', () => {
     const state = await readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 6,
+      stateVersion: 7,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))
 
@@ -377,7 +585,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 6,
+      stateVersion: 7,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -395,7 +603,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 6,
+      stateVersion: 7,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     await expect(readFile(path)).resolves.toEqual(before)
@@ -414,7 +622,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 6,
+      stateVersion: 7,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -455,6 +663,50 @@ describe('closed Saki state reads', () => {
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
+  })
+
+  it.each([
+    ['Work Assignment', 'work_assignments', 'assignment-11111111-1111-4111-8111-111111111111', {
+      id: 'assignment-11111111-1111-4111-8111-111111111111',
+      schemaVersion: 1,
+      revision: 0,
+      intentId: 'intent-22222222-2222-4222-8222-222222222222',
+      projectId: 'project-33333333-3333-4333-8333-333333333333',
+      workItemId: `work-item-${'4'.repeat(64)}`,
+      primaryWorkSessionId: 'work-session-55555555-5555-4555-8555-555555555555',
+      agentRunId: 'agent-run-66666666-6666-4666-8666-666666666666',
+      state: 'assigned',
+      createdAt: 1,
+      updatedAt: 1,
+    }],
+    ['Work Session', 'work_sessions', 'work-session-55555555-5555-4555-8555-555555555555', {
+      id: 'work-session-55555555-5555-4555-8555-555555555555',
+      schemaVersion: 1,
+      revision: 0,
+      intentId: 'intent-22222222-2222-4222-8222-222222222222',
+      assignmentId: 'assignment-11111111-1111-4111-8111-111111111111',
+      projectId: 'project-33333333-3333-4333-8333-333333333333',
+      workItemId: `work-item-${'4'.repeat(64)}`,
+      primary: true,
+      agentRunIds: ['agent-run-66666666-6666-4666-8666-666666666666'],
+      state: 'open',
+      createdAt: 1,
+      updatedAt: 1,
+    }],
+    ['Agent operation Intent', 'agent_operation_intents', 'intent-22222222-2222-4222-8222-222222222222',
+      orphanAgentIntentRecord()],
+  ])('rejects an orphan current %s in a closed generation', async (_kind, table, id, record) => {
+    const path = await databasePath()
+    const control = currentControlSnapshot()
+    control.tables[table] = { [id]: record }
+    await materialize(path, [
+      { spec: sakiControlPlaneDomainSpec, snapshot: control },
+      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
+      { spec: sakiStorageGenerationDomainSpec, snapshot: sealSnapshot() },
+    ])
+
+    await expect(readClosedCurrentSakiState(path, V5_EXPECTATION, AbortSignal.timeout(2_000)))
+      .rejects.toMatchObject({ code: 'recovery-required' })
   })
 
   it('returns structural v2 data for separate validation and rejects a v2-plus-seal hybrid', async () => {
@@ -506,7 +758,7 @@ describe('closed Saki state reads', () => {
     expect(historical.controlPlane.table('installations').get(INSTALLATION_ID)?.currentHostId).toBe(HOST_ID)
 
     await materialize(path, [
-      { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
+      { spec: sakiHostExecutionV1DomainSpec, snapshot: emptySnapshot(sakiHostExecutionV1DomainSpec) },
     ])
     await expect(readClosedSakiV4State(path, {
       installationId: INSTALLATION_ID,
@@ -528,6 +780,50 @@ describe('closed Saki state reads', () => {
     expect(historical.hostExecution.table('operations').size).toBe(0)
     expect(historical.storageGeneration.table('storage_generation').size).toBe(1)
     expect(await exactFiles(path)).toEqual(before)
+  })
+
+  it('validates exact historical v6 domains for adjacent migration', async () => {
+    const path = await databasePath()
+    await materializeV6(path)
+
+    const historical = await readClosedSakiV6State(path, V5_EXPECTATION, AbortSignal.timeout(2_000))
+
+    expect(historical.stateVersion).toBe(6)
+    expect(historical.controlPlane.table('development_project_registry')
+      .get(DEVELOPMENT_PROJECT_REGISTRY_KEY)?.schemaVersion).toBe(1)
+    expect(historical.hostExecution.table('operations').size).toBe(0)
+    expect(historical.storageGeneration.table('storage_generation').size).toBe(1)
+  })
+
+  it.each([
+    {
+      description: 'a missing storage-generation seal',
+      snapshot: () => ({ global: null, tables: { storage_generation: {} } }),
+      causeMessage: 'historical v6 Saki storage-generation seal is not the required singleton',
+    },
+    {
+      description: 'a storage-generation seal under a noncanonical singleton key',
+      snapshot: () => {
+        const source = v4SealSnapshot()
+        const seal = source.tables.storage_generation?.[STORAGE_GENERATION_KEY]
+        if (seal === undefined) throw new Error('historical storage-generation seal fixture is missing')
+        return { global: null, tables: { storage_generation: { unexpected: seal } } }
+      },
+      causeMessage: 'historical v6 Saki storage-generation seal is not the required singleton',
+    },
+    {
+      description: 'a storage-generation seal that disagrees with manifest build provenance',
+      snapshot: () => v4SealSnapshot(OTHER_BUILD_ID),
+      causeMessage: 'historical v6 Saki storage-generation seal disagrees with selected generation metadata',
+    },
+  ])('rejects historical v6 state with $description', async ({ snapshot, causeMessage }) => {
+    const path = await databasePath()
+    await materializeV6(path, snapshot())
+
+    await expect(readClosedSakiV6State(path, V5_EXPECTATION, AbortSignal.timeout(2_000))).rejects.toMatchObject({
+      code: 'recovery-required',
+      cause: { message: causeMessage },
+    })
   })
 
   it('classifies malformed historical v5 SQLite state and retains its validation cause', async () => {

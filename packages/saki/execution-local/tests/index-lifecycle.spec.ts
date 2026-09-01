@@ -22,6 +22,7 @@ import type {
 } from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import LocalSakiHostExecution, { type Config } from '../src/index.ts'
+import { provideInertLocalAgentRunDependencies } from './storage.ts'
 
 const run = promisify(execFile)
 const roots: string[] = []
@@ -288,6 +289,7 @@ async function provider(root: string, config: Partial<Config> = {}): Promise<{
   await context.plugin(Storage)
   await context.plugin(StorageSqlite, { path: join(storageRoot, 'saki.db'), journalMode: 'delete' })
   await context.plugin(StorageDomain, { backend: 'sqlite' })
+  provideInertLocalAgentRunDependencies(context)
   await context.plugin(LocalFileSystem, { cwd: process.cwd() })
   await context.plugin(LocalSubprocessRuntime)
   context.provide('workspaceRegistry', { list: () => [{ id: WORKSPACE_ID, path: root }] })

@@ -29,8 +29,8 @@ import {
 } from '@breakfastdapaidang/saki-github'
 import {
   hostOperationPreparationSchema,
-  hostOperationRequestSchema,
   hostOperationSnapshotSchema,
+  commitHostOperationRequestSchema,
   canonicalDigest,
   inheritedChangeBaselineIdentityMaterial,
   inheritedChangeBaselineSchema,
@@ -44,7 +44,14 @@ import {
   projectGitWorktreeFingerprintSchema,
   projectInspectionWorkspaceIndependentMaterial,
   projectSelectionInspectionSchema,
+  sakiAgentRunIdSchema,
+  sakiExecutionDispatchIdSchema,
+  sakiWorkSessionIdSchema,
+  startAgentRunHostOperationRequestSchema,
+  startAgentRunHostOperationResultSchema,
+  stageFilesHostOperationRequestSchema,
   selectedProjectGitChangeSchema,
+  unstageFilesHostOperationRequestSchema,
 } from '@breakfastdapaidang/saki-execution'
 import {
   SAKI_BOARD_WORK_ITEM_LIMIT,
@@ -53,18 +60,21 @@ import {
 } from './constants.ts'
 import {
   sakiBootstrapChallengeIdSchema as bootstrapChallengeId,
+  sakiAgentProfileIdSchema as agentProfileId,
   sakiBoardRemoteFingerprintSchema as boardRemoteFingerprint,
   sakiBoardWorkItemIdSchema as boardWorkItemId,
   sakiBrowserSessionIdSchema as browserSessionId,
   sakiControlIntentIdSchema as controlIntentId,
   sakiDevelopmentProjectIdSchema as developmentProjectId,
   sakiGrantIdSchema as grantId,
+  sakiDispatchClaimIdSchema as dispatchClaimId,
   sakiGitHubScanAttemptIdSchema as githubScanAttemptId,
   sakiHostIdSchema as hostId,
   sakiInstallationAccessIdSchema as installationAccessId,
   sakiInstallationGenerationIdSchema as installationGenerationId,
   sakiInstallationIdSchema as installationId,
   sakiIntentReceiptIdSchema as intentReceiptId,
+  sakiWorkAssignmentIdSchema as workAssignmentId,
   sakiPrincipalIdSchema as principalId,
   sakiResourceBindingIdSchema as resourceBindingId,
   sakiStorageGenerationIdSchema as storageGenerationId,
@@ -80,6 +90,7 @@ import {
 } from './work-item-issue.ts'
 import type {
   SakiGrantId,
+  SakiWorkAssignmentId,
   SakiHostId,
   SakiInstallationAccessId,
   SakiInstallationId,
@@ -90,11 +101,17 @@ import type {
   SakiResourceBindingId,
   SakiGitHubScanFailure,
   CreateCommitIntent,
+  GiveWorkItemToAgentIntent,
   GitMutationExpectation,
   StageFilesIntent,
   SakiWorkItemRecoveryId,
   UnstageFilesIntent,
 } from './types.ts'
+import type {
+  SakiAgentRunId,
+  SakiExecutionDispatchId,
+  SakiWorkSessionId,
+} from '@breakfastdapaidang/saki-execution'
 
 const revision = z.number().int().nonnegative()
 const positiveRevision = z.number().int().positive()
@@ -102,6 +119,7 @@ const ordinal = z.number().int().nonnegative()
 const timestamp = z.number().int().nonnegative()
 const digest = z.string().regex(/^[0-9a-f]{64}$/)
 const projectTitle = z.string().min(1).max(200).refine(value => value.trim().length > 0)
+const agentPresetId = z.string().min(1).max(200).regex(/^[a-z0-9][a-z0-9-]*$/u)
 const trustedPath = z.string().min(1).max(MAX_TRUSTED_PATH_CHARS).refine(isAbsoluteHostPath)
 const githubSafeText = z.string().min(1).max(4_096).regex(/^[^\u0000\u007f]*$/u)
 const githubNameWithOwner = z.string()
@@ -214,11 +232,17 @@ export const V5_HOST_OPERATOR_ACTIONS = [
   'project-commit:create',
 ] as const
 
-/** Current Host Operator actions, including Work Item mutations. */
-export const HOST_OPERATOR_ACTIONS = [
+/** Exact Host Operator action vocabulary retained by v6 Grant records. */
+export const V6_HOST_OPERATOR_ACTIONS = [
   ...V5_HOST_OPERATOR_ACTIONS,
   'work-item:create',
   'work-item:move',
+] as const
+
+/** Current Host Operator actions, including agent assignment. */
+export const HOST_OPERATOR_ACTIONS = [
+  ...V6_HOST_OPERATOR_ACTIONS,
+  'work-item:give-to-agent',
 ] as const
 
 const grantRecordSharedShape = {
@@ -249,6 +273,12 @@ export const v4GrantRecordSchema = z.object({
 export const v5GrantRecordSchema = z.object({
   ...grantRecordSharedShape,
   actions: z.array(z.enum(V5_HOST_OPERATOR_ACTIONS)),
+}).strict()
+
+/** Exact independently revisioned v6 Host Operator Grant entity. */
+export const v6GrantRecordSchema = z.object({
+  ...grantRecordSharedShape,
+  actions: z.array(z.enum(V6_HOST_OPERATOR_ACTIONS)),
 }).strict()
 
 /** Independently revisioned current Host Operator Grant entity. */
@@ -348,8 +378,8 @@ export const installationAccessRecordSchema = historicalInstallationAccessRecord
 /** Parsed durable Installation Access aggregate. */
 export type InstallationAccessRecord = z.infer<typeof installationAccessRecordSchema>
 
-/** One titled Development Project child record. */
-export const developmentProjectRecordSchema = z.object({
+/** Exact historical v6 Development Project child record. */
+export const developmentProjectV1RecordSchema = z.object({
   id: developmentProjectId,
   revision,
   projectTitle,
@@ -357,6 +387,33 @@ export const developmentProjectRecordSchema = z.object({
   state: z.literal('active'),
   createdAt: timestamp,
 }).strict()
+
+/** Parsed exact historical v6 Development Project child. */
+export type DevelopmentProjectV1Record = z.infer<typeof developmentProjectV1RecordSchema>
+
+/** Explicit provider and model selection retained by one Agent Profile. */
+export const agentModelRouteRequestSchema = z.object({
+  provider: z.string().min(1).max(200),
+  model: z.string().min(1).max(200),
+}).strict()
+
+/** One current immutable Agent Profile version owned by a Development Project. */
+export const agentProfileRecordSchema = z.object({
+  id: agentProfileId,
+  projectId: developmentProjectId,
+  version: z.number().int().positive(),
+  agentPresetId,
+  modelRouteRequest: agentModelRouteRequestSchema.nullable(),
+  createdAt: timestamp,
+}).strict()
+
+/** Parsed current Agent Profile record. */
+export type AgentProfileRecord = z.infer<typeof agentProfileRecordSchema>
+
+/** One titled Development Project child with an explicit default Agent Profile. */
+export const developmentProjectRecordSchema = developmentProjectV1RecordSchema.extend({
+  defaultAgentProfileId: agentProfileId,
+})
 
 /** Parsed durable Development Project child. */
 export type DevelopmentProjectRecord = z.infer<typeof developmentProjectRecordSchema>
@@ -432,17 +489,27 @@ const registryIntentMappingSchema = z.object({
   registryRevision: revision,
 }).strict()
 
-/** Singleton Development Project Registry aggregate. */
-export const developmentProjectRegistryRecordSchema = z.object({
+/** Exact historical v6 singleton Development Project Registry aggregate. */
+export const developmentProjectRegistryV1RecordSchema = z.object({
   id: z.literal(DEVELOPMENT_PROJECT_REGISTRY_KEY),
   schemaVersion: z.literal(1),
   revision,
-  projects: z.array(developmentProjectRecordSchema),
+  projects: z.array(developmentProjectV1RecordSchema),
   resourceBindings: z.array(resourceBindingRecordSchema),
   canonicalWorktreeIndex: z.array(bindingPathIndexSchema),
   gitDirectoryIndex: z.array(bindingPathIndexSchema),
   intentMappings: z.array(registryIntentMappingSchema),
 }).strict()
+
+/** Parsed exact historical v6 Development Project Registry aggregate. */
+export type DevelopmentProjectRegistryV1Record = z.infer<typeof developmentProjectRegistryV1RecordSchema>
+
+/** Singleton Development Project Registry aggregate. */
+export const developmentProjectRegistryRecordSchema = developmentProjectRegistryV1RecordSchema.extend({
+  schemaVersion: z.literal(2),
+  projects: z.array(developmentProjectRecordSchema),
+  agentProfiles: z.array(agentProfileRecordSchema),
+})
 
 /** Parsed singleton Development Project Registry aggregate. */
 export type DevelopmentProjectRegistryRecord = z.infer<typeof developmentProjectRegistryRecordSchema>
@@ -895,6 +962,16 @@ export const moveWorkItemIntentSchema = z.object({
     context.addIssue({ code: 'custom', message: 'Work Item cannot be positioned after itself' })
   }
 })
+
+/** Strict manual Agent assignment Intent without execution or Host authority. */
+export const giveWorkItemToAgentIntentSchema = z.object({
+  type: z.literal('give-work-item-to-agent'),
+  intentId: controlIntentId,
+  projectId: developmentProjectId,
+  workItemId: boardWorkItemId,
+  expectedProjectRevision: revision,
+  expectedRemoteFingerprint: boardRemoteFingerprint,
+}).strict() satisfies z.ZodType<GiveWorkItemToAgentIntent>
 
 const githubWorkItemIntentSchema = z.discriminatedUnion('type', [
   createWorkItemIntentSchema,
@@ -2095,6 +2172,12 @@ export const gitOperationIntentPhaseSchema = z.enum([
   'reconciliation-required',
 ])
 
+const gitHostOperationRequestSchema = z.discriminatedUnion('type', [
+  stageFilesHostOperationRequestSchema,
+  unstageFilesHostOperationRequestSchema,
+  commitHostOperationRequestSchema,
+])
+
 /** Safe terminal classifications retained with a structured Git Intent. */
 export const gitOperationTerminalReasonSchema = z.enum([
   'expected-evidence',
@@ -2122,7 +2205,7 @@ export const gitOperationIntentRecordSchema = z.object({
     actor: controlIntentActorSchema,
   }).strict(),
   requestRevision: revision,
-  hostRequest: hostOperationRequestSchema.optional(),
+  hostRequest: gitHostOperationRequestSchema.optional(),
   phase: gitOperationIntentPhaseSchema,
   reservationRevision: revision.optional(),
   preparation: hostOperationPreparationSchema.optional(),
@@ -2248,7 +2331,8 @@ export const gitOperationIntentRecordSchema = z.object({
     context.addIssue({ code: 'custom', message: 'Git Intent preparation disagrees with Host snapshot' })
   }
   if (value.operationSnapshot !== undefined
-    && (value.operationSnapshot.source.intentId !== value.id
+    && (value.operationSnapshot.source.kind !== 'control-intent'
+      || value.operationSnapshot.source.intentId !== value.id
       || value.operationSnapshot.source.intentRevision !== value.requestRevision
       || value.operationSnapshot.source.payloadDigest !== value.payloadDigest
       || value.operationSnapshot.bindingId !== expected.expectedBinding.id
@@ -2295,6 +2379,280 @@ export const gitOperationIntentRecordSchema = z.object({
 /** Parsed durable structured Git Intent. */
 export type GitOperationIntentRecord = z.infer<typeof gitOperationIntentRecordSchema>
 
+const frozenWorkItemDefinitionSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  issueId: githubIssueIdSchema,
+  issueNumber: z.number().int().positive(),
+  issueState: z.literal('open'),
+  title: githubSafeText,
+  url: githubSafeUrl,
+  body: z.string().max(256 * 1024).refine(value => value.isWellFormed()
+    && !value.includes('\0')
+    && new TextEncoder().encode(value).byteLength <= 256 * 1024),
+  updatedAt: timestamp,
+  remoteFingerprint: boardRemoteFingerprint,
+  intendedOutcome: z.string().min(1).max(32_768),
+  acceptanceCriteria: z.array(z.string().min(1).max(4_096)).min(1).max(128),
+  blockage: z.array(z.string().min(1).max(4_096)).max(128),
+}).strict()
+
+const frozenAgentProfileSchema = z.object({
+  id: agentProfileId,
+  version: positiveRevision,
+  agentPresetId,
+  modelRoute: agentModelRouteRequestSchema,
+}).strict()
+
+/** Durable accepted manual Give-to-Agent Intent and all preallocated child identities. */
+export const agentOperationIntentRecordSchema = z.object({
+  id: controlIntentId,
+  schemaVersion: z.literal(1),
+  revision,
+  receiptId: intentReceiptId,
+  payloadDigest: digest,
+  payload: z.object({
+    intent: giveWorkItemToAgentIntentSchema,
+    actor: controlIntentActorSchema,
+  }).strict(),
+  phase: z.enum([
+    'prepared',
+    'admission-reserved',
+    'dispatching',
+    'started',
+    'canceled',
+    'reconciliation-required',
+  ]),
+  assignmentId: workAssignmentId,
+  workSessionId: sakiWorkSessionIdSchema,
+  agentRunId: sakiAgentRunIdSchema,
+  dispatchId: sakiExecutionDispatchIdSchema,
+  inProgressIntentId: controlIntentId,
+  workItemDefinition: frozenWorkItemDefinitionSchema,
+  projectContext: z.object({
+    projectId: developmentProjectId,
+    projectRevision: revision,
+    projectTitle,
+    resourceBindingId,
+    bindingRevision: revision,
+  }).strict(),
+  profile: frozenAgentProfileSchema,
+  contextDigest: digest,
+  hostRequest: startAgentRunHostOperationRequestSchema,
+  terminalReason: z.enum([
+    'authority-revoked',
+    'effect-unknown',
+    'evidence-conflict',
+    'protocol',
+  ]).optional(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  refineDurableIntentIdentity(value, context)
+  if (canonicalDigest('saki/agent-operation-intent/v1', value.payload) !== value.payloadDigest) {
+    context.addIssue({ code: 'custom', message: 'Agent operation Intent payload digest is stale' })
+  }
+  if (canonicalDigest('saki/agent-operation-context/v1', {
+    workItemDefinition: value.workItemDefinition,
+    projectContext: value.projectContext,
+    profile: value.profile,
+  }) !== value.contextDigest) {
+    context.addIssue({ code: 'custom', message: 'Agent operation frozen context digest is stale' })
+  }
+  const request = value.hostRequest
+  if (request.source.dispatchId !== value.dispatchId
+    || request.run.agentRunId !== value.agentRunId
+    || request.run.workSessionId !== value.workSessionId
+    || !isDeepStrictEqual(request.run.profile, value.profile)
+    || request.expected.binding.id !== value.projectContext.resourceBindingId
+    || request.expected.binding.revision !== value.projectContext.bindingRevision) {
+    context.addIssue({ code: 'custom', message: 'Agent operation Intent child identities are inconsistent' })
+  }
+  const terminal = value.phase === 'canceled' || value.phase === 'reconciliation-required'
+  if (terminal !== (value.terminalReason !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'Agent operation terminal reason disagrees with phase' })
+  }
+  if (value.updatedAt < value.createdAt) {
+    context.addIssue({ code: 'custom', message: 'Agent operation timestamps are not monotonic' })
+  }
+})
+
+/** Parsed durable manual Give-to-Agent Intent. */
+export type AgentOperationIntentRecord = z.infer<typeof agentOperationIntentRecordSchema>
+
+/** Durable Work Assignment created by one accepted manual Intent. */
+export const workAssignmentRecordSchema = z.object({
+  id: workAssignmentId,
+  schemaVersion: z.literal(1),
+  revision,
+  intentId: controlIntentId,
+  projectId: developmentProjectId,
+  workItemId: boardWorkItemId,
+  primaryWorkSessionId: sakiWorkSessionIdSchema,
+  agentRunId: sakiAgentRunIdSchema,
+  state: z.enum(['assigned', 'active', 'canceled', 'reconciliation-required']),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict().refine(value => value.updatedAt >= value.createdAt, 'Assignment timestamps are not monotonic')
+
+/** Parsed durable Work Assignment. */
+export type WorkAssignmentRecord = z.infer<typeof workAssignmentRecordSchema>
+
+/** Durable user-visible primary Work Session across Agent Run attempts. */
+export const workSessionRecordSchema = z.object({
+  id: sakiWorkSessionIdSchema,
+  schemaVersion: z.literal(1),
+  revision,
+  intentId: controlIntentId,
+  assignmentId: workAssignmentId,
+  projectId: developmentProjectId,
+  workItemId: boardWorkItemId,
+  primary: z.literal(true),
+  agentRunIds: z.array(sakiAgentRunIdSchema).min(1).max(32),
+  state: z.enum(['open', 'canceled', 'reconciliation-required']),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  if (new Set(value.agentRunIds).size !== value.agentRunIds.length) {
+    context.addIssue({ code: 'custom', message: 'Work Session repeats Agent Run ids' })
+  }
+  if (value.updatedAt < value.createdAt) {
+    context.addIssue({ code: 'custom', message: 'Work Session timestamps are not monotonic' })
+  }
+})
+
+/** Parsed durable Work Session. */
+export type WorkSessionRecord = z.infer<typeof workSessionRecordSchema>
+
+/** Durable Agent Run allocation and ordered Dispatch association. */
+export const agentRunRecordSchema = z.object({
+  id: sakiAgentRunIdSchema,
+  schemaVersion: z.literal(1),
+  revision,
+  intentId: controlIntentId,
+  assignmentId: workAssignmentId,
+  workSessionId: sakiWorkSessionIdSchema,
+  projectId: developmentProjectId,
+  workItemId: boardWorkItemId,
+  bindingId: resourceBindingId,
+  profile: frozenAgentProfileSchema,
+  sessionId: z.string().regex(/^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
+  inputPlan: z.object({
+    messageId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
+    payloadDigest: digest,
+  }).strict(),
+  dispatchIds: z.array(sakiExecutionDispatchIdSchema).min(1).max(32),
+  state: z.enum(['allocated', 'starting', 'running', 'canceled', 'reconciliation-required']),
+  hostResult: startAgentRunHostOperationResultSchema.optional(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  if (new Set(value.dispatchIds).size !== value.dispatchIds.length) {
+    context.addIssue({ code: 'custom', message: 'Agent Run repeats Dispatch ids' })
+  }
+  if (value.updatedAt < value.createdAt) {
+    context.addIssue({ code: 'custom', message: 'Agent Run timestamps are not monotonic' })
+  }
+  if (value.hostResult !== undefined
+    && (value.hostResult.agentRunId !== value.id
+      || value.hostResult.workSessionId !== value.workSessionId
+      || value.hostResult.sessionId !== value.sessionId
+      || value.hostResult.inputMessageId !== value.inputPlan.messageId)) {
+    context.addIssue({ code: 'custom', message: 'Agent Run Host result disagrees with its exact input plan' })
+  }
+  if ((value.state === 'running') !== (value.hostResult !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'Agent Run Host result disagrees with state' })
+  }
+})
+
+/** Parsed durable Agent Run. */
+export type AgentRunRecord = z.infer<typeof agentRunRecordSchema>
+
+const executionDispatchClaimSchema = z.object({
+  id: dispatchClaimId,
+  executorHostId: hostId,
+  fencingToken: positiveRevision,
+  issuedAt: timestamp,
+  expiresAt: timestamp,
+}).strict().refine(value => value.expiresAt > value.issuedAt, 'Dispatch claim expiry must follow issuance')
+
+/** Durable one-Host delivery of one preallocated Agent Run. */
+export const executionDispatchRecordSchema = z.object({
+  id: sakiExecutionDispatchIdSchema,
+  schemaVersion: z.literal(1),
+  revision,
+  intentId: controlIntentId,
+  agentRunId: sakiAgentRunIdSchema,
+  workSessionId: sakiWorkSessionIdSchema,
+  hostId,
+  bindingId: resourceBindingId,
+  payloadDigest: digest,
+  hostRequest: startAgentRunHostOperationRequestSchema,
+  state: z.enum(['pending', 'claimed', 'accepted', 'canceled', 'reconciliation-required']),
+  latestFencingToken: revision,
+  claim: executionDispatchClaimSchema.optional(),
+  acceptedFencingToken: positiveRevision.optional(),
+  preparation: hostOperationPreparationSchema.optional(),
+  operationSnapshot: hostOperationSnapshotSchema.optional(),
+  terminalReason: z.enum(['authority-revoked', 'effect-unknown', 'evidence-conflict', 'protocol']).optional(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+}).strict().superRefine((value, context) => {
+  if (value.hostRequest.source.dispatchId !== value.id
+    || value.hostRequest.run.agentRunId !== value.agentRunId
+    || value.hostRequest.run.workSessionId !== value.workSessionId
+    || value.hostRequest.expected.binding.id !== value.bindingId
+    || value.hostRequest.source.payloadDigest !== value.payloadDigest) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch disagrees with its immutable Host request' })
+  }
+  if ((value.state === 'claimed') !== (value.claim !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch claim disagrees with state' })
+  }
+  if (value.claim !== undefined && value.claim.fencingToken !== value.latestFencingToken) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch claim has a stale fencing token' })
+  }
+  if (value.state === 'accepted'
+    && (value.acceptedFencingToken === undefined || value.preparation === undefined)) {
+    context.addIssue({ code: 'custom', message: 'accepted Execution Dispatch lacks admission evidence' })
+  }
+  if (value.acceptedFencingToken !== undefined
+    && (value.preparation === undefined || value.acceptedFencingToken !== value.latestFencingToken)) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch accepted fencing lacks matching preparation' })
+  }
+  if (value.preparation !== undefined
+    && (value.preparation.operation.type !== 'start-agent-run'
+      || value.preparation.operation.hostId !== value.hostId)) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch preparation disagrees with its target Host' })
+  }
+  if (value.operationSnapshot !== undefined
+    && (value.operationSnapshot.operation.type !== 'start-agent-run'
+      || value.operationSnapshot.operation.hostId !== value.hostId
+      || value.operationSnapshot.source.kind !== 'execution-dispatch'
+      || value.operationSnapshot.source.dispatchId !== value.id
+      || value.operationSnapshot.source.payloadDigest !== value.payloadDigest
+      || value.operationSnapshot.bindingId !== value.bindingId
+      || value.operationSnapshot.bindingRevision !== value.hostRequest.expected.binding.revision)) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch Host snapshot disagrees with its immutable request' })
+  }
+  if (value.preparation !== undefined && value.operationSnapshot !== undefined
+    && (value.preparation.operation.id !== value.operationSnapshot.operation.id
+      || !isDeepStrictEqual(value.preparation.requestFingerprint, value.operationSnapshot.requestFingerprint))) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch preparation disagrees with Host snapshot' })
+  }
+  const terminal = value.state === 'canceled' || value.state === 'reconciliation-required'
+  if (terminal !== (value.terminalReason !== undefined)
+    || (value.state === 'canceled' && value.terminalReason !== 'authority-revoked')
+    || (value.state === 'reconciliation-required' && value.terminalReason === 'authority-revoked')) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch terminal reason disagrees with state' })
+  }
+  if (value.updatedAt < value.createdAt) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch timestamps are not monotonic' })
+  }
+})
+
+/** Parsed durable Execution Dispatch. */
+export type ExecutionDispatchRecord = z.infer<typeof executionDispatchRecordSchema>
+
 const bindingWriteAdmissionBase = {
   id: resourceBindingId,
   schemaVersion: z.literal(1),
@@ -2316,8 +2674,17 @@ const manualWriteAdmissionBase = {
   reservedAt: timestamp,
 } as const
 
-/** Single local write owner for one Resource Binding; unknown variants fail closed. */
-export const bindingWriteAdmissionRecordSchema = z.union([
+const agentRunWriteAdmissionBase = {
+  ...bindingWriteAdmissionBase,
+  state: z.literal('agent-run'),
+  bindingRevision: revision,
+  originIntentId: controlIntentId,
+  agentRunId: sakiAgentRunIdSchema,
+  payloadDigest: digest,
+  reservedAt: timestamp,
+} as const
+
+const historicalBindingWriteAdmissionVariants = [
   z.object({ ...bindingWriteAdmissionBase, state: z.literal('available') }).strict(),
   z.object({
     ...manualWriteAdmissionBase,
@@ -2329,7 +2696,12 @@ export const bindingWriteAdmissionRecordSchema = z.union([
     preparation: hostOperationPreparationSchema,
     acceptedAt: timestamp,
   }).strict(),
-]).superRefine((value, context) => {
+] as const
+
+function refineHistoricalBindingWriteAdmission(
+  value: z.infer<(typeof historicalBindingWriteAdmissionVariants)[number]>,
+  context: z.RefinementCtx,
+): void {
   if (value.state === 'manual-host-operation'
     && (value.updatedAt < value.reservedAt
       || (value.phase === 'accepted'
@@ -2341,6 +2713,32 @@ export const bindingWriteAdmissionRecordSchema = z.union([
       ? 'commit' : value.action === 'project-changes:stage' ? 'stage-files' : 'unstage-files')) {
     context.addIssue({ code: 'custom', message: 'write admission action disagrees with Host preparation' })
   }
+}
+
+/** Exact historical v6 Binding write-admission vocabulary. */
+export const bindingWriteAdmissionV1RecordSchema = z.union(historicalBindingWriteAdmissionVariants)
+  .superRefine(refineHistoricalBindingWriteAdmission)
+
+/** Single local write owner for one Resource Binding; unknown variants fail closed. */
+export const bindingWriteAdmissionRecordSchema = z.union([
+  ...historicalBindingWriteAdmissionVariants,
+  z.object({
+    ...agentRunWriteAdmissionBase,
+    phase: z.literal('reserved'),
+  }).strict(),
+  z.object({
+    ...agentRunWriteAdmissionBase,
+    phase: z.literal('accepted'),
+    acceptedAt: timestamp,
+  }).strict(),
+]).superRefine((value, context) => {
+  if (value.state !== 'agent-run') refineHistoricalBindingWriteAdmission(value, context)
+  if (value.state === 'agent-run'
+    && (value.updatedAt < value.reservedAt
+      || (value.phase === 'accepted'
+        && (value.acceptedAt < value.reservedAt || value.acceptedAt > value.updatedAt)))) {
+    context.addIssue({ code: 'custom', message: 'Agent Run admission timestamps are not monotonic' })
+  }
 })
 
 /** Parsed single-writer admission row. */
@@ -2349,7 +2747,7 @@ export type BindingWriteAdmissionRecord = z.infer<typeof bindingWriteAdmissionRe
 /** Exact Saki control-plane domain declaration. */
 export const sakiControlPlaneDomainSpec = defineDomain({
   name: 'saki_control_plane',
-  version: 6,
+  version: 7,
   tables: {
     control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
     installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
@@ -2377,6 +2775,15 @@ export const sakiControlPlaneDomainSpec = defineDomain({
     ),
     github_work_item_recovery: domainTable<SakiWorkItemRecoveryId, GitHubWorkItemRecoveryRecord>(
       githubWorkItemRecoveryRecordSchema,
+    ),
+    agent_operation_intents: domainTable<SakiControlIntentId, AgentOperationIntentRecord>(
+      agentOperationIntentRecordSchema,
+    ),
+    work_assignments: domainTable<SakiWorkAssignmentId, WorkAssignmentRecord>(workAssignmentRecordSchema),
+    work_sessions: domainTable<SakiWorkSessionId, WorkSessionRecord>(workSessionRecordSchema),
+    agent_runs: domainTable<SakiAgentRunId, AgentRunRecord>(agentRunRecordSchema),
+    execution_dispatches: domainTable<SakiExecutionDispatchId, ExecutionDispatchRecord>(
+      executionDispatchRecordSchema,
     ),
   },
 })

@@ -13,7 +13,7 @@ A `Requires:` line lists the service keys the plugin `inject`s: its `cordis.yml`
 
 ## `@breakfastdapaidang/saki-execution-local`
 
-Requires: `fs` · `storageDomain` · `subprocess` · `workspaceRegistry`
+Requires: `agentPresets` · `agents` · `fs` · `sessionPersistence` · `sessions` · `storageDomain` · `subprocess` · `workspaceRegistry`
 
 ```ts config-catalog
 type ResolvedConfig = Required<Config>
@@ -59,7 +59,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/execution-local/src/index.ts:100`](../packages/saki/execution-local/src/index.ts)
+Source: [`packages/saki/execution-local/src/index.ts:112`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 
@@ -92,7 +92,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/github-app/src/index.ts:64`](../packages/saki/github-app/src/index.ts)
+Source: [`packages/saki/github-app/src/index.ts:66`](../packages/saki/github-app/src/index.ts)
 
 <a id="deepseek-aidsh-acp"></a>
 

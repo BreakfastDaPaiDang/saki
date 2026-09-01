@@ -25,6 +25,7 @@ export {
   readClosedSakiV3State,
   readClosedSakiV4State,
   readClosedSakiV5State,
+  readClosedSakiV6State,
 } from './closed-state.ts'
 export type {
   ClosedCurrentSakiState,
@@ -34,6 +35,7 @@ export type {
   ClosedSakiV3State,
   ClosedSakiV4State,
   ClosedSakiV5State,
+  ClosedSakiV6State,
 } from './closed-state.ts'
 export {
   createDurableFileWriter,

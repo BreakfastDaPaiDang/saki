@@ -8,18 +8,32 @@ export {
 } from './constants.ts'
 export { SakiInstallationState } from './installation-state.ts'
 export {
+  agentOperationIntentRecordSchema,
+  agentRunRecordSchema,
   bindingWriteAdmissionRecordSchema,
+  executionDispatchRecordSchema,
+  giveWorkItemToAgentIntentSchema,
   gitOperationIntentRecordSchema,
   sakiControlPlaneDomainSpec,
+  workAssignmentRecordSchema,
+  workSessionRecordSchema,
 } from './spec.ts'
 export type {
+  AgentOperationIntentRecord,
+  AgentRunRecord,
   BindingWriteAdmissionRecord,
+  ExecutionDispatchRecord,
   GitOperationIntentRecord,
+  WorkAssignmentRecord,
+  WorkSessionRecord,
 } from './spec.ts'
 export {
+  sakiAgentProfileIdSchema,
   sakiBuildIdSchema,
+  sakiDispatchClaimIdSchema,
   sakiInstallationIdSchema,
   sakiStorageGenerationIdSchema,
+  sakiWorkAssignmentIdSchema,
 } from './ids.ts'
 export {
   createStorageGenerationSeal,
@@ -27,17 +41,20 @@ export {
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
+  sakiStorageGenerationV4DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationSealRecordSchema,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
   storageGenerationV3SealRecordSchema,
+  storageGenerationV4SealRecordSchema,
 } from './state-version.ts'
 export type {
   StorageGenerationSealRecord,
   StorageGenerationV1SealRecord,
   StorageGenerationV2SealRecord,
   StorageGenerationV3SealRecord,
+  StorageGenerationV4SealRecord,
 } from './state-version.ts'
 export {
   validateCurrentSakiState,
@@ -54,14 +71,19 @@ export type {
 export type { SakiAuthenticationContext } from './authentication.ts'
 export type {
   CreateWorkItemIntent,
+  GiveWorkItemToAgentIntent,
   MoveWorkItemIntent,
   SakiBoardMutationOverlayProjection,
+  SakiGiveWorkItemToAgentIntentReceipt,
+  SakiGiveWorkItemToAgentReceipt,
   SakiWorkItemIntentReceipt,
 } from './types.ts'
 export type {
   AccessProjection,
   SakiAccessExchangeResult,
+  SakiAgentProfileId,
   SakiAccessLogoutResult,
+  SakiAgentRunProjection,
   SakiAuthenticatedAccessProjection,
   SakiBootstrapChallengeId,
   SakiBuildId,
@@ -99,6 +121,7 @@ export type {
   SakiDevelopmentWorkspaceProjection,
   SakiDevelopmentWorkspaceQuery,
   SakiGrantId,
+  SakiDispatchClaimId,
   SakiHostId,
   SakiInstallationAccessId,
   SakiInstallationId,
@@ -110,6 +133,11 @@ export type {
   SakiIntentReceipt,
   SakiIntentReceiptMap,
   SakiIntentReceiptId,
+  SakiWorkAssignmentId,
+  SakiWorkItemDetailProjection,
+  SakiAgentRunId,
+  SakiExecutionDispatchId,
+  SakiWorkSessionId,
   SakiGitHubSynchronizationReceipt,
   SakiGitOperationAvailabilityProjection,
   SakiGitOperationIntent,
@@ -161,6 +189,7 @@ export {
   sakiControlPlaneV3DomainSpec,
   sakiControlPlaneV4DomainSpec,
   sakiControlPlaneV5DomainSpec,
+  sakiControlPlaneV6DomainSpec,
 } from './migration.ts'
 export { SakiBootstrapHandoff } from './secrets.ts'
 

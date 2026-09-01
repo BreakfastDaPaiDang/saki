@@ -20,3 +20,6 @@ export const GITHUB_ISSUE_CREATE_TITLE_UTF8_LIMIT = 1_024
 
 /** Maximum complete Issue-create body size after UTF-8 encoding. */
 export const GITHUB_ISSUE_CREATE_BODY_UTF8_LIMIT = 60_000
+
+/** Maximum complete targeted Issue body admitted after UTF-8 encoding. */
+export const GITHUB_ISSUE_DETAIL_BODY_UTF8_LIMIT = 256 * 1024

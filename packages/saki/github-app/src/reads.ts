@@ -3,11 +3,13 @@
 import { z } from 'zod'
 import {
   GitHubProviderError,
+  githubBranchSafetyFactSchema,
   githubAccountId,
   githubCommitComparisonFactSchema,
   githubCommitFactSchema,
   githubCommitId,
   githubIssueFactSchema,
+  githubIssueDetailFactSchema,
   githubProjectFactSchema,
   githubProjectId,
   githubReleaseByTagObservationSchema,
@@ -20,11 +22,15 @@ import {
   githubTagReferenceFactSchema,
 } from '@breakfastdapaidang/saki-github'
 import type {
+  GitHubBranchSafetyFact,
+  GitHubBranchSafetyReadRequest,
   GitHubCommitComparisonFact,
   GitHubCommitFact,
   GitHubCommitReadRequest,
   GitHubCompareCommitsReadRequest,
   GitHubIssueFact,
+  GitHubIssueDetailFact,
+  GitHubIssueDetailReadRequest,
   GitHubIssueReadRequest,
   GitHubProjectFact,
   GitHubProjectReadRequest,
@@ -82,6 +88,18 @@ query SakiIssue($issueId: ID!) {
   rateLimit { cost limit remaining resetAt }
 }`
 
+const ISSUE_DETAIL_QUERY = `
+query SakiIssueDetail($issueId: ID!) {
+  node(id: $issueId) {
+    __typename
+    ... on Issue {
+      id number state title body url updatedAt
+      repository { id databaseId: fullDatabaseId }
+    }
+  }
+  rateLimit { cost limit remaining resetAt }
+}`
+
 const PROJECT_QUERY = `
 query SakiProject($projectId: ID!) {
   node(id: $projectId) {
@@ -112,6 +130,23 @@ const issueDataSchema = z.object({
   }).loose().nullable(),
   rateLimit: repositoryDataSchema.shape.rateLimit,
 }).loose()
+
+const issueDetailDataSchema = z.object({
+  node: graphqlIssueNodeSchema.extend({
+    __typename: z.literal('Issue'),
+    body: z.string(),
+  }).loose().nullable(),
+  rateLimit: repositoryDataSchema.shape.rateLimit,
+}).loose()
+
+const branchSchema = z.object({
+  name: z.string().min(1).max(255),
+  protected: z.boolean(),
+}).loose()
+
+const activeBranchRulesSchema = z.array(z.object({
+  type: z.string().min(1).max(100).regex(/^[a-z][a-z0-9_]*$/u),
+}).loose()).max(10_000)
 
 const projectDataSchema = z.object({
   node: graphqlProjectNodeSchema.extend({
@@ -218,6 +253,80 @@ export async function readIssue(
     || data.node.repository.id !== request.repositoryId
     || data.node.repository.databaseId !== request.repositoryDatabaseId) invalid(request.kind)
   return githubIssueFactSchema.parse(issueFact(data.node))
+}
+
+/**
+ * Read one exact Issue with its complete bounded Markdown body.
+ * @param request - exact Issue identity.
+ * @param privateKey - operation-scoped private key.
+ * @param config - validated provider limits.
+ * @param signal - operation lifetime.
+ * @param queue - installation request scheduler.
+ * @returns detached exact Issue detail.
+ */
+export async function readIssueDetail(
+  request: GitHubIssueDetailReadRequest,
+  privateKey: string,
+  config: ResolvedConfig,
+  signal: AbortSignal,
+  queue: InstallationPriorityQueue,
+): Promise<GitHubIssueDetailFact> {
+  const session = await createSession(request.installation, privateKey, request.repositoryDatabaseId, config, signal, queue)
+  const data = issueDetailDataSchema.parse(await queryGraphql(
+    session.installation,
+    ISSUE_DETAIL_QUERY,
+    { issueId: request.issueId },
+    signal,
+    request.kind,
+  ))
+  if (data.node === null) notFound(request.kind)
+  if (data.node.id !== request.issueId
+    || data.node.repository.id !== request.repositoryId
+    || data.node.repository.databaseId !== request.repositoryDatabaseId) invalid(request.kind)
+  return githubIssueDetailFactSchema.parse({
+    ...graphqlIssueFact(data.node, request.kind),
+    body: data.node.body,
+  })
+}
+
+/**
+ * Classify one exact branch using effective rules without Administration permission.
+ * @param request - exact Repository and branch name.
+ * @param privateKey - operation-scoped private key.
+ * @param config - validated provider limits.
+ * @param signal - operation lifetime.
+ * @param queue - installation request scheduler.
+ * @returns fail-closed branch-safety facts.
+ */
+export async function readBranchSafety(
+  request: GitHubBranchSafetyReadRequest,
+  privateKey: string,
+  config: ResolvedConfig,
+  signal: AbortSignal,
+  queue: InstallationPriorityQueue,
+): Promise<GitHubBranchSafetyFact> {
+  const session = await createSession(request.installation, privateKey, request.repositoryDatabaseId, config, signal, queue)
+  const repository = await repositoryFromSession(session, request, signal)
+  const [owner, repo] = repositoryCoordinates(repository)
+  let rawBranch: unknown
+  try {
+    rawBranch = (await session.installation.request('GET /repos/{owner}/{repo}/branches/{branch}', {
+      owner,
+      repo,
+      branch: request.branch,
+      request: { signal },
+    })).data
+  } catch (error) {
+    if (httpStatus(error) !== 404) throw error
+    return await readMissingBranchSafety(session, request, owner, repo, signal)
+  }
+  const branch = branchSchema.parse(rawBranch)
+  if (branch.name !== request.branch) invalid(request.kind)
+  return githubBranchSafetyFactSchema.parse({
+    kind: branch.protected ? 'protected' : 'safe',
+    branchExists: true,
+    observedAt: Date.now(),
+  })
 }
 
 /**
@@ -489,6 +598,30 @@ export async function readCompareCommits(
     ...(comparison.merge_base_commit === null
       ? {}
       : { mergeBaseCommitId: githubCommitId(comparison.merge_base_commit.sha) }),
+    observedAt: Date.now(),
+  })
+}
+
+async function readMissingBranchSafety(
+  session: GitHubOperationSession,
+  request: GitHubBranchSafetyReadRequest,
+  owner: string,
+  repo: string,
+  signal: AbortSignal,
+): Promise<GitHubBranchSafetyFact> {
+  const rawRules: unknown = (await session.installation.request(
+    'GET /repos/{owner}/{repo}/rules/branches/{branch}',
+    {
+      owner,
+      repo,
+      branch: request.branch,
+      request: { signal },
+    },
+  )).data
+  const rules = activeBranchRulesSchema.parse(rawRules)
+  return githubBranchSafetyFactSchema.parse({
+    kind: rules.length === 0 ? 'legacy-protection-unknown' : 'protected',
+    branchExists: false,
     observedAt: Date.now(),
   })
 }

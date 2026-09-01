@@ -20,6 +20,10 @@ import {
   projectSelectionProjectionSchema,
   readProjectDiffRequestSchema,
   readProjectDiffResultSchema,
+  sakiAgentProfileIdSchema,
+  sakiAgentRunIdSchema,
+  sakiExecutionDispatchIdSchema,
+  sakiWorkSessionIdSchema,
   selectedProjectGitChangeSchema,
   stageFilesHostOperationResultSchema,
   unstageFilesHostOperationResultSchema,
@@ -34,6 +38,7 @@ import type {
   ConfigureGitHubSynchronizationIntent,
   CreateWorkItemIntent,
   CreateCommitIntent,
+  GiveWorkItemToAgentIntent,
   GitMutationExpectation,
   GitHubAccountId,
   GitHubAppId,
@@ -48,6 +53,7 @@ import type {
   GitHubSynchronizationConfigurationPatch,
   RegisterDevelopmentProjectIntent,
   SakiControlIntentId,
+  SakiAgentRunProjection,
   SakiBoardProjection,
   SakiBoardMutationOverlayProjection,
   SakiBoardRemoteFingerprint,
@@ -62,6 +68,9 @@ import type {
   SakiIntentInput,
   SakiIntentReceiptId,
   SakiWorkItemIntentReceipt,
+  SakiGiveWorkItemToAgentIntentReceipt,
+  SakiWorkAssignmentId,
+  SakiWorkItemDetailProjection,
   SakiGitHubMappingHealthProjection,
   SakiGitHubMappingIssue,
   SakiGitHubRateLimitProjection,
@@ -99,6 +108,7 @@ const projectId = brandedId<SakiDevelopmentProjectId>('project')
 const bindingId = brandedId<SakiResourceBindingId>('binding')
 const intentId = brandedId<SakiControlIntentId>('intent')
 const receiptId = brandedId<SakiIntentReceiptId>('receipt')
+const assignmentId = brandedId<SakiWorkAssignmentId>('assignment')
 const safeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 const positiveInteger = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
 const revision = safeInteger
@@ -371,6 +381,16 @@ export const sakiMoveWorkItemIntentSchema = z.object({
   }
 }) satisfies z.ZodType<MoveWorkItemIntent>
 
+/** Strict manual Agent assignment Intent without execution or Host authority. */
+export const sakiGiveWorkItemToAgentIntentSchema = z.object({
+  type: z.literal('give-work-item-to-agent'),
+  intentId,
+  projectId,
+  workItemId: boardWorkItemId,
+  expectedProjectRevision: revision,
+  expectedRemoteFingerprint: boardRemoteFingerprint,
+}).strict() satisfies z.ZodType<GiveWorkItemToAgentIntent>
+
 /** Closed Control Intent request union. */
 export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
   sakiRegisterDevelopmentProjectIntentSchema,
@@ -380,6 +400,7 @@ export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
   sakiCreateCommitIntentSchema,
   sakiCreateWorkItemIntentSchema,
   sakiMoveWorkItemIntentSchema,
+  sakiGiveWorkItemToAgentIntentSchema,
 ]) satisfies z.ZodType<SakiIntentInput>
 
 /** Authenticated member of the Access Projection schema. */
@@ -1479,6 +1500,149 @@ export const sakiBoardProjectionSchema: z.ZodType<SakiBoardProjection> = z.discr
   confirmedBoardProjectionSchema,
 ])
 
+const sakiAgentRunSessionId = brandedId<SakiAgentRunProjection['sessionId']>('session')
+const agentPresetId = z.string().min(1).max(200).regex(/^[a-z0-9][a-z0-9-]*$/u)
+const safeAgentDisplayText = (maximum: number) => z.string().min(1).max(maximum)
+  .refine(value => value.isWellFormed() && !/[\u0000\u007f]/u.test(value))
+
+const sakiAgentRunProjectionBaseShape = {
+  id: sakiAgentRunIdSchema,
+  revision,
+  assignmentId,
+  workSessionId: sakiWorkSessionIdSchema,
+  sessionId: sakiAgentRunSessionId,
+  source: z.object({
+    kind: z.literal('manual-give-to-agent'),
+    intentId,
+    projectId,
+    workItemId: boardWorkItemId,
+  }).strict(),
+  profile: z.object({
+    id: sakiAgentProfileIdSchema,
+    version: positiveRevision,
+    agentPresetId,
+  }).strict(),
+  model: z.object({
+    provider: safeAgentDisplayText(200),
+    model: safeAgentDisplayText(200),
+  }).strict(),
+  createdAt: safeInteger,
+  updatedAt: safeInteger,
+} as const
+
+const currentAgentRunProjectionSchema = z.object({
+  ...sakiAgentRunProjectionBaseShape,
+  state: z.enum(['allocated', 'starting', 'running']),
+  recovery: z.object({ state: z.literal('resumable') }).strict(),
+}).strict().refine(value => value.updatedAt >= value.createdAt, 'Agent Run timestamps are not monotonic')
+
+const canceledAgentRunProjectionSchema = z.object({
+  ...sakiAgentRunProjectionBaseShape,
+  state: z.literal('canceled'),
+  recovery: z.object({
+    state: z.literal('terminal'),
+    reason: z.literal('authority-revoked'),
+  }).strict(),
+}).strict().refine(value => value.updatedAt >= value.createdAt, 'Agent Run timestamps are not monotonic')
+
+const reconciliationAgentRunProjectionSchema = z.object({
+  ...sakiAgentRunProjectionBaseShape,
+  state: z.literal('reconciliation-required'),
+  recovery: z.object({
+    state: z.literal('required'),
+    reason: z.enum(['effect-unknown', 'evidence-conflict', 'protocol']),
+  }).strict(),
+}).strict().refine(value => value.updatedAt >= value.createdAt, 'Agent Run timestamps are not monotonic')
+
+const recentAgentRunProjectionSchema = z.union([
+  canceledAgentRunProjectionSchema,
+  reconciliationAgentRunProjectionSchema,
+])
+
+/** Browser-safe current or recent manual Agent Run schema. */
+export const sakiAgentRunProjectionSchema = z.union([
+  currentAgentRunProjectionSchema,
+  recentAgentRunProjectionSchema,
+]) satisfies z.ZodType<SakiAgentRunProjection>
+
+/** Strict assigned Work Item detail schema without Host or credential evidence. */
+export const sakiWorkItemDetailProjectionSchema = z.object({
+  type: z.literal('work-item-detail'),
+  projectId,
+  workItemId: boardWorkItemId,
+  definition: z.object({
+    title: safeAgentDisplayText(4_096),
+    url: safeUrl,
+    number: positiveInteger,
+    status: sakiBoardStatusSchema,
+    intendedOutcome: safeAgentDisplayText(32_768),
+    acceptanceCriteria: boundedArray(safeAgentDisplayText(4_096), 1, 128),
+    blockage: boundedArray(safeAgentDisplayText(4_096), 0, 128),
+  }).strict(),
+  assignment: z.object({
+    id: assignmentId,
+    revision,
+    state: z.enum(['assigned', 'active', 'canceled', 'reconciliation-required']),
+    primaryWorkSessionId: sakiWorkSessionIdSchema,
+    createdAt: safeInteger,
+    updatedAt: safeInteger,
+  }).strict(),
+  primaryWorkSession: z.object({
+    id: sakiWorkSessionIdSchema,
+    revision,
+    state: z.enum(['open', 'canceled', 'reconciliation-required']),
+    createdAt: safeInteger,
+    updatedAt: safeInteger,
+  }).strict(),
+  currentAgentRun: currentAgentRunProjectionSchema.optional(),
+  recentAgentRuns: boundedArray(recentAgentRunProjectionSchema, 0, 32),
+}).strict().superRefine((projection, context) => {
+  if (projection.assignment.updatedAt < projection.assignment.createdAt) {
+    context.addIssue({ code: 'custom', message: 'Assignment timestamps are not monotonic', path: ['assignment'] })
+  }
+  if (projection.primaryWorkSession.updatedAt < projection.primaryWorkSession.createdAt) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Work Session timestamps are not monotonic',
+      path: ['primaryWorkSession'],
+    })
+  }
+  if (projection.assignment.primaryWorkSessionId !== projection.primaryWorkSession.id) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Assignment disagrees with its primary Work Session',
+      path: ['primaryWorkSession'],
+    })
+  }
+  const runs = [
+    ...(projection.currentAgentRun === undefined ? [] : [projection.currentAgentRun]),
+    ...projection.recentAgentRuns,
+  ]
+  if (runs.length > 32 || new Set(runs.map(run => run.id)).size !== runs.length) {
+    context.addIssue({ code: 'custom', message: 'Work Item detail repeats or exceeds Agent Runs', path: ['recentAgentRuns'] })
+  }
+  for (const [index, run] of runs.entries()) {
+    if (run.source.projectId !== projection.projectId || run.source.workItemId !== projection.workItemId) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Agent Run belongs to another Work Item',
+        path: index === 0 && projection.currentAgentRun !== undefined
+          ? ['currentAgentRun', 'source']
+          : ['recentAgentRuns', index - (projection.currentAgentRun === undefined ? 0 : 1), 'source'],
+      })
+    }
+  }
+  if (projection.currentAgentRun !== undefined
+    && (projection.currentAgentRun.assignmentId !== projection.assignment.id
+      || projection.currentAgentRun.workSessionId !== projection.primaryWorkSession.id)) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Current Agent Run disagrees with the active Assignment or primary Work Session',
+      path: ['currentAgentRun'],
+    })
+  }
+}) satisfies z.ZodType<SakiWorkItemDetailProjection>
+
 const githubSynchronizationActiveSchema = z.object({
   revision: positiveRevision,
   configuration: githubSynchronizationConfigurationSchema,
@@ -1825,7 +1989,10 @@ const gitOperationFailedReason = z.enum([
 ])
 
 function validateIntentResultReceiptIdentity(
-  result: { readonly ok: boolean; readonly receipt?: { readonly id: string; readonly intentId: string } },
+  result: {
+    readonly ok: boolean
+    readonly receipt?: { readonly id: string; readonly intentId: string } | undefined
+  },
   context: z.RefinementCtx,
 ): void {
   const receipt = result.receipt
@@ -2035,6 +2202,86 @@ export const sakiMoveWorkItemResultSchema = createWorkItemResultSchema(
   'move-work-item',
 ) satisfies z.ZodType<SakiWorkItemIntentReceipt<'move-work-item'>>
 
+const giveWorkItemToAgentReceiptBase = {
+  ...receiptIdentity,
+  type: z.literal('give-work-item-to-agent'),
+  projectId,
+  workItemId: boardWorkItemId,
+  assignmentId,
+  workSessionId: sakiWorkSessionIdSchema,
+  agentRunId: sakiAgentRunIdSchema,
+  dispatchId: sakiExecutionDispatchIdSchema,
+} as const
+
+const giveWorkItemToAgentNonterminalReceiptSchema = z.object({
+  ...giveWorkItemToAgentReceiptBase,
+  state: z.enum(['prepared', 'admission-reserved', 'dispatching']),
+}).strict()
+
+const giveWorkItemToAgentConflictReceiptSchema = z.object({
+  ...giveWorkItemToAgentReceiptBase,
+  state: z.literal('conflict'),
+  reason: z.enum([
+    'expected-revision',
+    'stale-remote',
+    'work-item-not-ready',
+    'work-item-blocked',
+    'acceptance-criteria-missing',
+    'binding-unavailable',
+    'inherited-changes-unsafe',
+    'writable-run-active',
+    'branch-protected',
+    'legacy-protection-unknown',
+  ]),
+}).strict()
+
+/** Give-to-Agent business result with only browser-safe durable identities. */
+export const sakiGiveWorkItemToAgentResultSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    receipt: z.object({
+      ...giveWorkItemToAgentReceiptBase,
+      state: z.literal('started'),
+    }).strict(),
+  }).strict(),
+  z.object({ ok: z.literal(false), reason: z.literal('denied') }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('unavailable'),
+    detail: z.enum([
+      'work-item-detail-unavailable',
+      'branch-safety-unavailable',
+      'agent-profile-unavailable',
+      'model-route-unavailable',
+      'host-unavailable',
+    ]).optional(),
+    receipt: giveWorkItemToAgentNonterminalReceiptSchema.optional(),
+  }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('conflict'),
+    receipt: giveWorkItemToAgentConflictReceiptSchema.optional(),
+  }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('canceled'),
+    receipt: z.object({
+      ...giveWorkItemToAgentReceiptBase,
+      state: z.literal('canceled'),
+      reason: z.literal('authority-revoked'),
+    }).strict(),
+  }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('reconciliation-required'),
+    receipt: z.object({
+      ...giveWorkItemToAgentReceiptBase,
+      state: z.literal('reconciliation-required'),
+      reason: z.enum(['effect-unknown', 'evidence-conflict', 'protocol']),
+    }).strict(),
+  }).strict(),
+]).superRefine(validateIntentResultReceiptIdentity) satisfies z.ZodType<SakiGiveWorkItemToAgentIntentReceipt>
+
 /** Union schema retained for callers that intentionally handle every Control Intent result. */
 export const sakiIntentResultSchema = z.union([
   sakiRegisterDevelopmentProjectResultSchema,
@@ -2044,6 +2291,7 @@ export const sakiIntentResultSchema = z.union([
   sakiCreateCommitResultSchema,
   sakiCreateWorkItemResultSchema,
   sakiMoveWorkItemResultSchema,
+  sakiGiveWorkItemToAgentResultSchema,
 ]) satisfies z.ZodType<SakiIntentReceipt>
 
 /** Browser Access Projection inferred from the strict wire schema. */
@@ -2110,6 +2358,10 @@ export type SakiWireCreateWorkItemResult = z.infer<typeof sakiCreateWorkItemResu
 export type SakiWireMoveWorkItemIntent = z.infer<typeof sakiMoveWorkItemIntentSchema>
 /** Browser MoveWorkItem result inferred from its exact safe receipt schema. */
 export type SakiWireMoveWorkItemResult = z.infer<typeof sakiMoveWorkItemResultSchema>
+/** Browser Give-to-Agent Intent inferred from its strict authority-free schema. */
+export type SakiWireGiveWorkItemToAgentIntent = z.infer<typeof sakiGiveWorkItemToAgentIntentSchema>
+/** Browser Give-to-Agent result inferred from its exact safe receipt schema. */
+export type SakiWireGiveWorkItemToAgentResult = z.infer<typeof sakiGiveWorkItemToAgentResultSchema>
 /** Branded Host id accepted by the browser client. */
 export type SakiWireHostId = SakiHostId
 /** Branded Project id accepted by the browser client. */

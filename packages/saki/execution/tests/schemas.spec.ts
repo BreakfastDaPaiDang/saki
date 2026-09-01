@@ -1,9 +1,11 @@
 import { Context } from '@deepseek-ai/cordis'
 import Invariants from '@deepseek-ai/dsh-invariants'
+import { MessageId } from '@deepseek-ai/dsh-llm'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { describe, expect, it, vi } from 'vitest'
 import { canonicalDigest } from '../src/canonical.ts'
 import {
+  computeStartAgentRunPayloadDigest,
   computeProjectGitChangeFingerprint,
   computeProjectGitChangeId,
   computeProjectGitStatusFingerprint,
@@ -59,6 +61,8 @@ import {
   safeGitRemoteObservationSchema,
   safeGitRemoteObservationKey,
   stageFilesHostOperationResultSchema,
+  startAgentRunHostOperationRequestSchema,
+  startAgentRunHostOperationResultSchema,
 } from '../src/schemas.ts'
 import type {
   ActiveHostProjectBinding,
@@ -68,6 +72,7 @@ import type {
   ProjectSelectionProjection,
   SakiHostId,
   SakiResourceBindingId,
+  StartAgentRunInputMessage,
 } from '../src/types.ts'
 import type {
   ProjectGitChangeFingerprintMaterial,
@@ -1341,6 +1346,83 @@ describe('InheritedChangeBaseline schemas', () => {
       .toBe(false)
   })
 
+  it('admits one complete dispatch-sourced StartAgentRun request and result', () => {
+    const { request, result } = startAgentRunFixture()
+
+    expect(startAgentRunHostOperationRequestSchema.parse(request)).toEqual(request)
+    expect(hostOperationRequestSchema.parse(request)).toEqual(request)
+    expect(startAgentRunHostOperationResultSchema.parse(result)).toEqual(result)
+  })
+
+  it('keeps Dispatch claims out of immutable StartAgentRun input and correlates every stable id', () => {
+    const { request } = startAgentRunFixture()
+    const change = boundStatusFixture().observation.changes[0]!
+    const operation = { source: request.source, expected: request.expected }
+    const snapshot = {
+      operation: {
+        id: 'host-operation-99999999-9999-4999-8999-999999999999',
+        hostId: request.expected.binding.hostId,
+        type: 'start-agent-run',
+      },
+      revision: 0,
+      source: request.source,
+      requestFingerprint: { version: 1, digest: '9'.repeat(64) },
+      bindingId: request.expected.binding.id,
+      bindingRevision: request.expected.binding.revision,
+      preparedAt: 1,
+      updatedAt: 1,
+      state: 'prepared',
+      admission: { kind: 'not-accepted' },
+    } as const
+
+    expect(startAgentRunHostOperationRequestSchema.safeParse({
+      ...request,
+      source: { ...request.source, claimId: 'claim-sentinel', fencingToken: 3 },
+    }).success).toBe(false)
+    for (const [field, mismatch] of [
+      ['dispatchId', 'dispatch-88888888-8888-4888-8888-888888888888'],
+      ['agentRunId', 'agent-run-88888888-8888-4888-8888-888888888888'],
+      ['workSessionId', 'work-session-88888888-8888-4888-8888-888888888888'],
+    ] as const) {
+      expect(startAgentRunHostOperationRequestSchema.safeParse({
+        ...request,
+        run: {
+          ...request.run,
+          input: {
+            ...request.run.input,
+            source: {
+              ...request.run.input.source,
+              [field]: mismatch,
+            },
+          },
+        },
+      }).success, field).toBe(false)
+    }
+    expect(startAgentRunHostOperationRequestSchema.safeParse({
+      ...request,
+      source: { ...request.source, payloadDigest: '0'.repeat(64) },
+    }).success).toBe(false)
+    expect(hostOperationRequestSchema.safeParse({
+      ...operation,
+      type: 'stage-files',
+      changes: [{ id: change.id, fingerprint: change.fingerprint }],
+    }).success).toBe(false)
+    expect(hostOperationSnapshotSchema.parse(snapshot)).toEqual(snapshot)
+    expect(hostOperationSnapshotSchema.safeParse({
+      ...snapshot,
+      operation: { ...snapshot.operation, type: 'stage-files' },
+    }).success).toBe(false)
+    expect(hostOperationSnapshotSchema.safeParse({
+      ...snapshot,
+      source: {
+        kind: 'control-intent',
+        intentId: 'intent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        intentRevision: 0,
+        payloadDigest: 'a'.repeat(64),
+      },
+    }).success).toBe(false)
+  })
+
   it('keeps Host Operation requests path-free and durable lifecycle evidence closed', () => {
     const { baseline, binding, observation, projectionWithoutFingerprint } = boundStatusFixture()
     const trackedChange = observation.changes[0]!
@@ -1699,6 +1781,7 @@ describe('InheritedChangeBaseline schemas', () => {
       }
 
       async startOperation(): Promise<never> { throw new Error('unavailable') }
+      async resumeAgentRun(): Promise<never> { throw new Error('unavailable') }
       async inspectOperation(): Promise<never> { throw new Error('unavailable') }
       async cancelOperation(): Promise<never> { throw new Error('unavailable') }
       onChanged(): () => void { return () => undefined }
@@ -1816,6 +1899,58 @@ function boundStatusFixture() {
     trackedChange,
     trusted,
     untrackedChange,
+  }
+}
+
+function startAgentRunFixture() {
+  const { baseline, binding, observation } = boundStatusFixture()
+  const dispatchId = 'dispatch-22222222-2222-4222-8222-222222222222'
+  const agentRunId = 'agent-run-33333333-3333-4333-8333-333333333333'
+  const workSessionId = 'work-session-44444444-4444-4444-8444-444444444444'
+  const sessionId = 'session-55555555-5555-4555-8555-555555555555'
+  const input = {
+    id: MessageId('66666666-6666-4666-8666-666666666666'),
+    role: 'user',
+    content: [{ type: 'text', text: 'Implement the frozen Work Item definition.' }],
+    source: { kind: 'saki-agent-run', dispatchId, agentRunId, workSessionId },
+  } as StartAgentRunInputMessage
+  const request = {
+    type: 'start-agent-run',
+    source: {
+      kind: 'execution-dispatch',
+      dispatchId,
+      payloadDigest: computeStartAgentRunPayloadDigest(input),
+    },
+    expected: {
+      binding,
+      status: observation.fingerprint,
+      head: observation.head,
+      index: observation.index,
+      worktree: observation.worktree,
+      preEffectBaseline: baseline,
+    },
+    run: {
+      agentRunId,
+      workSessionId,
+      sessionId,
+      profile: {
+        id: 'agent-profile-77777777-7777-4777-8777-777777777777',
+        version: 1,
+        agentPresetId: 'standard',
+        modelRoute: { provider: 'fake', model: 'fake-model' },
+      },
+      input,
+    },
+  } as const
+  return {
+    request,
+    result: {
+      type: 'start-agent-run',
+      agentRunId,
+      workSessionId,
+      sessionId,
+      inputMessageId: input.id,
+    } as const,
   }
 }
 

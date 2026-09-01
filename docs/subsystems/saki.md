@@ -2,7 +2,7 @@
 
 English | [中文](saki.zh.md)
 
-The Saki control plane owns product state independently from agent conversations. Its implemented surface establishes one stable local Installation, one enrolled Host, one human Principal with a current Host Operator Grant, one versioned Installation Access aggregate, a revisioned Development Project Registry with recoverable first-registration Intents, recoverable direct structured-Git Intents for bound Projects, and recoverable GitHub-backed Create/Move Work Item Intents. A versioned provisioning owner and independently revisioned entity tables retain those identities and operation evidence across interrupted startup. The [Saki backend architecture](../saki/architecture/0.1.0-backend.md) defines the wider control-plane and execution-plane split; this page is the reference for the implemented Cordis service.
+The Saki control plane owns product state independently from agent conversations. Its implemented surface establishes one stable local Installation, one enrolled Host, one human Principal with a current Host Operator Grant, one versioned Installation Access aggregate, a revisioned Development Project Registry with recoverable first-registration Intents, recoverable direct structured-Git Intents for bound Projects, recoverable GitHub-backed Create/Move Work Item Intents, and a manual Give-to-Agent Intent that starts one recoverable Agent Run. A versioned provisioning owner and independently revisioned entity tables retain those identities and operation evidence across interrupted startup. The [Saki backend architecture](../saki/architecture/0.1.0-backend.md) defines the wider control-plane and execution-plane split; this page is the reference for the implemented Cordis service.
 
 ## Installation access
 
@@ -20,9 +20,17 @@ The `project-index` query returns the current Registry revision, enrolled Host c
 
 The protected `project-changes` query reopens the exact active Resource Binding through `ctx.sakiHostExecution` and returns a complete display-safe status observation. It includes exact Binding revision, HEAD, branch and upstream, index-tree evidence, worktree fingerprint, structured rows with bounded repository-relative display paths, status fingerprint, and repository-level eligibility for stage, unstage, and Commit; canonical Host paths stay private. Each row uses an observation-scoped opaque id and fingerprint. `project-diff` resolves that identity and a staged, unstaged, or conflict layer against the exact observation and returns one bounded page tied to a complete patch fingerprint and cursor.
 
-`stage-files`, `unstage-files`, and `create-commit` are durable direct Control Intents. Submission freezes the authenticated Actor and authority plus the exact Registry, Project, Binding, status, HEAD, index, worktree, and inherited-change evidence. One Binding Write Admission row allows only one `manual-host-operation` writer for the Resource Binding. The control plane reserves it, prepares one idempotent `{ kind: 'control-intent' }` Host Operation, accepts that exact preparation, and starts or inspects it outside storage callbacks. Exact replay returns the same receipt; changed immutable input conflicts; unknown or contradictory effect evidence remains `reconciliation-required`.
+`stage-files`, `unstage-files`, and `create-commit` are durable direct Control Intents. Submission freezes the authenticated Actor and authority plus the exact Registry, Project, Binding, status, HEAD, index, worktree, and inherited-change evidence. One Binding Write Admission row permits exactly one `manual-host-operation` or `agent-run` writer for the Resource Binding. A direct Git Intent reserves the former, prepares one idempotent `{ kind: 'control-intent' }` Host Operation, accepts that exact preparation, and starts or inspects it outside storage callbacks. Exact replay returns the same receipt; changed immutable input conflicts; unknown or contradictory effect evidence remains `reconciliation-required`.
 
-The Local Host builds stage and unstage results in an alternate index, persists a random same-directory pin, and links that pin without clobbering into the bound index lock before publication. It creates deterministic hook-free unsigned Commits from the observed index tree. Attached-HEAD publication freezes the target branch, revalidates HEAD immediately before the effect, and compare-and-sets only that target. Detached HEAD remains available for inspection, Diff, stage, and unstage, but CreateCommit is unavailable because Git 2.45 cannot atomically prove that `HEAD` stayed direct while compare-and-setting its object id. Git 2.45 is the minimum. Random scratch cleanup requires an exact owner marker; index-lock cleanup requires the operation-owned path, file identity, and digest; and attempted publication that cannot be proved is never retried automatically. Automated dispatch and Agent Run sources remain later work.
+The Local Host builds stage and unstage results in an alternate index, persists a random same-directory pin, and links that pin without clobbering into the bound index lock before publication. It creates deterministic hook-free unsigned Commits from the observed index tree. Attached-HEAD publication freezes the target branch, revalidates HEAD immediately before the effect, and compare-and-sets only that target. Detached HEAD remains available for inspection, Diff, stage, and unstage, but CreateCommit is unavailable because Git 2.45 cannot atomically prove that `HEAD` stayed direct while compare-and-setting its object id. Git 2.45 is the minimum. Random scratch cleanup requires an exact owner marker; index-lock cleanup requires the operation-owned path, file identity, and digest; and attempted publication that cannot be proved is never retried automatically.
+
+## Manual Agent dispatch
+
+`give-work-item-to-agent` is a durable manual Control Intent. It revalidates the current Ready Issue and branch safety, active Binding and complete inherited-change baseline, Host Operator authority, acceptance criteria, Blockage, and default Agent Profile, then requires the current LLM adapter to resolve the Profile's exact provider/model route before durable acceptance. Resolution failure returns `model-route-unavailable` without retaining Agent operation records or starting generation. This resolution proves a registered provider adapter and exact model metadata, not production provider authorization, credential availability, quota, or account health. Acceptance freezes the model-visible input and preallocates the Work Assignment, primary Work Session, Agent Run, Execution Dispatch, DSH Session, input MessageId, and child `MoveWorkItem` Intent before Host wake-up. A short renewable Dispatch Claim fences delivery; final acceptance requires that exact claim to remain current and unexpired after awaited Host work. The longer-lived `agent-run` Binding Write Admission contends with direct Git on the same row.
+
+The Local Host reads detached physical Session persistence, freshly revalidates the writable Git world after live Agent acquisition, and inserts the original input only when complete history proves absence. Host success proves the exact Session and input rather than model completion. Startup restores each validated running Run from its exact succeeded Host Operation, physical Session header, and original input before readiness, without another input, wake, or model request. Cancellation and terminal multi-record recovery preserve accepted delivery, live-Agent quiescence, write ownership, and monotonic crash-prefix semantics described by the [manual dispatch decision](../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md). Automatic dispatch remains later work.
+
+`SakiWorkItemDetailProjection` and `SakiAgentRunProjection` are strict browser-safe schema fixtures for the frontend handoff. This slice adds no control-plane query, Host route, or browser-client method for either Projection, and exposes no canonical path, credential, or Host snapshot.
 
 ## GitHub Board and Work Item operations
 
@@ -32,7 +40,7 @@ Complete GitHub Project scans publish one confirmed Board and checkpoint atomica
 
 ## Host transport
 
-[`saki-host-api`](../../packages/saki/host-api/README.md) owns strict endpoint schemas on the logical `/saki` [Connection](../../packages/client/connection/README.md) channel. The Host adapter rejects URL queries before decoding, extracts cookies and request headers outside JSON, constructs the non-wire `SakiAuthenticationContext`, and returns `Set-Cookie` outside the RPC result. Every Saki reply uses `Cache-Control: no-store`, and every transport or RPC failure uses one fixed opaque internal error. Its protected operations correlate exact request and result types for inspection, Project-index, Development-Workspace, first-registration, Project Changes, Project Diff, Board, Project Settings, stage, unstage, Commit, CreateWorkItem, and MoveWorkItem calls; strict outbound validation rejects an implementation result containing unexpected authority, path, credential, or Projection fields before serialization.
+[`saki-host-api`](../../packages/saki/host-api/README.md) owns strict endpoint schemas on the logical `/saki` [Connection](../../packages/client/connection/README.md) channel. The Host adapter rejects URL queries before decoding, extracts cookies and request headers outside JSON, constructs the non-wire `SakiAuthenticationContext`, and returns `Set-Cookie` outside the RPC result. Every Saki reply uses `Cache-Control: no-store`, and every transport or RPC failure uses one fixed opaque internal error. Its protected operations correlate exact request and result types for inspection, Project-index, Development-Workspace, first-registration, Project Changes, Project Diff, Board, Project Settings, stage, unstage, Commit, CreateWorkItem, MoveWorkItem, and Give-to-Agent calls; strict outbound validation rejects an implementation result containing unexpected authority, path, credential, or Projection fields before serialization.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -184,6 +192,18 @@ abstract prepareOperation<K extends HostOperationKind>( request: HostOperationRe
 abstract startOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, acceptance: HostOperationAcceptance, signal: AbortSignal, ): Promise<HostOperationStartResult<K>>
 
 /**
+ * Restore the live handle for one control-plane-validated running Agent Run
+ * from the exact succeeded Host Operation and durable Session evidence.
+ * This recovery never wakes the Agent or submits model input.
+ * @param operation - exact succeeded StartAgentRun Host Operation reference.
+ * @param request - complete immutable request retained by the validated control plane.
+ * @param signal - required startup lifetime and cancellation.
+ * @returns after the matching live Agent handle has been restored for the exact Session.
+ * @throws when the operation, request, physical Session evidence, or live Agent conflicts or is unavailable.
+ */
+abstract resumeAgentRun( operation: HostOperationReference<'start-agent-run'>, request: StartAgentRunHostOperationRequest, signal: AbortSignal, ): Promise<void>
+
+/**
  * Inspect and recover one durable Host Operation without starting a new external effect.
  * @param operation - stable Provider-routed reference.
  * @param signal - required caller lifetime and cancellation.
@@ -208,6 +228,8 @@ abstract cancelOperation<K extends HostOperationKind>( operation: HostOperationR
  */
 abstract onChanged(listener: (change: HostOperationChange) => void): HostOperationChangedDisposer
 ```
+
+Types: [StartAgentRunHostOperationRequest](../../packages/saki/execution/README.md)
 
 Source: [`packages/saki/execution/src/index.ts`](../../packages/saki/execution/src/index.ts)
 

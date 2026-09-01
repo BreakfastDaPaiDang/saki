@@ -1,12 +1,11 @@
 /** Shared real-process harness for Saki Host snapshots. */
 
-import { execFile, spawn, type ChildProcessByStdio } from 'node:child_process'
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createServer } from 'node:net'
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { access, mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-import type { Readable } from 'node:stream'
 import { promisify } from 'node:util'
 import { expect } from 'vitest'
 import type { ProjectGitHead } from '@breakfastdapaidang/saki-execution'
@@ -21,14 +20,16 @@ const nullConfig = process.platform === 'win32' ? 'NUL' : '/dev/null'
 
 /** Running Saki child and the safe launcher handoff captured from stdout. */
 export interface StartedSaki {
-  readonly child: ChildProcessByStdio<null, Readable, Readable>
+  readonly child: ChildProcessWithoutNullStreams
   readonly bootstrapPurpose?: 'initial-bootstrap' | 'local-reauthentication'
   readonly bootstrapSecret?: string
+  readonly records: readonly unknown[]
   readonly stop: () => Promise<void>
 }
 
 /** Narrow fixture controls explicitly supplied to one Saki child. */
 export interface SakiSnapshotStartOptions {
+  readonly agentRunSnapshot?: boolean
   readonly boardProviderEnabled?: boolean
   readonly boardProviderStatePath?: string
 }
@@ -235,6 +236,7 @@ export async function startSaki(
   if (options.boardProviderEnabled !== undefined) {
     environment.SAKI_BOARD_SNAPSHOT_PROVIDER_ENABLED = options.boardProviderEnabled ? '1' : '0'
   }
+  if (options.agentRunSnapshot === true) environment.SAKI_AGENT_RUN_SNAPSHOT = '1'
   if (source) environment.TSX_TSCONFIG_PATH = join(root, 'tsconfig.json')
   const child = spawn(process.execPath, [
     ...(source ? ['--import', tsxLoader] : []),
@@ -242,7 +244,7 @@ export async function startSaki(
   ], {
     cwd: runtimeRoot,
     env: environment,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
   let childDidClose = false
   const childClosed = new Promise<void>((resolveClosed) => {
@@ -255,9 +257,17 @@ export async function startSaki(
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (chunk: string) => { stderr += chunk })
   const lines = createInterface({ input: child.stdout })
+  let linesDidClose = false
+  const linesClosed = new Promise<void>((resolveLinesClosed) => {
+    lines.once('close', () => {
+      linesDidClose = true
+      resolveLinesClosed()
+    })
+  })
   let ready = false
   let bootstrapPurpose: 'initial-bootstrap' | 'local-reauthentication' | undefined
   let bootstrapSecret: string | undefined
+  const records: unknown[] = []
   const closesWithin = async (milliseconds: number): Promise<boolean> => {
     if (childDidClose) return true
     return await new Promise<boolean>((resolveWait) => {
@@ -269,13 +279,22 @@ export async function startSaki(
     })
   }
   const stopChild = async (failOnForcedTermination = true): Promise<void> => {
-    if (!childDidClose && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+    if (!childDidClose && child.exitCode === null && child.signalCode === null) {
+      if (options.agentRunSnapshot === true && child.stdin !== null) child.stdin.end()
+      else child.kill('SIGTERM')
+    }
     if (!await closesWithin(5_000)) {
       const forced = child.kill('SIGKILL')
       if (!await closesWithin(5_000)) throw new Error('Saki snapshot host did not close after SIGKILL')
       if (forced && failOnForcedTermination) throw new Error('Saki snapshot host required SIGKILL during normal teardown')
     }
-    lines.close()
+    if (!linesDidClose) {
+      await Promise.race([
+        linesClosed,
+        new Promise<void>(resolveDrain => setTimeout(resolveDrain, 1_000)),
+      ])
+    }
+    if (!linesDidClose) lines.close()
   }
   try {
     await new Promise<void>((resolveReady, reject) => {
@@ -297,6 +316,7 @@ export async function startSaki(
         } catch {
           return
         }
+        records.push(value)
         if ((value as { status?: unknown }).status === 'ready') ready = true
         const secret = (value as { bootstrapSecret?: unknown }).bootstrapSecret
         if (typeof secret === 'string') bootstrapSecret = secret
@@ -327,6 +347,7 @@ export async function startSaki(
     child,
     ...(bootstrapPurpose === undefined ? {} : { bootstrapPurpose }),
     ...(bootstrapSecret === undefined ? {} : { bootstrapSecret }),
+    records,
     stop: async () => {
       await stopChild()
       expect(stderr).toBe('')

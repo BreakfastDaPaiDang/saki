@@ -2,7 +2,7 @@
 
 [English](saki.md) | 中文
 
-Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现接口建立一个稳定的本地 Installation、一个已登记的 Saki Host、一个具备当前 Host Operator Grant 的人类 Principal、一条带版本的 Installation Access 聚合记录、包含可恢复首次登记 Intent 的 Development Project Registry、面向已绑定 Project 的可恢复直接结构化 Git Intent，以及由 GitHub 支持的可恢复 Create/Move Work Item Intent。版本化的置备所有者与各自带修订号的实体表会在启动中断后保留这些身份与 operation evidence。[Saki 后端架构](../saki/architecture/0.1.0-backend.zh.md)定义了更完整的控制面与执行面划分；本页是已实现 Cordis 服务的参考。
+Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现接口建立一个稳定的本地 Installation、一个已登记的 Saki Host、一个具备当前 Host Operator Grant 的人类 Principal、一条带版本的 Installation Access 聚合记录、包含可恢复首次登记 Intent 的 Development Project Registry、面向已绑定 Project 的可恢复直接结构化 Git Intent、由 GitHub 支持的可恢复 Create/Move Work Item Intent，以及启动一个可恢复 Agent Run 的手动 Give-to-Agent Intent。版本化的置备所有者与各自带修订号的实体表会在启动中断后保留这些身份与 operation evidence。[Saki 后端架构](../saki/architecture/0.1.0-backend.zh.md)定义了更完整的控制面与执行面划分；本页是已实现 Cordis 服务的参考。
 
 ## Installation 访问
 
@@ -20,9 +20,17 @@ Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现
 
 受保护的 `project-changes` 查询会通过 `ctx.sakiHostExecution` 重新打开精确 active Resource Binding，并返回一份完整且展示安全的 status observation。它包含精确 Binding revision、HEAD、branch 与 upstream、index-tree evidence、worktree fingerprint、带有界 repository-relative 展示路径的结构化 row、status fingerprint，以及 stage、unstage 与 Commit 的仓库级 eligibility；规范 Host 路径始终保持私有。每项 row 使用 observation-scoped opaque id 与 fingerprint。`project-diff` 会针对精确 observation 解析该 identity 与 staged、unstaged 或 conflict layer，并返回绑定到完整 patch fingerprint 与 cursor 的一个有界页面。
 
-`stage-files`、`unstage-files` 与 `create-commit` 是持久直接 Control Intent。提交会固定已认证 Actor 与 authority，以及精确 Registry、Project、Binding、status、HEAD、index、worktree 与 inherited-change evidence。一条 Binding Write Admission row 只允许该 Resource Binding 存在一个 `manual-host-operation` writer。控制面会预留它、prepare 一条幂等 `{ kind: 'control-intent' }` Host Operation、接受该精确 preparation，并在 storage callback 外启动或检查它。精确 replay 返回同一 receipt；不可变 input 改变会 conflict；未知或矛盾 effect evidence 会保持 `reconciliation-required`。
+`stage-files`、`unstage-files` 与 `create-commit` 是持久直接 Control Intent。提交会固定已认证 Actor 与 authority，以及精确 Registry、Project、Binding、status、HEAD、index、worktree 与 inherited-change evidence。一条 Binding Write Admission row 只允许该 Resource Binding 存在一个 `manual-host-operation` 或 `agent-run` writer。直接 Git Intent 会预留前者、prepare 一条幂等 `{ kind: 'control-intent' }` Host Operation、接受该精确 preparation，并在 storage callback 外启动或检查它。精确 replay 返回同一 receipt；不可变 input 改变会 conflict；未知或矛盾 effect evidence 会保持 `reconciliation-required`。
 
-Local Host 会通过 alternate index 构建 stage 与 unstage result，持久化位于同一目录的随机 pin，并在 publication 前以不覆盖既有文件的方式将该 pin 链接为绑定 index lock。它还会从已观察 index tree 创建确定性、无 hook 且无签名的 Commit。Attached-HEAD publication 会固定目标 branch、在副作用前立即重新验证 HEAD，并只对该 target 执行 compare-and-set。Detached HEAD 仍可用于 inspection、Diff、stage 与 unstage；但 CreateCommit 不可用，因为 Git 2.45 无法在 compare-and-set object id 的同时原子证明 `HEAD` 始终是 direct ref。Git 2.45 是最低版本。随机 scratch cleanup 要求精确 owner marker；index-lock cleanup 要求 operation-owned path、file identity 与 digest；而且无法证明结果的 attempted publication 绝不会自动重试。Automated dispatch 与 Agent Run source 仍属于后续工作。
+Local Host 会通过 alternate index 构建 stage 与 unstage result，持久化位于同一目录的随机 pin，并在 publication 前以不覆盖既有文件的方式将该 pin 链接为绑定 index lock。它还会从已观察 index tree 创建确定性、无 hook 且无签名的 Commit。Attached-HEAD publication 会固定目标 branch、在副作用前立即重新验证 HEAD，并只对该 target 执行 compare-and-set。Detached HEAD 仍可用于 inspection、Diff、stage 与 unstage；但 CreateCommit 不可用，因为 Git 2.45 无法在 compare-and-set object id 的同时原子证明 `HEAD` 始终是 direct ref。Git 2.45 是最低版本。随机 scratch cleanup 要求精确 owner marker；index-lock cleanup 要求 operation-owned path、file identity 与 digest；而且无法证明结果的 attempted publication 绝不会自动重试。
+
+## 手动 Agent dispatch
+
+`give-work-item-to-agent` 是一条持久的手动 Control Intent。它会重新验证当前 Ready Issue 与 branch safety、活动 Binding 与完整 inherited-change baseline、Host Operator authority、验收条件、Blockage 和默认 Agent Profile，随后要求当前 LLM adapter 在持久接受前解析该 Profile 的精确 provider/model route。解析失败会返回 `model-route-unavailable`，不会保留 Agent operation 记录或启动生成。这项解析只证明已登记的 provider adapter 与精确 model metadata，不证明生产 provider authorization、credential availability、quota 或 account health。Acceptance 会固定模型可见输入，并在唤醒 Host 前预分配 Work Assignment、主要 Work Session、Agent Run、Execution Dispatch、DSH Session、输入 MessageId 与子 `MoveWorkItem` Intent。短期且可续期的 Dispatch Claim 会对交付进行 fencing；等待 Host 工作结束后的最终 acceptance 会要求该精确 claim 仍是当前 claim 且尚未过期。生命周期更长的 `agent-run` Binding Write Admission 会在同一条 row 上与直接 Git 竞争。
+
+Local Host 会分离读取物理 Session persistence，在获取 live Agent 后重新验证可写 Git world，并且只在完整 history 证明输入不存在时才插入原始输入。Host success 证明精确 Session 与输入，而非模型执行已经完成。启动流程会在进入 ready 前，根据精确 succeeded Host Operation、物理 Session header 与原始输入恢复每个已经过校验的 running Run，而且不会增加输入、wake 或模型请求。取消与终态多记录恢复会保留 accepted delivery、live-Agent quiescence、write ownership，以及[手动 dispatch 决策](../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)说明的单调 crash-prefix 语义。Automated dispatch 仍属于后续工作。
+
+`SakiWorkItemDetailProjection` 与 `SakiAgentRunProjection` 是供前端交接使用的严格且面向浏览器安全的 schema fixture。本切片不为任一 Projection 增加控制面 query、Host route 或 browser-client method，也不会公开规范路径、凭据或 Host snapshot。
 
 ## GitHub Board 与 Work Item 操作
 
@@ -32,7 +40,7 @@ Local Host 会通过 alternate index 构建 stage 与 unstage result，持久化
 
 ## Host 传输
 
-[`saki-host-api`](../../packages/saki/host-api/README.zh.md) 在逻辑 `/saki` [Connection](../../packages/client/connection/README.zh.md) 通道上拥有严格的端点 schema。Host 适配器在解码前拒绝 URL 查询参数，在 JSON 外提取 Cookie 和请求头，构造不进入协议载荷的 `SakiAuthenticationContext`，并在 RPC 结果之外返回 `Set-Cookie`。每个 Saki 响应都使用 `Cache-Control: no-store`，每项传输或 RPC 故障都使用同一种固定且不透明的内部错误。其受保护操作为检查、Project-index、Development-Workspace、首次登记、Project Changes、Project Diff、Board、Project Settings、stage、unstage、Commit、CreateWorkItem 与 MoveWorkItem 调用关联准确的请求和结果类型；严格的出站验证会在序列化前拒绝含有意外权限、路径、凭据或 Projection 字段的实现结果。
+[`saki-host-api`](../../packages/saki/host-api/README.zh.md) 在逻辑 `/saki` [Connection](../../packages/client/connection/README.zh.md) 通道上拥有严格的端点 schema。Host 适配器在解码前拒绝 URL 查询参数，在 JSON 外提取 Cookie 和请求头，构造不进入协议载荷的 `SakiAuthenticationContext`，并在 RPC 结果之外返回 `Set-Cookie`。每个 Saki 响应都使用 `Cache-Control: no-store`，每项传输或 RPC 故障都使用同一种固定且不透明的内部错误。其受保护操作为检查、Project-index、Development-Workspace、首次登记、Project Changes、Project Diff、Board、Project Settings、stage、unstage、Commit、CreateWorkItem、MoveWorkItem 与 Give-to-Agent 调用关联准确的请求和结果类型；严格的出站验证会在序列化前拒绝含有意外权限、路径、凭据或 Projection 字段的实现结果。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -184,6 +192,18 @@ abstract prepareOperation<K extends HostOperationKind>( request: HostOperationRe
 abstract startOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, acceptance: HostOperationAcceptance, signal: AbortSignal, ): Promise<HostOperationStartResult<K>>
 
 /**
+ * Restore the live handle for one control-plane-validated running Agent Run
+ * from the exact succeeded Host Operation and durable Session evidence.
+ * This recovery never wakes the Agent or submits model input.
+ * @param operation - exact succeeded StartAgentRun Host Operation reference.
+ * @param request - complete immutable request retained by the validated control plane.
+ * @param signal - required startup lifetime and cancellation.
+ * @returns after the matching live Agent handle has been restored for the exact Session.
+ * @throws when the operation, request, physical Session evidence, or live Agent conflicts or is unavailable.
+ */
+abstract resumeAgentRun( operation: HostOperationReference<'start-agent-run'>, request: StartAgentRunHostOperationRequest, signal: AbortSignal, ): Promise<void>
+
+/**
  * Inspect and recover one durable Host Operation without starting a new external effect.
  * @param operation - stable Provider-routed reference.
  * @param signal - required caller lifetime and cancellation.
@@ -208,6 +228,8 @@ abstract cancelOperation<K extends HostOperationKind>( operation: HostOperationR
  */
 abstract onChanged(listener: (change: HostOperationChange) => void): HostOperationChangedDisposer
 ```
+
+Types: [StartAgentRunHostOperationRequest](../../packages/saki/execution/README.zh.md)
 
 Source: [`packages/saki/execution/src/index.ts`](../../packages/saki/execution/src/index.ts)
 

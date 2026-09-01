@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Saki 私有 Host Execution Service Definition 注册 `ctx.sakiHostExecution`。它定义提供方无关的 Project 检查与 Diff 值，以及结构化 StageFiles、UnstageFiles 和 Commit 副作用所使用的持久 Host Operation 生命周期。[Saki 控制面](../control-plane/README.zh.md)拥有授权、Project 策略、写入准入和持久 Control Intent。[Saki 后端架构](../../../docs/saki/architecture/0.1.0-backend.zh.md)定义更完整的控制面与执行面划分。
+Saki 私有 Host Execution Service Definition 注册 `ctx.sakiHostExecution`。它定义提供方无关的 Project 检查与 Diff 值，以及结构化 StageFiles、UnstageFiles、Commit 和 Agent Run 启动副作用所使用的持久 Host Operation 生命周期。[Saki 控制面](../control-plane/README.zh.md)拥有授权、Project 策略、写入准入和持久 Control Intent。[Saki 后端架构](../../../docs/saki/architecture/0.1.0-backend.zh.md)定义更完整的控制面与执行面划分。
 
 ## 项目选择检查
 
@@ -30,21 +30,29 @@ StageFiles 与 UnstageFiles 携带 observation-scoped change id 和 fingerprint�
 
 Service Definition 没有配置。每个 Service Provider 拥有其执行环境机制与必需的资源限制。
 
+## 持久 Agent 启动
+
+`StartAgentRun` 携带 `execution-dispatch` source、精确可写 Git precondition、预分配的 Agent Run、Work Session、DSH Session 与输入 MessageId、固定 Agent Profile 与 Model Route，以及一条完整的纯文本 `UserMessage`。其 payload digest 覆盖该 message 与它的 `saki-agent-run` source。Preparation 保持 inert；start 要求已接受的 Dispatch mapping 和当前 `agent-run` Binding Write Admission。稳定结果会重复 Run、Work Session、Session 与输入这四项 identity。
+
+Host 成功证明目标 Session 与原始输入已经持久化，并不表示模型轮次已经完成。精确 replay 会复用一条 Host Operation。Provider 会在交付前检查完整 Session history：只有输入不存在时才允许发送原始输入；canceled、replaced、unknown 或 conflicting evidence 一律不得重新发送。参见[手动 dispatch 决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)。
+
+`resumeAgentRun` 是仅供启动恢复使用的 operation，目标是已经过控制面校验的 running Run，以及与其精确匹配的 succeeded `StartAgentRun` operation 和 request。只有物理 Session header 与原始输入匹配该 request 时，Provider 才会恢复 live Agent handle。它不会增加输入、wake 或模型请求；Host、Session 或 Agent evidence 缺失、不可用或冲突时，启动流程会失败。
+
 ## 模型体验
 
-### Host execution 值
+### Host execution 值与 Agent Run 输入
 
 #### 模型看到什么
 
-什么也看不到。`ctx.sakiHostExecution` 向 Host 侧 Saki Consumer 提供分离的检查、Diff 与 operation 值，不注册工具、prompt section 或 session event。
+Inspection、Diff 与结构化 Git operation 不会增加模型可见内容。已启动的 `StartAgentRun` 通过选定 DSH Session 交付其精确纯文本 user message；message source 保留 Dispatch、Agent Run 与 Work Session id。
 
 #### Token 影响
 
-每次请求直接增加零个 token。
+Inspection、Diff、preparation 与结构化 Git operation 直接增加零个 token。原始输入持久化后，启动 Agent 可能发出选定模型请求；其 token 用量取决于已固定 message 与组装后的 Agent context。
 
 #### KV Cache 影响
 
-与模型请求相互独立：该服务不组装或更改请求前缀。
+原始输入是新的 user turn，不属于可复用 prefix。仅用于恢复的 wake message 会在模型组装前排除。
 
 ## 已知限制与暂缓事项
 

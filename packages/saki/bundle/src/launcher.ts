@@ -1,6 +1,7 @@
 /** Pure launch-time Saki Installation paths and dynamic storage patch. */
 
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import {
@@ -9,6 +10,8 @@ import {
 } from '@breakfastdapaidang/saki-installation-maintenance'
 
 export { CURRENT_SAKI_BUILD_ID }
+
+const SHIPPED_AGENT_PRESET_ROOT = fileURLToPath(new URL('../config/agent-presets/', import.meta.url))
 
 /**
  * Resolve the Installation root and exact legacy B03 path from launch environment.
@@ -41,6 +44,24 @@ export function sakiPreparedStoragePatch(databasePath: string): PatchOptions {
       backend: 'sqlite',
       path: databasePath,
       journalMode: 'wal',
+    },
+  }
+}
+
+/**
+ * Bind the private launcher to the preset assets shipped beside its own build.
+ * The system root is the complete Saki roster; local files cannot add or
+ * shadow Product Agent capabilities.
+ * @returns final id-targeted preset-roster patch with an absolute root.
+ */
+export function sakiAgentPresetsPatch(): PatchOptions {
+  return {
+    id: 'agent-presets',
+    name: '@deepseek-ai/dsh-agent-presets',
+    config: {
+      default: 'development',
+      roots: [{ path: SHIPPED_AGENT_PRESET_ROOT, trust: 'system' }],
+      includeUserRoot: false,
     },
   }
 }

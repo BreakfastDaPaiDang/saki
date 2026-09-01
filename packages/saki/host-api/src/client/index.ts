@@ -10,6 +10,7 @@ import {
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiCreateCommitResultSchema,
   sakiCreateWorkItemResultSchema,
+  sakiGiveWorkItemToAgentResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiInspectProjectSelectionResultSchema,
   sakiProjectDiffResultSchema,
@@ -33,6 +34,8 @@ import type {
   SakiWireCreateCommitResult,
   SakiWireCreateWorkItemIntent,
   SakiWireCreateWorkItemResult,
+  SakiWireGiveWorkItemToAgentIntent,
+  SakiWireGiveWorkItemToAgentResult,
   SakiWireDevelopmentWorkspaceResult,
   SakiWireHostId,
   SakiWireInspectProjectSelectionResult,
@@ -227,6 +230,18 @@ export interface SakiHostClient {
     requestToken: string,
     signal?: AbortSignal,
   ): Promise<SakiWireMoveWorkItemResult>
+  /**
+   * Start or resume one manual Agent Run for an exact Ready Work Item.
+   * @param intent - revision-fenced Work Item command without execution authority.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns the stable started identities or one typed recoverable outcome.
+   */
+  giveWorkItemToAgent(
+    intent: SakiWireGiveWorkItemToAgentIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireGiveWorkItemToAgentResult>
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -445,6 +460,20 @@ export class SakiHostClientService extends Service implements SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireMoveWorkItemResult> {
     return sakiMoveWorkItemResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  /** @inheritdoc */
+  async giveWorkItemToAgent(
+    intent: SakiWireGiveWorkItemToAgentIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireGiveWorkItemToAgentResult> {
+    return sakiGiveWorkItemToAgentResultSchema.parse(await this.call(
       'control/submit',
       intent,
       signal,
