@@ -89,7 +89,7 @@ async function start(): Promise<RunningHost> {
     databasePath: join(directory, 'saki.sqlite'),
     installationId: INSTALLATION_ID,
     storageGenerationId: STORAGE_GENERATION_ID,
-    stateVersion: 7,
+    stateVersion: 8,
     createdByBuildId: BUILD_ID,
     promoteToReady: () => Promise.resolve(),
   })
@@ -199,6 +199,10 @@ describe('Saki /saki Host transport', () => {
       value: { ok: true, projection: { type: 'project-index', revision: 0, projects: [], hosts: [{ state: 'enrolled' }] } },
     })
     expect(query.response.headers.get('cache-control')).toBe('no-store')
+    expect((await rpc(host, 'control/query', { type: 'my-work' }, { cookie })).message.result)
+      .toMatchObject({ ok: true, value: { ok: true, projection: { type: 'my-work', items: [] } } })
+    expect((await rpc(host, 'control/query', { type: 'attention' }, { cookie })).message.result)
+      .toMatchObject({ ok: true, value: { ok: true, projection: { type: 'attention', items: [] } } })
 
     const hostId = (query.message.result as { value: { projection: { hosts: [{ id: string }] } } }).value.projection.hosts[0].id
     const inspected = await rpc(host, 'control/query', {
@@ -1031,7 +1035,7 @@ describe('Saki /saki Host transport', () => {
     await host.close()
   })
 
-  it('routes only the minimal Give-to-Agent Intent without browser execution authority', async () => {
+  it('routes only minimal Agent Intents without browser execution authority', async () => {
     const host = await start()
     const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
     const exchange = await rpc(host, 'access/exchange', { secret })
@@ -1053,6 +1057,18 @@ describe('Saki /saki Host transport', () => {
       'x-saki-request-token': token,
     })).message.result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
     expect(submit.mock.calls[0]?.[1]).toEqual(intent)
+    const answerIntent = {
+      type: 'answer-intervention',
+      intentId: 'intent-77777777-7777-4777-8777-777777777777',
+      interventionId: 'intervention-88888888-8888-4888-8888-888888888888',
+      expectedInterventionRevision: 3,
+      answer: { kind: 'text', text: 'Continue with the public projection.' },
+    } as const
+    expect((await rpc(host, 'control/submit', answerIntent, {
+      cookie,
+      'x-saki-request-token': token,
+    })).message.result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
+    expect(submit.mock.calls[1]?.[1]).toEqual(answerIntent)
 
     for (const authority of [
       { actor: { kind: 'human', value: 'authority-sentinel' } },
@@ -1075,7 +1091,7 @@ describe('Saki /saki Host transport', () => {
       expect(rejected.message.result).toEqual(OPAQUE_ERROR_RESULT)
       expect(JSON.stringify(rejected.message)).not.toContain('authority-sentinel')
     }
-    expect(submit).toHaveBeenCalledTimes(1)
+    expect(submit).toHaveBeenCalledTimes(2)
     await host.close()
   })
 

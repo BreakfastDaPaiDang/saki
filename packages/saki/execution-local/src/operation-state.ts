@@ -9,6 +9,7 @@ import {
   commitHostOperationRequestSchema,
   commitHostOperationResultSchema,
   hostOperationRequestSchema,
+  hostOperationRequestV2Schema,
   hostOperationSnapshotSchema,
   isRepositoryRelativeGitPath,
   MAX_GIT_REF_CHARS,
@@ -29,6 +30,7 @@ import {
   type HostOperationSnapshot,
   type StageFilesHostOperationResult,
   type StartAgentRunHostOperationRequest,
+  type StartAgentRunHostOperationRequestV2,
   type StartAgentRunHostOperationResult,
   type UnstageFilesHostOperationResult,
 } from '@breakfastdapaidang/saki-execution'
@@ -112,16 +114,33 @@ export interface LocalHostGitOperationRecordV1 extends LocalHostOperationRecordB
   readonly effectPlan?: LocalHostGitOperationEffectPlan
 }
 
+/** Exact Git mutation record retained by the version-two Host domain. */
+export interface LocalHostGitOperationRecordV2 extends LocalHostOperationRecordBase {
+  readonly schemaVersion: 2
+  readonly request: GitHostOperationRequest
+  readonly effectPlan?: LocalHostGitOperationEffectPlan
+}
+
+/** Exact Agent Run record retained by the version-two Host domain. */
+export interface LocalHostAgentRunOperationRecordV2 extends LocalHostOperationRecordBase {
+  readonly schemaVersion: 2
+  readonly request: StartAgentRunHostOperationRequestV2
+  readonly effectPlan?: LocalHostAgentRunPlan
+}
+
+/** Complete version-two Host Operation record. */
+export type LocalHostOperationRecordV2 = LocalHostGitOperationRecordV2 | LocalHostAgentRunOperationRecordV2
+
 /** Current Git mutation record; its request fingerprint remains the version-one value. */
 export interface LocalHostGitOperationRecord extends LocalHostOperationRecordBase {
-  readonly schemaVersion: 2
+  readonly schemaVersion: 3
   readonly request: GitHostOperationRequest
   readonly effectPlan?: LocalHostGitOperationEffectPlan
 }
 
 /** Current Agent Run record whose external effect is reconciled from the Session log. */
 export interface LocalHostAgentRunOperationRecord extends LocalHostOperationRecordBase {
-  readonly schemaVersion: 2
+  readonly schemaVersion: 3
   readonly request: StartAgentRunHostOperationRequest
   readonly effectPlan?: LocalHostAgentRunPlan
 }
@@ -380,10 +399,12 @@ const localHostAgentRunPlanSchema = z.object({
   result: startAgentRunHostOperationResultSchema,
 }).strict()
 
-function localHostOperationRecordSchemaFor(schemaVersion: 1 | 2) {
+function localHostOperationRecordSchemaFor(schemaVersion: 1 | 2 | 3) {
   return z.object({
     schemaVersion: z.literal(schemaVersion),
-    request: schemaVersion === 1 ? gitHostOperationRequestSchema : hostOperationRequestSchema,
+    request: schemaVersion === 1
+      ? gitHostOperationRequestSchema
+      : schemaVersion === 2 ? hostOperationRequestV2Schema : hostOperationRequestSchema,
     preparationRevision: z.number().int().nonnegative(),
     snapshot: hostOperationSnapshotSchema,
     effectPlan: schemaVersion === 1
@@ -391,14 +412,14 @@ function localHostOperationRecordSchemaFor(schemaVersion: 1 | 2) {
       : z.union([localHostGitOperationEffectPlanSchema, localHostAgentRunPlanSchema]).optional(),
   }).strict().superRefine((record, context) => {
     validateLocalHostOperationRecord(
-      record as unknown as LocalHostOperationRecord | LocalHostGitOperationRecordV1,
+      record as unknown as LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostGitOperationRecordV1,
       context,
     )
   })
 }
 
 function validateLocalHostOperationRecord(
-  record: LocalHostOperationRecord | LocalHostGitOperationRecordV1,
+  record: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostGitOperationRecordV1,
   context: z.RefinementCtx,
 ): void {
   const snapshot = record.snapshot
@@ -476,11 +497,20 @@ function validateLocalHostOperationRecord(
   }
 }
 
-type LocalHostAnyGitOperationRecord = LocalHostGitOperationRecord | LocalHostGitOperationRecordV1
+type LocalHostAnyGitOperationRecord =
+  | LocalHostGitOperationRecord
+  | LocalHostGitOperationRecordV2
+  | LocalHostGitOperationRecordV1
+
+function expectedObjectIdWidth(record: LocalHostAnyGitOperationRecord): 40 | 64 {
+  return record.request.expected.binding.expectedInspection.projection.objectFormat === 'sha1' ? 40 : 64
+}
 
 const localHostOperationRecordV1Schema = localHostOperationRecordSchemaFor(1) as unknown as
   z.ZodType<LocalHostGitOperationRecordV1>
-const localHostOperationRecordSchema = localHostOperationRecordSchemaFor(2) as unknown as
+const localHostOperationRecordV2Schema = localHostOperationRecordSchemaFor(2) as unknown as
+  z.ZodType<LocalHostOperationRecordV2>
+const localHostOperationRecordSchema = localHostOperationRecordSchemaFor(3) as unknown as
   z.ZodType<LocalHostOperationRecord>
 
 function validateIndexPlan(
@@ -515,7 +545,7 @@ function validateIndexPlan(
       })
     }
   }
-  const objectWidth = record.request.expected.binding.expectedInspection.projection.objectFormat === 'sha1' ? 40 : 64
+  const objectWidth = expectedObjectIdWidth(record)
   if (plan.result.resultingIndex.treeId.length !== objectWidth) {
     context.addIssue({ code: 'custom', message: 'index effect plan uses a different object format' })
   }
@@ -544,7 +574,7 @@ function validateCommitPlan(
 ): void {
   if (record.request.type !== 'commit') return
   const expectedHead = record.request.expected.head
-  const objectWidth = record.request.expected.binding.expectedInspection.projection.objectFormat === 'sha1' ? 40 : 64
+  const objectWidth = expectedObjectIdWidth(record)
   const zeroObjectId = '0'.repeat(objectWidth)
   if (plan.result.commitId.length !== objectWidth || plan.result.treeId.length !== objectWidth
     || plan.expectedOldObjectId.length !== objectWidth
@@ -715,29 +745,53 @@ export const sakiHostExecutionV1DomainSpec = defineDomain({
   },
 })
 
+/** Exact Host Execution domain retained for cold version-two migration. */
+export const sakiHostExecutionV2DomainSpec = defineDomain({
+  name: 'saki_host_execution',
+  version: 2,
+  tables: {
+    operations: domainTable<HostOperationId, LocalHostOperationRecordV2>(localHostOperationRecordV2Schema),
+  },
+})
+
 /** Provider-owned durability domain included in the current Saki product state. */
 export const sakiHostExecutionDomainSpec = defineDomain({
   name: 'saki_host_execution',
-  version: 2,
+  version: 3,
   tables: {
     operations: domainTable<HostOperationId, LocalHostOperationRecord>(localHostOperationRecordSchema),
   },
 })
 
-/** Cold version-one to version-two migration preserving every Git request fingerprint verbatim. */
+/** Cold migrations preserving every existing request fingerprint verbatim. */
 export const sakiHostExecutionDomainMigrations = defineDomainMigrations({
   current: sakiHostExecutionDomainSpec,
-  steps: [{
-    from: sakiHostExecutionV1DomainSpec,
-    to: sakiHostExecutionDomainSpec,
-    migrate: snapshot => ({
-      tables: {
-        operations: Object.fromEntries(Object.entries(snapshot.tables['operations'] ?? {}).map(([id, value]) => [
-          id,
-          { ...(value as LocalHostGitOperationRecordV1), schemaVersion: 2 as const },
-        ])),
-      },
-      global: null,
-    }),
-  }],
+  steps: [
+    {
+      from: sakiHostExecutionV1DomainSpec,
+      to: sakiHostExecutionV2DomainSpec,
+      migrate: snapshot => ({
+        tables: {
+          operations: Object.fromEntries(Object.entries(snapshot.tables['operations'] ?? {}).map(([id, value]) => [
+            id,
+            { ...(value as LocalHostGitOperationRecordV1), schemaVersion: 2 as const },
+          ])),
+        },
+        global: null,
+      }),
+    },
+    {
+      from: sakiHostExecutionV2DomainSpec,
+      to: sakiHostExecutionDomainSpec,
+      migrate: snapshot => ({
+        tables: {
+          operations: Object.fromEntries(Object.entries(snapshot.tables['operations'] ?? {}).map(([id, value]) => [
+            id,
+            { ...(value as LocalHostOperationRecordV2), schemaVersion: 3 as const },
+          ])),
+        },
+        global: null,
+      }),
+    },
+  ],
 })

@@ -16,6 +16,8 @@ import {
   sakiAccessExchangeResultSchema,
   sakiAccessLogoutResultSchema,
   sakiAccessProjectionSchema,
+  sakiAnswerInterventionResultSchema,
+  sakiAttentionResultSchema,
   sakiBoardResultSchema,
   sakiBootstrapExchangeRequestSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
@@ -33,6 +35,7 @@ import {
   sakiProjectSettingsResultSchema,
   sakiQueryRequestSchema,
   sakiMoveWorkItemResultSchema,
+  sakiMyWorkResultSchema,
   sakiStageFilesResultSchema,
   sakiUnstageFilesResultSchema,
 } from './wire.ts'
@@ -143,6 +146,12 @@ async function query(
   if (!resolution.ok) return reply({ ok: true, value: { ok: false, reason: 'unavailable' } })
   const result = await controlPlane.query(resolution.authentication, parsed.data, signal)
   switch (parsed.data.type) {
+    case 'my-work': {
+      return reply({ ok: true, value: sakiMyWorkResultSchema.parse(result) })
+    }
+    case 'attention': {
+      return reply({ ok: true, value: sakiAttentionResultSchema.parse(result) })
+    }
     case 'inspect-project-selection': {
       return reply({ ok: true, value: sakiInspectProjectSelectionResultSchema.parse(result) })
     }
@@ -239,6 +248,10 @@ async function authenticatedMutation(
       case 'give-work-item-to-agent': {
         const result = await controlPlane.submit(authentication, operation.intent, signal)
         return reply({ ok: true, value: sakiGiveWorkItemToAgentResultSchema.parse(result) })
+      }
+      case 'answer-intervention': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiAnswerInterventionResultSchema.parse(result) })
       }
       /* v8 ignore next 2 -- Saki Intent input is closed and strict Host parsing rejects unknown tags before dispatch. */
       default: return assertNever(operation.intent)

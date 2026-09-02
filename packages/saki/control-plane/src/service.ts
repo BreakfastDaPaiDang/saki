@@ -11,7 +11,6 @@ import { isLoopbackHostname } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-llm'
 import type { Domain, DomainChanged, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
-import type {} from '@breakfastdapaidang/saki-execution'
 import { SakiAuthenticationContext } from './authentication.ts'
 import type {
   SakiAuthenticationRequest,
@@ -20,6 +19,7 @@ import type {
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
+  answerInterventionIntentSchema,
   configureGitHubSynchronizationIntentSchema,
   createWorkItemIntentSchema,
   createCommitIntentSchema,
@@ -70,12 +70,25 @@ import {
 } from './work-item-operations.ts'
 import {
   AgentOperations,
+  type SakiAgentInterventionRequest,
+  type SakiAgentInterventionRequestResult,
   type AgentOperationIntentTable,
   type AgentRunTable,
   type ExecutionDispatchTable,
+  type InterventionRequestTable,
   type WorkAssignmentTable,
   type WorkSessionTable,
 } from './agent-operations.ts'
+export type {
+  SakiAgentInterventionRequest,
+  SakiAgentInterventionRequestResult,
+} from './agent-operations.ts'
+import {
+  deriveSakiPrincipalWork,
+  type SakiGiveToAgentAvailability,
+  type SakiPrincipalWorkProjectionSources,
+  type SakiProjectionAction,
+} from './attention.ts'
 import {
   bootstrapDigest,
   constantTimeTextEqual,
@@ -94,13 +107,16 @@ import type {
   SakiBootstrapExchangeRequest,
   SakiBootstrapTransportContext,
   SakiBrowserSessionId,
+  SakiBoardWorkItemId,
   SakiChangedDisposer,
+  SakiDevelopmentProjectId,
   SakiGrantId,
   SakiHostId,
   SakiInstallationAccessId,
   SakiInstallationId,
   SakiInstallationIdentity,
   SakiIntentReceipt,
+  SakiInterventionRequestId,
   SakiPrincipalId,
   SakiProjectionKey,
   SakiQuery,
@@ -113,9 +129,11 @@ import type {
   CreateWorkItemIntent,
   CreateCommitIntent,
   GiveWorkItemToAgentIntent,
+  AnswerInterventionIntent,
   SakiGitOperationIntent,
   SakiGitOperationIntentReceipt,
   SakiGiveWorkItemToAgentIntentReceipt,
+  SakiAnswerInterventionIntentReceipt,
   SakiWorkItemIntentReceipt,
   StageFilesIntent,
   MoveWorkItemIntent,
@@ -236,12 +254,39 @@ export interface SakiAccess {
   ): Promise<SakiAccessLogoutResult>
 }
 
+/** Trusted same-process bridge used only by Saki's Development Agent tool. */
+export interface SakiAgentInterventions {
+  /**
+   * Persist or replay one opening request before its tool result reaches the Session.
+   * @param request - calling Session, Tool Call, and exact question.
+   * @param signal - caller cancellation before durable admission.
+   * @returns stable Intervention identity or a bounded rejection.
+   */
+  request(
+    request: SakiAgentInterventionRequest,
+    signal: AbortSignal,
+  ): Promise<SakiAgentInterventionRequestResult>
+
+  /**
+   * Inspect durable Session evidence and advance an opening request when its
+   * exact successful tool result and balanced turn are durable.
+   * @param interventionId - durable request to recover.
+   * @param signal - caller lifetime and cancellation.
+   */
+  finalizeOpening(
+    interventionId: SakiInterventionRequestId,
+    signal: AbortSignal,
+  ): Promise<'open' | 'pending' | 'reconciliation-required'>
+}
+
 /** Control-plane operations used by trusted Consumers. */
 export interface SakiControlPlaneModule {
   /** Access lifecycle separated from Control Intent authority. */
   readonly access: SakiAccess
   /** Local clear-secret launcher channel. */
   readonly bootstrap: SakiBootstrapLaunch
+  /** Trusted Agent-only Intervention creation and opening recovery. */
+  readonly agentInterventions: SakiAgentInterventions
   /**
    * Read trusted local Installation and current Host identities.
    * @returns stable independent identities.
@@ -356,6 +401,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private workSessionTable!: WorkSessionTable
   private agentRunTable!: AgentRunTable
   private executionDispatchTable!: ExecutionDispatchTable
+  private interventionRequestTable!: InterventionRequestTable
   private projects!: DevelopmentProjects
   private gitOperations!: GitOperations
   private agentOperations!: AgentOperations
@@ -401,6 +447,18 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     },
   }
 
+  /** Trusted Agent-only Intervention creation and opening recovery. */
+  readonly agentInterventions: SakiAgentInterventions = {
+    request: (request, signal) => this.runOwnedOperation(
+      signal,
+      operationSignal => this.agentOperations.requestIntervention(request, operationSignal),
+    ),
+    finalizeOpening: (interventionId, signal) => this.runOwnedOperation(
+      signal,
+      operationSignal => this.agentOperations.finalizeInterventionOpening(interventionId, operationSignal),
+    ),
+  }
+
   /** @param ctx - owning Cordis context. @param config - resolved access configuration. */
   constructor(ctx: Context, private readonly config: Required<Config>) {
     super(ctx, 'sakiControlPlane')
@@ -423,25 +481,26 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       if (change.table === 'registration_intents' || change.table === 'github_sync_configuration_intents'
         || change.table === 'git_operation_intents' || change.table === 'agent_operation_intents'
         || change.table === 'work_assignments' || change.table === 'work_sessions'
-        || change.table === 'agent_runs' || change.table === 'execution_dispatches') return
+        || change.table === 'agent_runs' || change.table === 'execution_dispatches'
+        || change.table === 'intervention_requests') return
       if (change.table === 'github_work_item_intents' || change.table === 'github_work_item_recovery') {
-        this.notify(['board'])
+        this.notify(['my-work', 'board'])
         return
       }
       if (change.table === 'binding_write_admissions') {
-        this.notify(['project-changes'])
+        this.notify(['my-work', 'project-changes'])
         return
       }
       if (change.table === 'github_project_sync') {
         this.githubSynchronizationConsumer?.wake()
-        this.notify(['project-settings', 'board'])
+        this.notify(['my-work', 'project-settings', 'board'])
         return
       }
       if (change.table === 'development_project_registry') {
-        this.notify(['project-index', 'development-workspace', 'project-changes'])
+        this.notify(['my-work', 'attention', 'project-index', 'development-workspace', 'project-changes'])
         return
       }
-      this.notify(['access', 'project-index', 'development-workspace', 'project-changes'])
+      this.notify(['access', 'my-work', 'attention', 'project-index', 'development-workspace', 'project-changes'])
     })
     ctx.effect(() => () => {
       this.listeners.clear()
@@ -506,6 +565,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     this.workSessionTable = domain.table('work_sessions')
     this.agentRunTable = domain.table('agent_runs')
     this.executionDispatchTable = domain.table('execution_dispatches')
+    this.interventionRequestTable = domain.table('intervention_requests')
 
     let settleStartup!: () => void
     this.startupSettled = new Promise((resolve) => { settleStartup = resolve })
@@ -634,6 +694,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         workSessionTable: this.workSessionTable,
         agentRunTable: this.agentRunTable,
         dispatchTable: this.executionDispatchTable,
+        interventionTable: this.interventionRequestTable,
         admissionTable: this.bindingWriteAdmissionTable,
         execution: this.ctx.sakiHostExecution,
         projects: this.projects,
@@ -652,7 +713,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           return await this.githubWorkItemOperations.submit(intent, actor, signal)
         },
         claimTtlMs: this.config.agentDispatchClaimTtlMs,
-        notifyChanged: () => { this.notify(['project-changes', 'board']) },
+        notifyChanged: () => { this.notify(['my-work', 'attention', 'project-changes', 'board']) },
         lifetime: this.lifetime.signal,
       })
       agentOperationsForDisposal = this.agentOperations
@@ -669,6 +730,11 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         workItems.intents,
         gitOperations.intents,
         agentOperations.intents,
+        agentOperations.interventions.flatMap(intervention => (
+          'answer' in intervention && intervention.answer !== undefined
+            ? [{ id: intervention.answer.payload.intent.intentId }]
+            : []
+        )),
       )
       validateCurrentSakiState(
         domain,
@@ -760,6 +826,20 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   ): Promise<SakiQueryResult> {
     signal.throwIfAborted()
     switch (query.type) {
+      case 'my-work': {
+        if (!this.authorized(authentication, 'my-work:read')) return { ok: false, reason: 'denied' }
+        return {
+          ok: true,
+          projection: deriveSakiPrincipalWork(this.principalWorkProjectionSources(authentication)).myWork,
+        }
+      }
+      case 'attention': {
+        if (!this.authorized(authentication, 'attention:read')) return { ok: false, reason: 'denied' }
+        return {
+          ok: true,
+          projection: deriveSakiPrincipalWork(this.principalWorkProjectionSources(authentication)).attention,
+        }
+      }
       case 'inspect-project-selection': {
         if (!this.authorized(authentication, 'inspect-project-selection')
           || query.hostId !== this.requireFoundation().host.id) {
@@ -903,6 +983,69 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     }
   }
 
+  private principalWorkProjectionSources(
+    authentication: SakiAuthenticationContext,
+  ): SakiPrincipalWorkProjectionSources {
+    const registry = this.projects.registry()
+    const allowedActions = new Set<SakiProjectionAction>()
+    if (this.authorized(authentication, 'work-item:give-to-agent')) {
+      allowedActions.add('work-item:give-to-agent')
+    }
+    if (this.authorized(authentication, 'intervention:answer')) {
+      allowedActions.add('intervention:answer')
+    }
+    const githubProjectSyncs = [...this.githubProjectSyncTable.entries()].map(([, value]) => value)
+    const giveToAgentAvailability = new Map<
+      SakiDevelopmentProjectId,
+      ReadonlyMap<SakiBoardWorkItemId, SakiGiveToAgentAvailability>
+    >()
+    for (const project of registry.projects) {
+      const availability = this.projectGiveToAgentAvailability(authentication, registry, project)
+      const sync = githubProjectSyncs.find(candidate => candidate.id === project.id)
+      const availabilityByWorkItem = new Map<SakiBoardWorkItemId, SakiGiveToAgentAvailability>()
+      for (const item of sync?.confirmedBoard?.items ?? []) {
+        availabilityByWorkItem.set(item.id, availability)
+      }
+      giveToAgentAvailability.set(project.id, availabilityByWorkItem)
+    }
+    return {
+      principalId: authentication.principalId,
+      allowedActions,
+      projects: registry.projects,
+      githubProjectSyncs,
+      workAssignments: [...this.workAssignmentTable.entries()].map(([, value]) => value),
+      agentRuns: [...this.agentRunTable.entries()].map(([, value]) => value),
+      executionDispatches: [...this.executionDispatchTable.entries()].map(([, value]) => value),
+      interventions: [...this.interventionRequestTable.entries()].map(([, value]) => value),
+      giveToAgentAvailability,
+    }
+  }
+
+  private projectGiveToAgentAvailability(
+    authentication: SakiAuthenticationContext,
+    registry: DevelopmentProjectRegistryRecord,
+    project: DevelopmentProjectRegistryRecord['projects'][number],
+  ): SakiGiveToAgentAvailability {
+    if (!this.authorized(authentication, 'work-item:give-to-agent')) {
+      return { available: false, reason: 'action-denied' }
+    }
+    if (!this.githubSynchronization.mutationContext(project.id).ok) {
+      return { available: false, reason: 'synchronization-unavailable' }
+    }
+    const profile = registry.agentProfiles.find(candidate => candidate.id === project.defaultAgentProfileId)
+    if (profile?.modelRouteRequest == null) {
+      return { available: false, reason: 'operation-conditions-unavailable' }
+    }
+    const binding = this.projects.currentActiveBinding(project.id)
+    if (typeof binding === 'string') return { available: false, reason: 'binding-unavailable' }
+    const admission = this.bindingWriteAdmissionTable.get(binding.binding.id)
+    if (admission === undefined) return { available: false, reason: 'binding-unavailable' }
+    if (admission.state !== 'available') {
+      return { available: false, reason: 'operation-conditions-unavailable' }
+    }
+    return { available: true }
+  }
+
   /** @inheritdoc */
   async submit<I extends SakiIntent>(
     authentication: SakiAuthenticationContext,
@@ -997,6 +1140,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ))
         break
       }
+      case 'answer-intervention': {
+        const parsed = answerInterventionIntentSchema.parse(intent) as AnswerInterventionIntent
+        result = this.runOwnedOperation(signal, operationSignal => this.enqueueIntentOperation(
+          parsed.intentId,
+          () => this.submitInterventionAnswer(authentication, parsed, operationSignal),
+        ))
+        break
+      }
       /* v8 ignore next 2 -- SakiIntent is closed and Host wire parsing rejects unknown tags before dispatch. */
       default: return assertNever(intent)
     }
@@ -1048,9 +1199,29 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     return await this.agentOperations.submit(intent, this.currentControlIntentActor(), signal)
   }
 
+  private async submitInterventionAnswer(
+    authentication: SakiAuthenticationContext,
+    intent: AnswerInterventionIntent,
+    signal: AbortSignal,
+  ): Promise<SakiAnswerInterventionIntentReceipt> {
+    signal.throwIfAborted()
+    if (!this.authorized(authentication, 'intervention:answer')) return { ok: false, reason: 'denied' }
+    if (this.hasControlIntentConflict(intent.intentId, 'intervention')
+      || this.interventionAnswerIntentBelongsToAnotherRequest(intent)) {
+      return { ok: false, reason: 'conflict' }
+    }
+    return await this.agentOperations.answerIntervention(intent, this.currentControlIntentActor(), signal)
+  }
+
   private hasControlIntentConflict(
     intentId: SakiControlIntentId,
-    owner: 'registration' | 'github-synchronization' | 'git-operation' | 'work-item' | 'agent-operation',
+    owner:
+      | 'registration'
+      | 'github-synchronization'
+      | 'git-operation'
+      | 'work-item'
+      | 'agent-operation'
+      | 'intervention',
   ): boolean {
     return (owner !== 'registration' && this.requireRegistrationIntentTable().get(intentId) !== undefined)
       || (owner !== 'github-synchronization'
@@ -1058,6 +1229,22 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       || (owner !== 'git-operation' && this.requireGitOperationIntentTable().get(intentId) !== undefined)
       || (owner !== 'work-item' && this.requireGitHubWorkItemIntentTable().get(intentId) !== undefined)
       || (owner !== 'agent-operation' && this.requireAgentOperationIntentTable().get(intentId) !== undefined)
+      || (owner !== 'intervention' && this.interventionAnswerIntentExists(intentId))
+  }
+
+  private interventionAnswerIntentExists(intentId: SakiControlIntentId): boolean {
+    return [...this.interventionRequestTable.entries()].some(([, intervention]) => (
+      'answer' in intervention
+      && intervention.answer?.payload.intent.intentId === intentId
+    ))
+  }
+
+  private interventionAnswerIntentBelongsToAnotherRequest(intent: AnswerInterventionIntent): boolean {
+    return [...this.interventionRequestTable.entries()].some(([, intervention]) => (
+      intervention.id !== intent.interventionId
+      && 'answer' in intervention
+      && intervention.answer?.payload.intent.intentId === intent.intentId
+    ))
   }
 
   private currentControlIntentActor(): ControlIntentActor {
@@ -1785,6 +1972,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       || this.requireWorkSessionTable().size !== 0
       || this.requireAgentRunTable().size !== 0
       || this.requireExecutionDispatchTable().size !== 0
+      || this.requireInterventionRequestTable().size !== 0
   }
 
   private assertOnlyProvisioningRow<K extends string, V>(table: KvTable<K, V>, key: K): void {
@@ -1919,6 +2107,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private requireExecutionDispatchTable(): ExecutionDispatchTable {
     return this.executionDispatchTable
+  }
+
+  private requireInterventionRequestTable(): InterventionRequestTable {
+    return this.interventionRequestTable
   }
 
   private requireInstallation(id: SakiInstallationId): InstallationRecord {

@@ -2,9 +2,12 @@ import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import { describe, expect, it } from 'vitest'
 import {
   agentRunRecordSchema,
+  agentRunV1RecordSchema,
   bindingWriteAdmissionRecordSchema,
   executionDispatchRecordSchema,
+  executionDispatchV1RecordSchema,
   sakiControlPlaneDomainSpec,
+  sakiControlPlaneV7DomainSpec,
   type AgentRunRecord,
   type BindingWriteAdmissionRecord,
   type ExecutionDispatchRecord,
@@ -24,10 +27,14 @@ import {
 } from '@breakfastdapaidang/saki-execution'
 import {
   sakiHostExecutionDomainSpec,
+  sakiHostExecutionV2DomainSpec,
   type LocalHostOperationRecord,
 } from '@breakfastdapaidang/saki-execution-local'
 import * as stateValidation from '../src/state-validation.ts'
-import { validateGitOperationLinks } from '../src/state-validation.ts'
+import {
+  validateGitOperationLinks,
+  validateSakiV7AgentOperationLinks,
+} from '../src/state-validation.ts'
 
 const INTENT_ID = 'intent-11111111-1111-4111-8111-111111111111'
 const ASSIGNMENT_ID = 'assignment-22222222-2222-4222-8222-222222222222'
@@ -147,7 +154,7 @@ function fixture(): Fixture {
   })
   const run = agentRunRecordSchema.parse({
     id: AGENT_RUN_ID,
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     intentId: INTENT_ID,
     assignmentId: ASSIGNMENT_ID,
@@ -219,7 +226,7 @@ function preparedOperation(
     admission: { kind: 'not-accepted' },
   })
   const record = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 2,
+    schemaVersion: 3,
     request,
     preparationRevision: 0,
     snapshot,
@@ -641,5 +648,43 @@ describe('current StartAgentRun cross-domain validation', () => {
     const [controlPlane, hostExecution] = domains(state)
 
     expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+})
+
+describe('historical v7 StartAgentRun cross-domain validation', () => {
+  it('accepts the exact v1 Run, v1 Dispatch, and Host v2 relationship', () => {
+    const running = runningState(fixture())
+    const run = agentRunV1RecordSchema.parse({ ...running.runs[0], schemaVersion: 1 })
+    const dispatch = executionDispatchV1RecordSchema.parse(running.dispatches[0])
+    const hostOperation = sakiHostExecutionV2DomainSpec.tables.operations.valueSchema.parse({
+      ...running.hostOperations[0],
+      schemaVersion: 2,
+    })
+    const admission = running.admissions[0]
+    if (admission === undefined) throw new Error('historical admission fixture is missing')
+    const controlTables = new Map<string, ReturnType<typeof readonlyTable>>([
+      ['agent_runs', readonlyTable([[run.id, run]])],
+      ['execution_dispatches', readonlyTable([[dispatch.id, dispatch]])],
+      ['binding_write_admissions', readonlyTable([[admission.id, admission]])],
+    ])
+    const controlPlane = {
+      name: sakiControlPlaneV7DomainSpec.name,
+      table: (name: string) => controlTables.get(name),
+      close: () => Promise.resolve(),
+    } as unknown as Domain<typeof sakiControlPlaneV7DomainSpec>
+    const hostExecution = {
+      name: sakiHostExecutionV2DomainSpec.name,
+      table: () => readonlyTable([[hostOperation.snapshot.operation.id, hostOperation]]),
+      close: () => Promise.resolve(),
+    } as unknown as Domain<typeof sakiHostExecutionV2DomainSpec>
+
+    expect(() => { validateSakiV7AgentOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+
+    const withoutRun = {
+      ...controlPlane,
+      table: (name: string) => name === 'agent_runs' ? readonlyTable([]) : controlTables.get(name),
+    } as unknown as Domain<typeof sakiControlPlaneV7DomainSpec>
+    expect(() => { validateSakiV7AgentOperationLinks(withoutRun, hostExecution) })
+      .toThrow('StartAgentRun Host Operation has no Agent Run')
   })
 })

@@ -14,6 +14,7 @@ import type {
   HostOperationPreparation,
   HostOperationReference,
   HostOperationRequest,
+  HostOperationRequestV2,
   HostOperationRequestFingerprint,
   HostOperationSnapshot,
   HostOperationSource,
@@ -21,6 +22,8 @@ import type {
   InheritedChangeBaseline,
   InheritedChangeBaselineEntry,
   InheritedCurrentWorktreeEvidence,
+  InspectInterventionOpeningRequest,
+  InterventionOpeningEvidence,
   InspectProjectRequest,
   InspectProjectResult,
   InspectProjectSelectionResult,
@@ -44,13 +47,17 @@ import type {
   SakiAgentRunId,
   SakiAgentProfileId,
   SakiExecutionDispatchId,
+  SakiControlIntentActorAttribution,
+  SakiInterventionAnswerMessageSource,
   SakiWorkSessionId,
   SelectedProjectGitChange,
   StageFilesHostOperationRequest,
   StageFilesHostOperationResult,
   StartAgentRunHostOperationRequest,
+  StartAgentRunHostOperationRequestV2,
   StartAgentRunHostOperationResult,
   StartAgentRunInputMessage,
+  StartAgentRunInputMessageV2,
   StartAgentRunProfile,
   UnstageFilesHostOperationRequest,
   UnstageFilesHostOperationResult,
@@ -112,6 +119,23 @@ export const sakiAgentRunIdSchema = z.string()
 export const sakiWorkSessionIdSchema = z.string()
   .regex(/^work-session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
   .transform(value => value as SakiWorkSessionId)
+
+/** Strict durable Intervention identity shared with answer delivery. */
+export const sakiInterventionRequestIdSchema = z.string()
+  .regex(/^intervention-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  .transform(value => value as SakiInterventionAnswerMessageSource['interventionId'])
+const sakiInstallationIdSchema = z.string()
+  .regex(/^installation-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  .transform(value => value as SakiControlIntentActorAttribution['installationId'])
+const sakiStorageGenerationIdSchema = z.string()
+  .regex(/^storage-generation-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  .transform(value => value as SakiControlIntentActorAttribution['storageGenerationId'])
+const sakiPrincipalIdSchema = z.string()
+  .regex(/^principal-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  .transform(value => value as SakiControlIntentActorAttribution['principalId'])
+const sakiGrantIdSchema = z.string()
+  .regex(/^grant-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  .transform(value => value as SakiControlIntentActorAttribution['grantId'])
 /** Strict durable Host Operation identity. */
 export const hostOperationIdSchema = z.string()
   .regex(/^host-operation-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
@@ -1077,6 +1101,27 @@ const startAgentRunTextSchema = z.string()
   .refine(value => value.isWellFormed() && !value.includes('\0'))
   .refine(value => UTF8.encode(value).byteLength <= MAX_START_AGENT_RUN_INPUT_UTF8_BYTES)
 
+/** Exact bounded request for durable Intervention-opening evidence. */
+export const inspectInterventionOpeningRequestSchema: z.ZodType<InspectInterventionOpeningRequest> = z.object({
+  hostId: hostId.transform(value => value as InspectInterventionOpeningRequest['hostId']),
+  sessionId: startAgentRunSessionIdSchema,
+  callId: z.string().min(1).max(4_096)
+    .transform(value => value as InspectInterventionOpeningRequest['callId']),
+  interventionId: sakiInterventionRequestIdSchema,
+  expectedQuestion: startAgentRunTextSchema,
+  expectedToolResult: z.object({
+    content: z.tuple([z.object({ type: z.literal('text'), text: startAgentRunTextSchema }).strict()]),
+  }).strict(),
+}).strict()
+
+/** Closed browser-safe outcomes from durable Intervention-opening inspection. */
+export const interventionOpeningEvidenceSchema: z.ZodType<InterventionOpeningEvidence> = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('absent') }).strict(),
+  z.object({ kind: z.literal('pending') }).strict(),
+  z.object({ kind: z.literal('confirmed'), turn: positive, step: positive }).strict(),
+  z.object({ kind: z.literal('conflict') }).strict(),
+])
+
 /** Exact provenance carried by one preallocated Agent Run input. */
 export const sakiAgentRunMessageSourceSchema = z.object({
   kind: z.literal('saki-agent-run'),
@@ -1085,12 +1130,48 @@ export const sakiAgentRunMessageSourceSchema = z.object({
   workSessionId: sakiWorkSessionIdSchema,
 }).strict()
 
+/** Browser-safe immutable Actor attribution carried by one Intervention answer. */
+export const sakiControlIntentActorAttributionSchema: z.ZodType<SakiControlIntentActorAttribution> = z.object({
+  installationId: sakiInstallationIdSchema,
+  storageGenerationId: sakiStorageGenerationIdSchema,
+  hostId: hostId.transform(value => value as SakiControlIntentActorAttribution['hostId']),
+  principalId: sakiPrincipalIdSchema,
+  principalRevision: nonnegative,
+  grantId: sakiGrantIdSchema,
+  grantRevision: nonnegative,
+}).strict()
+
+/** Exact attributed provenance for an Intervention answer. */
+export const sakiInterventionAnswerMessageSourceSchema: z.ZodType<SakiInterventionAnswerMessageSource> = z.object({
+  kind: z.literal('saki-intervention-answer'),
+  interventionId: sakiInterventionRequestIdSchema,
+  answerIntentId: sakiControlIntentIdSchema,
+  dispatchId: sakiExecutionDispatchIdSchema,
+  agentRunId: sakiAgentRunIdSchema,
+  workSessionId: sakiWorkSessionIdSchema,
+  actor: sakiControlIntentActorAttributionSchema,
+}).strict()
+
+/** Current message provenance accepted by StartAgentRun. */
+export const startAgentRunMessageSourceSchema = z.union([
+  sakiAgentRunMessageSourceSchema,
+  sakiInterventionAnswerMessageSourceSchema,
+])
+
+/** Exact initial-input UserMessage retained by `saki_host_execution@2`. */
+export const startAgentRunInputMessageV2Schema: z.ZodType<StartAgentRunInputMessageV2> = z.object({
+  id: startAgentRunMessageIdSchema,
+  role: z.literal('user'),
+  content: z.tuple([z.object({ type: z.literal('text'), text: startAgentRunTextSchema }).strict()]),
+  source: sakiAgentRunMessageSourceSchema,
+}).strict()
+
 /** Exact text-only UserMessage delivered by StartAgentRun. */
 export const startAgentRunInputMessageSchema: z.ZodType<StartAgentRunInputMessage> = z.object({
   id: startAgentRunMessageIdSchema,
   role: z.literal('user'),
   content: z.tuple([z.object({ type: z.literal('text'), text: startAgentRunTextSchema }).strict()]),
-  source: sakiAgentRunMessageSourceSchema,
+  source: startAgentRunMessageSourceSchema,
 }).strict()
 
 /** Immutable Development Agent Profile values mounted for one Run. */
@@ -1104,19 +1185,10 @@ export const startAgentRunProfileSchema: z.ZodType<StartAgentRunProfile> = z.obj
   }).strict(),
 }).strict()
 
-/** Strict Agent-start request with full writable preconditions and frozen input. */
-export const startAgentRunHostOperationRequestSchema = z.object({
-  type: z.literal('start-agent-run'),
-  source: executionDispatchHostOperationSourceSchema,
-  expected: hostGitMutationPreconditionSchema,
-  run: z.object({
-    agentRunId: sakiAgentRunIdSchema,
-    workSessionId: sakiWorkSessionIdSchema,
-    sessionId: startAgentRunSessionIdSchema,
-    profile: startAgentRunProfileSchema,
-    input: startAgentRunInputMessageSchema,
-  }).strict(),
-}).strict().superRefine((value, context) => {
+function refineStartAgentRunRequestRelations(
+  value: Pick<StartAgentRunHostOperationRequest, 'source' | 'run'>,
+  context: z.RefinementCtx,
+): void {
   if (value.run.input.source.dispatchId !== value.source.dispatchId) {
     context.addIssue({ code: 'custom', message: 'Agent Run input disagrees with its Dispatch', path: ['run', 'input', 'source', 'dispatchId'] })
   }
@@ -1129,7 +1201,35 @@ export const startAgentRunHostOperationRequestSchema = z.object({
   if (computeStartAgentRunPayloadDigest(value.run.input) !== value.source.payloadDigest) {
     context.addIssue({ code: 'custom', message: 'Agent Run input disagrees with its payload digest', path: ['source', 'payloadDigest'] })
   }
-}) satisfies z.ZodType<StartAgentRunHostOperationRequest>
+}
+
+/** Strict Agent-start request with full writable preconditions and frozen input. */
+export const startAgentRunHostOperationRequestSchema = z.object({
+  type: z.literal('start-agent-run'),
+  source: executionDispatchHostOperationSourceSchema,
+  expected: hostGitMutationPreconditionSchema,
+  run: z.object({
+    agentRunId: sakiAgentRunIdSchema,
+    workSessionId: sakiWorkSessionIdSchema,
+    sessionId: startAgentRunSessionIdSchema,
+    profile: startAgentRunProfileSchema,
+    input: startAgentRunInputMessageSchema,
+  }).strict(),
+}).strict().superRefine(refineStartAgentRunRequestRelations) satisfies z.ZodType<StartAgentRunHostOperationRequest>
+
+/** Exact StartAgentRun request retained by `saki_host_execution@2`. */
+export const startAgentRunHostOperationRequestV2Schema = z.object({
+  type: z.literal('start-agent-run'),
+  source: executionDispatchHostOperationSourceSchema,
+  expected: hostGitMutationPreconditionSchema,
+  run: z.object({
+    agentRunId: sakiAgentRunIdSchema,
+    workSessionId: sakiWorkSessionIdSchema,
+    sessionId: startAgentRunSessionIdSchema,
+    profile: startAgentRunProfileSchema,
+    input: startAgentRunInputMessageV2Schema,
+  }).strict(),
+}).strict().superRefine(refineStartAgentRunRequestRelations) satisfies z.ZodType<StartAgentRunHostOperationRequestV2>
 
 /** Closed current Host Operation request union. */
 export const hostOperationRequestSchema = z.discriminatedUnion('type', [
@@ -1138,6 +1238,14 @@ export const hostOperationRequestSchema = z.discriminatedUnion('type', [
   commitHostOperationRequestSchema,
   startAgentRunHostOperationRequestSchema,
 ]) satisfies z.ZodType<HostOperationRequest>
+
+/** Exact Host Operation request union retained by `saki_host_execution@2`. */
+export const hostOperationRequestV2Schema = z.discriminatedUnion('type', [
+  stageFilesHostOperationRequestSchema,
+  unstageFilesHostOperationRequestSchema,
+  commitHostOperationRequestSchema,
+  startAgentRunHostOperationRequestV2Schema,
+]) satisfies z.ZodType<HostOperationRequestV2>
 
 /** One selected change path resolved by the Host after observation matching. */
 export const appliedProjectGitChangeSchema: z.ZodType<AppliedProjectGitChange> = z.object({
@@ -1225,7 +1333,7 @@ export const commitHostOperationResultSchema = z.object({
   }
 }) satisfies z.ZodType<CommitHostOperationResult>
 
-/** Stable evidence that the intended Agent Run and initial input exist. */
+/** Stable evidence that the intended Agent Run and dispatched input exist. */
 const startAgentRunHostOperationResultObjectSchema = z.object({
   type: z.literal('start-agent-run'),
   agentRunId: sakiAgentRunIdSchema,
@@ -1233,7 +1341,7 @@ const startAgentRunHostOperationResultObjectSchema = z.object({
   sessionId: startAgentRunSessionIdSchema,
   inputMessageId: startAgentRunMessageIdSchema,
 }).strict() satisfies z.ZodType<StartAgentRunHostOperationResult>
-/** Strict evidence schema for one durable Agent Run and its exact initial input. */
+/** Strict evidence schema for one durable Agent Run and its exact dispatched input. */
 export const startAgentRunHostOperationResultSchema: z.ZodType<StartAgentRunHostOperationResult> =
   startAgentRunHostOperationResultObjectSchema
 

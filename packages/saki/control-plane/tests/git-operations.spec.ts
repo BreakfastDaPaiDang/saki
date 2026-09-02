@@ -25,6 +25,7 @@ import type {
   HostOperationSnapshot,
   HostOperationStartResult,
   InspectProjectResult,
+  InterventionOpeningEvidence,
   ProjectGitChangeFingerprintMaterial,
   ProjectGitStatusObservation,
   ProjectGitStatusSeedMaterial,
@@ -177,6 +178,9 @@ class FakeExecution extends SakiHostExecution {
   }
 
   async inspectProject(): Promise<InspectProjectResult> { return this.inspectResult }
+  async inspectInterventionOpening(): Promise<InterventionOpeningEvidence> {
+    return { kind: 'absent' }
+  }
   async readDiff(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
     return { ok: false, reason: 'unavailable' }
   }

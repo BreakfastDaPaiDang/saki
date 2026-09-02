@@ -85,7 +85,7 @@ type SessionEvidence =
  * Advance one accepted StartAgentRun through durable planning, exact input
  * delivery, and success evidence without waiting for model completion. Fresh
  * writable-world evidence is required after Agent acquisition and immediately
- * before either the original send or a pending-input wake.
+ * before either the exact input send or a pending-input wake.
  * @param dependencies - live Agent and Session capabilities.
  * @param initial - accepted, planning, or publishing Agent Run record.
  * @param persist - durable Host Operation writer.

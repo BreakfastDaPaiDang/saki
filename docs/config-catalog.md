@@ -59,7 +59,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/execution-local/src/index.ts:112`](../packages/saki/execution-local/src/index.ts)
+Source: [`packages/saki/execution-local/src/index.ts:115`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 
@@ -93,6 +93,22 @@ export interface Config {
 ```
 
 Source: [`packages/saki/github-app/src/index.ts:66`](../packages/saki/github-app/src/index.ts)
+
+<a id="breakfastdapaidangsaki-tool-intervention"></a>
+
+## `@breakfastdapaidang/saki-tool-intervention`
+
+Requires: `tools` · `sessions` · `sakiControlPlane` · `timer`
+
+```ts config-catalog
+/** Local recovery scheduling for an Intervention opening. */
+export interface Config {
+  /** Milliseconds before retrying a transient opening-finalization failure. */
+  openingRecoveryRetryDelayMs?: number
+}
+```
+
+Source: [`packages/saki/tool-intervention/src/index.ts:22`](../packages/saki/tool-intervention/src/index.ts)
 
 <a id="deepseek-aidsh-acp"></a>
 

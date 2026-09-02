@@ -4,6 +4,7 @@ import type { ProjectGitChangeId } from '@breakfastdapaidang/saki-execution'
 import { describe, expect, it, vi } from 'vitest'
 import SakiHostClientService from '../src/client/index.ts'
 import {
+  sakiAnswerInterventionIntentSchema,
   sakiConfigureGitHubSynchronizationIntentSchema,
   sakiCreateCommitIntentSchema,
   sakiCreateWorkItemIntentSchema,
@@ -60,10 +61,18 @@ describe('Saki browser Host client', () => {
       expectedProjectRevision: 2,
       expectedRemoteFingerprint: `remote-fingerprint-${'4'.repeat(64)}`,
     })
+    const answerIntent = sakiAnswerInterventionIntentSchema.parse({
+      type: 'answer-intervention',
+      intentId: 'intent-44444444-4444-4444-8444-444444444444',
+      interventionId: 'intervention-55555555-5555-4555-8555-555555555555',
+      expectedInterventionRevision: 3,
+      answer: { kind: 'text', text: 'Continue with the public projection.' },
+    })
 
     await ctx.sakiHostClient.createWorkItem(createIntent, 'work-item-token')
     await ctx.sakiHostClient.moveWorkItem(moveIntent, 'work-item-token')
     await ctx.sakiHostClient.giveWorkItemToAgent(giveIntent, 'work-item-token')
+    await ctx.sakiHostClient.answerIntervention(answerIntent, 'work-item-token')
 
     expect(call.mock.calls).toEqual([
       ['/saki', 'control/submit', createIntent, {
@@ -75,6 +84,10 @@ describe('Saki browser Host client', () => {
         headers: { 'x-saki-request-token': 'work-item-token' },
       }],
       ['/saki', 'control/submit', giveIntent, {
+        credentials: 'same-origin',
+        headers: { 'x-saki-request-token': 'work-item-token' },
+      }],
+      ['/saki', 'control/submit', answerIntent, {
         credentials: 'same-origin',
         headers: { 'x-saki-request-token': 'work-item-token' },
       }],
@@ -160,6 +173,8 @@ describe('Saki browser Host client', () => {
 
     await ctx.sakiHostClient.readAccess()
     await ctx.sakiHostClient.queryProjectIndex()
+    await ctx.sakiHostClient.queryMyWork()
+    await ctx.sakiHostClient.queryAttention()
     await ctx.sakiHostClient.inspectProjectSelection(intent.hostId, 'D:/repository')
     await ctx.sakiHostClient.queryDevelopmentWorkspace(workspaceQuery.projectId, 7)
     await ctx.sakiHostClient.queryProjectChanges(PROJECT_ID, 7)
@@ -181,6 +196,8 @@ describe('Saki browser Host client', () => {
     expect(call.mock.calls).toEqual([
       ['/saki', 'access/read', {}, { credentials: 'same-origin' }],
       ['/saki', 'control/query', { type: 'project-index' }, { credentials: 'same-origin' }],
+      ['/saki', 'control/query', { type: 'my-work' }, { credentials: 'same-origin' }],
+      ['/saki', 'control/query', { type: 'attention' }, { credentials: 'same-origin' }],
       ['/saki', 'control/query', {
         type: 'inspect-project-selection',
         hostId: HOST_ID,

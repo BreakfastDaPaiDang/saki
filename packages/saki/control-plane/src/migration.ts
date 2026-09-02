@@ -22,9 +22,13 @@ import { sakiAgentProfileIdSchema, sakiStorageGenerationIdSchema } from './ids.t
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
+  agentOperationIntentRecordSchema,
+  agentRunV1RecordSchema,
+  bindingWriteAdmissionRecordSchema,
   bindingWriteAdmissionV1RecordSchema,
   controlStateRecordSchema,
   developmentProjectRegistryRecordSchema,
+  executionDispatchV1RecordSchema,
   developmentProjectRegistryV1RecordSchema,
   gitOperationIntentRecordSchema,
   githubProjectSyncRecordSchema,
@@ -43,13 +47,19 @@ import {
   principalRecordSchema,
   registrationIntentRecordSchema,
   sakiControlPlaneDomainSpec,
+  V7_HOST_OPERATOR_ACTIONS,
   V5_HOST_OPERATOR_ACTIONS,
   V6_HOST_OPERATOR_ACTIONS,
+  v7GrantRecordSchema,
   v5GrantRecordSchema,
   v6GrantRecordSchema,
+  workAssignmentV1RecordSchema,
+  workSessionRecordSchema,
 } from './spec.ts'
 import type {
   ControlStateRecord,
+  AgentOperationIntentRecord,
+  BindingWriteAdmissionRecord,
   DevelopmentProjectRegistryRecord,
   DevelopmentProjectRegistryV1Record,
   GitOperationIntentRecord,
@@ -63,6 +73,7 @@ import type {
   InstallationRecord,
   PrincipalRecord,
   RegistrationIntentRecord,
+  WorkSessionRecord,
 } from './spec.ts'
 import type {
   SakiAgentProfileId,
@@ -76,7 +87,11 @@ import type {
   SakiPrincipalId,
   SakiResourceBindingId,
   SakiStorageGenerationId,
+  SakiWorkAssignmentId,
   SakiWorkItemRecoveryId,
+  SakiAgentRunId,
+  SakiExecutionDispatchId,
+  SakiWorkSessionId,
 } from './types.ts'
 
 const {
@@ -694,6 +709,55 @@ export const sakiControlPlaneV6DomainSpec = defineDomain({
     ),
   },
 })
+
+/** Exact v7 control-plane schema retained as the adjacent v8 migration source. */
+export const sakiControlPlaneV7DomainSpec = defineDomain({
+  name: 'saki_control_plane',
+  version: 7,
+  tables: {
+    control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
+    installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
+    hosts: domainTable<SakiHostId, HostRecord>(hostRecordSchema),
+    principals: domainTable<SakiPrincipalId, PrincipalRecord>(principalRecordSchema),
+    grants: domainTable<SakiGrantId, z.infer<typeof v7GrantRecordSchema>>(v7GrantRecordSchema),
+    installation_access: domainTable<SakiInstallationAccessId, InstallationAccessRecord>(
+      installationAccessRecordSchema,
+    ),
+    development_project_registry: domainTable<
+      typeof DEVELOPMENT_PROJECT_REGISTRY_KEY,
+      DevelopmentProjectRegistryRecord
+    >(developmentProjectRegistryRecordSchema),
+    registration_intents: domainTable<SakiControlIntentId, RegistrationIntentRecord>(registrationIntentRecordSchema),
+    github_project_sync: domainTable<SakiDevelopmentProjectId, GitHubProjectSyncRecord>(
+      githubProjectSyncRecordSchema,
+    ),
+    github_sync_configuration_intents: domainTable<
+      SakiControlIntentId,
+      GitHubSynchronizationConfigurationIntentRecord
+    >(githubSynchronizationConfigurationIntentRecordSchema),
+    git_operation_intents: domainTable<SakiControlIntentId, GitOperationIntentRecord>(gitOperationIntentRecordSchema),
+    binding_write_admissions: domainTable<SakiResourceBindingId, BindingWriteAdmissionRecord>(
+      bindingWriteAdmissionRecordSchema,
+    ),
+    github_work_item_intents: domainTable<SakiControlIntentId, GitHubWorkItemIntentRecord>(
+      githubWorkItemIntentRecordSchema,
+    ),
+    github_work_item_recovery: domainTable<SakiWorkItemRecoveryId, GitHubWorkItemRecoveryRecord>(
+      githubWorkItemRecoveryRecordSchema,
+    ),
+    agent_operation_intents: domainTable<SakiControlIntentId, AgentOperationIntentRecord>(
+      agentOperationIntentRecordSchema,
+    ),
+    work_assignments: domainTable<SakiWorkAssignmentId, z.infer<typeof workAssignmentV1RecordSchema>>(
+      workAssignmentV1RecordSchema,
+    ),
+    work_sessions: domainTable<SakiWorkSessionId, WorkSessionRecord>(workSessionRecordSchema),
+    agent_runs: domainTable<SakiAgentRunId, z.infer<typeof agentRunV1RecordSchema>>(agentRunV1RecordSchema),
+    execution_dispatches: domainTable<SakiExecutionDispatchId, z.infer<typeof executionDispatchV1RecordSchema>>(
+      executionDispatchV1RecordSchema,
+    ),
+  },
+})
 /* jscpd:ignore-end */
 
 function sourceTable<T>(snapshot: DomainMigrationSnapshot, name: string): Readonly<Record<string, T>> {
@@ -802,14 +866,56 @@ function migrateGrantsToV6(snapshot: DomainMigrationSnapshot): Record<string, z.
   }))
 }
 
-function migrateGrantsToV7(snapshot: DomainMigrationSnapshot): Record<string, GrantRecord> {
+function migrateGrantsToV7(
+  snapshot: DomainMigrationSnapshot,
+): Record<string, z.infer<typeof v7GrantRecordSchema>> {
   const control = sourceTable<ControlStateRecord>(snapshot, 'control_state')[CONTROL_STATE_KEY]
   return Object.fromEntries(Object.entries(
     sourceTable<z.infer<typeof v6GrantRecordSchema>>(snapshot, 'grants'),
   ).map(([key, value]) => {
     if (key !== control?.hostOperatorGrantId) return [key, value]
+    return [key, { ...value, revision: value.revision + 1, actions: [...V7_HOST_OPERATOR_ACTIONS] }]
+  }))
+}
+
+function migrateGrantsToV8(snapshot: DomainMigrationSnapshot): Record<string, GrantRecord> {
+  const control = sourceTable<ControlStateRecord>(snapshot, 'control_state')[CONTROL_STATE_KEY]
+  return Object.fromEntries(Object.entries(
+    sourceTable<z.infer<typeof v7GrantRecordSchema>>(snapshot, 'grants'),
+  ).map(([key, value]) => {
+    if (key !== control?.hostOperatorGrantId) return [key, value]
     return [key, { ...value, revision: value.revision + 1, actions: [...HOST_OPERATOR_ACTIONS] }]
   }))
+}
+
+function migrateWorkAssignmentsToV8(snapshot: DomainMigrationSnapshot): Record<string, Record<string, unknown>> {
+  const intents = sourceTable<AgentOperationIntentRecord>(snapshot, 'agent_operation_intents')
+  return mapTable(
+    sourceTable<z.infer<typeof workAssignmentV1RecordSchema>>(snapshot, 'work_assignments'),
+    (assignment) => {
+      const intent = intents[assignment.intentId]
+      if (intent === undefined
+        || intent.assignmentId !== assignment.id
+        || intent.agentRunId !== assignment.agentRunId
+        || intent.workSessionId !== assignment.primaryWorkSessionId
+        || intent.projectContext.projectId !== assignment.projectId
+        || intent.payload.intent.workItemId !== assignment.workItemId) {
+        throw new Error(`v7 Work Assignment '${assignment.id}' lacks its exact Agent operation owner`)
+      }
+      return {
+        ...assignment,
+        schemaVersion: 2,
+        ownerPrincipalId: intent.payload.actor.principalId,
+      }
+    },
+  )
+}
+
+function migrateAgentRunsToV8(snapshot: DomainMigrationSnapshot): Record<string, Record<string, unknown>> {
+  return mapTable(
+    sourceTable<z.infer<typeof agentRunV1RecordSchema>>(snapshot, 'agent_runs'),
+    run => ({ ...run, schemaVersion: 2 }),
+  )
 }
 
 function migrateV4Inspection(value: z.infer<typeof v4ProjectSelectionInspectionSchema>) {
@@ -934,7 +1040,7 @@ function migrateGitHubProjectSyncToV6(
   )
 }
 
-/** Pure retained migration chain from exact B03 v2 media through frozen adjacent formats to current v7 records. */
+/** Pure retained migration chain from exact B03 v2 media through frozen adjacent formats to current v8 records. */
 export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
   current: sakiControlPlaneDomainSpec,
   steps: [
@@ -1027,7 +1133,7 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
     },
     {
       from: sakiControlPlaneV6DomainSpec,
-      to: sakiControlPlaneDomainSpec,
+      to: sakiControlPlaneV7DomainSpec,
       migrate: snapshot => ({
         global: snapshot.global,
         tables: {
@@ -1042,6 +1148,20 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
           work_sessions: {},
           agent_runs: {},
           execution_dispatches: {},
+        },
+      }),
+    },
+    {
+      from: sakiControlPlaneV7DomainSpec,
+      to: sakiControlPlaneDomainSpec,
+      migrate: snapshot => ({
+        global: snapshot.global,
+        tables: {
+          ...snapshot.tables,
+          grants: migrateGrantsToV8(snapshot),
+          work_assignments: migrateWorkAssignmentsToV8(snapshot),
+          agent_runs: migrateAgentRunsToV8(snapshot),
+          intervention_requests: {},
         },
       }),
     },

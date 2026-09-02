@@ -172,6 +172,15 @@ abstract inspectProject( request: InspectProjectRequest, signal: AbortSignal, ):
 abstract readDiff( binding: ActiveHostProjectBinding, request: ReadProjectDiffRequest, signal: AbortSignal, ): Promise<ReadProjectDiffResult>
 
 /**
+ * Inspect one exact `request_intervention` call in durable Session state
+ * without exposing or mutating that Session.
+ * @param request - stable Session, call, Intervention, and expected model-visible result.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns whether the opening is absent, incomplete, exactly confirmed, or conflicting.
+ */
+abstract inspectInterventionOpening( request: InspectInterventionOpeningRequest, signal: AbortSignal, ): Promise<InterventionOpeningEvidence>
+
+/**
  * Durably create or replay one inert Host Operation before any external
  * effect and bind an ephemeral current-admission callback to its receipt.
  * @param request - complete immutable operation request and trusted Git preconditions.

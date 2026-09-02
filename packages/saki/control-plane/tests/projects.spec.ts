@@ -1551,6 +1551,24 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
 
     if (mode === 'success') {
       await setGrantActions(harness, ['work-item:move'])
+      expect(await harness.control.query(harness.authentication, {
+        type: 'my-work',
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+      expect(await harness.control.query(harness.authentication, {
+        type: 'attention',
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+      await setGrantActions(harness, ['my-work:read', 'attention:read', 'work-item:move'])
+      expect(await harness.control.query<'my-work'>(harness.authentication, {
+        type: 'my-work',
+      }, new AbortController().signal)).toMatchObject({
+        ok: true,
+        projection: {
+          items: [{ recommendation: { available: false, reason: 'action-denied' } }],
+        },
+      })
+      expect(await harness.control.query<'attention'>(harness.authentication, {
+        type: 'attention',
+      }, new AbortController().signal)).toMatchObject({ ok: true, projection: { items: [] } })
       expect(await harness.control.submit(harness.authentication, {
         ...agentIntent,
         intentId: 'intent-43434343-4343-4343-8343-434343434343' as SakiControlIntentId,
@@ -1558,10 +1576,29 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     }
     await setGrantActions(harness, [
       'board:read',
+      'my-work:read',
+      'attention:read',
       'work-item:give-to-agent',
       'work-item:move',
       ...(mode === 'move-conflict' ? ['github-synchronization:configure' as const] : []),
     ])
+    expect(await harness.control.query<'my-work'>(harness.authentication, {
+      type: 'my-work',
+    }, new AbortController().signal)).toMatchObject({
+      ok: true,
+      projection: {
+        items: [{
+          recommendation: {
+            available: true,
+            offer: {
+              type: 'give-work-item-to-agent',
+              expectedProjectRevision: 0,
+              expectedRemoteFingerprint: item.remoteFingerprint,
+            },
+          },
+        }],
+      },
+    })
     if (mode === 'success') {
       expect(await harness.control.submit(harness.authentication, agentIntent, new AbortController().signal)).toEqual({
         ok: false,
@@ -1621,7 +1658,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     expect(host.requests).toHaveLength(2)
     expect(host.requests[1]).toEqual(host.requests[0])
     expect(host.startCount).toBe(1)
-    expect(changedKeys).toContainEqual(['project-changes', 'board'])
+    expect(changedKeys).toContainEqual(['my-work', 'attention', 'project-changes', 'board'])
     disposeChanged()
 
     if (mode === 'success') {
@@ -2163,11 +2200,15 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     )
     expect(registration).toMatchObject({ ok: true, receipt: { state: 'confirmed', registryRevision: 2 } })
     if (!registration.ok) throw new Error('second Host registration failed')
+    const receipt = registration.receipt
+    if (receipt.state !== 'confirmed' || !('projectId' in receipt)) {
+      throw new Error('second Host registration failed')
+    }
     const committed = projects.registry()
-    const otherProject = committed.projects.find(project => project.id === registration.receipt.projectId)
+    const otherProject = committed.projects.find(project => project.id === receipt.projectId)
     const otherProfile = committed.agentProfiles.find(profile => profile.id === otherProject?.defaultAgentProfileId)
     expect(otherProfile).toMatchObject({
-      projectId: registration.receipt.projectId,
+      projectId: receipt.projectId,
       version: 1,
       agentPresetId: 'standard',
       modelRouteRequest: { provider: 'test-provider', model: 'test-model' },

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   sakiHostExecutionDomainSpec,
   sakiHostExecutionV1DomainSpec,
+  sakiHostExecutionV2DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import {
   sakiStorageGenerationDomainSpec,
@@ -11,8 +12,8 @@ import {
 import { sakiStateCapability } from '../src/state-version.ts'
 
 describe('Saki product state capability', () => {
-  it('retains exact v2-v6 readers and makes only complete v7 writable', () => {
-    expect(sakiStateCapability.readable.map(spec => spec.version)).toEqual([2, 3, 4, 5, 6, 7])
+  it('retains exact v2-v7 readers and makes only complete v8 writable', () => {
+    expect(sakiStateCapability.readable.map(spec => spec.version)).toEqual([2, 3, 4, 5, 6, 7, 8])
     expect(sakiStateCapability.resolveReadable(1)).toBeUndefined()
     expect(sakiStateCapability.resolveReadable(2)?.domains.map(domain => [domain.name, domain.version])).toEqual([
       ['saki_control_plane', 2],
@@ -48,7 +49,15 @@ describe('Saki product state capability', () => {
       ['saki_host_execution', 2],
       ['saki_storage_generation', 5],
     ])
-    expect(sakiStateCapability.writable.version).toBe(7)
+    const v7 = sakiStateCapability.resolveReadable(7)
+    if (v7?.version !== 7) throw new Error('state version 7 capability is missing')
+    expect(v7.hostExecution).toBe(sakiHostExecutionV2DomainSpec)
+    expect(sakiStateCapability.resolveReadable(8)?.domains.map(domain => [domain.name, domain.version])).toEqual([
+      ['saki_control_plane', 8],
+      ['saki_host_execution', 3],
+      ['saki_storage_generation', 6],
+    ])
+    expect(sakiStateCapability.writable.version).toBe(8)
     expect(sakiStateCapability.writable.hostExecution).toBe(sakiHostExecutionDomainSpec)
     expect(sakiStateCapability.writable.storageGeneration).toBe(sakiStorageGenerationDomainSpec)
     expect('buildId' in sakiStateCapability).toBe(false)

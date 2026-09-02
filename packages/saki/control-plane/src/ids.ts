@@ -17,6 +17,7 @@ import type {
   SakiInstallationGenerationId,
   SakiInstallationId,
   SakiIntentReceiptId,
+  SakiInterventionRequestId,
   SakiWorkAssignmentId,
   SakiPrincipalId,
   SakiResourceBindingId,
@@ -66,6 +67,8 @@ export const sakiResourceBindingIdSchema = brandedId<SakiResourceBindingId>('bin
 export { sakiAgentProfileIdSchema, sakiControlIntentIdSchema }
 /** Strict Intent receipt identity. */
 export const sakiIntentReceiptIdSchema = brandedId<SakiIntentReceiptId>('receipt')
+/** Strict durable Intervention Request identity. */
+export const sakiInterventionRequestIdSchema = brandedId<SakiInterventionRequestId>('intervention')
 /** Strict Work Assignment identity. */
 export const sakiWorkAssignmentIdSchema = brandedId<SakiWorkAssignmentId>('assignment')
 /** Strict short-lived Execution Dispatch claim identity. */

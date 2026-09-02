@@ -29,12 +29,15 @@ import {
   unstageFilesHostOperationResultSchema,
 } from '@breakfastdapaidang/saki-execution'
 import {
+  MAX_INTERVENTION_ANSWER_CHARS,
+  MAX_INTERVENTION_PROMPT_CHARS,
   SAKI_BOARD_WORK_ITEM_LIMIT,
   SAKI_GITHUB_CAPACITY_OBSERVED_LIMIT,
   SAKI_GITHUB_MAPPING_ISSUE_LIMIT,
 } from '@breakfastdapaidang/saki-control-plane/constants'
 import type {
   AccessProjection,
+  AnswerInterventionIntent,
   ConfigureGitHubSynchronizationIntent,
   CreateWorkItemIntent,
   CreateCommitIntent,
@@ -67,8 +70,12 @@ import type {
   SakiIntentReceipt,
   SakiIntentInput,
   SakiIntentReceiptId,
+  SakiInterventionRequestId,
+  SakiMyWorkProjection,
+  SakiAttentionProjection,
   SakiWorkItemIntentReceipt,
   SakiGiveWorkItemToAgentIntentReceipt,
+  SakiAnswerInterventionIntentReceipt,
   SakiWorkAssignmentId,
   SakiWorkItemDetailProjection,
   SakiGitHubMappingHealthProjection,
@@ -109,6 +116,7 @@ const bindingId = brandedId<SakiResourceBindingId>('binding')
 const intentId = brandedId<SakiControlIntentId>('intent')
 const receiptId = brandedId<SakiIntentReceiptId>('receipt')
 const assignmentId = brandedId<SakiWorkAssignmentId>('assignment')
+const interventionId = brandedId<SakiInterventionRequestId>('intervention')
 const safeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 const positiveInteger = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
 const revision = safeInteger
@@ -169,6 +177,8 @@ export const sakiBootstrapExchangeRequestSchema = z.object({
 
 /** Closed project-query body schema with branded cross-boundary ids. */
 export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('my-work') }).strict(),
+  z.object({ type: z.literal('attention') }).strict(),
   z.object({
     type: z.literal('inspect-project-selection'),
     hostId,
@@ -391,6 +401,19 @@ export const sakiGiveWorkItemToAgentIntentSchema = z.object({
   expectedRemoteFingerprint: boardRemoteFingerprint,
 }).strict() satisfies z.ZodType<GiveWorkItemToAgentIntent>
 
+/** Strict Intervention answer Intent without Actor, Grant, or delivery authority. */
+export const sakiAnswerInterventionIntentSchema = z.object({
+  type: z.literal('answer-intervention'),
+  intentId,
+  interventionId,
+  expectedInterventionRevision: revision,
+  answer: z.object({
+    kind: z.literal('text'),
+    text: z.string().min(1).max(MAX_INTERVENTION_ANSWER_CHARS)
+      .refine(value => value.isWellFormed() && !value.includes('\0')),
+  }).strict(),
+}).strict() satisfies z.ZodType<AnswerInterventionIntent>
+
 /** Closed Control Intent request union. */
 export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
   sakiRegisterDevelopmentProjectIntentSchema,
@@ -401,6 +424,7 @@ export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
   sakiCreateWorkItemIntentSchema,
   sakiMoveWorkItemIntentSchema,
   sakiGiveWorkItemToAgentIntentSchema,
+  sakiAnswerInterventionIntentSchema,
 ]) satisfies z.ZodType<SakiIntentInput>
 
 /** Authenticated member of the Access Projection schema. */
@@ -1505,6 +1529,269 @@ const agentPresetId = z.string().min(1).max(200).regex(/^[a-z0-9][a-z0-9-]*$/u)
 const safeAgentDisplayText = (maximum: number) => z.string().min(1).max(maximum)
   .refine(value => value.isWellFormed() && !/[\u0000\u007f]/u.test(value))
 
+const interventionRequiredAnswerSchema = z.object({
+  kind: z.literal('text'),
+  prompt: safeAgentDisplayText(MAX_INTERVENTION_PROMPT_CHARS),
+  maxLength: positiveInteger.max(MAX_INTERVENTION_ANSWER_CHARS),
+}).strict()
+
+const agentRunReturnAddressSchema = z.object({
+  kind: z.literal('agent-run'),
+  projectId,
+  workItemId: boardWorkItemId,
+  workSessionId: sakiWorkSessionIdSchema,
+  agentRunId: sakiAgentRunIdSchema,
+}).strict()
+
+const sakiReturnAddressSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('work-item'),
+    projectId,
+    workItemId: boardWorkItemId,
+  }).strict(),
+  z.object({
+    kind: z.literal('work-session'),
+    projectId,
+    workItemId: boardWorkItemId,
+    workSessionId: sakiWorkSessionIdSchema,
+  }).strict(),
+  agentRunReturnAddressSchema,
+])
+
+const interventionProjectionSchema = z.object({
+  id: interventionId,
+  revision,
+  kind: z.literal('text-input'),
+  state: z.enum(['open', 'reconciliation-required']),
+  targetPrincipalId: principalId,
+  requiredAnswer: interventionRequiredAnswerSchema,
+  createdAt: safeInteger,
+  updatedAt: safeInteger,
+  returnAddress: agentRunReturnAddressSchema,
+}).strict().superRefine((value, context) => {
+  if (value.updatedAt < value.createdAt) {
+    context.addIssue({ code: 'custom', message: 'Intervention timestamps are not monotonic' })
+  }
+})
+
+const actionOfferSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('give-work-item-to-agent'),
+    projectId,
+    workItemId: boardWorkItemId,
+    expectedProjectRevision: revision,
+    expectedRemoteFingerprint: boardRemoteFingerprint,
+    reason: safeAgentDisplayText(200),
+  }).strict(),
+  z.object({
+    type: z.literal('answer-intervention'),
+    interventionId,
+    expectedInterventionRevision: revision,
+    requiredAnswer: interventionRequiredAnswerSchema,
+    reason: safeAgentDisplayText(200),
+  }).strict(),
+])
+
+const actionRecommendationSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(true), offer: actionOfferSchema }).strict(),
+  z.object({ available: z.literal(false), reason: safeAgentDisplayText(200) }).strict(),
+])
+
+const myWorkItemSchema = z.object({
+  project: z.object({ id: projectId, title: projectTitle }).strict(),
+  workItem: z.object({
+    id: boardWorkItemId,
+    title: safeAgentDisplayText(4_096),
+    issueNumber: positiveInteger,
+    status: sakiBoardStatusSchema,
+    updatedAt: safeInteger,
+  }).strict(),
+  group: z.enum(['ready-to-start', 'active', 'waiting-for-operator', 'recently-finished']),
+  assignment: z.object({
+    id: assignmentId,
+    revision,
+    ownerPrincipalId: principalId,
+    state: z.enum(['assigned', 'active', 'canceled', 'reconciliation-required']),
+  }).strict().optional(),
+  run: z.object({
+    id: sakiAgentRunIdSchema,
+    revision,
+    state: z.enum([
+      'allocated',
+      'starting',
+      'running',
+      'waiting',
+      'resume-pending',
+      'canceled',
+      'reconciliation-required',
+    ]),
+  }).strict().optional(),
+  intervention: interventionProjectionSchema.optional(),
+  returnAddress: sakiReturnAddressSchema,
+  recommendation: actionRecommendationSchema,
+}).strict()
+
+function sameRequiredAnswer(
+  left: z.infer<typeof interventionRequiredAnswerSchema>,
+  right: z.infer<typeof interventionRequiredAnswerSchema>,
+): boolean {
+  return left.prompt === right.prompt && left.maxLength === right.maxLength
+}
+
+function sameAgentRunReturnAddress(
+  left: z.infer<typeof sakiReturnAddressSchema>,
+  right: z.infer<typeof agentRunReturnAddressSchema>,
+): boolean {
+  return left.kind === 'agent-run'
+    && left.workSessionId === right.workSessionId
+    && left.agentRunId === right.agentRunId
+}
+
+const readyUnavailableReasons = new Set([
+  'action-denied',
+  'automation-policy-unavailable',
+  'binding-unavailable',
+  'budget-unavailable',
+  'git-unavailable',
+  'operation-conditions-unavailable',
+  'production-credential-unavailable',
+  'synchronization-unavailable',
+])
+
+/** Principal-scoped My Work Projection with stable product-only return addresses. */
+export const sakiMyWorkProjectionSchema: z.ZodType<SakiMyWorkProjection> = z.object({
+  type: z.literal('my-work'),
+  principalId,
+  items: z.array(myWorkItemSchema),
+}).strict().superRefine((projection, context) => {
+  projection.items.forEach((item, index) => {
+    if (item.returnAddress.projectId !== item.project.id
+      || item.returnAddress.workItemId !== item.workItem.id) {
+      context.addIssue({ code: 'custom', message: 'My Work return address disagrees with its Work Item', path: ['items', index, 'returnAddress'] })
+    }
+    if (item.assignment !== undefined && item.assignment.ownerPrincipalId !== projection.principalId) {
+      context.addIssue({ code: 'custom', message: 'My Work Assignment belongs to another Principal', path: ['items', index, 'assignment'] })
+    }
+    if (item.intervention !== undefined && item.intervention.targetPrincipalId !== projection.principalId) {
+      context.addIssue({ code: 'custom', message: 'My Work Intervention targets another Principal', path: ['items', index, 'intervention'] })
+    }
+    if ((item.assignment === undefined) !== (item.run === undefined)) {
+      context.addIssue({ code: 'custom', message: 'My Work Assignment and Agent Run must appear together', path: ['items', index] })
+    }
+    const terminal = item.workItem.status === 'done' || item.workItem.status === 'canceled'
+    const reconciliation = item.assignment?.state === 'reconciliation-required'
+      || item.run?.state === 'reconciliation-required'
+    const expectedGroup = item.intervention !== undefined
+      || item.workItem.status === 'in-review'
+      || reconciliation
+      ? 'waiting-for-operator'
+      : terminal
+        ? 'recently-finished'
+        : item.assignment === undefined
+          ? 'ready-to-start'
+          : 'active'
+    if (item.group !== expectedGroup
+      || (item.assignment?.state === 'canceled' && !terminal)
+      || (item.group === 'ready-to-start' && item.workItem.status !== 'ready')) {
+      context.addIssue({ code: 'custom', message: 'My Work group disagrees with its current records', path: ['items', index, 'group'] })
+    }
+    const returnAddressMatches = item.intervention !== undefined
+      ? sameAgentRunReturnAddress(item.returnAddress, item.intervention.returnAddress)
+      : item.run === undefined
+        ? item.returnAddress.kind === 'work-item'
+        : item.returnAddress.kind === 'agent-run' && item.returnAddress.agentRunId === item.run.id
+    if (!returnAddressMatches) {
+      context.addIssue({ code: 'custom', message: 'My Work return address disagrees with its current owner', path: ['items', index, 'returnAddress'] })
+    }
+    const recommendation = item.recommendation
+    if (!recommendation.available) {
+      const expectedReason = item.intervention?.state === 'reconciliation-required'
+        ? 'reconciliation-required'
+        : item.intervention?.state === 'open'
+          ? 'response-action-denied'
+          : item.workItem.status === 'in-review'
+            ? 'acceptance-not-available'
+            : terminal
+              ? 'terminal-work-item'
+              : reconciliation
+                ? 'reconciliation-required'
+                : item.assignment !== undefined
+                  ? 'active-work'
+                  : undefined
+      if (expectedReason === undefined
+        ? !readyUnavailableReasons.has(recommendation.reason)
+        : recommendation.reason !== expectedReason) {
+        context.addIssue({ code: 'custom', message: 'My Work recommendation disagrees with its current records', path: ['items', index, 'recommendation'] })
+      }
+      return
+    }
+    const offer = recommendation.offer
+    if (offer.type === 'give-work-item-to-agent') {
+      if (item.group !== 'ready-to-start'
+        || item.assignment !== undefined
+        || item.run !== undefined
+        || item.intervention !== undefined
+        || offer.projectId !== item.project.id
+        || offer.workItemId !== item.workItem.id) {
+        context.addIssue({ code: 'custom', message: 'Give-to-Agent offer disagrees with its Work Item', path: ['items', index, 'recommendation', 'offer'] })
+      }
+      return
+    }
+    if (item.intervention === undefined
+      || item.intervention.state !== 'open'
+      || offer.interventionId !== item.intervention.id
+      || offer.expectedInterventionRevision !== item.intervention.revision
+      || !sameRequiredAnswer(offer.requiredAnswer, item.intervention.requiredAnswer)) {
+      context.addIssue({ code: 'custom', message: 'Answer offer disagrees with its Intervention', path: ['items', index, 'recommendation', 'offer'] })
+    }
+  })
+})
+
+const attentionItemSchema = z.object({
+  source: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('intervention'), id: interventionId, revision }).strict(),
+    z.object({ kind: z.literal('work-assignment'), id: assignmentId, revision }).strict(),
+    z.object({ kind: z.literal('execution-dispatch'), id: sakiExecutionDispatchIdSchema, revision }).strict(),
+  ]),
+  projectId,
+  targetPrincipalId: principalId,
+  severity: z.enum(['information', 'warning', 'action-required']),
+  openedAt: safeInteger,
+  requiredResponse: interventionRequiredAnswerSchema.optional(),
+  returnAddress: sakiReturnAddressSchema,
+}).strict().superRefine((item, context) => {
+  if (item.returnAddress.projectId !== item.projectId) {
+    context.addIssue({ code: 'custom', message: 'Attention return address belongs to another Project', path: ['returnAddress'] })
+  }
+  if (item.source.kind !== 'intervention' && item.requiredResponse !== undefined) {
+    context.addIssue({ code: 'custom', message: 'Attention required response disagrees with its source', path: ['requiredResponse'] })
+  }
+  if (item.source.kind === 'intervention') {
+    const expectedSeverity = item.requiredResponse === undefined ? 'warning' : 'action-required'
+    if (item.severity !== expectedSeverity) {
+      context.addIssue({ code: 'custom', message: 'Intervention Attention severity disagrees with its response', path: ['severity'] })
+    }
+    return
+  }
+  const expectedSeverity = item.source.kind === 'work-assignment' ? 'warning' : 'action-required'
+  if (item.severity !== expectedSeverity || item.returnAddress.kind !== 'agent-run') {
+    context.addIssue({ code: 'custom', message: 'Attention source disagrees with its severity or return address', path: ['source'] })
+  }
+})
+
+/** Principal-scoped Attention Projection without notification acknowledgement state. */
+export const sakiAttentionProjectionSchema: z.ZodType<SakiAttentionProjection> = z.object({
+  type: z.literal('attention'),
+  principalId,
+  items: z.array(attentionItemSchema),
+}).strict().superRefine((projection, context) => {
+  projection.items.forEach((item, index) => {
+    if (item.targetPrincipalId !== projection.principalId) {
+      context.addIssue({ code: 'custom', message: 'Attention item targets another Principal', path: ['items', index] })
+    }
+  })
+})
+
 const sakiAgentRunProjectionBaseShape = {
   id: sakiAgentRunIdSchema,
   revision,
@@ -1820,6 +2107,22 @@ const boardFailureSchema = z.object({
   ok: z.literal(false),
   reason: z.enum(['denied', 'unavailable', 'not-found']),
 }).strict()
+const principalWorkFailureSchema = z.object({
+  ok: z.literal(false),
+  reason: z.enum(['denied', 'unavailable']),
+}).strict()
+
+/** Exact result schema for a Principal-scoped My Work query. */
+export const sakiMyWorkResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: sakiMyWorkProjectionSchema }).strict(),
+  principalWorkFailureSchema,
+]) satisfies z.ZodType<SakiQueryResult<'my-work'>>
+
+/** Exact result schema for a Principal-scoped Attention query. */
+export const sakiAttentionResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: sakiAttentionProjectionSchema }).strict(),
+  principalWorkFailureSchema,
+]) satisfies z.ZodType<SakiQueryResult<'attention'>>
 
 /** Exact result schema for an inspection query. */
 export const sakiInspectProjectSelectionResultSchema = z.discriminatedUnion('ok', [
@@ -1865,6 +2168,8 @@ export const sakiBoardResultSchema: z.ZodType<SakiQueryResult<'board'>> = z.disc
 
 /** Union schema retained for callers that intentionally handle every query kind. */
 export const sakiQueryResultSchema = z.union([
+  sakiMyWorkResultSchema,
+  sakiAttentionResultSchema,
   sakiInspectProjectSelectionResultSchema,
   sakiProjectIndexResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
@@ -2282,6 +2587,60 @@ export const sakiGiveWorkItemToAgentResultSchema = z.union([
   }).strict(),
 ]).superRefine(validateIntentResultReceiptIdentity) satisfies z.ZodType<SakiGiveWorkItemToAgentIntentReceipt>
 
+const answerInterventionReceiptBase = {
+  ...receiptIdentity,
+  type: z.literal('answer-intervention'),
+  interventionId,
+  interventionRevision: revision,
+} as const
+const answeredInterventionReceiptSchema = z.object({
+  ...answerInterventionReceiptBase,
+  state: z.literal('answered'),
+  dispatchId: sakiExecutionDispatchIdSchema,
+}).strict()
+const resolvedInterventionReceiptSchema = z.object({
+  ...answerInterventionReceiptBase,
+  state: z.literal('resolved'),
+  dispatchId: sakiExecutionDispatchIdSchema,
+}).strict()
+const interventionAnswerConflictReceiptSchema = z.object({
+  ...answerInterventionReceiptBase,
+  state: z.literal('conflict'),
+  reason: z.enum(['expected-revision', 'already-answered', 'invalid-answer', 'owner-unavailable']),
+}).strict()
+const interventionAnswerReconciliationReceiptSchema = z.object({
+  ...answerInterventionReceiptBase,
+  state: z.literal('reconciliation-required'),
+  reason: z.enum(['effect-unknown', 'evidence-conflict', 'protocol']),
+  dispatchId: sakiExecutionDispatchIdSchema.optional(),
+}).strict()
+
+/** Intervention answer result with only durable browser-safe receipt evidence. */
+export const sakiAnswerInterventionResultSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    receipt: z.union([answeredInterventionReceiptSchema, resolvedInterventionReceiptSchema]),
+  }).strict(),
+  deniedIntentResultSchema,
+  unavailableIntentResultSchema,
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('unavailable'),
+    receipt: answeredInterventionReceiptSchema,
+  }).strict(),
+  plainConflictIntentResultSchema,
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('conflict'),
+    receipt: interventionAnswerConflictReceiptSchema,
+  }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('reconciliation-required'),
+    receipt: interventionAnswerReconciliationReceiptSchema,
+  }).strict(),
+]).superRefine(validateIntentResultReceiptIdentity) satisfies z.ZodType<SakiAnswerInterventionIntentReceipt>
+
 /** Union schema retained for callers that intentionally handle every Control Intent result. */
 export const sakiIntentResultSchema = z.union([
   sakiRegisterDevelopmentProjectResultSchema,
@@ -2292,6 +2651,7 @@ export const sakiIntentResultSchema = z.union([
   sakiCreateWorkItemResultSchema,
   sakiMoveWorkItemResultSchema,
   sakiGiveWorkItemToAgentResultSchema,
+  sakiAnswerInterventionResultSchema,
 ]) satisfies z.ZodType<SakiIntentReceipt>
 
 /** Browser Access Projection inferred from the strict wire schema. */
@@ -2300,6 +2660,10 @@ export type SakiWireAccessProjection = z.infer<typeof sakiAccessProjectionSchema
 export type SakiWireAccessExchangeResult = z.infer<typeof sakiAccessExchangeResultSchema>
 /** Browser logout result inferred from the strict wire schema. */
 export type SakiWireAccessLogoutResult = z.infer<typeof sakiAccessLogoutResultSchema>
+/** Browser My Work result inferred from its exact Principal-scoped schema. */
+export type SakiWireMyWorkResult = z.infer<typeof sakiMyWorkResultSchema>
+/** Browser Attention result inferred from its exact Principal-scoped schema. */
+export type SakiWireAttentionResult = z.infer<typeof sakiAttentionResultSchema>
 /** Browser Project-index query result inferred from its exact wire schema. */
 export type SakiWireProjectIndexResult = z.infer<typeof sakiProjectIndexResultSchema>
 /** Browser inspection query result inferred from its exact wire schema. */
@@ -2362,6 +2726,10 @@ export type SakiWireMoveWorkItemResult = z.infer<typeof sakiMoveWorkItemResultSc
 export type SakiWireGiveWorkItemToAgentIntent = z.infer<typeof sakiGiveWorkItemToAgentIntentSchema>
 /** Browser Give-to-Agent result inferred from its exact safe receipt schema. */
 export type SakiWireGiveWorkItemToAgentResult = z.infer<typeof sakiGiveWorkItemToAgentResultSchema>
+/** Browser Intervention answer Intent inferred from its strict authority-free schema. */
+export type SakiWireAnswerInterventionIntent = z.infer<typeof sakiAnswerInterventionIntentSchema>
+/** Browser Intervention answer result inferred from its exact safe receipt schema. */
+export type SakiWireAnswerInterventionResult = z.infer<typeof sakiAnswerInterventionResultSchema>
 /** Branded Host id accepted by the browser client. */
 export type SakiWireHostId = SakiHostId
 /** Branded Project id accepted by the browser client. */

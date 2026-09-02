@@ -4,7 +4,6 @@ import { lstat, rmdir } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import type {
   SakiBuildId,
-  SakiInstallationId,
   SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
@@ -14,6 +13,7 @@ import {
   readClosedSakiV4State,
   readClosedSakiV5State,
   readClosedSakiV6State,
+  readClosedSakiV7State,
 } from './closed-state.ts'
 import { SakiMaintenanceError } from './error.ts'
 import { sakiStateCapability } from './state-version.ts'
@@ -38,6 +38,8 @@ import { verifyRecoveryBackup } from './recovery-backup.ts'
 import type { VerifiedRecoveryBackup } from './recovery-backup.ts'
 import { validateClosedSakiV2Source } from './legacy-state.ts'
 import { LEGACY_B03_BUILD_ID } from './release.ts'
+
+const PREVIOUS_WRITABLE_STATE_VERSION = 7 as const
 
 function requireAbsolutePath(path: string, subject: string): string {
   const absolute = resolve(path)
@@ -121,19 +123,24 @@ async function recoverFresh(
   }
   if (manifest.value.installationId !== journal.installationId
     || manifest.value.storageGenerationId !== journal.candidateStorageGenerationId
-    || manifest.value.stateVersion !== sakiStateCapability.writable.version) {
+    || !isRecoverableJournalTarget(manifest.value.stateVersion)) {
     throw new SakiMaintenanceError(
       'recovery-required',
       'active fresh operation disagrees with the published Installation authority',
     )
   }
   const selected = await readSelectedGeneration(root, manifest.value, signal)
-  await validateSelectedCurrentGeneration(selected, signal)
+  await validateSelectedJournalTarget(selected, signal)
   await removeOwnedPath(root, partial, signal)
   await clearSettledOperation(root, active)
 }
 
-async function validateSelectedCurrentGeneration(
+function isRecoverableJournalTarget(stateVersion: number): boolean {
+  return stateVersion === PREVIOUS_WRITABLE_STATE_VERSION
+    || stateVersion === sakiStateCapability.writable.version
+}
+
+async function validateSelectedJournalTarget(
   selected: SelectedGeneration,
   signal: AbortSignal,
 ): Promise<void> {
@@ -141,6 +148,10 @@ async function validateSelectedCurrentGeneration(
     installationId: selected.installation.installationId,
     storageGenerationId: selected.installation.storageGenerationId,
     createdByBuildId: selected.generation.createdByBuildId,
+  }
+  if (selected.generation.stateVersion === PREVIOUS_WRITABLE_STATE_VERSION) {
+    await readClosedSakiV7State(selected.databasePath, expectation, signal)
+    return
   }
   if (selected.installation.phase === 'ready') {
     await readClosedCurrentSakiState(selected.databasePath, expectation, signal)
@@ -189,24 +200,32 @@ async function recoverBackup(
 
 async function validateUpgradeCandidate(
   root: string,
-  installationId: SakiInstallationId,
-  storageGenerationId: SakiStorageGenerationId,
+  journal: Extract<SakiOperationJournal, { readonly kind: 'upgrade' }>,
   signal: AbortSignal,
 ): Promise<SelectedGeneration> {
   const candidate = await readUnselectedGeneration(
     root,
-    installationId,
-    storageGenerationId,
+    journal.installationId,
+    journal.candidateStorageGenerationId,
     signal,
   )
-  if (candidate.generation.stateVersion !== sakiStateCapability.writable.version) {
-    throw new SakiMaintenanceError('recovery-required', 'upgrade candidate is not current Saki state')
+  if (!isRecoverableJournalTarget(candidate.generation.stateVersion)
+    || candidate.generation.stateVersion <= journal.sourceStateVersion) {
+    throw new SakiMaintenanceError(
+      'recovery-required',
+      'upgrade candidate is not a recoverable forward Saki state',
+    )
   }
-  await readClosedCurrentSakiState(candidate.databasePath, {
-    installationId,
-    storageGenerationId,
+  const expectation = {
+    installationId: candidate.installation.installationId,
+    storageGenerationId: candidate.installation.storageGenerationId,
     createdByBuildId: candidate.generation.createdByBuildId,
-  }, signal)
+  }
+  if (candidate.generation.stateVersion === PREVIOUS_WRITABLE_STATE_VERSION) {
+    await readClosedSakiV7State(candidate.databasePath, expectation, signal)
+  } else {
+    await readClosedCurrentSakiState(candidate.databasePath, expectation, signal)
+  }
   return candidate
 }
 
@@ -226,7 +245,7 @@ function requireUpgradeBackupSource(
 
 function requireRetainedUpgradeSource(
   journal: Extract<SakiOperationJournal, { readonly kind: 'upgrade' }>,
-  stateVersion: 2 | 3 | 4 | 5 | 6,
+  stateVersion: 2 | 3 | 4 | 5 | 6 | 7,
   storageGenerationId: SakiStorageGenerationId,
   sourceBuildId: SakiBuildId,
 ): void {
@@ -252,7 +271,8 @@ async function recoverUpgrade(
     && manifest.value.phase === 'ready'
     && manifest.value.installationId === journal.installationId
     && manifest.value.storageGenerationId === journal.candidateStorageGenerationId
-    && manifest.value.stateVersion === sakiStateCapability.writable.version
+    && isRecoverableJournalTarget(manifest.value.stateVersion)
+    && manifest.value.stateVersion > journal.sourceStateVersion
   if (candidateSelected) {
     const backup = await verifyJournalBackup(root, journal, signal)
     if (backup === undefined) {
@@ -263,7 +283,7 @@ async function recoverUpgrade(
     }
     requireUpgradeBackupSource(journal, backup)
     const selected = await readSelectedGeneration(root, manifest.value, signal)
-    await validateSelectedCurrentGeneration(selected, signal)
+    await validateSelectedJournalTarget(selected, signal)
     await removeJournalDirectory(root, journal.backup.partialLeaf, signal)
     await removeJournalDirectory(root, journal.candidate.partialLeaf, signal)
     await clearSettledOperation(root, active)
@@ -271,7 +291,7 @@ async function recoverUpgrade(
   }
 
   let oldStorageGenerationId: SakiStorageGenerationId
-  let oldStateVersion: 2 | 3 | 4 | 5 | 6
+  let oldStateVersion: 2 | 3 | 4 | 5 | 6 | 7
   let oldSourceBuildId: SakiBuildId
   if (manifest === undefined) {
     const legacy = await validateClosedSakiV2Source(
@@ -290,7 +310,8 @@ async function recoverUpgrade(
         && manifest.value.stateVersion !== 3
         && manifest.value.stateVersion !== 4
         && manifest.value.stateVersion !== 5
-        && manifest.value.stateVersion !== 6)
+        && manifest.value.stateVersion !== 6
+        && manifest.value.stateVersion !== 7)
       || manifest.value.storageGenerationId === journal.candidateStorageGenerationId) {
       throw new SakiMaintenanceError(
         'recovery-required',
@@ -335,8 +356,18 @@ async function recoverUpgrade(
         },
         signal,
       )
-    } else {
+    } else if (manifest.value.stateVersion === 6) {
       await readClosedSakiV6State(
+        old.databasePath,
+        {
+          installationId: old.installation.installationId,
+          storageGenerationId: old.installation.storageGenerationId,
+          createdByBuildId: old.generation.createdByBuildId,
+        },
+        signal,
+      )
+    } else {
+      await readClosedSakiV7State(
         old.databasePath,
         {
           installationId: old.installation.installationId,
@@ -366,8 +397,7 @@ async function recoverUpgrade(
   if (candidateExists) {
     await validateUpgradeCandidate(
       root,
-      journal.installationId,
-      journal.candidateStorageGenerationId,
+      journal,
       signal,
     )
   }

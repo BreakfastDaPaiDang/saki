@@ -27,11 +27,11 @@ Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ct
 
 ## Agent Run operation
 
-`start-agent-run` Host Operation 会在接触 DSH 前保存一份 v2 `agent-run` effect plan。它的精确 replay 会挂载已固定 Agent Preset、应用已固定 Model Route，并在 Binding 的规范 worktree cwd 创建或恢复预分配 Session。物理 Session header 必须证明该 cwd 与 preset，live Agent option 也必须匹配 route。任何不匹配、同一 Session id 下的其他 live Agent，或冲突的 message-source evidence 都会成为 conflict，而不会产生另一个 Run。
+`start-agent-run` Host Operation 会在接触 DSH 前保存一份 schema version 3 record，其中包含 `agent-run` effect plan。它的精确 replay 会挂载已固定 Agent Preset、应用已固定 Model Route，并在 Binding 的规范 worktree cwd 创建或恢复预分配 Session。Version 2 保留为精确 cold-migration schema，并且只接受原始 `saki-agent-run` source。物理 Session header 必须证明该 cwd 与 preset，live Agent option 也必须匹配 route。任何不匹配、同一 Session id 下的其他 live Agent，或冲突的 message-source evidence 都会成为 conflict，而不会产生另一个 Run。
 
-Provider 会通过完整 snapshot 与 event-history 读取，分离读取精确输入 MessageId 的物理 Session persistence。只有完全不存在时才允许插入一次原始 `next-turn`。获取 live Agent 后，Provider 会在插入该输入前，以及后续唤醒 pending 输入前立即重新验证可写 Git world。插入后会 flush 并重新检查；只有该输入仍为 pending 时才使用确定性 `next-step` wake，Agent-scoped pre-step listener 会在模型组装前移除这些 wake message。已 recorded 的原始输入证明 Host 成功。Canceled、removed、replaced、claimed-without-record、attempt 后缺失及 conflicting evidence 会被取消或进入对账，而且不会重发原始输入。
+Provider 会通过完整 snapshot 与 event-history 读取，分离读取精确输入 MessageId 的物理 Session persistence。只有完全不存在时才允许插入一次 `next-turn`。初始输入与带归因的 Intervention answer 共用这条路径；answer 使用新的 Dispatch 与 Host Operation，同时保留 Run、Work Session、Session 及其稳定 MessageId。获取 live Agent 后，Provider 会在插入输入前，以及后续唤醒 pending 输入前立即重新验证可写 Git world。插入后会 flush 并重新检查；只有该输入仍为 pending 时才使用确定性 `next-step` wake，Agent-scoped pre-step listener 会在模型组装前移除这些 wake message。已 recorded 的输入证明 Host 成功。Canceled、removed、replaced、claimed-without-record、attempt 后缺失及 conflicting evidence 会被取消或进入对账，而且不会重发输入。
 
-Inspection 绝不创建、恢复或唤醒 Agent。启动 resume 是一项独立 operation，它要求精确的 succeeded Host result、匹配的物理 Session header 与输入，以及匹配且可用的 live Agent；Host 会在对外服务前恢复该 Agent，并使其保持 model-idle。因此，持久 `not-started` plan 可以在不归因无关 Session 的情况下证明取消；publishing 或终态 replay 会重新检查精确持久输入与 id。取消会在终态持久化前停止并排空所拥有的 live Agent。disposal 失败时，Host 会继续跟踪 handle，并让 operation 保持可重试。Host 成功只报告 Run 与输入已经持久存在，并不表示模型执行完成。
+Inspection 绝不创建、恢复或唤醒 Agent。`inspectInterventionOpening` 会读取分离的物理 Session history；只有一条精确 `request_intervention` call 的非 error 模型可见 result 后跟随匹配的最终 step end 与 completed turn end 时，它才返回确认，并且只返回闭合 evidence，不暴露 Session。启动 resume 是一项独立 operation，它要求精确的 succeeded Host result、匹配的物理 Session header 与输入，以及匹配且可用的 live Agent；Host 会在对外服务前恢复该 Agent，并使其保持 model-idle。因此，持久 `not-started` plan 可以在不归因无关 Session 的情况下证明取消；publishing 或终态 replay 会重新检查精确持久输入与 id。取消会在终态持久化前停止并排空所拥有的 live Agent。disposal 失败时，Host 会继续跟踪 handle，并让 operation 保持可重试。Host 成功只报告 Run 与输入已经持久存在，并不表示模型执行完成。
 
 ## 配置
 
@@ -64,7 +64,7 @@ Inspection 绝不创建、恢复或唤醒 Agent。启动 resume 是一项独立 
 
 #### 模型看到什么
 
-Inspection 与结构化 Git operation 不会增加模型可见内容。`start-agent-run` 会在精确固定的纯文本 user message 持久化后交付它；恢复 wake message 会在模型看到前被过滤。
+Inspection 与结构化 Git operation 不会增加模型可见内容。`start-agent-run` 会在精确固定的纯文本初始输入或 Intervention answer 持久化后交付它；恢复 wake message 会在模型看到前被过滤。
 
 #### Token 影响
 
@@ -72,7 +72,7 @@ Inspection 与结构化 Git operation 直接增加零个 token。Agent start 可
 
 #### KV Cache 影响
 
-Inspection 与模型请求相互独立。Agent start 会在可复用 prefix 外加入一个 user turn；恢复 wake 在组装前被移除，因此没有 KV Cache 影响。
+Inspection 与模型请求相互独立。每条 Agent 输入都会在可复用 prefix 外加入一个 user turn；恢复 wake 在组装前被移除，因此没有 KV Cache 影响。
 
 ## 已知限制与暂缓事项
 

@@ -3,31 +3,59 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import Storage from '@deepseek-ai/dsh-storage'
+import Storage, { type KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
+  agentOperationIntentRecordSchema,
+  agentRunV1RecordSchema,
+  bindingWriteAdmissionRecordSchema,
+  executionDispatchV1RecordSchema,
   sakiControlPlaneMigrationPlan,
   sakiControlPlaneV3DomainSpec,
   sakiControlPlaneV4DomainSpec,
   sakiControlPlaneV5DomainSpec,
   sakiControlPlaneV6DomainSpec,
+  sakiControlPlaneV7DomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
+  sakiStorageGenerationV5DomainSpec,
+  sakiWorkAssignmentIdSchema,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
   storageGenerationV3SealRecordSchema,
   storageGenerationV4SealRecordSchema,
+  storageGenerationV5SealRecordSchema,
+  workSessionRecordSchema,
   type SakiBuildId,
 } from '@breakfastdapaidang/saki-control-plane'
-import { sakiHostExecutionV1DomainSpec } from '@breakfastdapaidang/saki-execution-local'
+import {
+  SAKI_BOARD_PROJECTION_FIXTURES,
+  SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES,
+} from '@breakfastdapaidang/saki-control-plane/src/fixtures.ts'
+import {
+  canonicalDigest,
+  computeStartAgentRunPayloadDigest,
+  hostOperationPreparationSchema,
+  hostOperationIdSchema,
+  hostOperationSnapshotSchema,
+  sakiAgentRunIdSchema,
+  sakiControlIntentIdSchema,
+  startAgentRunHostOperationRequestSchema,
+  startAgentRunInputMessageSchema,
+} from '@breakfastdapaidang/saki-execution'
+import {
+  sakiHostExecutionV1DomainSpec,
+  sakiHostExecutionV2DomainSpec,
+} from '@breakfastdapaidang/saki-execution-local'
 import {
   readActiveOperation,
   readClosedCurrentSakiState,
   readClosedSakiV2State,
+  readClosedSakiV7State,
   readInstallationManifest,
   backupSakiInstallation,
   createSakiMaintenanceOperations,
@@ -54,6 +82,15 @@ const V3_SOURCE_BUILD_ID = 'saki-build-0.1.0-b18-test' as SakiBuildId
 const V4_SOURCE_BUILD_ID = 'saki-build-0.1.0-b29-test' as SakiBuildId
 const V5_SOURCE_BUILD_ID = 'saki-build-0.1.0-b05-test' as SakiBuildId
 const V6_SOURCE_BUILD_ID = 'saki-build-0.1.0-b30-test' as SakiBuildId
+const V7_SOURCE_BUILD_ID = 'saki-build-0.1.0-b07-test' as SakiBuildId
+const AGENT_INTENT_ID = sakiControlIntentIdSchema.parse('intent-11111111-1111-4111-8111-111111111111')
+const ASSIGNMENT_ID = sakiWorkAssignmentIdSchema.parse('assignment-22222222-2222-4222-8222-222222222222')
+const WORK_SESSION_ID = 'work-session-33333333-3333-4333-8333-333333333333'
+const AGENT_RUN_ID = sakiAgentRunIdSchema.parse('agent-run-44444444-4444-4444-8444-444444444444')
+const DISPATCH_ID = 'dispatch-55555555-5555-4555-8555-555555555555'
+const OPERATION_ID = hostOperationIdSchema.parse('host-operation-55555555-5555-4555-8555-555555555555')
+const SESSION_ID = 'session-66666666-6666-4666-8666-666666666666'
+const MESSAGE_ID = '77777777-7777-4777-8777-777777777777'
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(async (root) => {
@@ -79,14 +116,20 @@ async function fixture(): Promise<{ readonly options: SakiMaintenanceOptions; re
 
 async function publishSelectedHistorical(
   options: SakiMaintenanceOptions,
-  stateVersion: 3 | 4 | 5 | 6,
+  stateVersion: 3 | 4 | 5 | 6 | 7,
+  customizeV7?: (controlPlane: KvUnitSnapshot) => {
+    readonly controlPlane: KvUnitSnapshot
+    readonly hostExecution: KvUnitSnapshot
+  },
 ): Promise<string> {
   const signal = new AbortController().signal
   const sourceBuildId = stateVersion === 3
     ? V3_SOURCE_BUILD_ID
     : stateVersion === 4
       ? V4_SOURCE_BUILD_ID
-      : stateVersion === 5 ? V5_SOURCE_BUILD_ID : V6_SOURCE_BUILD_ID
+      : stateVersion === 5
+        ? V5_SOURCE_BUILD_ID
+        : stateVersion === 6 ? V6_SOURCE_BUILD_ID : V7_SOURCE_BUILD_ID
   const historical = await readClosedSakiV2State(options.legacyDatabasePath, signal)
   const v3Snapshot = sakiControlPlaneMigrationPlan.steps[0]!.migrate(
     historical.controlPlaneSnapshot,
@@ -183,7 +226,7 @@ async function publishSelectedHistorical(
         },
         { targetBackend: sourceBackend, signal },
       )
-    } else {
+    } else if (stateVersion === 6) {
       const v4Snapshot = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3Snapshot)
       const v5Snapshot = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4Snapshot)
       await facility.materialize(
@@ -203,6 +246,40 @@ async function publishSelectedHistorical(
             storage_generation: {
               [STORAGE_GENERATION_KEY]: storageGenerationV4SealRecordSchema.parse({
                 schemaVersion: 4,
+                installationId: B03_INSTALLATION_ID,
+                storageGenerationId: B03_STORAGE_GENERATION_ID,
+                stateVersion,
+                createdByBuildId: sourceBuildId,
+              }),
+            },
+          },
+          global: null,
+        },
+        { targetBackend: sourceBackend, signal },
+      )
+    } else {
+      const v4Snapshot = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3Snapshot)
+      const v5Snapshot = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4Snapshot)
+      const v6Snapshot = sakiControlPlaneMigrationPlan.steps[3]!.migrate(v5Snapshot)
+      const v7ControlPlane = sakiControlPlaneMigrationPlan.steps[4]!.migrate(v6Snapshot)
+      const customized = customizeV7?.(v7ControlPlane)
+      await facility.materialize(
+        sakiControlPlaneV7DomainSpec,
+        customized?.controlPlane ?? v7ControlPlane,
+        { targetBackend: sourceBackend, signal },
+      )
+      await facility.materialize(
+        sakiHostExecutionV2DomainSpec,
+        customized?.hostExecution ?? { tables: { operations: {} }, global: null },
+        { targetBackend: sourceBackend, signal },
+      )
+      await facility.materialize(
+        sakiStorageGenerationV5DomainSpec,
+        {
+          tables: {
+            storage_generation: {
+              [STORAGE_GENERATION_KEY]: storageGenerationV5SealRecordSchema.parse({
+                schemaVersion: 5,
                 installationId: B03_INSTALLATION_ID,
                 storageGenerationId: B03_STORAGE_GENERATION_ID,
                 stateVersion,
@@ -255,6 +332,301 @@ async function publishSelectedV5(options: SakiMaintenanceOptions): Promise<strin
 
 async function publishSelectedV6(options: SakiMaintenanceOptions): Promise<string> {
   return await publishSelectedHistorical(options, 6)
+}
+
+async function publishSelectedV7(
+  options: SakiMaintenanceOptions,
+  customize?: Parameters<typeof publishSelectedHistorical>[2],
+): Promise<string> {
+  return await publishSelectedHistorical(options, 7, customize)
+}
+
+function withRunningPreviousWritableAgent(
+  controlPlane: KvUnitSnapshot,
+): {
+  readonly controlPlane: KvUnitSnapshot
+  readonly hostExecution: KvUnitSnapshot
+} {
+  const registryEntry = Object.entries(controlPlane.tables['development_project_registry'] ?? {})[0]
+  if (registryEntry === undefined) throw new Error('v7 Registry fixture is missing')
+  const registry = sakiControlPlaneV7DomainSpec.tables.development_project_registry.valueSchema
+    .parse(registryEntry[1])
+  const project = registry.projects[0]
+  const binding = registry.resourceBindings[0]
+  const registryProfile = registry.agentProfiles[0]
+  if (project === undefined || binding === undefined || registryProfile === undefined
+    || binding.currentInspection === undefined) {
+    throw new Error('v7 Agent operation fixture lacks a current Project Binding and Profile')
+  }
+  const modelRoute = { provider: 'fixture', model: 'fixture-model' }
+  const updatedRegistry = sakiControlPlaneV7DomainSpec.tables.development_project_registry.valueSchema.parse({
+    ...registry,
+    agentProfiles: [{ ...registryProfile, modelRouteRequest: modelRoute }],
+  })
+  const controlEntry = Object.entries(controlPlane.tables['control_state'] ?? {})[0]
+  if (controlEntry === undefined) throw new Error('v7 control-state fixture is missing')
+  const control = sakiControlPlaneV7DomainSpec.tables.control_state.valueSchema.parse(controlEntry[1])
+  const principal = sakiControlPlaneV7DomainSpec.tables.principals.valueSchema.parse(
+    controlPlane.tables['principals']?.[control.hostOperatorPrincipalId],
+  )
+  const grant = sakiControlPlaneV7DomainSpec.tables.grants.valueSchema.parse(
+    controlPlane.tables['grants']?.[control.hostOperatorGrantId],
+  )
+  const item = SAKI_BOARD_PROJECTION_FIXTURES.confirmedStaleFailure.confirmed?.items[0]
+  const active = SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES.activated.synchronization.active
+  if (item === undefined || active === undefined) throw new Error('v7 Work Item fixture is missing')
+  const profile = {
+    id: registryProfile.id,
+    version: registryProfile.version,
+    agentPresetId: registryProfile.agentPresetId,
+    modelRoute,
+  }
+  const input = startAgentRunInputMessageSchema.parse({
+    id: MESSAGE_ID,
+    role: 'user',
+    content: [{ type: 'text', text: 'Resume the retained v7 Agent Run.' }],
+    source: {
+      kind: 'saki-agent-run',
+      dispatchId: DISPATCH_ID,
+      agentRunId: AGENT_RUN_ID,
+      workSessionId: WORK_SESSION_ID,
+    },
+  })
+  const hostRequest = startAgentRunHostOperationRequestSchema.parse({
+    type: 'start-agent-run',
+    source: {
+      kind: 'execution-dispatch',
+      dispatchId: DISPATCH_ID,
+      payloadDigest: computeStartAgentRunPayloadDigest(input),
+    },
+    expected: {
+      binding: {
+        id: binding.id,
+        revision: binding.revision,
+        health: binding.health,
+        hostId: binding.hostId,
+        workspaceId: binding.workspaceId,
+        expectedInspection: binding.currentInspection,
+        inheritedChangeBaseline: binding.inheritedChangeBaseline,
+      },
+      status: { version: 1, digest: '2'.repeat(64) },
+      head: { kind: 'commit', objectId: '3'.repeat(40), symbolicRef: 'refs/heads/main' },
+      index: { kind: 'tree', treeId: '4'.repeat(40) },
+      worktree: { version: 1, digest: '5'.repeat(64) },
+      preEffectBaseline: binding.inheritedChangeBaseline,
+    },
+    run: {
+      agentRunId: AGENT_RUN_ID,
+      workSessionId: WORK_SESSION_ID,
+      sessionId: SESSION_ID,
+      profile,
+      input,
+    },
+  })
+  const result = {
+    type: 'start-agent-run' as const,
+    agentRunId: AGENT_RUN_ID,
+    workSessionId: WORK_SESSION_ID,
+    sessionId: SESSION_ID,
+    inputMessageId: MESSAGE_ID,
+  }
+  const operation = { id: OPERATION_ID, hostId: binding.hostId, type: 'start-agent-run' as const }
+  const requestFingerprint = {
+    version: 1 as const,
+    digest: canonicalDigest('saki/host-operation-request/v1', hostRequest),
+  }
+  const preparation = hostOperationPreparationSchema.parse({
+    operation,
+    preparationRevision: 0,
+    requestFingerprint,
+  })
+  const operationSnapshot = hostOperationSnapshotSchema.parse({
+    operation,
+    revision: 4,
+    source: hostRequest.source,
+    requestFingerprint,
+    bindingId: binding.id,
+    bindingRevision: binding.revision,
+    preparedAt: 2,
+    updatedAt: 6,
+    state: 'succeeded',
+    admission: { kind: 'accepted', revision: 2, acceptedAt: 3 },
+    completedAt: 6,
+    result,
+  })
+  const actor = {
+    installationId: B03_INSTALLATION_ID,
+    storageGenerationId: B03_STORAGE_GENERATION_ID,
+    hostId: binding.hostId,
+    principalId: principal.id,
+    principalRevision: principal.revision,
+    grantId: grant.id,
+    grantRevision: grant.revision,
+  }
+  const intent = {
+    type: 'give-work-item-to-agent' as const,
+    intentId: AGENT_INTENT_ID,
+    projectId: project.id,
+    workItemId: item.id,
+    expectedProjectRevision: project.revision,
+    expectedRemoteFingerprint: item.remoteFingerprint,
+  }
+  const payload = { intent, actor }
+  const workItemDefinition = {
+    repositoryId: item.source.repositoryId,
+    repositoryDatabaseId: active.configuration.repositoryDatabaseId,
+    issueId: item.source.issueId,
+    issueNumber: item.issueNumber,
+    issueState: 'open' as const,
+    title: item.title,
+    url: item.url,
+    body: '# Acceptance criteria\n- survives adjacent migration',
+    updatedAt: item.updatedAt,
+    remoteFingerprint: item.remoteFingerprint,
+    intendedOutcome: 'Retain the running Agent operation.',
+    acceptanceCriteria: ['survives adjacent migration'],
+    blockage: [],
+  }
+  const projectContext = {
+    projectId: project.id,
+    projectRevision: project.revision,
+    projectTitle: project.projectTitle,
+    resourceBindingId: binding.id,
+    bindingRevision: binding.revision,
+  }
+  const retainedIntent = agentOperationIntentRecordSchema.parse({
+    id: AGENT_INTENT_ID,
+    schemaVersion: 1,
+    revision: 4,
+    receiptId: AGENT_INTENT_ID.replace(/^intent-/u, 'receipt-'),
+    payloadDigest: canonicalDigest('saki/agent-operation-intent/v1', payload),
+    payload,
+    phase: 'started',
+    assignmentId: ASSIGNMENT_ID,
+    workSessionId: WORK_SESSION_ID,
+    agentRunId: AGENT_RUN_ID,
+    dispatchId: DISPATCH_ID,
+    inProgressIntentId: 'intent-88888888-8888-4888-8888-888888888888',
+    workItemDefinition,
+    projectContext,
+    profile,
+    contextDigest: canonicalDigest('saki/agent-operation-context/v1', {
+      workItemDefinition,
+      projectContext,
+      profile,
+    }),
+    hostRequest,
+    createdAt: 1,
+    updatedAt: 6,
+  })
+  const assignment = sakiControlPlaneV7DomainSpec.tables.work_assignments.valueSchema.parse({
+    id: ASSIGNMENT_ID,
+    schemaVersion: 1,
+    revision: 2,
+    intentId: AGENT_INTENT_ID,
+    projectId: project.id,
+    workItemId: item.id,
+    primaryWorkSessionId: WORK_SESSION_ID,
+    agentRunId: AGENT_RUN_ID,
+    state: 'active',
+    createdAt: 1,
+    updatedAt: 6,
+  })
+  const workSession = workSessionRecordSchema.parse({
+    id: WORK_SESSION_ID,
+    schemaVersion: 1,
+    revision: 1,
+    intentId: AGENT_INTENT_ID,
+    assignmentId: ASSIGNMENT_ID,
+    projectId: project.id,
+    workItemId: item.id,
+    primary: true,
+    agentRunIds: [AGENT_RUN_ID],
+    state: 'open',
+    createdAt: 1,
+    updatedAt: 6,
+  })
+  const run = agentRunV1RecordSchema.parse({
+    id: AGENT_RUN_ID,
+    schemaVersion: 1,
+    revision: 2,
+    intentId: AGENT_INTENT_ID,
+    assignmentId: ASSIGNMENT_ID,
+    workSessionId: WORK_SESSION_ID,
+    projectId: project.id,
+    workItemId: item.id,
+    bindingId: binding.id,
+    profile,
+    sessionId: SESSION_ID,
+    inputPlan: { messageId: MESSAGE_ID, payloadDigest: hostRequest.source.payloadDigest },
+    dispatchIds: [DISPATCH_ID],
+    state: 'running',
+    hostResult: result,
+    createdAt: 1,
+    updatedAt: 6,
+  })
+  const dispatch = executionDispatchV1RecordSchema.parse({
+    id: DISPATCH_ID,
+    schemaVersion: 1,
+    revision: 4,
+    intentId: AGENT_INTENT_ID,
+    agentRunId: AGENT_RUN_ID,
+    workSessionId: WORK_SESSION_ID,
+    hostId: binding.hostId,
+    bindingId: binding.id,
+    payloadDigest: hostRequest.source.payloadDigest,
+    hostRequest,
+    state: 'accepted',
+    latestFencingToken: 1,
+    acceptedFencingToken: 1,
+    preparation,
+    operationSnapshot,
+    createdAt: 1,
+    updatedAt: 6,
+  })
+  const admission = bindingWriteAdmissionRecordSchema.parse({
+    id: binding.id,
+    schemaVersion: 1,
+    revision: 2,
+    state: 'agent-run',
+    phase: 'accepted',
+    bindingRevision: binding.revision,
+    originIntentId: AGENT_INTENT_ID,
+    agentRunId: AGENT_RUN_ID,
+    payloadDigest: hostRequest.source.payloadDigest,
+    reservedAt: 2,
+    acceptedAt: 3,
+    updatedAt: 3,
+  })
+  const hostOperation = sakiHostExecutionV2DomainSpec.tables.operations.valueSchema.parse({
+    schemaVersion: 2,
+    request: hostRequest,
+    preparationRevision: 0,
+    snapshot: operationSnapshot,
+    effectPlan: { kind: 'agent-run', publication: 'applied-recorded', result },
+  })
+  return {
+    controlPlane: {
+      global: controlPlane.global,
+      tables: {
+        ...controlPlane.tables,
+        development_project_registry: { [registryEntry[0]]: updatedRegistry },
+        agent_operation_intents: { [AGENT_INTENT_ID]: retainedIntent },
+        work_assignments: { [ASSIGNMENT_ID]: assignment },
+        work_sessions: { [WORK_SESSION_ID]: workSession },
+        agent_runs: { [AGENT_RUN_ID]: run },
+        execution_dispatches: { [DISPATCH_ID]: dispatch },
+        binding_write_admissions: {
+          ...(controlPlane.tables['binding_write_admissions'] ?? {}),
+          [binding.id]: admission,
+        },
+      },
+    },
+    hostExecution: {
+      global: null,
+      tables: { operations: { [OPERATION_ID]: hostOperation } },
+    },
+  }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -365,12 +737,12 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 7 })
+    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 8 })
     expect(await readFile(legacy)).toEqual(before)
     expect(result.selected.installation).toMatchObject({
       phase: 'ready',
       installationId: B03_INSTALLATION_ID,
-      stateVersion: 7,
+      stateVersion: 8,
     })
     const current = await readClosedCurrentSakiState(
       result.selected.databasePath,
@@ -434,13 +806,13 @@ describe('offline Saki Installation operations', () => {
     )
     await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
     await expect(readInstallationManifest(options.installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 7 },
+      value: { phase: 'ready', stateVersion: 8 },
     })
 
     const currentBackup = await backupSakiInstallation(options, signal)
     expect(currentBackup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
-      stateVersion: 7,
+      stateVersion: 8,
       sourceBuildId: options.currentBuildId,
     })
     await expect(upgradeSakiInstallation(options, signal)).rejects.toMatchObject({
@@ -502,7 +874,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, new AbortController().signal)
 
-    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 7 })
+    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 8 })
     expect(result.backup.manifest).toMatchObject({
       stateVersion: 2,
       sourceBuildId: options.legacyBuildId,
@@ -511,7 +883,7 @@ describe('offline Saki Installation operations', () => {
     await expect(readInstallationManifest(
       options.installationRoot,
       new AbortController().signal,
-    )).resolves.toMatchObject({ value: { phase: 'ready', stateVersion: 7 } })
+    )).resolves.toMatchObject({ value: { phase: 'ready', stateVersion: 8 } })
   })
 
   it('upgrades a manifest-selected exact v3 generation without mutating it', async () => {
@@ -522,7 +894,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 3, targetVersion: 7 })
+    expect(result).toMatchObject({ sourceVersion: 3, targetVersion: 8 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -552,7 +924,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 4, targetVersion: 7 })
+    expect(result).toMatchObject({ sourceVersion: 4, targetVersion: 8 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -561,7 +933,7 @@ describe('offline Saki Installation operations', () => {
     })
     expect(await readFile(selectedDatabasePath)).toEqual(before)
     await expect(readInstallationManifest(options.installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 7 },
+      value: { phase: 'ready', stateVersion: 8 },
     })
     await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
 
@@ -610,7 +982,7 @@ describe('offline Saki Installation operations', () => {
       ]))
   })
 
-  it('upgrades an exact v5 generation into reopenable v7 state without mutating the source', async () => {
+  it('upgrades an exact v5 generation into reopenable v8 state without mutating the source', async () => {
     const { options } = await fixture()
     const selectedDatabasePath = await publishSelectedV5(options)
     const before = await readFile(selectedDatabasePath)
@@ -618,7 +990,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 5, targetVersion: 7 })
+    expect(result).toMatchObject({ sourceVersion: 5, targetVersion: 8 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -651,7 +1023,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 6, targetVersion: 7 })
+    expect(result).toMatchObject({ sourceVersion: 6, targetVersion: 8 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -685,6 +1057,119 @@ describe('offline Saki Installation operations', () => {
       'work-item:give-to-agent',
     )
     expect(current.hostExecution.table('operations').size).toBe(0)
+  })
+
+  it('upgrades an exact v7 generation through Host v2 and the retained v7 backup', async () => {
+    const { options } = await fixture()
+    const selectedDatabasePath = await publishSelectedV7(options)
+    const before = await readFile(selectedDatabasePath)
+    const signal = new AbortController().signal
+    const source = await readClosedSakiV7State(
+      selectedDatabasePath,
+      {
+        installationId: B03_INSTALLATION_ID,
+        storageGenerationId: B03_STORAGE_GENERATION_ID,
+        createdByBuildId: V7_SOURCE_BUILD_ID,
+      },
+      signal,
+    )
+    expect(source.hostExecution.table('operations').size).toBe(0)
+
+    const result = await upgradeSakiInstallation(options, signal)
+
+    expect(result).toMatchObject({ sourceVersion: 7, targetVersion: 8 })
+    expect(result.backup.manifest).toMatchObject({
+      installationId: B03_INSTALLATION_ID,
+      storageGenerationId: B03_STORAGE_GENERATION_ID,
+      stateVersion: 7,
+      sourceBuildId: V7_SOURCE_BUILD_ID,
+    })
+    expect(await readFile(selectedDatabasePath)).toEqual(before)
+    await expect(verifySakiInstallationBackup(
+      options,
+      result.backup.manifest.backupId,
+      signal,
+    )).resolves.toMatchObject({ manifest: { stateVersion: 7 } })
+    const current = await readClosedCurrentSakiState(
+      result.selected.databasePath,
+      {
+        installationId: result.selected.generation.installationId,
+        storageGenerationId: result.selected.generation.storageGenerationId,
+        createdByBuildId: result.selected.generation.createdByBuildId,
+      },
+      signal,
+    )
+    expect(current.stateVersion).toBe(8)
+    expect(current.hostExecution.table('operations').size).toBe(0)
+    expect(current.controlPlane.table('intervention_requests').size).toBe(0)
+    expect(current.storageGeneration.table('storage_generation').get(STORAGE_GENERATION_KEY))
+      .toMatchObject({ schemaVersion: 6, stateVersion: 8 })
+  })
+
+  it('migrates a linked running v7 Agent operation and Host v2 record into valid v8 state', async () => {
+    const { options } = await fixture()
+    const selectedDatabasePath = await publishSelectedV7(options, withRunningPreviousWritableAgent)
+    const before = await readFile(selectedDatabasePath)
+    const signal = new AbortController().signal
+    const source = await readClosedSakiV7State(
+      selectedDatabasePath,
+      {
+        installationId: B03_INSTALLATION_ID,
+        storageGenerationId: B03_STORAGE_GENERATION_ID,
+        createdByBuildId: V7_SOURCE_BUILD_ID,
+      },
+      signal,
+    )
+    expect(source.controlPlane.table('agent_runs').size).toBe(1)
+    expect(source.hostExecution.table('operations').size).toBe(1)
+
+    const result = await upgradeSakiInstallation(options, signal)
+
+    expect(result).toMatchObject({ sourceVersion: 7, targetVersion: 8 })
+    expect(await readFile(selectedDatabasePath)).toEqual(before)
+    const current = await readClosedCurrentSakiState(
+      result.selected.databasePath,
+      {
+        installationId: result.selected.generation.installationId,
+        storageGenerationId: result.selected.generation.storageGenerationId,
+        createdByBuildId: result.selected.generation.createdByBuildId,
+      },
+      signal,
+    )
+    const retainedIntent = current.controlPlane.table('agent_operation_intents').get(AGENT_INTENT_ID)
+    expect(current.controlPlane.table('work_assignments').get(ASSIGNMENT_ID)).toMatchObject({
+      schemaVersion: 2,
+      ownerPrincipalId: retainedIntent?.payload.actor.principalId,
+    })
+    expect(current.controlPlane.table('agent_runs').get(AGENT_RUN_ID)).toMatchObject({
+      schemaVersion: 2,
+      state: 'running',
+    })
+    expect(current.hostExecution.table('operations').get(OPERATION_ID)).toMatchObject({
+      schemaVersion: 3,
+      snapshot: { state: 'succeeded' },
+    })
+  }, 20_000)
+
+  it('recovers a pre-backup v7 upgrade journal before retrying the v7-to-v8 upgrade', async () => {
+    const { options } = await fixture()
+    await publishSelectedV7(options)
+    const crash = new Error('crash after v7 journal publication')
+    const interrupted = createSakiMaintenanceOperations({
+      afterJournalPublication: async () => { throw crash },
+    })
+    const signal = new AbortController().signal
+
+    await expect(interrupted.upgrade(options, signal)).rejects.toBe(crash)
+    await expect(readActiveOperation(options.installationRoot, signal)).resolves.toMatchObject({
+      journal: { kind: 'upgrade', sourceStateVersion: 7 },
+    })
+
+    await expect(upgradeSakiInstallation(options, signal)).resolves.toMatchObject({
+      sourceVersion: 7,
+      targetVersion: 8,
+    })
+    await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
   })
 
   it('requires a ready selected Installation before offline maintenance', async () => {

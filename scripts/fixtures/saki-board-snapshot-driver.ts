@@ -53,16 +53,62 @@ async function reportAgentRunSnapshot(ctx: Context): Promise<void> {
   const signal = AbortSignal.timeout(5_000)
   const inputs: unknown[] = []
   const inputInsertions: unknown[] = []
+  const interventionAnswerInputs: unknown[] = []
+  const interventionAnswerInputInsertions: unknown[] = []
+  const interventionAnswerInputSessionIds: string[] = []
+  const interventionToolLifecycle: unknown[] = []
   const inputSessionIds: string[] = []
   for (const snapshot of await ctx.sessionPersistence.listSnapshots(signal)) {
     const persisted = await ctx.sessionPersistence.readFrom(snapshot.header.id, 0, signal)
+    const foundInterventionCall = persisted.events.find(event =>
+      event.type === 'tool/call' && event.data.name === 'request_intervention')
+    const interventionCall = foundInterventionCall?.type === 'tool/call'
+      ? foundInterventionCall
+      : undefined
     for (const event of persisted.events) {
       if (event.type === 'user/message' && event.data.source.kind === 'saki-agent-run') {
         inputs.push(event.data)
         inputSessionIds.push(snapshot.header.id)
       }
+      if (event.type === 'user/message' && event.data.source.kind === 'saki-intervention-answer') {
+        interventionAnswerInputs.push(event.data)
+        interventionAnswerInputSessionIds.push(snapshot.header.id)
+      }
       if (event.type === 'agent/inbox/spliced') {
         inputInsertions.push(...event.data.inserted.filter(message => message.source.kind === 'saki-agent-run'))
+        interventionAnswerInputInsertions.push(...event.data.inserted.filter(
+          message => message.source.kind === 'saki-intervention-answer',
+        ))
+      }
+      if (interventionCall !== undefined
+        && event.type === 'tool/call'
+        && event.data.callId === interventionCall.data.callId) {
+        interventionToolLifecycle.push({ type: event.type, data: event.data })
+      }
+      if (interventionCall !== undefined
+        && event.type === 'tool/result'
+        && event.data.message.source.callId === interventionCall.data.callId) {
+        interventionToolLifecycle.push({
+          type: event.type,
+          data: {
+            turn: event.data.turn,
+            step: event.data.step,
+            source: event.data.message.source,
+            content: event.data.message.content,
+            ...(event.data.error === undefined ? {} : { error: event.data.error }),
+          },
+        })
+      }
+      if (interventionCall !== undefined
+        && event.type === 'step/end'
+        && event.data.turn === interventionCall.data.turn
+        && event.data.step === interventionCall.data.step) {
+        interventionToolLifecycle.push({ type: event.type, data: event.data })
+      }
+      if (interventionCall !== undefined
+        && event.type === 'turn/end'
+        && event.data.turn === interventionCall.data.turn) {
+        interventionToolLifecycle.push({ type: event.type, data: event.data })
       }
     }
   }
@@ -70,9 +116,14 @@ async function reportAgentRunSnapshot(ctx: Context): Promise<void> {
     product: 'saki-agent-run-snapshot',
     modelRequests: ctx.sakiTestLlm.requests,
     modelInput: ctx.sakiTestLlm.lastAgentRunInput ?? null,
+    modelInterventionAnswerInput: ctx.sakiTestLlm.lastInterventionAnswerInput ?? null,
     modelComposition: ctx.sakiTestLlm.lastAgentRunComposition ?? null,
     durableInputs: inputs,
     durableInputInsertions: inputInsertions,
+    durableInterventionAnswerInputs: interventionAnswerInputs,
+    durableInterventionAnswerInputInsertions: interventionAnswerInputInsertions,
+    durableInterventionAnswerInputSessionIds: interventionAnswerInputSessionIds,
+    interventionToolLifecycle,
     durableInputSessionIds: inputSessionIds,
     liveAgentSessionIds: ctx.agents.list().map(agent => agent.id),
   })}\n`)

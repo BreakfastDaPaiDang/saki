@@ -229,6 +229,8 @@
       "ignoreDependencies": [
         "@breakfastdapaidang/saki-github-app",
         "@breakfastdapaidang/saki-host-api",
+        "@breakfastdapaidang/saki-tool-intervention",
+        "@deepseek-ai/cordis-plugin-timer",
         "@deepseek-ai/dsh-agent-instructions",
         "@deepseek-ai/dsh-agent-loop",
         "@deepseek-ai/dsh-credentials-windows-dpapi",
