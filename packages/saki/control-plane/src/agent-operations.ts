@@ -544,13 +544,7 @@ export class AgentOperations {
   }
 
   private async finalizeRunOpenings(runId: SakiAgentRunId, signal: AbortSignal): Promise<void> {
-    const openingIds = [...this.options.interventionTable.entries()]
-      .map(([, value]) => interventionRequestRecordSchema.parse(value))
-      .filter(intervention => intervention.state === 'opening'
-        && intervention.owner.agentRunId === runId)
-      .map(intervention => intervention.id)
-      .sort()
-    for (const interventionId of openingIds) {
+    for (const interventionId of this.openingInterventionIdsForRun(runId)) {
       await this.finalizeInterventionOpening(interventionId, signal)
     }
   }
@@ -559,18 +553,21 @@ export class AgentOperations {
     runId: SakiAgentRunId,
     reason: 'effect-unknown' | 'evidence-conflict' | 'protocol',
   ): Promise<void> {
-    const openingIds = [...this.options.interventionTable.entries()]
-      .map(([, value]) => interventionRequestRecordSchema.parse(value))
-      .filter(intervention => intervention.state === 'opening'
-        && intervention.owner.agentRunId === runId)
-      .map(intervention => intervention.id)
-      .sort()
-    for (const interventionId of openingIds) {
+    for (const interventionId of this.openingInterventionIdsForRun(runId)) {
       await enqueueKeyedOperation(this.interventionTails, interventionId, async () => {
         const current = this.requireIntervention(interventionId)
         if (current.state === 'opening') await this.reconcileIntervention(current, reason)
       })
     }
+  }
+
+  private openingInterventionIdsForRun(runId: SakiAgentRunId): SakiInterventionRequestId[] {
+    return [...this.options.interventionTable.entries()]
+      .map(([, value]) => interventionRequestRecordSchema.parse(value))
+      .filter(intervention => intervention.state === 'opening'
+        && intervention.owner.agentRunId === runId)
+      .map(intervention => intervention.id)
+      .sort()
   }
 
   /**
@@ -865,26 +862,26 @@ export class AgentOperations {
     if (this.currentInterventionAnswerAdmission(intervention, retainedClaim) === undefined) {
       return await this.reconcileInterventionAnswer(intervention, retainedClaim, 'protocol')
     }
-    const accepted = await this.acceptClaimedInterventionDispatch(
-      intervention,
+    const accepted = await this.acceptClaimedDispatch(
       retainedClaim,
       prepared.preparation,
       prepared.snapshot,
+      current => this.currentInterventionAnswerAdmission(intervention, current) !== undefined,
     )
     return accepted === undefined ? answerUnavailable(intervention) : undefined
   }
 
-  private async acceptClaimedInterventionDispatch(
-    intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
+  private async acceptClaimedDispatch(
     claimed: ClaimedExecutionDispatch,
     preparation: HostOperationPreparation<'start-agent-run'>,
     snapshot: HostOperationSnapshot<'start-agent-run'>,
+    claimRemainsAdmissible: (current: ClaimedExecutionDispatch) => boolean,
   ): Promise<ExecutionDispatchRecord | undefined> {
     try {
       return await this.options.dispatchTable.update(claimed.id, (value) => {
         const current = executionDispatchRecordSchema.parse(value)
         if (!sameDispatchClaim(current, claimed) || current.claim.expiresAt <= Date.now()
-          || this.currentInterventionAnswerAdmission(intervention, current) === undefined) {
+          || !claimRemainsAdmissible(current)) {
           throw new DispatchClaimLost()
         }
         return executionDispatchRecordSchema.parse(Object.fromEntries(Object.entries({
@@ -951,15 +948,8 @@ export class AgentOperations {
     let inspected = await this.options.execution.inspectOperation(preparation.operation, signal)
     signal.throwIfAborted()
     assertDispatchSnapshot(dispatch, inspected)
-    if (inspected.state === 'succeeded') {
-      return await this.finishInterventionAnswer(intervention, dispatch, inspected.result, inspected)
-    }
-    if (inspected.state === 'reconciliation-required') {
-      return await this.reconcileInterventionAnswer(intervention, dispatch, inspected.reason)
-    }
-    if (inspected.state === 'failed' || inspected.state === 'canceled') {
-      return await this.reconcileInterventionAnswer(intervention, dispatch, 'protocol')
-    }
+    const inspectedResult = await this.resolveInterventionAnswerSnapshot(intervention, dispatch, inspected)
+    if (inspectedResult !== undefined) return inspectedResult
     dispatch = await this.updateDispatch(dispatch, { operationSnapshot: inspected })
     const replay = await this.options.execution.prepareOperation<'start-agent-run'>(
       dispatch.hostRequest,
@@ -978,16 +968,25 @@ export class AgentOperations {
     assertDispatchSnapshot(dispatch, started.snapshot)
     inspected = started.snapshot
     dispatch = await this.updateDispatch(dispatch, { operationSnapshot: inspected })
-    if (inspected.state === 'succeeded') {
-      return await this.finishInterventionAnswer(intervention, dispatch, inspected.result, inspected)
+    return await this.resolveInterventionAnswerSnapshot(intervention, dispatch, inspected)
+      ?? answerUnavailable(intervention)
+  }
+
+  private async resolveInterventionAnswerSnapshot(
+    intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
+    dispatch: ExecutionDispatchRecord,
+    snapshot: HostOperationSnapshot<'start-agent-run'>,
+  ): Promise<InterventionAnswerResult | undefined> {
+    if (snapshot.state === 'succeeded') {
+      return await this.finishInterventionAnswer(intervention, dispatch, snapshot.result, snapshot)
     }
-    if (inspected.state === 'reconciliation-required') {
-      return await this.reconcileInterventionAnswer(intervention, dispatch, inspected.reason)
+    if (snapshot.state === 'reconciliation-required') {
+      return await this.reconcileInterventionAnswer(intervention, dispatch, snapshot.reason)
     }
-    if (inspected.state === 'failed' || inspected.state === 'canceled') {
+    if (snapshot.state === 'failed' || snapshot.state === 'canceled') {
       return await this.reconcileInterventionAnswer(intervention, dispatch, 'protocol')
     }
-    return answerUnavailable(intervention)
+    return undefined
   }
 
   private async finishInterventionAnswer(
@@ -1599,49 +1598,14 @@ export class AgentOperations {
       return { ok: false, result: unavailable(record) }
     }
     await this.acceptAdmission(record)
-    const accepted = await this.acceptClaimedDispatch(record, retainedClaim, prepared.preparation, prepared.snapshot)
+    const accepted = await this.acceptClaimedDispatch(
+      retainedClaim,
+      prepared.preparation,
+      prepared.snapshot,
+      () => this.acceptanceAuthorityIsCurrent(record),
+    )
     if (accepted === undefined) return { ok: false, result: unavailable(record) }
     return { ok: true }
-  }
-
-  private async acceptClaimedDispatch(
-    record: AgentOperationIntentRecord,
-    claimed: ClaimedExecutionDispatch,
-    preparation: HostOperationPreparation<'start-agent-run'>,
-    snapshot: HostOperationSnapshot<'start-agent-run'>,
-  ): Promise<ExecutionDispatchRecord | undefined> {
-    try {
-      return await this.options.dispatchTable.update(claimed.id, (value) => {
-        const current = executionDispatchRecordSchema.parse(value)
-        if (!sameDispatchClaim(current, claimed) || current.claim.expiresAt <= Date.now()
-          || !this.acceptanceAuthorityIsCurrent(record)) {
-          throw new DispatchClaimLost()
-        }
-        const candidate = Object.fromEntries(Object.entries({
-          ...current,
-          revision: current.revision + 1,
-          state: 'accepted',
-          claim: undefined,
-          acceptedFencingToken: claimed.claim.fencingToken,
-          preparation,
-          operationSnapshot: snapshot,
-          updatedAt: Math.max(current.updatedAt, Date.now()),
-        }).filter(([, candidateValue]) => candidateValue !== undefined))
-        return executionDispatchRecordSchema.parse(candidate)
-      })
-    } catch (error) {
-      const replayValue = this.options.dispatchTable.get(claimed.id)
-      if (replayValue !== undefined) {
-        const replay = executionDispatchRecordSchema.parse(replayValue)
-        if (replay.revision === claimed.revision + 1
-          && replay.state === 'accepted'
-          && replay.acceptedFencingToken === claimed.claim.fencingToken
-          && isDeepStrictEqual(replay.preparation, preparation)
-          && isDeepStrictEqual(replay.operationSnapshot, snapshot)) return replay
-      }
-      if (error instanceof DispatchClaimLost) return undefined
-      throw error
-    }
   }
 
   private acceptanceAuthorityIsCurrent(record: AgentOperationIntentRecord): boolean {
@@ -1871,12 +1835,7 @@ export class AgentOperations {
       return Promise.resolve(this.admitInterventionAnswer(expectation, dispatch))
     }
     const intent = agentOperationIntentRecordSchema.parse(intentValue)
-    if (intent.phase !== 'dispatching' || dispatch.state !== 'accepted'
-      || dispatch.acceptedFencingToken === undefined || dispatch.preparation === undefined
-      || !isDeepStrictEqual(expectation.source, dispatch.hostRequest.source)
-      || !isDeepStrictEqual(expectation.preparation, dispatch.preparation)
-      || expectation.bindingId !== dispatch.bindingId
-      || expectation.bindingRevision !== dispatch.hostRequest.expected.binding.revision) {
+    if (intent.phase !== 'dispatching' || !dispatchMatchesAdmissionExpectation(dispatch, expectation)) {
       return Promise.resolve({ kind: 'denied', reason: 'not-current' })
     }
     const admissionValue = this.options.admissionTable.get(dispatch.bindingId)
@@ -1907,12 +1866,7 @@ export class AgentOperations {
         && candidate.answer.dispatchId === dispatch.id
         && candidate.answer.payload.intent.intentId === dispatch.intentId)
     if (intervention?.state !== 'answered') return { kind: 'denied', reason: 'not-current' }
-    if (dispatch.state !== 'accepted' || dispatch.acceptedFencingToken === undefined
-      || dispatch.preparation === undefined
-      || !isDeepStrictEqual(expectation.source, dispatch.hostRequest.source)
-      || !isDeepStrictEqual(expectation.preparation, dispatch.preparation)
-      || expectation.bindingId !== dispatch.bindingId
-      || expectation.bindingRevision !== dispatch.hostRequest.expected.binding.revision) {
+    if (!dispatchMatchesAdmissionExpectation(dispatch, expectation)) {
       return { kind: 'denied', reason: 'not-current' }
     }
     if (!this.options.authorityCurrent(intervention.answer.payload.actor, 'intervention:answer')) {
@@ -2150,6 +2104,19 @@ function sameDispatchClaimOwner(
     && current.claim.id === expected.claim.id
     && current.claim.fencingToken === expected.claim.fencingToken
     && current.claim.executorHostId === expected.claim.executorHostId
+}
+
+function dispatchMatchesAdmissionExpectation(
+  dispatch: ExecutionDispatchRecord,
+  expectation: HostOperationAdmissionExpectation,
+): boolean {
+  return dispatch.state === 'accepted'
+    && dispatch.acceptedFencingToken !== undefined
+    && dispatch.preparation !== undefined
+    && isDeepStrictEqual(expectation.source, dispatch.hostRequest.source)
+    && isDeepStrictEqual(expectation.preparation, dispatch.preparation)
+    && expectation.bindingId === dispatch.bindingId
+    && expectation.bindingRevision === dispatch.hostRequest.expected.binding.revision
 }
 
 function admissionMatchesAgentOperation(

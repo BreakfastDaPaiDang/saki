@@ -2610,6 +2610,8 @@ export const agentRunV1RecordSchema = z.object({
   createdAt: timestamp,
   updatedAt: timestamp,
 }).strict().superRefine((value, context) => {
+  // The @7 migration reader owns these relationships so its persisted format does not depend on writable @8 schema evolution.
+  /* jscpd:ignore-start */
   if (new Set(value.dispatchIds).size !== value.dispatchIds.length) {
     context.addIssue({ code: 'custom', message: 'Agent Run repeats Dispatch ids' })
   }
@@ -2623,6 +2625,7 @@ export const agentRunV1RecordSchema = z.object({
       || value.hostResult.inputMessageId !== value.inputPlan.messageId)) {
     context.addIssue({ code: 'custom', message: 'Agent Run Host result disagrees with its exact input plan' })
   }
+  /* jscpd:ignore-end */
   if ((value.state === 'running') !== (value.hostResult !== undefined)) {
     context.addIssue({ code: 'custom', message: 'Agent Run Host result disagrees with state' })
   }
