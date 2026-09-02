@@ -23,6 +23,18 @@ const SESSION_ID = 'session-99999999-9999-4999-8999-999999999999'
 const PRINCIPAL_ID = 'principal-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const ASSIGNMENT_ID = 'assignment-abababab-abab-4bab-8bab-abababababab'
 const BINDING_ID = 'binding-acacacac-acac-4cac-8cac-acacacacacac'
+const OTHER_PROJECT_ID = 'project-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const OTHER_WORK_SESSION_ID = 'work-session-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const OTHER_AGENT_RUN_ID = 'agent-run-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const OTHER_SESSION_ID = 'session-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+
+function expectSchemaIssue(
+  result: { success: boolean; error?: { issues: readonly { message: string }[] } },
+  message: string,
+): void {
+  expect(result.success).toBe(false)
+  expect(result.error?.issues.map(issue => issue.message)).toContain(message)
+}
 
 const common = {
   id: INTERVENTION_ID,
@@ -202,6 +214,77 @@ describe('durable Intervention Request schemas', () => {
     expect(interventionRequestRecordSchema.safeParse(candidate).success).toBe(false)
   })
 
+  it('keeps every Agent-owned return relationship within its aggregate', () => {
+    const inconsistentRecords = [
+      {
+        record: { ...common, state: 'opening', returnAddress: { ...common.returnAddress, projectId: OTHER_PROJECT_ID } },
+        message: 'Intervention return address belongs to another Project',
+      },
+      {
+        record: { ...common, state: 'opening', cause: { ...common.cause, agentRunId: OTHER_AGENT_RUN_ID } },
+        message: 'Agent-owned Intervention cause is inconsistent',
+      },
+      {
+        record: { ...common, state: 'opening', cause: { ...common.cause, workSessionId: OTHER_WORK_SESSION_ID } },
+        message: 'Agent-owned Intervention cause is inconsistent',
+      },
+      {
+        record: {
+          ...common,
+          state: 'opening',
+          returnAddress: { ...common.returnAddress, workSessionId: OTHER_WORK_SESSION_ID },
+        },
+        message: 'Intervention Work Session return address is inconsistent',
+      },
+      {
+        record: {
+          ...common,
+          state: 'opening',
+          returnAddress: { ...common.returnAddress, agentRunId: OTHER_AGENT_RUN_ID },
+        },
+        message: 'Intervention Agent Run return address is inconsistent',
+      },
+    ] as const
+
+    for (const { record, message } of inconsistentRecords) {
+      expectSchemaIssue(interventionRequestRecordSchema.safeParse(record), message)
+    }
+  })
+
+  it('rejects inconsistent answer receipts, digests, and terminal timestamps', () => {
+    expectSchemaIssue(interventionRequestRecordSchema.safeParse({
+      ...common,
+      state: 'answered',
+      openedAt: 11,
+      answer: { ...answer, receiptId: 'receipt-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' },
+    }), 'Intervention answer receipt disagrees with its Intent')
+    expectSchemaIssue(interventionRequestRecordSchema.safeParse({
+      ...common,
+      state: 'answered',
+      openedAt: 11,
+      answer: { ...answer, payloadDigest: '0'.repeat(64) },
+    }), 'Intervention answer payload digest is stale')
+    expectSchemaIssue(interventionRequestRecordSchema.safeParse({
+      ...common,
+      revision: 3,
+      state: 'reconciliation-required',
+      openedAt: 11,
+      answer,
+      reason: 'protocol',
+      reconciliationRequiredAt: 10,
+      updatedAt: 12,
+    }), 'Intervention reconciliation timestamp is not monotonic')
+    expectSchemaIssue(interventionRequestRecordSchema.safeParse({
+      ...common,
+      revision: 3,
+      state: 'resolved',
+      openedAt: 11,
+      answer,
+      resolvedAt: 10,
+      updatedAt: 12,
+    }), 'Intervention resolution timestamp is not monotonic')
+  })
+
   it('exposes one strict expected-revision text-answer Intent', () => {
     expect(answerInterventionIntentSchema.parse(answerIntent)).toEqual(answerIntent)
     expect(answerInterventionIntentSchema.safeParse({ ...answerIntent, actor }).success).toBe(false)
@@ -288,5 +371,35 @@ describe('Intervention-compatible Agent ownership schemas', () => {
     expect(agentRunRecordSchema.parse(resumePending)).toEqual(resumePending)
     expect(agentRunRecordSchema.safeParse({ ...resumePending, hostResult: waiting.hostResult }).success).toBe(false)
     expect(agentRunV1RecordSchema.safeParse(waiting).success).toBe(false)
+  })
+
+  it('validates every relationship in the exact v7 Agent Run format', () => {
+    expect(agentRunV1RecordSchema.parse(runV1)).toEqual(runV1)
+    expectSchemaIssue(agentRunV1RecordSchema.safeParse({
+      ...runV1,
+      dispatchIds: [INITIAL_DISPATCH_ID, INITIAL_DISPATCH_ID],
+    }), 'Agent Run repeats Dispatch ids')
+    expectSchemaIssue(agentRunV1RecordSchema.safeParse({
+      ...runV1,
+      updatedAt: runV1.createdAt - 1,
+    }), 'Agent Run timestamps are not monotonic')
+
+    for (const hostResult of [
+      { ...runV1.hostResult, agentRunId: OTHER_AGENT_RUN_ID },
+      { ...runV1.hostResult, workSessionId: OTHER_WORK_SESSION_ID },
+      { ...runV1.hostResult, sessionId: OTHER_SESSION_ID },
+      { ...runV1.hostResult, inputMessageId: 'bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc' },
+    ]) {
+      expectSchemaIssue(agentRunV1RecordSchema.safeParse({ ...runV1, hostResult }),
+        'Agent Run Host result disagrees with its exact input plan')
+    }
+
+    const { hostResult: _hostResult, ...withoutHostResult } = runV1
+    expect(agentRunV1RecordSchema.parse({ ...withoutHostResult, state: 'allocated' }))
+      .toMatchObject({ state: 'allocated' })
+    expectSchemaIssue(agentRunV1RecordSchema.safeParse(withoutHostResult),
+      'Agent Run Host result disagrees with state')
+    expectSchemaIssue(agentRunV1RecordSchema.safeParse({ ...runV1, state: 'allocated' }),
+      'Agent Run Host result disagrees with state')
   })
 })

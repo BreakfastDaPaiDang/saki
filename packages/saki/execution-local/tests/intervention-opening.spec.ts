@@ -1,4 +1,5 @@
 import { CallId, createToolResultMessage, MessageId, type ContentBlock, type ToolResultMessage } from '@deepseek-ai/dsh-llm'
+import { Context } from '@deepseek-ai/cordis'
 import { SESSION_FORMAT_VERSION, SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import {
   SessionPersistenceRevision,
@@ -10,6 +11,7 @@ import type {
   SakiInterventionRequestId,
 } from '@breakfastdapaidang/saki-execution'
 import { describe, expect, it } from 'vitest'
+import LocalSakiHostExecution, { type Config } from '../src/index.ts'
 import { inspectLocalInterventionOpening } from '../src/intervention-opening.ts'
 
 const SESSION_ID = SessionId('session-11111111-1111-4111-8111-111111111111')
@@ -27,6 +29,25 @@ const HEADER: SessionHeader = {
 }
 
 describe('inspectLocalInterventionOpening', () => {
+  it('exposes exact opening evidence through the disposal-bound Local Host provider', async () => {
+    const context = new Context()
+    context.provide('sessionPersistence', persistence(openingEvents()) as never)
+    const execution = new LocalSakiHostExecution(
+      context,
+      LocalSakiHostExecution.Config({}) as Required<Config>,
+    )
+
+    try {
+      await expect(execution.inspectInterventionOpening(request(), new AbortController().signal))
+        .resolves.toEqual({ kind: 'confirmed', turn: 1, step: 1 })
+      await context.fiber.dispose()
+      await expect(execution.inspectInterventionOpening(request(), new AbortController().signal))
+        .rejects.toThrow('Saki Local Host Execution disposed')
+    } finally {
+      await context.fiber.dispose()
+    }
+  })
+
   it('confirms only an exact successful result in the final balanced step of a completed turn', async () => {
     const events = openingEvents()
     const evidence = await inspectLocalInterventionOpening(persistence(events), request(), new AbortController().signal)

@@ -16,7 +16,7 @@ import WorkspaceRegistry, {
 } from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import LlmRuntime from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { CallId } from '@deepseek-ai/dsh-llm'
 import LocalSakiHostExecution from '@breakfastdapaidang/saki-execution-local'
 import {
   computeGitHubProjectBoardFingerprint,
@@ -55,6 +55,7 @@ import type {
 } from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import SakiControlPlane, {
+  type AnswerInterventionIntent,
   type ConfigureGitHubSynchronizationIntent,
   type GitHubSynchronizationConfiguration,
   type RegisterDevelopmentProjectIntent,
@@ -63,6 +64,7 @@ import SakiControlPlane, {
   type SakiControlIntentId,
   type SakiControlPlaneModule,
   type SakiDevelopmentProjectId,
+  type SakiInterventionRequestId,
 } from '../src/index.ts'
 import { SAKI_GIT_REQUEST_FIXTURES, SAKI_PROJECT_PROJECTION_FIXTURES } from '../src/fixtures.ts'
 import { resolveSakiAuthentication, takeSakiCookieHeader } from '../src/host.ts'
@@ -671,6 +673,7 @@ interface AgentRunHostFixture {
   readonly requests: StartAgentRunHostOperationRequest[]
   readonly startCount: number
   beforeSuccess: (() => Promise<void>) | undefined
+  beginNextOperation(): void
 }
 
 function installAgentRunHostFixture(execution: SakiHostExecution): AgentRunHostFixture {
@@ -686,6 +689,10 @@ function installAgentRunHostFixture(execution: SakiHostExecution): AgentRunHostF
     requests: [] as StartAgentRunHostOperationRequest[],
     startCount: 0,
     beforeSuccess: undefined as (() => Promise<void>) | undefined,
+    beginNextOperation: () => {
+      pending = undefined
+      completed = undefined
+    },
   }
   const prepareOperation = execution.prepareOperation.bind(execution)
   const startOperation = execution.startOperation.bind(execution)
@@ -1502,13 +1509,13 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
   it.each([
     ['successful move and stale Actor restart rejection', 'success'],
     ['derived Intent collision', 'move-conflict'],
-  ] as const)('routes Give-to-Agent through the assembled control plane: %s', async (_case, mode) => {
+  ] as const)('routes the assembled Agent work lifecycle: %s', async (_case, mode) => {
     const durable = await paths()
     const repo = await repository(durable.root, `agent-control-route-${mode}`)
     const configuration = githubSynchronizationConfiguration()
     const ctx = await context(durable)
     const host = installAgentRunHostFixture(ctx.sakiHostExecution)
-    await ctx.plugin((providerContext: Context) => {
+    const installGitHubProvider = async () => await ctx.plugin((providerContext: Context) => {
       const provider = new FakeBoardGitHub(
         providerContext,
         githubBoardCandidate(configuration, configuration.statusOptionNodeIds.ready),
@@ -1520,6 +1527,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         '- The Host starts the exact frozen Run.',
       ].join('\n')
     })
+    const providerFiber = await installGitHubProvider()
     const harness = await mountControlPlane(ctx, AGENT_CONTROL_CONFIG)
     const registrationIntentId = 'intent-40404040-4040-4040-8040-404040404040' as SakiControlIntentId
     const registered = await harness.control.submit(harness.authentication, intent(
@@ -1530,6 +1538,11 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       await inspected(harness, repo),
     ), new AbortController().signal)
     if (!registered.ok) throw new Error('registration failed')
+    if (mode === 'success') {
+      expect(await harness.control.query<'my-work'>(harness.authentication, {
+        type: 'my-work',
+      }, new AbortController().signal)).toMatchObject({ ok: true, projection: { items: [] } })
+    }
     expect(await harness.control.submit(harness.authentication, {
       type: 'configure-github-synchronization',
       intentId: 'intent-41414141-4141-4141-8141-414141414141' as SakiControlIntentId,
@@ -1573,15 +1586,93 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         ...agentIntent,
         intentId: 'intent-43434343-4343-4343-8343-434343434343' as SakiControlIntentId,
       }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+      expect(await harness.control.submit(harness.authentication, {
+        type: 'answer-intervention',
+        intentId: 'intent-44434343-4343-4343-8343-434343434343' as SakiControlIntentId,
+        interventionId: 'intervention-44434343-4343-4343-8343-434343434343' as SakiInterventionRequestId,
+        expectedInterventionRevision: 0,
+        answer: { kind: 'text', text: 'Denied before the Intervention is inspected.' },
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
     }
     await setGrantActions(harness, [
       'board:read',
       'my-work:read',
       'attention:read',
       'work-item:give-to-agent',
+      'intervention:answer',
       'work-item:move',
       ...(mode === 'move-conflict' ? ['github-synchronization:configure' as const] : []),
     ])
+    if (mode === 'success') {
+      const recommendation = async () => {
+        const result = await harness.control.query<'my-work'>(harness.authentication, {
+          type: 'my-work',
+        }, new AbortController().signal)
+        if (!result.ok) throw new Error('My Work availability fixture is unavailable')
+        return result.projection.items[0]?.recommendation
+      }
+      const domain = liveSakiDomain(harness.ctx)
+      const registration = domain.table('registration_intents').get(registrationIntentId)
+      if (registration === undefined) throw new Error('registration fixture is absent')
+      await providerFiber.dispose()
+      const synchronization = githubSynchronization(harness)
+      const revisedConfiguration = { ...configuration, activePollIntervalMs: 45_000 }
+      expect(await synchronization.configure({
+        type: 'configure-github-synchronization',
+        intentId: 'intent-44444444-4444-4444-8444-444444444444' as SakiControlIntentId,
+        projectId: registered.receipt.projectId,
+        expectedSynchronizationRevision: 1,
+        patch: { activePollIntervalMs: revisedConfiguration.activePollIntervalMs },
+      }, registration.payload.actor, new AbortController().signal)).toMatchObject({ ok: true })
+      expect(await recommendation()).toEqual({ available: false, reason: 'synchronization-unavailable' })
+      const begun = await synchronization.beginScan(
+        registered.receipt.projectId,
+        'interactive',
+        Date.now() + 60_000,
+        new AbortController().signal,
+      )
+      if (!begun.ok) throw new Error(`revised scan did not begin: ${begun.reason}`)
+      expect(await synchronization.publishScan(
+        registered.receipt.projectId,
+        begun.lease.attemptId,
+        githubBoardCandidate(revisedConfiguration),
+        new AbortController().signal,
+      )).toMatchObject({ state: 'published', configurationRevision: 2 })
+      await installGitHubProvider()
+
+      const registryTable = domain.table('development_project_registry')
+      const originalRegistry = registryTable.get('development-project-registry')
+      if (originalRegistry === undefined) throw new Error('Project Registry fixture is absent')
+      await registryTable.update('development-project-registry', (current) => {
+        const candidate = structuredClone(current)
+        const profile = candidate.agentProfiles.find(value => value.id === candidate.projects[0]?.defaultAgentProfileId)
+        if (profile === undefined) throw new Error('Agent Profile fixture is absent')
+        profile.modelRouteRequest = null
+        return candidate
+      })
+      expect(await recommendation()).toEqual({ available: false, reason: 'operation-conditions-unavailable' })
+      await registryTable.put('development-project-registry', originalRegistry)
+
+      await registryTable.update('development-project-registry', (current) => {
+        const candidate = structuredClone(current)
+        const binding = candidate.resourceBindings[0]
+        if (binding === undefined) throw new Error('Resource Binding fixture is absent')
+        binding.health = 'missing'
+        delete binding.currentInspection
+        return candidate
+      })
+      expect(await recommendation()).toEqual({ available: false, reason: 'binding-unavailable' })
+      await registryTable.put('development-project-registry', originalRegistry)
+
+      const bindingId = originalRegistry.resourceBindings[0]?.id
+      if (bindingId === undefined) throw new Error('Resource Binding fixture is absent')
+      const admissions = domain.table('binding_write_admissions')
+      const admission = admissions.get(bindingId)
+      if (admission === undefined) throw new Error('Binding admission fixture is absent')
+      await admissions.delete(bindingId)
+      expect(await recommendation()).toEqual({ available: false, reason: 'binding-unavailable' })
+      await admissions.put(bindingId, admission)
+    }
     expect(await harness.control.query<'my-work'>(harness.authentication, {
       type: 'my-work',
     }, new AbortController().signal)).toMatchObject({
@@ -1662,7 +1753,151 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     disposeChanged()
 
     if (mode === 'success') {
+      expect(await harness.control.query<'my-work'>(harness.authentication, {
+        type: 'my-work',
+      }, new AbortController().signal)).toMatchObject({
+        ok: true,
+        projection: {
+          items: [{ recommendation: { available: false, reason: 'active-work' } }],
+        },
+      })
+      vi.spyOn(harness.ctx.sakiHostExecution, 'inspectInterventionOpening')
+        .mockResolvedValue({ kind: 'confirmed', turn: 1, step: 1 })
+      const sessionId = host.requests[0]?.run.sessionId
+      if (sessionId === undefined) throw new Error('Agent Run Session fixture is absent')
+      const openIntervention = async (toolCallId: string) => {
+        const requested = await harness.control.agentInterventions.request({
+          sessionId,
+          toolCallId: CallId(toolCallId),
+          prompt: 'Which exact path should this assembled Agent Run take?',
+        }, new AbortController().signal)
+        if (!requested.ok) throw new Error('assembled Intervention was not created')
+        expect(await harness.control.agentInterventions.finalizeOpening(
+          requested.interventionId,
+          new AbortController().signal,
+        )).toBe('open')
+        const work = await harness.control.query<'my-work'>(harness.authentication, {
+          type: 'my-work',
+        }, new AbortController().signal)
+        if (!work.ok) throw new Error('assembled Intervention is absent from My Work')
+        const intervention = work.projection.items[0]?.intervention
+        if (intervention?.id !== requested.interventionId || intervention.state !== 'open') {
+          throw new Error('assembled Intervention did not open')
+        }
+        return intervention
+      }
+      const answerIntervention = async (
+        intervention: Awaited<ReturnType<typeof openIntervention>>,
+        answer: AnswerInterventionIntent,
+      ) => {
+        const priorDispatchIds = new Set(host.requests.map(request => request.source.dispatchId))
+        const hostStartCount = host.startCount
+        host.beginNextOperation()
+        expect(await harness.control.submit(
+          harness.authentication,
+          answer,
+          new AbortController().signal,
+        )).toMatchObject({ ok: true, receipt: { state: 'resolved' } })
+
+        const resolved = liveSakiDomain(harness.ctx).table('intervention_requests').get(intervention.id)
+        if (resolved === undefined || !('answer' in resolved) || resolved.answer === undefined) {
+          throw new Error('assembled Intervention answer is absent')
+        }
+        const newRequests = host.requests.filter(request => !priorDispatchIds.has(request.source.dispatchId))
+        const newDispatchIds = new Set(newRequests.map(request => request.source.dispatchId))
+        expect(host.startCount).toBe(hostStartCount + 1)
+        expect(newDispatchIds).toEqual(new Set([resolved.answer.dispatchId]))
+        const resumed = newRequests[0]
+        if (resumed === undefined) throw new Error('Intervention answer Host request is absent')
+        for (const request of newRequests) expect(request).toEqual(resumed)
+        expect(resumed.run.agentRunId).toBe(intervention.returnAddress.agentRunId)
+        expect(resumed.run.workSessionId).toBe(intervention.returnAddress.workSessionId)
+        expect(resumed.run.sessionId).toBe(sessionId)
+        expect(resumed.source).toEqual({
+          kind: 'execution-dispatch',
+          dispatchId: resolved.answer.dispatchId,
+          payloadDigest: resolved.answer.inputPlan.payloadDigest,
+        })
+        expect(resumed.run.input).toEqual({
+          id: resolved.answer.inputPlan.messageId,
+          role: 'user',
+          content: [{
+            type: 'text',
+            text: `Operator response to your intervention request:\n\n${answer.answer.text}`,
+          }],
+          source: {
+            kind: 'saki-intervention-answer',
+            interventionId: intervention.id,
+            answerIntentId: answer.intentId,
+            dispatchId: resolved.answer.dispatchId,
+            agentRunId: intervention.returnAddress.agentRunId,
+            workSessionId: intervention.returnAddress.workSessionId,
+            actor: resolved.answer.payload.actor,
+          },
+        })
+      }
+
+      const firstIntervention = await openIntervention('call_service_intervention_first')
+      const firstAnswer = {
+        type: 'answer-intervention' as const,
+        intentId: 'intent-45454545-4545-4545-8545-454545454545' as SakiControlIntentId,
+        interventionId: firstIntervention.id,
+        expectedInterventionRevision: firstIntervention.revision,
+        answer: { kind: 'text' as const, text: 'Use the exact assembled path.' },
+      }
+      await answerIntervention(firstIntervention, firstAnswer)
+      expect(await harness.control.submit(harness.authentication, {
+        ...agentIntent,
+        intentId: firstAnswer.intentId,
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+      expect(await harness.control.submit(harness.authentication, {
+        ...firstAnswer,
+        interventionId: 'intervention-48484848-4848-4848-8848-484848484848' as SakiInterventionRequestId,
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+      expect(await harness.control.submit(harness.authentication, {
+        ...agentIntent,
+        intentId: 'intent-46464646-4646-4646-8646-464646464646' as SakiControlIntentId,
+      }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'conflict' })
+
+      const opening = await harness.control.agentInterventions.request({
+        sessionId,
+        toolCallId: CallId('call_service_intervention_opening'),
+        prompt: 'Leave this exact Intervention opening for recovery.',
+      }, new AbortController().signal)
+      if (!opening.ok) throw new Error('recovery Intervention was not created')
+      const openingRecord = liveSakiDomain(harness.ctx).table('intervention_requests').get(opening.interventionId)
+      if (openingRecord === undefined) throw new Error('recovery Intervention record is absent')
+      expect(await harness.control.submit(harness.authentication, {
+        ...agentIntent,
+        intentId: 'intent-49494949-4949-4949-8949-494949494949' as SakiControlIntentId,
+      }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'conflict' })
+      expect(await harness.control.query<'my-work'>(harness.authentication, {
+        type: 'my-work',
+      }, new AbortController().signal)).toMatchObject({
+        ok: true,
+        projection: { items: [{ assignment: {}, run: {} }] },
+      })
+
       await harness.close()
+      const recoveredContext = await context(durable)
+      vi.spyOn(recoveredContext.sakiHostExecution, 'resumeAgentRun').mockResolvedValue()
+      vi.spyOn(recoveredContext.sakiHostExecution, 'inspectInterventionOpening')
+        .mockResolvedValue({ kind: 'absent' })
+      const recovered = await mountControlPlane(recoveredContext, AGENT_CONTROL_CONFIG)
+      const recoveredDomain = liveSakiDomain(recovered.ctx)
+      expect(recoveredDomain.table('intervention_requests').get(opening.interventionId)).toMatchObject({
+        id: opening.interventionId,
+        revision: 1,
+        state: 'reconciliation-required',
+        reason: 'protocol',
+      })
+      const recoveredRun = recoveredDomain.table('agent_runs').get(openingRecord.owner.agentRunId)
+      expect(recoveredRun).toMatchObject({
+        id: openingRecord.owner.agentRunId,
+        state: 'running',
+      })
+      expect(recoveredRun).not.toHaveProperty('blockingInterventionId')
+      await recovered.close()
       await editSaki(durable, async (domain) => {
         const table = domain.table('agent_operation_intents')
         await table.update(agentIntent.intentId, (current) => {
