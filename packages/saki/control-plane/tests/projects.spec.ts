@@ -998,9 +998,9 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const database = new DatabaseSync(durable.sqlite)
     try {
       expect(database.prepare('SELECT name, version FROM units ORDER BY name').all()).toEqual([
-        { name: 'saki_control_plane', version: 7 },
-        { name: 'saki_host_execution', version: 2 },
-        { name: 'saki_storage_generation', version: 5 },
+        { name: 'saki_control_plane', version: 8 },
+        { name: 'saki_host_execution', version: 3 },
+        { name: 'saki_storage_generation', version: 6 },
       ])
       const tables = database.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
@@ -1010,7 +1010,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         'unit_tables',
         'units',
       ])
-      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(21)
+      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(22)
       expect(database.prepare(
         'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
       ).all('saki_control_plane')).toEqual([
@@ -1029,6 +1029,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         { table_name: 'hosts' },
         { table_name: 'installation_access' },
         { table_name: 'installations' },
+        { table_name: 'intervention_requests' },
         { table_name: 'principals' },
         { table_name: 'registration_intents' },
         { table_name: 'work_assignments' },
@@ -4591,12 +4592,12 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     })
     expect(invalidations).toEqual([
       {
-        keys: ['project-index', 'development-workspace', 'project-changes'],
+        keys: ['my-work', 'attention', 'project-index', 'development-workspace', 'project-changes'],
         registryRevision: 1,
         projectIds: [accepted.receipt.projectId],
       },
       {
-        keys: ['project-changes'],
+        keys: ['my-work', 'project-changes'],
         registryRevision: 1,
         projectIds: [accepted.receipt.projectId],
       },

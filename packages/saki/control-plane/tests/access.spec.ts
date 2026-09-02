@@ -860,7 +860,14 @@ describe('Saki Installation access', () => {
     }))
 
     await running.close()
-    expect(observed).toEqual([['access', 'project-index', 'development-workspace', 'project-changes']])
+    expect(observed).toEqual([[
+      'access',
+      'my-work',
+      'attention',
+      'project-index',
+      'development-workspace',
+      'project-changes',
+    ]])
     expect(diagnostic).toHaveBeenCalledTimes(1)
     expect(diagnostic).toHaveBeenCalledWith('[saki-control-plane] Projection listener failed')
     expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('listener-secret-sentinel')
