@@ -49,6 +49,7 @@ import type {
 import type {
   CreateCommitIntent,
   SakiControlIntentId,
+  SakiExecutionDispatchId,
   SakiGrantId,
   SakiGitOperationIntent,
   SakiInstallationId,
@@ -679,6 +680,24 @@ function availableAdmission(revision = 0): BindingWriteAdmissionRecord {
   })
 }
 
+function agentRunAdmission(revision = 1): Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> {
+  const admission = bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision,
+    state: 'agent-run',
+    phase: 'reserved',
+    bindingRevision: 0,
+    originIntentId: 'intent-00000000-0000-4000-8000-000000000390',
+    agentRunId: 'agent-run-00000000-0000-4000-8000-000000000391',
+    payloadDigest: '3'.repeat(64),
+    reservedAt: 1,
+    updatedAt: 1,
+  })
+  if (admission.state !== 'agent-run') throw new Error('test admission is not owned by an Agent Run')
+  return admission
+}
+
 function retainedAcceptedAdmission(
   record: GitOperationIntentRecord,
   revision = 10,
@@ -706,6 +725,28 @@ function retainedAcceptedAdmission(
 }
 
 describe('Saki structured Git operations', () => {
+  it('preserves an Agent Run write owner during validation and Git reservation', async () => {
+    const test = harness()
+    const admission = agentRunAdmission()
+    test.admissions.records.set(BINDING_ID, admission)
+
+    expect(() => validateGitOperationsDurableState(
+      test.intents,
+      test.admissions,
+      test.registry,
+      new Set(),
+      new Set(),
+      () => {},
+    )).not.toThrow()
+    await expect(test.operations.submit(
+      intent('stage-files', 'intent-00000000-0000-4000-8000-000000000392' as SakiControlIntentId),
+      actor(),
+      new AbortController().signal,
+    )).resolves.toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(test.admissions.get(BINDING_ID)).toEqual(admission)
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
   it('keeps all three browser Intents strict, path-free, and selection-bounded', () => {
     const stage = intent('stage-files') as StageFilesIntent
     const unstage = intent('unstage-files') as UnstageFilesIntent
@@ -1686,6 +1727,14 @@ describe('Saki structured Git operations', () => {
     ['source', (value: HostOperationAdmissionExpectation) => ({
       ...value,
       source: { ...value.source, payloadDigest: 'f'.repeat(64) },
+    })],
+    ['source family', (value: HostOperationAdmissionExpectation) => ({
+      ...value,
+      source: {
+        kind: 'execution-dispatch' as const,
+        dispatchId: 'dispatch-00000000-0000-4000-8000-000000000393' as SakiExecutionDispatchId,
+        payloadDigest: value.source.payloadDigest,
+      },
     })],
     ['preparation', (value: HostOperationAdmissionExpectation) => ({
       ...value,
@@ -3113,6 +3162,49 @@ describe('Saki structured Git operations', () => {
       actor(),
       new AbortController().signal,
     )).rejects.toThrow('missing-key')
+  })
+
+  it('preserves an Agent Run owner observed before terminal release and on replay', async () => {
+    const test = harness()
+    const submitted = intent(
+      'stage-files',
+      'intent-00000000-0000-4000-8000-000000000394' as SakiControlIntentId,
+    )
+    let owner: Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> | undefined
+    test.execution.afterAdmission = () => {
+      const current = bindingWriteAdmissionRecordSchema.parse(test.admissions.get(BINDING_ID))
+      owner = agentRunAdmission(current.revision + 1)
+      test.admissions.records.set(BINDING_ID, owner)
+    }
+
+    await expect(test.operations.submit(submitted, actor(), new AbortController().signal)).rejects.toThrow()
+    expect(owner).toBeDefined()
+    await expect(test.operations.submit(submitted, actor(), new AbortController().signal))
+      .resolves.toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(test.admissions.get(BINDING_ID)).toEqual(owner)
+  })
+
+  it('preserves an Agent Run owner that wins the terminal release update race', async () => {
+    const test = harness()
+    const submitted = intent(
+      'stage-files',
+      'intent-00000000-0000-4000-8000-000000000395' as SakiControlIntentId,
+    )
+    await test.operations.submit(submitted, actor(), new AbortController().signal)
+    const record = gitOperationIntentRecordSchema.parse(test.intents.get(submitted.intentId))
+    test.admissions.records.set(BINDING_ID, retainedAcceptedAdmission(record))
+    let owner: Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> | undefined
+    test.admissions.update = async (key, operation) => {
+      const current = bindingWriteAdmissionRecordSchema.parse(test.admissions.get(key))
+      owner = agentRunAdmission(current.revision + 1)
+      test.admissions.records.set(key, owner)
+      return operation(owner)
+    }
+
+    await expect(test.operations.submit(submitted, actor(), new AbortController().signal))
+      .resolves.toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(owner).toBeDefined()
+    expect(test.admissions.get(BINDING_ID)).toEqual(owner)
   })
 
   it('recovers when terminal admission release commits before its acknowledgement', async () => {

@@ -930,7 +930,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
   }, 30_000)
 
   it.each([
-    ['working directory', { cwd: 'D:/conflicting-worktree' }],
+    ['working directory', { cwd: join(tmpdir(), 'saki-conflicting-worktree') }],
     ['Agent preset', { agentPreset: 'conflicting-preset' }],
   ] as const)(
     'reconciles a physical Session whose %s disagrees with the Host request',
@@ -1350,7 +1350,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
         } else {
           persisted.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [] })
         }
-      }, history === 'mismatch' ? { cwd: 'D:/conflicting-worktree' } : {})
+      }, history === 'mismatch' ? { cwd: join(tmpdir(), 'saki-conflicting-worktree') } : {})
 
       const inspected = await harness.execution.inspectOperation(prepared.preparation.operation, signal)
 
@@ -1632,7 +1632,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       vi.spyOn(harness.context.sessionPersistence, 'readFrom').mockImplementation(async (...args) => {
         const persisted = await readFrom(...args)
         return failure === 'mismatch' && inputFlushed
-          ? { ...persisted, meta: { ...persisted.meta, cwd: 'D:/changed-after-flush' } }
+          ? { ...persisted, meta: { ...persisted.meta, cwd: join(tmpdir(), 'saki-changed-after-flush') } }
           : persisted
       })
       const getAgent = harness.context.agents.get.bind(harness.context.agents)
@@ -1905,6 +1905,44 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       signal,
     )).resolves.toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
   }, 60_000)
+
+  it.each(['start', 'resume', 'cancel'] as const)(
+    'revalidates physical Session identity before terminal Agent Run %s',
+    async (entry) => {
+      const { operation, request, restarted, signal } = await restartedSucceededAgentRun()
+      const readFrom = restarted.context.sessionPersistence.readFrom.bind(restarted.context.sessionPersistence)
+      vi.spyOn(restarted.context.sessionPersistence, 'readFrom').mockImplementation(async (...args) => {
+        const persisted = await readFrom(...args)
+        return {
+          ...persisted,
+          meta: { ...persisted.meta, cwd: join(tmpdir(), 'saki-terminal-session-drift') },
+        }
+      })
+
+      if (entry === 'resume') {
+        await expect(restarted.execution.resumeAgentRun(operation, request, signal))
+          .rejects.toThrow('is not exactly succeeded')
+        return
+      }
+      if (entry === 'cancel') {
+        await expect(restarted.execution.cancelOperation(operation, 'authority-revoked', signal))
+          .resolves.toMatchObject({ state: 'reconciliation-required', reason: 'evidence-conflict' })
+        return
+      }
+      const prepared = await restarted.execution.prepareOperation(request, accepted(56), signal)
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
+      await expect(restarted.execution.startOperation(
+        prepared.preparation.operation,
+        prepared.acceptance,
+        signal,
+      )).resolves.toMatchObject({
+        ok: true,
+        snapshot: { state: 'reconciliation-required', reason: 'evidence-conflict' },
+      })
+    },
+    60_000,
+  )
 
   it('replays a successful operation after provider restart without resending its input', async () => {
     const world = await createAgentRunWorld()
@@ -2416,7 +2454,7 @@ function changeSessionIdentityOnRead(harness: AgentRunHarness, targetRead: numbe
     const persisted = await readFrom(...args)
     reads += 1
     return reads === targetRead
-      ? { ...persisted, meta: { ...persisted.meta, cwd: 'D:/changed-between-inspections' } }
+      ? { ...persisted, meta: { ...persisted.meta, cwd: join(tmpdir(), 'saki-changed-between-inspections') } }
       : persisted
   })
 }

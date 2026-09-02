@@ -16,6 +16,7 @@ import WorkspaceRegistry, {
 } from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import LlmRuntime from '@deepseek-ai/dsh-llm'
 import LocalSakiHostExecution from '@breakfastdapaidang/saki-execution-local'
 import {
   computeGitHubProjectBoardFingerprint,
@@ -36,13 +37,20 @@ import {
 import {
   canonicalDigest,
   computeProjectInspectionFingerprint,
+  HostOperationAcceptance,
+  startAgentRunHostOperationRequestSchema,
 } from '@breakfastdapaidang/saki-execution'
 import type {
+  HostOperationAdmissionSource,
+  HostOperationPreparation,
+  HostOperationReference,
+  HostOperationSnapshot,
   InspectProjectSelectionResult,
   ProjectSelectionInspection,
   ProjectSelectionProjection,
   SakiHostExecution,
   SakiHostId,
+  StartAgentRunHostOperationRequest,
   TrustedProjectSelectionObservation,
 } from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -94,6 +102,10 @@ const DEFAULT_AGENT_PROFILE_TEMPLATE = {
   agentPresetId: 'standard',
   modelRouteRequest: { provider: 'test-provider', model: 'test-model' },
 } as const
+const AGENT_CONTROL_CONFIG = {
+  ...CONTROL_CONFIG,
+  defaultAgentProfile: DEFAULT_AGENT_PROFILE_TEMPLATE,
+} as const
 
 interface DurablePaths {
   readonly root: string
@@ -105,6 +117,7 @@ class FakeBoardGitHub extends SakiGitHub {
   readonly requests: GitHubScanMap['project-board']['request'][] = []
   nextFailure: Error | undefined
   nextMutationFailure: Error | undefined
+  agentIssueBody: string | undefined
 
   constructor(ctx: Context, private candidate: GitHubProjectBoardScanCandidate) {
     super(ctx)
@@ -113,6 +126,15 @@ class FakeBoardGitHub extends SakiGitHub {
   override async read<K extends keyof GitHubReadMap>(
     request: GitHubReadMap[K]['request'],
   ): Promise<GitHubReadMap[K]['result']> {
+    if (this.agentIssueBody !== undefined && request.kind === 'issue-detail') {
+      const item = this.candidate.items.find(candidate => candidate.content.kind === 'issue'
+        && candidate.content.issue.id === request.issueId)
+      if (item?.content.kind !== 'issue') throw new GitHubProviderError({ code: 'not-found', resource: request.kind })
+      return structuredClone({ ...item.content.issue, body: this.agentIssueBody })
+    }
+    if (this.agentIssueBody !== undefined && request.kind === 'branch-safety') {
+      return { kind: 'safe', branchExists: true, observedAt: this.candidate.observedAt }
+    }
     throw new GitHubProviderError({ code: 'not-found', resource: request.kind })
   }
 
@@ -310,8 +332,8 @@ async function start(
   return await mountControlPlane(ctx)
 }
 
-async function mountControlPlane(ctx: Context): Promise<Harness> {
-  const controlFiber = await ctx.plugin(SakiControlPlane, CONTROL_CONFIG)
+async function mountControlPlane(ctx: Context, config = CONTROL_CONFIG): Promise<Harness> {
+  const controlFiber = await ctx.plugin(SakiControlPlane, config)
   const secret = ctx.sakiControlPlane.bootstrap.take()!.consume()
   const exchange = await ctx.sakiControlPlane.access.exchangeBootstrap(
     { origin: ORIGIN }, { secret }, new AbortController().signal,
@@ -639,6 +661,111 @@ async function disposeDuringDispatchInspection(
   release.resolve(undefined)
   await expect(submission).rejects.toThrow()
   await closing
+}
+
+class TestAgentRunAcceptance extends HostOperationAcceptance {
+  constructor(readonly operationId: string) { super() }
+}
+
+interface AgentRunHostFixture {
+  readonly requests: StartAgentRunHostOperationRequest[]
+  readonly startCount: number
+  beforeSuccess: (() => Promise<void>) | undefined
+}
+
+function installAgentRunHostFixture(execution: SakiHostExecution): AgentRunHostFixture {
+  let pending: {
+    readonly request: StartAgentRunHostOperationRequest
+    readonly admission: HostOperationAdmissionSource
+    readonly preparation: HostOperationPreparation<'start-agent-run'>
+    readonly snapshot: HostOperationSnapshot<'start-agent-run'>
+    readonly acceptance: TestAgentRunAcceptance
+  } | undefined
+  let completed: HostOperationSnapshot<'start-agent-run'> | undefined
+  const state = {
+    requests: [] as StartAgentRunHostOperationRequest[],
+    startCount: 0,
+    beforeSuccess: undefined as (() => Promise<void>) | undefined,
+  }
+  const prepareOperation = execution.prepareOperation.bind(execution)
+  const startOperation = execution.startOperation.bind(execution)
+  const inspectOperation = execution.inspectOperation.bind(execution)
+  vi.spyOn(execution, 'prepareOperation').mockImplementation(async (request, admission, signal) => {
+    if (request.type !== 'start-agent-run') return await prepareOperation(request, admission, signal)
+    signal.throwIfAborted()
+    const parsed = startAgentRunHostOperationRequestSchema.parse(request)
+    state.requests.push(parsed)
+    const operation = {
+      id: parsed.source.dispatchId.replace(/^dispatch-/u, 'host-operation-'),
+      hostId: parsed.expected.binding.hostId,
+      type: 'start-agent-run',
+    } as HostOperationReference<'start-agent-run'>
+    const preparation = {
+      operation,
+      preparationRevision: 0,
+      requestFingerprint: {
+        version: 1 as const,
+        digest: canonicalDigest('saki/test-service-agent-host-request/v1', parsed),
+      },
+    }
+    const snapshot = {
+      operation,
+      revision: 0,
+      source: parsed.source,
+      requestFingerprint: preparation.requestFingerprint,
+      bindingId: parsed.expected.binding.id,
+      bindingRevision: parsed.expected.binding.revision,
+      preparedAt: 1,
+      updatedAt: 1,
+      state: 'prepared',
+      admission: { kind: 'not-accepted' },
+    } as const
+    const acceptance = new TestAgentRunAcceptance(operation.id)
+    pending = { request: parsed, admission, preparation, snapshot, acceptance }
+    return { ok: true, preparation, snapshot, acceptance } as never
+  })
+  vi.spyOn(execution, 'startOperation').mockImplementation(async (operation, acceptance, signal) => {
+    if (operation.type !== 'start-agent-run') return await startOperation(operation, acceptance, signal)
+    signal.throwIfAborted()
+    if (pending?.preparation.operation.id !== operation.id || pending.acceptance !== acceptance
+      || pending.acceptance.operationId !== operation.id) {
+      throw new Error('Agent Run Host fixture received mismatched start authority')
+    }
+    state.startCount += 1
+    const decision = await pending.admission({
+      bindingId: pending.request.expected.binding.id,
+      bindingRevision: pending.request.expected.binding.revision,
+      preparation: pending.preparation,
+      source: pending.request.source,
+    }, signal)
+    if (decision.kind !== 'accepted') throw new Error('Agent Run Host fixture was not admitted')
+    await state.beforeSuccess?.()
+    completed = {
+      ...pending.snapshot,
+      revision: 1,
+      updatedAt: 3,
+      state: 'succeeded',
+      admission: { kind: 'accepted', revision: decision.admissionRevision, acceptedAt: 2 },
+      completedAt: 3,
+      result: {
+        type: 'start-agent-run',
+        agentRunId: pending.request.run.agentRunId,
+        workSessionId: pending.request.run.workSessionId,
+        sessionId: pending.request.run.sessionId,
+        inputMessageId: pending.request.run.input.id,
+      },
+    }
+    return { ok: true, snapshot: completed } as never
+  })
+  vi.spyOn(execution, 'inspectOperation').mockImplementation(async (operation, signal) => {
+    if (operation.type !== 'start-agent-run') return await inspectOperation(operation, signal)
+    signal.throwIfAborted()
+    if (pending?.preparation.operation.id !== operation.id) {
+      throw new Error('Agent Run Host fixture received an unknown inspection')
+    }
+    return completed ?? pending.snapshot
+  })
+  return state
 }
 
 describe('Development Project registration', { timeout: 60_000 }, () => {
@@ -1369,6 +1496,157 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         .rejects.toThrow('GitHub Work Item Intent targets a missing Development Project')
     } finally {
       await orphaned.fiber.dispose()
+    }
+  })
+
+  it.each([
+    ['successful move and stale Actor restart rejection', 'success'],
+    ['derived Intent collision', 'move-conflict'],
+  ] as const)('routes Give-to-Agent through the assembled control plane: %s', async (_case, mode) => {
+    const durable = await paths()
+    const repo = await repository(durable.root, `agent-control-route-${mode}`)
+    const configuration = githubSynchronizationConfiguration()
+    const ctx = await context(durable)
+    const host = installAgentRunHostFixture(ctx.sakiHostExecution)
+    await ctx.plugin((providerContext: Context) => {
+      const provider = new FakeBoardGitHub(
+        providerContext,
+        githubBoardCandidate(configuration, configuration.statusOptionNodeIds.ready),
+      )
+      provider.agentIssueBody = [
+        '# Intended outcome',
+        'Exercise the assembled Agent dispatch route.',
+        '# Acceptance criteria',
+        '- The Host starts the exact frozen Run.',
+      ].join('\n')
+    })
+    const harness = await mountControlPlane(ctx, AGENT_CONTROL_CONFIG)
+    const registrationIntentId = 'intent-40404040-4040-4040-8040-404040404040' as SakiControlIntentId
+    const registered = await harness.control.submit(harness.authentication, intent(
+      registrationIntentId,
+      'Agent control route',
+      repo,
+      0,
+      await inspected(harness, repo),
+    ), new AbortController().signal)
+    if (!registered.ok) throw new Error('registration failed')
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'configure-github-synchronization',
+      intentId: 'intent-41414141-4141-4141-8141-414141414141' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      expectedSynchronizationRevision: 0,
+      patch: configuration,
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    const board = await waitForConfirmedBoard(harness, registered.receipt.projectId)
+    const item = board.confirmed?.items[0]
+    if (item === undefined) throw new Error('Agent Work Item fixture is missing')
+    const agentIntent = {
+      type: 'give-work-item-to-agent' as const,
+      intentId: 'intent-42424242-4242-4242-8242-424242424242' as SakiControlIntentId,
+      projectId: registered.receipt.projectId,
+      workItemId: item.id,
+      expectedProjectRevision: 0,
+      expectedRemoteFingerprint: item.remoteFingerprint,
+    }
+
+    if (mode === 'success') {
+      await setGrantActions(harness, ['work-item:move'])
+      expect(await harness.control.submit(harness.authentication, {
+        ...agentIntent,
+        intentId: 'intent-43434343-4343-4343-8343-434343434343' as SakiControlIntentId,
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    }
+    await setGrantActions(harness, [
+      'board:read',
+      'work-item:give-to-agent',
+      'work-item:move',
+      ...(mode === 'move-conflict' ? ['github-synchronization:configure' as const] : []),
+    ])
+    if (mode === 'success') {
+      expect(await harness.control.submit(harness.authentication, agentIntent, new AbortController().signal)).toEqual({
+        ok: false,
+        reason: 'unavailable',
+        detail: 'model-route-unavailable',
+      })
+    }
+    await ctx.plugin(LlmRuntime)
+    const resolveModelInfo = vi.spyOn(ctx.llm, 'resolveModelInfo').mockResolvedValue({
+      provider: 'test-provider',
+      id: 'test-model',
+      name: 'Test model',
+    })
+    if (mode === 'success') {
+      expect(await harness.control.submit(harness.authentication, {
+        ...agentIntent,
+        intentId: registrationIntentId,
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+    }
+    if (mode === 'move-conflict') {
+      host.beforeSuccess = async () => {
+        const record = liveSakiDomain(harness.ctx).table('agent_operation_intents').get(agentIntent.intentId)
+        if (record === undefined) throw new Error('Agent operation was not retained before Host success')
+        expect(await harness.control.submit(harness.authentication, {
+          type: 'configure-github-synchronization',
+          intentId: record.inProgressIntentId,
+          projectId: registered.receipt.projectId,
+          expectedSynchronizationRevision: board.synchronizationRevision,
+          patch: configuration,
+        }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'conflict' })
+      }
+    }
+    const changedKeys: string[][] = []
+    const disposeChanged = harness.control.onChanged((keys) => { changedKeys.push([...keys]) })
+    const submission = harness.control.submit(harness.authentication, agentIntent, new AbortController().signal)
+    if (mode === 'success') {
+      await expect(submission).resolves.toMatchObject({ ok: true, receipt: { state: 'started' } })
+      expect(await harness.control.query<'board'>(harness.authentication, {
+        type: 'board',
+        projectId: registered.receipt.projectId,
+        refresh: 'interactive',
+      }, new AbortController().signal)).toMatchObject({ ok: true })
+      const moved = await waitForConfirmedBoard(
+        harness,
+        registered.receipt.projectId,
+        (board.confirmed?.generation ?? 0) + 1,
+      )
+      expect(moved.confirmed?.items[0]?.status).toBe('in-progress')
+    } else {
+      await expect(submission).resolves.toMatchObject({
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'protocol' },
+      })
+    }
+    expect(resolveModelInfo).toHaveBeenCalledWith('test-provider', 'test-model', expect.any(AbortSignal))
+    expect(host.requests).toHaveLength(2)
+    expect(host.requests[1]).toEqual(host.requests[0])
+    expect(host.startCount).toBe(1)
+    expect(changedKeys).toContainEqual(['project-changes', 'board'])
+    disposeChanged()
+
+    if (mode === 'success') {
+      await harness.close()
+      await editSaki(durable, async (domain) => {
+        const table = domain.table('agent_operation_intents')
+        await table.update(agentIntent.intentId, (current) => {
+          const payload = {
+            ...current.payload,
+            actor: { ...current.payload.actor, grantRevision: current.payload.actor.grantRevision + 1 },
+          }
+          return {
+            ...current,
+            payload,
+            payloadDigest: canonicalDigest('saki/agent-operation-intent/v1', payload),
+          }
+        })
+      })
+      const restarted = await context(durable)
+      try {
+        await expect(restarted.plugin(SakiControlPlane, AGENT_CONTROL_CONFIG))
+          .rejects.toThrow('Saki registration Intent actor reference is inconsistent')
+      } finally {
+        await restarted.fiber.dispose()
+      }
     }
   })
 

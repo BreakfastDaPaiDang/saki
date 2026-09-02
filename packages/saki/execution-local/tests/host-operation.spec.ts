@@ -13,6 +13,7 @@ import * as StorageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import {
+  computeStartAgentRunPayloadDigest,
   hostOperationChangeSchema,
   MAX_GIT_REF_CHARS,
   MAX_HOST_OPERATION_SELECTED_CHANGES,
@@ -26,6 +27,8 @@ import type {
   SakiHostId,
   SakiResourceBindingId,
   StageFilesHostOperationRequest,
+  StartAgentRunHostOperationRequest,
+  StartAgentRunInputMessage,
   UnstageFilesHostOperationRequest,
 } from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +47,7 @@ import LocalSakiHostExecution, {
 } from '../src/index.ts'
 import {
   hostOperationSnapshotCore,
+  localHostAgentRunResultFor,
   localHostOperationRequestFingerprint,
   type LocalHostGitOperationRecord,
   type LocalHostOperationRecord,
@@ -2456,6 +2460,58 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
         effectPlan: { ...durable.effectPlan, publication: 'attempting' },
       }, `${snapshot.state} Host Operation contradicts its no-effect evidence`)
     }
+    const agentRunInput = {
+      id: '77777777-7777-4777-8777-777777777777',
+      role: 'user',
+      content: [{ type: 'text', text: 'Cross-kind durable schema probe.' }],
+      source: {
+        kind: 'saki-agent-run',
+        dispatchId: 'dispatch-22222222-2222-4222-8222-222222222222',
+        agentRunId: 'agent-run-33333333-3333-4333-8333-333333333333',
+        workSessionId: 'work-session-44444444-4444-4444-8444-444444444444',
+      },
+    } as StartAgentRunInputMessage
+    const agentRunRequest = {
+      type: 'start-agent-run',
+      source: {
+        kind: 'execution-dispatch',
+        dispatchId: agentRunInput.source.dispatchId,
+        payloadDigest: computeStartAgentRunPayloadDigest(agentRunInput),
+      },
+      expected: durable.request.expected,
+      run: {
+        agentRunId: agentRunInput.source.agentRunId,
+        workSessionId: agentRunInput.source.workSessionId,
+        sessionId: 'session-66666666-6666-4666-8666-666666666666',
+        profile: {
+          id: 'agent-profile-55555555-5555-4555-8555-555555555555',
+          version: 1,
+          agentPresetId: 'development',
+          modelRoute: { provider: 'test-provider', model: 'test-model' },
+        },
+        input: agentRunInput,
+      },
+    } as StartAgentRunHostOperationRequest
+    const agentRunPlan = {
+      kind: 'agent-run' as const,
+      publication: 'attempting' as const,
+      result: localHostAgentRunResultFor(agentRunRequest),
+    }
+    expectOperationRecordIssue({
+      ...durable,
+      effectPlan: agentRunPlan,
+    }, 'Agent Run effect plan disagrees with Host Operation type')
+    const agentRunFingerprint = localHostOperationRequestFingerprint(agentRunRequest)
+    expectOperationRecordIssue({
+      ...durable,
+      request: agentRunRequest,
+      snapshot: {
+        ...durable.snapshot,
+        operation: { ...durable.snapshot.operation, type: 'start-agent-run' },
+        source: agentRunRequest.source,
+        requestFingerprint: agentRunFingerprint,
+      },
+    }, 'Agent Run Host Operation has a Git effect plan')
     const { changes: _changes, ...requestBase } = durable.request
     const crossKindRequest: CommitHostOperationRequest = {
       ...requestBase,
@@ -7106,6 +7162,13 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
       windowsHide: true,
     })).rejects.toMatchObject({ code: 1 })
   }, 45_000)
+
+  it('initializes the durable operations table when migrating an empty snapshot', () => {
+    expect(sakiHostExecutionDomainMigrations.steps[0]!.migrate({
+      tables: {},
+      global: null,
+    })).toEqual({ tables: { operations: {} }, global: null })
+  })
 
   it('fails a replayed historical detached Commit before effect', async () => {
     const root = await repository()

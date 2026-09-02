@@ -120,6 +120,158 @@ describe('manual Give-to-Agent operations', () => {
     }).success).toBe(false)
   })
 
+  it('rejects internally inconsistent durable Agent operation records', async () => {
+    const started = harness()
+    await started.operations.submit(
+      intent('intent-10101010-1010-4010-8010-101010101010' as SakiControlIntentId),
+      actor(),
+      AbortSignal.timeout(5_000),
+    )
+    const retainedIntent = only(started.intents)
+    const retainedSession = only(started.sessions)
+    const retainedRun = only(started.runs)
+    const retainedDispatch = only(started.dispatches)
+    const retainedAdmission = only(started.admissions)
+    if (retainedRun.hostResult === undefined) throw new Error('test Agent Run lacks Host success')
+
+    expectSchemaIssue(agentOperationIntentRecordSchema.safeParse({
+      ...retainedIntent,
+      payloadDigest: retainedIntent.payloadDigest === 'f'.repeat(64) ? 'e'.repeat(64) : 'f'.repeat(64),
+    }), 'Agent operation Intent payload digest is stale')
+    expectSchemaIssue(agentOperationIntentRecordSchema.safeParse({
+      ...retainedIntent,
+      terminalReason: 'protocol',
+    }), 'Agent operation terminal reason disagrees with phase')
+    expectSchemaIssue(agentOperationIntentRecordSchema.safeParse({
+      ...retainedIntent,
+      createdAt: retainedIntent.updatedAt + 1,
+    }), 'Agent operation timestamps are not monotonic')
+
+    expectSchemaIssue(workSessionRecordSchema.safeParse({
+      ...retainedSession,
+      agentRunIds: [retainedRun.id, retainedRun.id],
+    }), 'Work Session repeats Agent Run ids')
+    expectSchemaIssue(workSessionRecordSchema.safeParse({
+      ...retainedSession,
+      createdAt: retainedSession.updatedAt + 1,
+    }), 'Work Session timestamps are not monotonic')
+
+    expectSchemaIssue(agentRunRecordSchema.safeParse({
+      ...retainedRun,
+      dispatchIds: [retainedDispatch.id, retainedDispatch.id],
+    }), 'Agent Run repeats Dispatch ids')
+    expectSchemaIssue(agentRunRecordSchema.safeParse({
+      ...retainedRun,
+      createdAt: retainedRun.updatedAt + 1,
+    }), 'Agent Run timestamps are not monotonic')
+    expectSchemaIssue(agentRunRecordSchema.safeParse({
+      ...retainedRun,
+      hostResult: {
+        ...retainedRun.hostResult,
+        inputMessageId: '20202020-2020-4020-8020-202020202020',
+      },
+    }), 'Agent Run Host result disagrees with its exact input plan')
+    expectSchemaIssue(agentRunRecordSchema.safeParse({
+      ...retainedRun,
+      state: 'starting',
+    }), 'Agent Run Host result disagrees with state')
+
+    const accepted = harness()
+    accepted.execution.startMode = 'unavailable'
+    await accepted.operations.submit(
+      intent('intent-30303030-3030-4030-8030-303030303030' as SakiControlIntentId),
+      actor(),
+      AbortSignal.timeout(5_000),
+    )
+    const acceptedDispatch = only(accepted.dispatches)
+    if (acceptedDispatch.preparation === undefined || acceptedDispatch.operationSnapshot === undefined) {
+      throw new Error('test Dispatch lacks accepted Host evidence')
+    }
+
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      hostRequest: {
+        ...acceptedDispatch.hostRequest,
+        source: { ...acceptedDispatch.hostRequest.source, payloadDigest: 'e'.repeat(64) },
+      },
+    }), 'Execution Dispatch disagrees with its immutable Host request')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      preparation: undefined,
+    }), 'accepted Execution Dispatch lacks admission evidence')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      acceptedFencingToken: acceptedDispatch.latestFencingToken + 1,
+    }), 'Execution Dispatch accepted fencing lacks matching preparation')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      preparation: {
+        ...acceptedDispatch.preparation,
+        operation: {
+          ...acceptedDispatch.preparation.operation,
+          hostId: 'host-40404040-4040-4040-8040-404040404040',
+        },
+      },
+    }), 'Execution Dispatch preparation disagrees with its target Host')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      operationSnapshot: {
+        ...acceptedDispatch.operationSnapshot,
+        bindingRevision: acceptedDispatch.operationSnapshot.bindingRevision + 1,
+      },
+    }), 'Execution Dispatch Host snapshot disagrees with its immutable request')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      operationSnapshot: {
+        ...acceptedDispatch.operationSnapshot,
+        requestFingerprint: {
+          ...acceptedDispatch.operationSnapshot.requestFingerprint,
+          digest: 'e'.repeat(64),
+        },
+      },
+    }), 'Execution Dispatch preparation disagrees with Host snapshot')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      state: 'reconciliation-required',
+      terminalReason: 'authority-revoked',
+    }), 'Execution Dispatch terminal reason disagrees with state')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      state: 'canceled',
+      terminalReason: 'protocol',
+    }), 'Execution Dispatch terminal reason disagrees with state')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      createdAt: acceptedDispatch.updatedAt + 1,
+    }), 'Execution Dispatch timestamps are not monotonic')
+
+    const claimed = harness()
+    claimed.execution.prepareMode = 'unavailable'
+    await claimed.operations.submit(
+      intent('intent-50505050-5050-4050-8050-505050505050' as SakiControlIntentId),
+      actor(),
+      AbortSignal.timeout(5_000),
+    )
+    const claimedDispatch = only(claimed.dispatches)
+    if (claimedDispatch.claim === undefined) throw new Error('test Dispatch lacks an active claim')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...claimedDispatch,
+      state: 'pending',
+    }), 'Execution Dispatch claim disagrees with state')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...claimedDispatch,
+      claim: { ...claimedDispatch.claim, fencingToken: claimedDispatch.latestFencingToken + 1 },
+    }), 'Execution Dispatch claim has a stale fencing token')
+
+    if (retainedAdmission.state !== 'agent-run' || retainedAdmission.phase !== 'accepted') {
+      throw new Error('test write admission is not accepted by its Agent Run')
+    }
+    expectSchemaIssue(bindingWriteAdmissionRecordSchema.safeParse({
+      ...retainedAdmission,
+      acceptedAt: retainedAdmission.updatedAt + 1,
+    }), 'Agent Run admission timestamps are not monotonic')
+  })
+
   it('freezes repeated definition headings and a default outcome through submission', async () => {
     const test = harness()
     test.execution.prepareMode = 'unavailable'
@@ -3699,6 +3851,13 @@ function foreignAgentWriteAdmission(): Extract<BindingWriteAdmissionRecord, { re
   })
   if (candidate.state !== 'agent-run') throw new Error('test admission is not owned by an Agent Run')
   return candidate
+}
+
+function expectSchemaIssue(
+  result: { readonly success: boolean; readonly error?: { readonly issues: readonly { readonly message: string }[] } },
+  message: string,
+): void {
+  expect(result.success ? [] : result.error?.issues.map(issue => issue.message)).toContain(message)
 }
 
 function actor(): ControlIntentActor {
