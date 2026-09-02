@@ -1,7 +1,7 @@
 /** Strict Saki identity schemas shared by product state and maintenance metadata. */
 
 import { z } from 'zod'
-import { sakiControlIntentIdSchema } from '@breakfastdapaidang/saki-execution'
+import { sakiAgentProfileIdSchema, sakiControlIntentIdSchema } from '@breakfastdapaidang/saki-execution'
 import type {
   SakiBootstrapChallengeId,
   SakiBoardRemoteFingerprint,
@@ -10,12 +10,14 @@ import type {
   SakiBuildId,
   SakiDevelopmentProjectId,
   SakiGrantId,
+  SakiDispatchClaimId,
   SakiGitHubScanAttemptId,
   SakiHostId,
   SakiInstallationAccessId,
   SakiInstallationGenerationId,
   SakiInstallationId,
   SakiIntentReceiptId,
+  SakiWorkAssignmentId,
   SakiPrincipalId,
   SakiResourceBindingId,
   SakiStorageGenerationId,
@@ -61,9 +63,13 @@ export const sakiBrowserSessionIdSchema = accessChildId<SakiBrowserSessionId>('s
 export const sakiDevelopmentProjectIdSchema = brandedId<SakiDevelopmentProjectId>('project')
 /** Strict Host-owned Resource Binding identity. */
 export const sakiResourceBindingIdSchema = brandedId<SakiResourceBindingId>('binding')
-export { sakiControlIntentIdSchema }
+export { sakiAgentProfileIdSchema, sakiControlIntentIdSchema }
 /** Strict Intent receipt identity. */
 export const sakiIntentReceiptIdSchema = brandedId<SakiIntentReceiptId>('receipt')
+/** Strict Work Assignment identity. */
+export const sakiWorkAssignmentIdSchema = brandedId<SakiWorkAssignmentId>('assignment')
+/** Strict short-lived Execution Dispatch claim identity. */
+export const sakiDispatchClaimIdSchema = brandedId<SakiDispatchClaimId>('dispatch-claim')
 /** Strict GitHub-backed Work Item identity. */
 export const sakiBoardWorkItemIdSchema = digestId<SakiBoardWorkItemId>('work-item')
 /** Strict Development-Project-scoped Work Item recovery identity. */

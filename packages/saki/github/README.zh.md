@@ -6,7 +6,7 @@ Saki 私有 GitHub Service Definition 注册 `ctx.sakiGitHub`。它拥有提供�
 
 ## 能力接口
 
-`SakiGitHub.read(request, signal)` 由可通过声明合并扩展的 `GitHubReadMap` 确定类型。B05 定义 GitHub App installation、Repository、Issue、Project v2、精确 `refs/tags/saki-v*` 引用、递归 annotated tag 剥离、按 tag 查找 Release、精确 Commit 和 Commit 比较读取。对已配置上游 Commit 的存在性检查就是精确 Commit 读取；缺失使用类型化的 `not-found` 失败。
+`SakiGitHub.read(request, signal)` 由可通过声明合并扩展的 `GitHubReadMap` 确定类型。它定义 GitHub App installation、Repository、Issue revision、完整且有界的 Issue detail、branch safety、Project v2、精确 `refs/tags/saki-v*` 引用、递归 annotated tag 剥离、按 tag 查找 Release、精确 Commit 和 Commit 比较读取。Branch safety 区分已有的安全或受保护分支，以及由活动规则覆盖的缺失分支；当缺失分支没有活动规则时，事实为 `legacy-protection-unknown`，因为它无法排除旧式保护。对已配置上游 Commit 的存在性检查就是精确 Commit 读取；缺失使用类型化的 `not-found` 失败。
 
 `SakiGitHub.scan(request, signal)` 由 `GitHubScanMap` 确定类型。其 `project-board` 成员接受一个 installation profile、Project node id、Repository node/database-id 对、持久 Status field id、提供方无关的必需 Status option id、调用方拥有的 `interactive` 或 `background` 优先级，以及调用方从每项目配置解析的 `rateLimitReserve`。Provider 在内部完整翻页读取所有 field、option、item、嵌套值和 open Issue connection。cursor 和部分结果不能穿过接口。结果是一个经过验证的 `GitHubProjectBoardScanCandidate`，包含稳定的前后 update fence、API 顺序、原始 item 内容、完整 open Issue、rate observation 和带版本指纹。
 
@@ -20,7 +20,7 @@ GitHub App、installation、account、Repository、Project、field、option、it
 
 Provider 抛出 `GitHubProviderError`；其 `failure` 只有以下闭合分支：取消、认证不可用、权限不匹配、可归因的 Status 映射不匹配、未找到、外部响应无效、primary rate limit、secondary rate limit、临时传输故障或永久拒绝。映射不匹配会标识精确的已配置 Status field 或非空的缺失必需 option id 集合，但不携带 Saki Status 语义。只有安全的 request、retry、reset、resource、operation、permission、外部 id 和 HTTP status observation 可以进入该值。因此，除非响应事实能证明类型化 rate-limit 失败，否则 GraphQL field error 或 partial data 会成为 `invalid-external-response`；不存在部分 candidate。
 
-严格 schema 拒绝未知属性，并交叉检查扫描 ownership、唯一的 field/item/Issue 身份、每个 Repository 中 Issue number 对 Issue 身份的唯一映射、Project item 与 open Issue 中同一 Issue 的事实一致性、连续 API 顺序、所选 Status field 类型、稳定 update fence、完整计数、open Issue state 和保留指纹。Issue-create request 要求不超过 1,024 个 UTF-8 字节的良构单行 title，以及不超过 60,000 个 UTF-8 字节、使用 LF 归一化并以唯一持久 `<!-- saki-work-item:<markerId> -->` 行结尾的良构 body。一次 installation observation 最多接纳 100,000 个可访问 Repository identity；一次 scan candidate 最多接纳 10,000 个 Project field、100,000 个 Project item 和 100,000 个 open Issue。
+严格 schema 拒绝未知属性，并交叉检查扫描 ownership、唯一的 field/item/Issue 身份、每个 Repository 中 Issue number 对 Issue 身份的唯一映射、Project item 与 open Issue 中同一 Issue 的事实一致性、连续 API 顺序、所选 Status field 类型、稳定 update fence、完整计数、open Issue state 和保留指纹。Issue-detail read 要么接纳完整 Markdown body，要么拒绝；body 可以为空，经过 UTF-8 编码后最多为 256 KiB。Issue-create request 要求不超过 1,024 个 UTF-8 字节的良构单行 title，以及不超过 60,000 个 UTF-8 字节、使用 LF 归一化并以唯一持久 `<!-- saki-work-item:<markerId> -->` 行结尾的良构 body。一次 installation observation 最多接纳 100,000 个可访问 Repository identity；一次 scan candidate 最多接纳 10,000 个 Project field、100,000 个 Project item 和 100,000 个 open Issue。
 
 ## Scan 指纹与 mutation 恢复
 

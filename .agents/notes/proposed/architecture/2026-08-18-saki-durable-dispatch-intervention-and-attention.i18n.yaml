@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-durable-dispatch-intervention-and-attention.md
-2026-08-18-saki-durable-dispatch-intervention-and-attention.md: 3c4152274ed7a42d2c077271830f5aeae88a07e0
-2026-08-18-saki-durable-dispatch-intervention-and-attention.zh.md: ebc868a06a2f714179c6a1dd3a8ff65215af3b36
+2026-08-18-saki-durable-dispatch-intervention-and-attention.md: af4b635d0ecd1a636bd1511cec618a7217a4931c
+2026-08-18-saki-durable-dispatch-intervention-and-attention.zh.md: 3a1f8ed4d8889ed3dcab158d1ba9268bffef7482

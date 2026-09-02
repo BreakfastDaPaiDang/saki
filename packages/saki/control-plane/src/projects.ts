@@ -19,11 +19,13 @@ import type {
 } from '@breakfastdapaidang/saki-execution'
 import {
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
+  agentProfileRecordSchema,
   developmentProjectRegistryRecordSchema,
   registrationIntentRecordSchema,
   resourceBindingRecordSchema,
 } from './spec.ts'
 import type {
+  AgentProfileRecord,
   DevelopmentProjectRecord,
   DevelopmentProjectRegistryRecord,
   RegistrationActor,
@@ -33,6 +35,7 @@ import type {
 import type {
   RegisterDevelopmentProjectIntent,
   SakiControlIntentId,
+  SakiAgentProfileId,
   SakiDevelopmentProjectId,
   SakiDevelopmentProjectSummary,
   SakiDevelopmentWorkspaceProjection,
@@ -137,6 +140,12 @@ class IntentCasConflict extends Error {
   }
 }
 
+/** New-Project values copied into its first immutable Agent Profile version. */
+export interface DevelopmentProjectAgentProfileTemplate {
+  readonly agentPresetId: AgentProfileRecord['agentPresetId']
+  readonly modelRouteRequest: AgentProfileRecord['modelRouteRequest']
+}
+
 /** Durable dependencies owned by the control-plane facade. */
 export interface DevelopmentProjectsOptions {
   readonly registryTable: RegistryTable
@@ -145,6 +154,7 @@ export interface DevelopmentProjectsOptions {
   readonly workspaces: WorkspaceRegistry
   readonly authorityCurrent: (actor: RegistrationActor) => boolean
   readonly validateActorReference: (actor: RegistrationActor) => void
+  readonly defaultAgentProfileTemplate: DevelopmentProjectAgentProfileTemplate
   /** Materialize or verify the Binding's single-writer admission before registration confirms. */
   readonly ensureBindingWriteAdmission?: (binding: ResourceBindingRecord) => Promise<void>
 }
@@ -569,6 +579,7 @@ export class DevelopmentProjects {
   ): Promise<CommittedRegistration> {
     const candidateProjectId = `project-${randomUUID()}` as SakiDevelopmentProjectId
     const candidateBindingId = `binding-${randomUUID()}` as SakiResourceBindingId
+    const candidateAgentProfileId = `agent-profile-${randomUUID()}` as SakiAgentProfileId
     const intentSnapshot = this.readIntents()
     await this.options.registryTable.update(DEVELOPMENT_PROJECT_REGISTRY_KEY, (currentValue) => {
       const registry = validateRegistry(currentValue)
@@ -590,9 +601,17 @@ export class DevelopmentProjects {
         revision: 0,
         projectTitle: intent.payload.intent.projectTitle,
         resourceBindingId: candidateBindingId,
+        defaultAgentProfileId: candidateAgentProfileId,
         state: 'active',
         createdAt: now,
       }
+      const agentProfile = agentProfileRecordSchema.parse({
+        id: candidateAgentProfileId,
+        projectId: candidateProjectId,
+        version: 1,
+        ...this.options.defaultAgentProfileTemplate,
+        createdAt: now,
+      })
       const binding = resourceBindingRecordSchema.parse({
         id: candidateBindingId,
         revision: 0,
@@ -610,6 +629,7 @@ export class DevelopmentProjects {
         ...registry,
         revision: registryRevision,
         projects: [...registry.projects, project],
+        agentProfiles: [...registry.agentProfiles, agentProfile],
         resourceBindings: [...registry.resourceBindings, binding],
         canonicalWorktreeIndex: [...registry.canonicalWorktreeIndex, {
           hostId,
@@ -758,9 +778,10 @@ export class DevelopmentProjects {
 function emptyRegistry(): DevelopmentProjectRegistryRecord {
   return developmentProjectRegistryRecordSchema.parse({
     id: DEVELOPMENT_PROJECT_REGISTRY_KEY,
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     projects: [],
+    agentProfiles: [],
     resourceBindings: [],
     canonicalWorktreeIndex: [],
     gitDirectoryIndex: [],
@@ -771,6 +792,7 @@ function emptyRegistry(): DevelopmentProjectRegistryRecord {
 function validateRegistry(value: DevelopmentProjectRegistryRecord): DevelopmentProjectRegistryRecord {
   const registry = developmentProjectRegistryRecordSchema.parse(value)
   unique(registry.projects.map(project => project.id), 'Project')
+  unique(registry.agentProfiles.map(profile => profile.id), 'Agent Profile')
   unique(registry.resourceBindings.map(binding => binding.id), 'Resource Binding')
   unique(registry.resourceBindings.map(binding => binding.workspaceId), 'Workspace')
   unique(registry.projects.map(project => project.resourceBindingId), 'Project-to-Binding reference')
@@ -790,6 +812,15 @@ function validateRegistry(value: DevelopmentProjectRegistryRecord): DevelopmentP
   for (const project of registry.projects) {
     const binding = registry.resourceBindings.find(candidate => candidate.id === project.resourceBindingId)
     if (binding?.projectId !== project.id) throw new Error(`Project '${project.id}' has an inconsistent Resource Binding`)
+    const profile = registry.agentProfiles.find(candidate => candidate.id === project.defaultAgentProfileId)
+    if (profile?.projectId !== project.id) {
+      throw new Error(`Project '${project.id}' has an inconsistent default Agent Profile`)
+    }
+  }
+  for (const profile of registry.agentProfiles) {
+    if (!registry.projects.some(project => project.id === profile.projectId)) {
+      throw new Error(`Agent Profile '${profile.id}' belongs to an unknown Project`)
+    }
   }
   for (const binding of registry.resourceBindings) {
     const worktreeEntries = registry.canonicalWorktreeIndex.filter(entry =>

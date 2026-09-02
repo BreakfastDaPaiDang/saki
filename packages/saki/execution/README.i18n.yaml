@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/saki/execution/README.md
-README.md: 30164fbaf67b41ef138eb7c5567af9ff84df679b
-README.zh.md: b16d0f667acafbccfa3784d8ba7a9b84340072a5
+README.md: 311761f2047c9c2feae417b6c1659ce9fa636fb0
+README.zh.md: 3d71d2facae2eb57f7050f1b183b7ee04acc6777

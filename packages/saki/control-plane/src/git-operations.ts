@@ -146,6 +146,7 @@ export function validateGitOperationsDurableState(
     const binding = bindingById.get(key)
     if (binding === undefined) throw new Error('Saki Binding write admission has no Resource Binding')
     if (admission.state === 'available') continue
+    if (admission.state === 'agent-run') continue
     const intent = byId.get(admission.source.intentId)
     if (intent === undefined) throw new Error('Saki manual write admission has no Git operation Intent')
     assertAdmissionMatchesIntent(admission, intent)
@@ -727,6 +728,7 @@ export class GitOperations {
             && current.action === actionFor(record.payload.intent.type)) return current
           throw new AdmissionBusy()
         }
+        if (current.state === 'agent-run') throw new AdmissionBusy()
         const now = Math.max(current.updatedAt, Date.now())
         return bindingWriteAdmissionRecordSchema.parse({
           id: bindingId,
@@ -796,6 +798,7 @@ export class GitOperations {
     if (current === undefined) throw new AdmissionUnavailable()
     const parsed = bindingWriteAdmissionRecordSchema.parse(current)
     if (parsed.state === 'available') return
+    if (parsed.state === 'agent-run') throw new AdmissionBusy()
     if (parsed.source.intentId !== record.id || parsed.source.payloadDigest !== record.payloadDigest) {
       throw new AdmissionBusy()
     }
@@ -803,6 +806,7 @@ export class GitOperations {
       await this.options.admissionTable.update(bindingId, (value) => {
         const stored = bindingWriteAdmissionRecordSchema.parse(value)
         if (stored.state === 'available') return stored
+        if (stored.state === 'agent-run') throw new AdmissionBusy()
         if (stored.revision !== parsed.revision || stored.source.intentId !== record.id
           || stored.source.payloadDigest !== record.payloadDigest) throw new AdmissionBusy()
         return bindingWriteAdmissionRecordSchema.parse({
@@ -831,6 +835,7 @@ export class GitOperations {
       if (current === undefined) throw new AdmissionUnavailable()
       const admission = bindingWriteAdmissionRecordSchema.parse(current)
       if (admission.state === 'available') return
+      if (admission.state === 'agent-run') return
       if (admission.source.intentId === record.id && admission.source.payloadDigest === record.payloadDigest) {
         try {
           await this.release(record)
@@ -840,6 +845,7 @@ export class GitOperations {
           if (replayValue === undefined) throw new AdmissionUnavailable()
           const replay = bindingWriteAdmissionRecordSchema.parse(replayValue)
           if (replay.state === 'available') return
+          if (replay.state === 'agent-run') return
           if (replay.source.intentId !== record.id || replay.source.payloadDigest !== record.payloadDigest) {
             const ownerValue = this.options.intentTable.get(replay.source.intentId)
             if (ownerValue === undefined) throw new Error('Saki manual write admission has no Git operation Intent')
@@ -870,6 +876,7 @@ export class GitOperations {
     signal: AbortSignal,
   ): HostOperationAdmissionDecision {
     signal.throwIfAborted()
+    if (expectation.source.kind !== 'control-intent') return { kind: 'denied', reason: 'not-current' }
     const recordValue = this.options.intentTable.get(expectation.source.intentId)
     if (recordValue === undefined) return { kind: 'denied', reason: 'not-current' }
     const record = gitOperationIntentRecordSchema.parse(recordValue)
@@ -1097,6 +1104,7 @@ function assertSnapshotMatches(record: GitOperationIntentRecord, snapshot: HostO
   const hostRequest = requireHostRequest(record)
   if (snapshot.operation.hostId !== record.payload.actor.hostId
     || snapshot.operation.type !== hostRequest.type
+    || snapshot.source.kind !== 'control-intent'
     || snapshot.source.intentId !== record.id
     || snapshot.source.intentRevision !== record.requestRevision
     || snapshot.source.payloadDigest !== record.payloadDigest

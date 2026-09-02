@@ -46,6 +46,7 @@ export {
 export {
   GITHUB_ISSUE_CREATE_BODY_UTF8_LIMIT,
   GITHUB_ISSUE_CREATE_TITLE_UTF8_LIMIT,
+  GITHUB_ISSUE_DETAIL_BODY_UTF8_LIMIT,
   GITHUB_INSTALLATION_REPOSITORY_LIMIT,
   GITHUB_PROJECT_BOARD_FIELD_LIMIT,
   GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT,
@@ -53,6 +54,8 @@ export {
   GITHUB_TAG_PEEL_DEPTH_LIMIT,
 } from './constants.ts'
 export {
+  githubBranchSafetyFactSchema,
+  githubBranchSafetyReadRequestSchema,
   githubCommitComparisonFactSchema,
   githubCommitFactSchema,
   githubCommitReadRequestSchema,
@@ -67,6 +70,8 @@ export {
   githubIssueCreateInspectionSchema,
   githubIssueCreateRequestSchema,
   githubIssueFactSchema,
+  githubIssueDetailFactSchema,
+  githubIssueDetailReadRequestSchema,
   githubIssueReadRequestSchema,
   githubPermissionFactSchema,
   githubProjectBoardFingerprintSchema,
@@ -98,6 +103,8 @@ export {
   githubTagTargetSchema,
 } from './schemas.ts'
 export type {
+  GitHubBranchSafetyFact,
+  GitHubBranchSafetyReadRequest,
   GitHubAccountId,
   GitHubAppId,
   GitHubCommitComparisonFact,
@@ -114,6 +121,8 @@ export type {
   GitHubInstallationProfile,
   GitHubInstallationReadRequest,
   GitHubIssueFact,
+  GitHubIssueDetailFact,
+  GitHubIssueDetailReadRequest,
   GitHubIssueId,
   GitHubIssueCreateInspection,
   GitHubIssueCreateInspectionHint,

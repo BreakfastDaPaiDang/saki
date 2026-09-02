@@ -13,6 +13,7 @@ import {
   readClosedSakiV3State,
   readClosedSakiV4State,
   readClosedSakiV5State,
+  readClosedSakiV6State,
 } from './closed-state.ts'
 import { SakiMaintenanceError } from './error.ts'
 import { sakiStateCapability } from './state-version.ts'
@@ -225,7 +226,7 @@ function requireUpgradeBackupSource(
 
 function requireRetainedUpgradeSource(
   journal: Extract<SakiOperationJournal, { readonly kind: 'upgrade' }>,
-  stateVersion: 2 | 3 | 4 | 5,
+  stateVersion: 2 | 3 | 4 | 5 | 6,
   storageGenerationId: SakiStorageGenerationId,
   sourceBuildId: SakiBuildId,
 ): void {
@@ -270,7 +271,7 @@ async function recoverUpgrade(
   }
 
   let oldStorageGenerationId: SakiStorageGenerationId
-  let oldStateVersion: 2 | 3 | 4 | 5
+  let oldStateVersion: 2 | 3 | 4 | 5 | 6
   let oldSourceBuildId: SakiBuildId
   if (manifest === undefined) {
     const legacy = await validateClosedSakiV2Source(
@@ -288,7 +289,8 @@ async function recoverUpgrade(
       || (manifest.value.stateVersion !== 2
         && manifest.value.stateVersion !== 3
         && manifest.value.stateVersion !== 4
-        && manifest.value.stateVersion !== 5)
+        && manifest.value.stateVersion !== 5
+        && manifest.value.stateVersion !== 6)
       || manifest.value.storageGenerationId === journal.candidateStorageGenerationId) {
       throw new SakiMaintenanceError(
         'recovery-required',
@@ -323,8 +325,18 @@ async function recoverUpgrade(
         },
         signal,
       )
-    } else {
+    } else if (manifest.value.stateVersion === 5) {
       await readClosedSakiV5State(
+        old.databasePath,
+        {
+          installationId: old.installation.installationId,
+          storageGenerationId: old.installation.storageGenerationId,
+          createdByBuildId: old.generation.createdByBuildId,
+        },
+        signal,
+      )
+    } else {
+      await readClosedSakiV6State(
         old.databasePath,
         {
           installationId: old.installation.installationId,

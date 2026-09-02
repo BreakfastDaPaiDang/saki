@@ -22,13 +22,15 @@ Dispatch 采用至少一次交付。本地 scheduler、恢复后的 poller 或�
 
 [带 fencing 的幂等 admission 提案](2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)拥有确切的 `pending`、`claimed`、`accepted`、cancellation、rejection 与 reconciliation 转换。它要求 Host 在产生副作用前准备一条持久 Host Operation，并要求控制面在 Host 启动 operation 前使用当前 fencing token 接受该映射。
 
+[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)针对一项显式 Ready-to-Run 操作部分实现了本提案。它持久化一条 Work Assignment、主要 Work Session、Agent Run、Execution Dispatch 与 expected-revision Dispatch Claim，然后使用共享的 Host Operation 生命周期与 Binding Write Admission。自动领取、Intervention Request、Attention Inbox、持久 Agent Identity 交付与通用多 Dispatch orchestration 仍处于 proposed 状态。
+
 Intervention Request 是持久控制面记录，包含稳定 id、kind、Project 与 subject reference、目标 Principal 或角色、所需决定或 input schema、阻塞范围、因果 Intent、Dispatch、Work Session 或 Agent Run reference、当前 revision、生命周期状态、可选 deadline 与 escalation policy。初始 kind 覆盖输入、审批、凭据授权、验收、冲突解决和对账。通知确认与请求解决是不同事实，过期不能产生批准。
 
 针对 expected revision 的第一个有效授权回答胜出。回答通过新的 Control Intent 进入，获得独立 Actor 归因，并且只能满足已声明条件，不能授予额外权限。回答需要进入模型时，Work Session 接收带归因、可重建的 event 或持久 reference。实时 DSH question 或 approval Provider 可以把开放请求桥接到当前 turn。进程丢失后，Saki 通过后续带归因 turn 恢复，而不会假装已挂起工具调用仍然存活。
 
 Attention Inbox 是 query projection，不是持久队列。它为一个 Principal 或 Agent Identity 连接开放 Work Assignment、Intervention Request、失败或需要对账的 Dispatch，以及选定 Signal。每个条目都链接到拥有它的记录，并公开可执行 Control Intent；关闭通知不会解决拥有记录。该名称与 Work Management 中作为 Work Item Status 的 `Inbox` 保持区别。
 
-0.1.0 公开简化的 Host Operator Attention Inbox，并持久化 Execution Dispatch 与 Intervention Request 记录。持久 Agent Identity inbox、Project Coordinator assignment、跨 Host 交付、飞书或 QQ adapter 与通用定时工作仍是这些记录的后续 Consumer。
+已实现的手动切片会持久化 Execution Dispatch 记录。0.1.0 的其余提案会公开简化的 Host Operator Attention Inbox，并持久化 Intervention Request 记录。持久 Agent Identity inbox、Project Coordinator assignment、跨 Host 交付、飞书或 QQ adapter 与通用定时工作仍是这些记录的后续 Consumer。
 
 ## 考虑过的方案
 

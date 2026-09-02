@@ -49,6 +49,7 @@ import type {
 import type {
   CreateCommitIntent,
   SakiControlIntentId,
+  SakiExecutionDispatchId,
   SakiGrantId,
   SakiGitOperationIntent,
   SakiInstallationId,
@@ -61,6 +62,7 @@ import type {
 
 const PROJECT = SAKI_PROJECT_PROJECTION_FIXTURES.developmentWorkspace.project
 const PROJECT_ID = PROJECT.id
+const AGENT_PROFILE_ID = 'agent-profile-00000000-0000-4000-8000-000000000015' as const
 const BINDING_ID = PROJECT.binding.id
 const HOST_ID = PROJECT.binding.hostId
 const OTHER_HOST_ID = 'host-00000000-0000-4000-8000-000000000099' as typeof HOST_ID
@@ -128,7 +130,7 @@ class TestAcceptance extends HostOperationAcceptance {
 }
 
 interface FakeOperation {
-  readonly request: HostOperationRequest
+  readonly request: HostOperationRequest<'stage-files' | 'unstage-files' | 'commit'>
   admission: HostOperationAdmissionSource
   readonly preparation: HostOperationPreparation
   readonly acceptance: HostOperationAcceptance
@@ -179,6 +181,8 @@ class FakeExecution extends SakiHostExecution {
     return { ok: false, reason: 'unavailable' }
   }
 
+  async resumeAgentRun(): Promise<never> { throw new Error('Git-only test Host cannot resume Agent Runs') }
+
   async prepareOperation<K extends HostOperationKind>(
     request: HostOperationRequest<K>,
     admission: HostOperationAdmissionSource,
@@ -189,8 +193,10 @@ class FakeExecution extends SakiHostExecution {
       ok: false,
       reason: this.prepareMode,
     }
+    if (request.type === 'start-agent-run') return { ok: false, reason: 'source-conflict' }
+    const gitRequest: HostOperationRequest<'stage-files' | 'unstage-files' | 'commit'> = request
     const existing = [...this.operations.values()].find(candidate =>
-      candidate.request.source.intentId === request.source.intentId)
+      candidate.request.source.intentId === gitRequest.source.intentId)
     if (existing !== undefined) {
       existing.admission = admission
       return {
@@ -201,32 +207,32 @@ class FakeExecution extends SakiHostExecution {
       } as HostOperationReceipt<K>
     }
     const operation = {
-      id: `host-operation-${String(request.source.intentId).slice('intent-'.length)}`,
-      hostId: request.expected.binding.hostId,
-      type: request.type,
+      id: `host-operation-${String(gitRequest.source.intentId).slice('intent-'.length)}`,
+      hostId: gitRequest.expected.binding.hostId,
+      type: gitRequest.type,
     } as HostOperationReference<K>
     const preparation = {
       operation,
       preparationRevision: 0,
       requestFingerprint: {
         version: 1 as const,
-        digest: canonicalDigest('saki/test-host-request/v1', request),
+        digest: canonicalDigest('saki/test-host-request/v1', gitRequest),
       },
     }
     const snapshot = {
       operation,
       revision: 0,
-      source: request.source,
+      source: gitRequest.source,
       requestFingerprint: preparation.requestFingerprint,
-      bindingId: request.expected.binding.id,
-      bindingRevision: request.expected.binding.revision,
+      bindingId: gitRequest.expected.binding.id,
+      bindingRevision: gitRequest.expected.binding.revision,
       preparedAt: 10,
       updatedAt: 10,
       state: 'prepared',
       admission: { kind: 'not-accepted' },
     } as HostOperationSnapshot<K>
     const stored: FakeOperation = {
-      request,
+      request: gitRequest,
       admission,
       preparation,
       acceptance: new TestAcceptance(operation.id),
@@ -236,10 +242,10 @@ class FakeExecution extends SakiHostExecution {
     this.afterPrepare?.()
     if (this.probeAdmissionDuringPrepare) {
       const decision = await admission({
-        bindingId: request.expected.binding.id,
-        bindingRevision: request.expected.binding.revision,
+        bindingId: gitRequest.expected.binding.id,
+        bindingRevision: gitRequest.expected.binding.revision,
         preparation,
-        source: request.source,
+        source: gitRequest.source,
       }, new AbortController().signal)
       this.prepareAdmissionDecision = decision.kind
     }
@@ -516,14 +522,23 @@ function statusFixture() {
   })
   const registry = developmentProjectRegistryRecordSchema.parse({
     id: 'development-project-registry',
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 1,
     projects: [{
       id: PROJECT_ID,
       revision: 0,
       projectTitle: 'Fixture project',
       resourceBindingId: BINDING_ID,
+      defaultAgentProfileId: AGENT_PROFILE_ID,
       state: 'active',
+      createdAt: 1,
+    }],
+    agentProfiles: [{
+      id: AGENT_PROFILE_ID,
+      projectId: PROJECT_ID,
+      version: 1,
+      agentPresetId: 'standard',
+      modelRouteRequest: null,
       createdAt: 1,
     }],
     resourceBindings: [resource],
@@ -665,6 +680,24 @@ function availableAdmission(revision = 0): BindingWriteAdmissionRecord {
   })
 }
 
+function agentRunAdmission(revision = 1): Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> {
+  const admission = bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision,
+    state: 'agent-run',
+    phase: 'reserved',
+    bindingRevision: 0,
+    originIntentId: 'intent-00000000-0000-4000-8000-000000000390',
+    agentRunId: 'agent-run-00000000-0000-4000-8000-000000000391',
+    payloadDigest: '3'.repeat(64),
+    reservedAt: 1,
+    updatedAt: 1,
+  })
+  if (admission.state !== 'agent-run') throw new Error('test admission is not owned by an Agent Run')
+  return admission
+}
+
 function retainedAcceptedAdmission(
   record: GitOperationIntentRecord,
   revision = 10,
@@ -692,6 +725,28 @@ function retainedAcceptedAdmission(
 }
 
 describe('Saki structured Git operations', () => {
+  it('preserves an Agent Run write owner during validation and Git reservation', async () => {
+    const test = harness()
+    const admission = agentRunAdmission()
+    test.admissions.records.set(BINDING_ID, admission)
+
+    expect(() => validateGitOperationsDurableState(
+      test.intents,
+      test.admissions,
+      test.registry,
+      new Set(),
+      new Set(),
+      () => {},
+    )).not.toThrow()
+    await expect(test.operations.submit(
+      intent('stage-files', 'intent-00000000-0000-4000-8000-000000000392' as SakiControlIntentId),
+      actor(),
+      new AbortController().signal,
+    )).resolves.toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(test.admissions.get(BINDING_ID)).toEqual(admission)
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
   it('keeps all three browser Intents strict, path-free, and selection-bounded', () => {
     const stage = intent('stage-files') as StageFilesIntent
     const unstage = intent('unstage-files') as UnstageFilesIntent
@@ -1672,6 +1727,14 @@ describe('Saki structured Git operations', () => {
     ['source', (value: HostOperationAdmissionExpectation) => ({
       ...value,
       source: { ...value.source, payloadDigest: 'f'.repeat(64) },
+    })],
+    ['source family', (value: HostOperationAdmissionExpectation) => ({
+      ...value,
+      source: {
+        kind: 'execution-dispatch' as const,
+        dispatchId: 'dispatch-00000000-0000-4000-8000-000000000393' as SakiExecutionDispatchId,
+        payloadDigest: value.source.payloadDigest,
+      },
     })],
     ['preparation', (value: HostOperationAdmissionExpectation) => ({
       ...value,
@@ -2908,7 +2971,7 @@ describe('Saki structured Git operations', () => {
       operation.snapshot = {
         ...operation.snapshot,
         source: { ...operation.snapshot.source, payloadDigest: 'f'.repeat(64) },
-      }
+      } as HostOperationSnapshot
     }, 'Host snapshot disagrees with its Saki Git Intent'],
   ] as const)('rejects a Provider receipt with mismatched %s', async (_name, mutate, message) => {
     const test = harness()
@@ -3099,6 +3162,49 @@ describe('Saki structured Git operations', () => {
       actor(),
       new AbortController().signal,
     )).rejects.toThrow('missing-key')
+  })
+
+  it('preserves an Agent Run owner observed before terminal release and on replay', async () => {
+    const test = harness()
+    const submitted = intent(
+      'stage-files',
+      'intent-00000000-0000-4000-8000-000000000394' as SakiControlIntentId,
+    )
+    let owner: Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> | undefined
+    test.execution.afterAdmission = () => {
+      const current = bindingWriteAdmissionRecordSchema.parse(test.admissions.get(BINDING_ID))
+      owner = agentRunAdmission(current.revision + 1)
+      test.admissions.records.set(BINDING_ID, owner)
+    }
+
+    await expect(test.operations.submit(submitted, actor(), new AbortController().signal)).rejects.toThrow()
+    expect(owner).toBeDefined()
+    await expect(test.operations.submit(submitted, actor(), new AbortController().signal))
+      .resolves.toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(test.admissions.get(BINDING_ID)).toEqual(owner)
+  })
+
+  it('preserves an Agent Run owner that wins the terminal release update race', async () => {
+    const test = harness()
+    const submitted = intent(
+      'stage-files',
+      'intent-00000000-0000-4000-8000-000000000395' as SakiControlIntentId,
+    )
+    await test.operations.submit(submitted, actor(), new AbortController().signal)
+    const record = gitOperationIntentRecordSchema.parse(test.intents.get(submitted.intentId))
+    test.admissions.records.set(BINDING_ID, retainedAcceptedAdmission(record))
+    let owner: Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> | undefined
+    test.admissions.update = async (key, operation) => {
+      const current = bindingWriteAdmissionRecordSchema.parse(test.admissions.get(key))
+      owner = agentRunAdmission(current.revision + 1)
+      test.admissions.records.set(key, owner)
+      return operation(owner)
+    }
+
+    await expect(test.operations.submit(submitted, actor(), new AbortController().signal))
+      .resolves.toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(owner).toBeDefined()
+    expect(test.admissions.get(BINDING_ID)).toEqual(owner)
   })
 
   it('recovers when terminal admission release commits before its acknowledgement', async () => {

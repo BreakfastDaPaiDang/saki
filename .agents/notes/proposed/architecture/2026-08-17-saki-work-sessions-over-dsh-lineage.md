@@ -14,7 +14,7 @@ Saki's control plane records Work Session identity, Work Item association, assig
 
 A Project Coordinator is a persistent Agent Identity that operates through replaceable Coordination Sessions. It receives attributed summaries and Signals from Work Sessions and reads durable Project projections rather than retaining every child transcript in one model context. Human messages, coordinator messages, and executing-Agent messages keep distinct sources even when they enter the same Work Session.
 
-Version 0.1.0 may create top-level DSH Sessions and expose only the primary Work Session for each Work Item. Its persistence and APIs permit multiple Work Sessions and do not require a Project Coordinator, concurrent specialist Sessions, or autonomous inter-session routing.
+The [manual Give-to-Agent decision](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md) creates one primary Work Session with a preallocated top-level DSH Session for each accepted manual start. Multiple Work Sessions, Project Coordinator identity and replacement, concurrent specialist Sessions, autonomous inter-session routing, and promotion of nested execution descendants remain proposed.
 
 ## Alternatives considered
 

@@ -21,6 +21,7 @@ import {
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiCreateCommitResultSchema,
   sakiCreateWorkItemResultSchema,
+  sakiGiveWorkItemToAgentResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiEmptyRequestSchema,
   sakiInspectProjectSelectionResultSchema,
@@ -234,6 +235,10 @@ async function authenticatedMutation(
       case 'move-work-item': {
         const result = await controlPlane.submit(authentication, operation.intent, signal)
         return reply({ ok: true, value: sakiMoveWorkItemResultSchema.parse(result) })
+      }
+      case 'give-work-item-to-agent': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiGiveWorkItemToAgentResultSchema.parse(result) })
       }
       /* v8 ignore next 2 -- Saki Intent input is closed and strict Host parsing rejects unknown tags before dispatch. */
       default: return assertNever(operation.intent)

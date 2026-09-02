@@ -196,6 +196,17 @@ const READY_ISSUE = issue(27, 'open', 'Publish a read-only GitHub Board Projecti
 const CANCELED_ISSUE = issue(29, 'closed', 'Retired synchronization experiment')
 const INBOX_ISSUE = issue(30, 'open', 'Unplanned repository issue')
 
+/** Complete Ready Issue body used by the assembled Agent Run snapshot. */
+export const SAKI_AGENT_RUN_SNAPSHOT_ISSUE_BODY = [
+  '# Intended outcome',
+  'Ship the assembled manual Agent Run path.',
+  '# Acceptance criteria',
+  '- Deliver this exact frozen Work Item input once',
+  '- Reopen the same durable Run after restart',
+  '# Blocked by',
+  'None',
+].join('\n')
+
 function scanSource(statusOptionId: GitHubProjectOptionId = STATUS_OPTIONS.ready): GitHubProjectBoardFingerprintSource {
   const observedAt = Date.now()
   const installation = installationFact(observedAt)
@@ -412,6 +423,27 @@ export class SakiBoardSnapshotGitHub extends SakiGitHub {
     if (request.kind === 'issue') {
       const found = [READY_ISSUE, CANCELED_ISSUE, INBOX_ISSUE].find(candidate => candidate.id === request.issueId)
       if (found !== undefined) return Promise.resolve(structuredClone(found))
+    }
+    if (request.kind === 'issue-detail') {
+      const found = [READY_ISSUE, CANCELED_ISSUE, INBOX_ISSUE].find(candidate => candidate.id === request.issueId)
+      if (found !== undefined) {
+        return Promise.resolve({
+          ...structuredClone(found),
+          body: found.id === READY_ISSUE.id ? SAKI_AGENT_RUN_SNAPSHOT_ISSUE_BODY : '',
+        })
+      }
+    }
+    if (request.kind === 'branch-safety') {
+      const matches = request.repositoryId === REPOSITORY_ID
+        && request.repositoryDatabaseId === REPOSITORY_DATABASE_ID
+        && request.branch === 'main'
+      if (!matches) {
+        throw new GitHubProviderError({
+          code: 'invalid-external-response',
+          operation: 'saki-board-snapshot-branch-safety-request',
+        })
+      }
+      return Promise.resolve({ kind: 'safe', branchExists: true, observedAt })
     }
     throw new GitHubProviderError({ code: 'not-found', resource: request.kind })
   }

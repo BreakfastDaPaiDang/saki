@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-The private Saki Host Execution Service Definition registers `ctx.sakiHostExecution`. It defines provider-neutral project inspection and Diff values plus the durable Host Operation lifecycle used for structured StageFiles, UnstageFiles, and Commit effects. The [Saki control plane](../control-plane/README.md) owns authorization, Project policy, write admission, and durable Control Intents. The wider control-plane and execution-plane split is defined by the [Saki backend architecture](../../../docs/saki/architecture/0.1.0-backend.md).
+The private Saki Host Execution Service Definition registers `ctx.sakiHostExecution`. It defines provider-neutral project inspection and Diff values plus the durable Host Operation lifecycle used for structured StageFiles, UnstageFiles, Commit, and Agent Run start effects. The [Saki control plane](../control-plane/README.md) owns authorization, Project policy, write admission, and durable Control Intents. The wider control-plane and execution-plane split is defined by the [Saki backend architecture](../../../docs/saki/architecture/0.1.0-backend.md).
 
 ## Project-selection inspection
 
@@ -30,21 +30,29 @@ StageFiles and UnstageFiles carry observation-scoped change ids and fingerprints
 
 The Service Definition has no configuration. Each Service Provider owns its execution-world mechanism and required resource bounds.
 
+## Durable Agent starts
+
+`StartAgentRun` carries an `execution-dispatch` source, exact writable Git precondition, preallocated Agent Run, Work Session, DSH Session and input MessageId, frozen Agent Profile and Model Route, and one complete text-only `UserMessage`. Its payload digest covers that message and its `saki-agent-run` source. Preparation is inert; start requires the accepted Dispatch mapping and current `agent-run` Binding Write Admission. The stable result repeats all four Run, Work Session, Session, and input identities.
+
+Host success proves that the intended Session and original input are durable, not that the model turn finished. Exact replay reuses one Host Operation. Providers inspect complete Session history before delivery: only absence permits the original input, while canceled, replaced, unknown, or conflicting evidence must not be resent. See the [manual dispatch decision](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md).
+
+`resumeAgentRun` is a startup-only recovery operation for a control-plane-validated running Run and its exact succeeded `StartAgentRun` operation and request. A Provider restores the live Agent handle only when the physical Session header and original input match that request. It adds no input, wake, or model request; missing, unavailable, or conflicting Host, Session, or Agent evidence rejects startup.
+
 ## Model Experience
 
-### Host execution values
+### Host execution values and Agent Run input
 
 #### What the model sees
 
-Nothing. `ctx.sakiHostExecution` provides detached inspection, Diff, and operation values to Host-side Saki Consumers and registers no tool, prompt section, or session event.
+Inspection, Diff, and structured Git operations add nothing. A started `StartAgentRun` delivers its exact text-only user message through the selected DSH Session; the message source retains the Dispatch, Agent Run, and Work Session ids.
 
 #### Token effect
 
-Zero direct tokens on every request.
+Zero direct tokens for inspection, Diff, preparation, and structured Git operations. Starting an Agent may issue the selected model request after the original input becomes durable; its token use depends on the frozen message and assembled Agent context.
 
 #### KV Cache effect
 
-Independent of model requests: the service does not assemble or change a request prefix.
+The original input is a new user turn rather than part of the reusable prefix. Recovery-only wake messages are excluded before model assembly.
 
 ## Known Limitations and Deferred Work
 

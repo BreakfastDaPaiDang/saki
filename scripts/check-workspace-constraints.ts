@@ -180,8 +180,9 @@ const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   // The maintenance library and CLI share operation state through one generated
   // chunk so both entries observe the same in-process ownership records.
   '@breakfastdapaidang/saki-installation-maintenance': ['lib/maintenance-operations-*.js'],
-  // The private Saki bundle carries its empty root beside the patch layer.
-  '@breakfastdapaidang/saki-bundle': ['cordis.yml'],
+  // The private Saki bundle carries its empty root and owned Agent preset
+  // beside the patch layer.
+  '@breakfastdapaidang/saki-bundle': ['cordis.yml', 'config/agent-presets/**/*.yml'],
 }
 
 function sameStringList(actual: readonly string[] | undefined, expected: readonly string[]): boolean {

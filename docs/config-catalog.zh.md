@@ -15,7 +15,7 @@
 
 ## `@breakfastdapaidang/saki-execution-local`
 
-需要：`fs` · `storageDomain` · `subprocess` · `workspaceRegistry`
+需要：`agentPresets` · `agents` · `fs` · `sessionPersistence` · `sessions` · `storageDomain` · `subprocess` · `workspaceRegistry`
 
 ```ts config-catalog
 type ResolvedConfig = Required<Config>
@@ -61,7 +61,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/saki/execution-local/src/index.ts:100`](../packages/saki/execution-local/src/index.ts)
+来源：[`packages/saki/execution-local/src/index.ts:112`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 
@@ -94,7 +94,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/saki/github-app/src/index.ts:64`](../packages/saki/github-app/src/index.ts)
+来源：[`packages/saki/github-app/src/index.ts:66`](../packages/saki/github-app/src/index.ts)
 
 <a id="deepseek-aidsh-acp"></a>
 

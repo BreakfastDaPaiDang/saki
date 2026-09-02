@@ -16,12 +16,22 @@ import type {
   ProjectSelectionProjection,
   RepositoryComparisonObservation,
   SafeGitRemoteObservation,
+  StartAgentRunInputMessage,
   TrustedProjectSelectionObservation,
   WorkspaceId,
 } from './types.ts'
 import { canonicalDigest, exactBytesDigest } from './canonical.ts'
 
 const UTF8 = new TextEncoder()
+
+/**
+ * Compute the immutable payload identity of one preallocated Agent Run input.
+ * @param input - complete identified UserMessage, including Saki provenance.
+ * @returns lowercase canonical SHA-256 digest.
+ */
+export function computeStartAgentRunPayloadDigest(input: StartAgentRunInputMessage): string {
+  return canonicalDigest('saki/start-agent-run-input/v1', input)
+}
 
 /** Stable baseline material with capture timestamp and elapsed duration removed. */
 export type InheritedChangeBaselineIdentityMaterial =

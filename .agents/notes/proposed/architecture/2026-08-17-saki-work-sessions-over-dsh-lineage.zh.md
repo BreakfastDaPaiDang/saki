@@ -14,7 +14,7 @@ Saki 控制面按照 [Agent Operations ADR 0002](../../../../docs/adr/agent-oper
 
 Project Coordinator 是通过可替换 Coordination Session 工作的持久 Agent Identity。它从 Work Session 接收带来源摘要和 Signal，并读取持久 Project 投影，而不在一个模型上下文中保留每个子会话的全文。人类消息、协调者消息和执行 Agent 消息即使进入同一个 Work Session，也保留不同的来源。
 
-0.1.0 可以创建顶层 DSH Session，并且只公开每个 Work Item 的主要 Work Session。它的持久化和 API 允许多个 Work Session，且不要求 Project Coordinator、并发专项 Session 或会话间自主路由。
+[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)为每次已接受的手动启动创建一个主要 Work Session，并预分配一个顶层 DSH Session。多个 Work Session、Project Coordinator 身份与替换、并发专项 Session、会话间自主路由，以及嵌套执行后代的提升仍处于 proposed 状态。
 
 ## 考虑过的方案
 

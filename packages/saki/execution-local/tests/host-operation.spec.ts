@@ -13,6 +13,7 @@ import * as StorageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import {
+  computeStartAgentRunPayloadDigest,
   hostOperationChangeSchema,
   MAX_GIT_REF_CHARS,
   MAX_HOST_OPERATION_SELECTED_CHANGES,
@@ -26,6 +27,8 @@ import type {
   SakiHostId,
   SakiResourceBindingId,
   StageFilesHostOperationRequest,
+  StartAgentRunHostOperationRequest,
+  StartAgentRunInputMessage,
   UnstageFilesHostOperationRequest,
 } from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -37,14 +40,19 @@ import {
 } from '../src/git-mutation.ts'
 import LocalSakiHostExecution, {
   MIN_OPERATION_MAX_INDEX_BYTES,
+  sakiHostExecutionDomainMigrations,
   sakiHostExecutionDomainSpec,
+  sakiHostExecutionV1DomainSpec,
   type Config,
 } from '../src/index.ts'
 import {
   hostOperationSnapshotCore,
+  localHostAgentRunResultFor,
   localHostOperationRequestFingerprint,
+  type LocalHostGitOperationRecord,
   type LocalHostOperationRecord,
 } from '../src/operation-state.ts'
+import { provideInertLocalAgentRunDependencies } from './storage.ts'
 
 const run = promisify(execFile)
 const roots: string[] = []
@@ -637,7 +645,8 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     let durable: LocalHostOperationRecord | undefined
     persistence.replace(async (record) => {
       await persistence.original(record)
-      if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started') {
+      if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started'
+        && record.effectPlan.kind !== 'agent-run') {
         durable = record
         throw new Error('simulated Unstage plan acknowledgement loss')
       }
@@ -1827,7 +1836,8 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     const persistence = operationPersistence(execution)
     let scratchPath: string | undefined
     persistence.replace(async (record) => {
-      if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started') {
+      if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started'
+        && record.effectPlan.kind !== 'agent-run') {
         scratchPath = record.effectPlan.scratch.path
         throw new Error('simulated first Stage plan persistence failure')
       }
@@ -2037,17 +2047,21 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
       signal,
     )).rejects.toThrow('simulated crash before scratch recovery')
     persistence.restore()
-    if (durable?.effectPlan === undefined) throw new Error('test did not retain an effect plan')
-    roots.push(durable.effectPlan.scratch.path)
+    if (durable?.effectPlan === undefined || durable.effectPlan.kind === 'agent-run') {
+      throw new Error('test did not retain a Git effect plan')
+    }
+    const gitDurable = durable as LocalHostGitOperationRecord
+    if (gitDurable.effectPlan === undefined) throw new Error('test did not retain a Git effect plan')
+    roots.push(gitDurable.effectPlan.scratch.path)
     const unrelated = await mkdtemp(join(tmpdir(), 'saki-unrelated-temporary-'))
     roots.push(unrelated)
-    const marker = await readFile(join(durable.effectPlan.scratch.path, 'owner'))
+    const marker = await readFile(join(gitDurable.effectPlan.scratch.path, 'owner'))
     await writeFile(join(unrelated, 'owner'), marker)
     await persistence.original({
-      ...durable,
+      ...gitDurable,
       effectPlan: {
-        ...durable.effectPlan,
-        scratch: { ...durable.effectPlan.scratch, path: unrelated },
+        ...gitDurable.effectPlan,
+        scratch: { ...gitDurable.effectPlan.scratch, path: unrelated },
       },
     })
 
@@ -2307,7 +2321,8 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     const persistence = operationPersistence(execution)
     let durable: LocalHostOperationRecord | undefined
     persistence.replace(async (record) => {
-      if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started') {
+      if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started'
+        && record.effectPlan.kind !== 'agent-run') {
         durable = record
       }
       if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'attempting') {
@@ -2445,6 +2460,58 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
         effectPlan: { ...durable.effectPlan, publication: 'attempting' },
       }, `${snapshot.state} Host Operation contradicts its no-effect evidence`)
     }
+    const agentRunInput = {
+      id: '77777777-7777-4777-8777-777777777777',
+      role: 'user',
+      content: [{ type: 'text', text: 'Cross-kind durable schema probe.' }],
+      source: {
+        kind: 'saki-agent-run',
+        dispatchId: 'dispatch-22222222-2222-4222-8222-222222222222',
+        agentRunId: 'agent-run-33333333-3333-4333-8333-333333333333',
+        workSessionId: 'work-session-44444444-4444-4444-8444-444444444444',
+      },
+    } as StartAgentRunInputMessage
+    const agentRunRequest = {
+      type: 'start-agent-run',
+      source: {
+        kind: 'execution-dispatch',
+        dispatchId: agentRunInput.source.dispatchId,
+        payloadDigest: computeStartAgentRunPayloadDigest(agentRunInput),
+      },
+      expected: durable.request.expected,
+      run: {
+        agentRunId: agentRunInput.source.agentRunId,
+        workSessionId: agentRunInput.source.workSessionId,
+        sessionId: 'session-66666666-6666-4666-8666-666666666666',
+        profile: {
+          id: 'agent-profile-55555555-5555-4555-8555-555555555555',
+          version: 1,
+          agentPresetId: 'development',
+          modelRoute: { provider: 'test-provider', model: 'test-model' },
+        },
+        input: agentRunInput,
+      },
+    } as StartAgentRunHostOperationRequest
+    const agentRunPlan = {
+      kind: 'agent-run' as const,
+      publication: 'attempting' as const,
+      result: localHostAgentRunResultFor(agentRunRequest),
+    }
+    expectOperationRecordIssue({
+      ...durable,
+      effectPlan: agentRunPlan,
+    }, 'Agent Run effect plan disagrees with Host Operation type')
+    const agentRunFingerprint = localHostOperationRequestFingerprint(agentRunRequest)
+    expectOperationRecordIssue({
+      ...durable,
+      request: agentRunRequest,
+      snapshot: {
+        ...durable.snapshot,
+        operation: { ...durable.snapshot.operation, type: 'start-agent-run' },
+        source: agentRunRequest.source,
+        requestFingerprint: agentRunFingerprint,
+      },
+    }, 'Agent Run Host Operation has a Git effect plan')
     const { changes: _changes, ...requestBase } = durable.request
     const crossKindRequest: CommitHostOperationRequest = {
       ...requestBase,
@@ -5399,7 +5466,8 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     const persistence = operationPersistence(execution)
     let scratchPath: string | undefined
     persistence.replace(async (record) => {
-      if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started') {
+      if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started'
+        && record.effectPlan.kind !== 'agent-run') {
         scratchPath = record.effectPlan.scratch.path
         throw new Error('simulated first Commit plan persistence failure')
       }
@@ -7095,6 +7163,13 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     })).rejects.toMatchObject({ code: 1 })
   }, 45_000)
 
+  it('initializes the durable operations table when migrating an empty snapshot', () => {
+    expect(sakiHostExecutionDomainMigrations.steps[0]!.migrate({
+      tables: {},
+      global: null,
+    })).toEqual({ tables: { operations: {} }, global: null })
+  })
+
   it('fails a replayed historical detached Commit before effect', async () => {
     const root = await repository()
     await git(root, 'checkout', '--detach')
@@ -7133,7 +7208,7 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
       hostId: HOST_ID,
       type: 'commit' as const,
     }
-    const record = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    const historicalRecord = sakiHostExecutionV1DomainSpec.tables.operations.valueSchema.parse({
       schemaVersion: 1,
       request,
       preparationRevision: 0,
@@ -7150,6 +7225,16 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
         admission: { kind: 'not-accepted' },
       },
     })
+    const migrated = sakiHostExecutionDomainMigrations.steps[0]!.migrate({
+      tables: { operations: { [operation.id]: historicalRecord } },
+      global: null,
+    })
+    const record = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse(
+      migrated.tables['operations']![operation.id],
+    )
+    expect(record).toEqual({ ...historicalRecord, schemaVersion: 2 })
+    expect(record.request).toEqual(historicalRecord.request)
+    expect(record.snapshot.requestFingerprint).toEqual(historicalRecord.snapshot.requestFingerprint)
     const operationTable = (execution as unknown as {
       operationTable: { put: (id: typeof operation.id, value: LocalHostOperationRecord) => Promise<void> }
     }).operationTable
@@ -17363,6 +17448,7 @@ async function provider(
   await ctx.plugin(Storage)
   await ctx.plugin(StorageSqlite, { path: join(storageRoot, 'saki.db'), journalMode: 'delete' })
   await ctx.plugin(StorageDomain, { backend: 'sqlite' })
+  provideInertLocalAgentRunDependencies(ctx)
   await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
   await ctx.plugin(LocalSubprocessRuntime)
   ctx.provide('workspaceRegistry', { list: () => [{ id: WORKSPACE_ID, path: root }] })

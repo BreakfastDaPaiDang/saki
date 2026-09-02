@@ -14,7 +14,7 @@
 
 ## Read 与完整 scan
 
-提供方实现 installation、Repository、Issue、Project v2、精确 `refs/tags/saki-v*`、递归 annotated-tag peel、按 tag 查找 Release、Commit 和 Commit comparison read。tag peel 会检查循环并限制深度。Release `target_commitish` 只为展示保留，绝不作为 Commit 证据。
+提供方实现 installation、Repository、Issue revision、完整 Issue detail、branch safety、Project v2、精确 `refs/tags/saki-v*`、递归 annotated-tag peel、按 tag 查找 Release、Commit 和 Commit comparison read。已有分支采用 GitHub 的 `protected` 事实，其中包括适用的 branch protection 和 ruleset。缺失分支通过 GitHub 的 effective-rules endpoint 检查；存在活动规则时归类为受保护，没有活动规则时返回 `legacy-protection-unknown`，因为只读 token 无法排除旧式保护。该路径不请求 Administration 权限。tag peel 会检查循环并限制深度。Release `target_commitish` 只为展示保留，绝不作为 Commit 证据。
 
 一次 `project-board` scan 会执行两遍完整读取，覆盖 Project field、按 API position 升序排列的 archived 与 non-archived Project item、嵌套 item field value 和 open Repository Issue。每一遍都有自己的前后 Project 与 Repository fence、mapping 校验、分页和计数校验。每一页都经过严格解析，并且必须重复精确的请求 Project、Repository node/database-id 对或 Project item 父身份；id 与 cursor 不得重复；配置的 Status id 必须仍精确标识一个 single-select field 及每个必需 option；配置的 item、field-value、page 和 response-byte 限制会快速失败，而不是截断结果。只有两遍的语义指纹相同时，提供方才返回第二遍 candidate；数量不变的 Status 变更或任何其他语义差异都会拒绝本次 operation，且不存在部分 candidate。
 

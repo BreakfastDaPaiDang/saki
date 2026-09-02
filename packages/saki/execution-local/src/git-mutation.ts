@@ -26,6 +26,7 @@ import {
   type AppliedProjectGitChange,
   type HostOperationCancellationReason,
   type HostOperationFailure,
+  type HostGitMutationPrecondition,
   type HostOperationRequest,
   type HostOperationSnapshot,
   type ProjectGitChange,
@@ -57,8 +58,8 @@ import {
   type LocalHostCommitPlan,
   type LocalHostIndexFileEvidence,
   type LocalHostIndexPinEvidence,
-  type LocalHostOperationEffectPlan,
-  type LocalHostOperationRecord,
+  type LocalHostGitOperationEffectPlan as LocalHostOperationEffectPlan,
+  type LocalHostGitOperationRecord as LocalHostOperationRecord,
   type LocalHostOperationScratch,
   type LocalHostStageFilesPlan,
   type LocalHostUnstageFilesPlan,
@@ -152,6 +153,12 @@ export interface LocalGitMutationDependencies {
   /** Provider-private adapters used to exercise host failure boundaries. @internal */
   readonly internals?: LocalGitMutationInternals
 }
+
+/** Read-only Local Host capabilities needed to revalidate one frozen writable world. */
+export type LocalHostWorldVerificationDependencies = Pick<
+  LocalGitMutationDependencies,
+  'fs' | 'workspaces' | 'git' | 'config' | 'identityReader'
+>
 
 /** File handle surface used by the mutation engine's Node adapter. @internal */
 export interface LocalGitMutationFileHandle {
@@ -348,6 +355,7 @@ type HashableWorktreeEvidence = Extract<
 >
 type HashableWorktreeMode = Exclude<CapturedInventoryGitObject['mode'], '160000'>
 type CommitRequest = Extract<HostOperationRequest, { readonly type: 'commit' }>
+type IndexRequest = Extract<HostOperationRequest, { readonly type: 'stage-files' | 'unstage-files' }>
 type AttachedCommitRequest = CommitRequest & {
   readonly expected: CommitRequest['expected'] & {
     readonly head: CommitRequest['expected']['head'] & { readonly symbolicRef: string }
@@ -2072,7 +2080,7 @@ async function prepareCommitAttempt(
 async function prepareIndexPublication(
   dependencies: LocalGitMutationDependencies,
   record: LocalHostOperationRecord,
-  request: Exclude<HostOperationRequest, { readonly type: 'commit' }>,
+  request: IndexRequest,
   signal: AbortSignal,
 ): Promise<PreparedIndexPublication> {
   const indexReadLimit = dependencies.config.operationMaxIndexBytes
@@ -2293,7 +2301,7 @@ async function prepareIndexPublication(
 async function applyIndexSelection(
   dependencies: LocalGitMutationDependencies,
   record: LocalHostOperationRecord,
-  request: Exclude<HostOperationRequest, { readonly type: 'commit' }>,
+  request: IndexRequest,
   stable: StableMutationObservation,
   scratch: LocalHostOperationScratch,
   signal: AbortSignal,
@@ -2460,7 +2468,32 @@ async function observeAndValidate(
   record: LocalHostOperationRecord,
   signal: AbortSignal,
 ): Promise<StableMutationObservation> {
-  const binding = record.request.expected.binding
+  return await observeAndValidateExpected(dependencies, record.request.expected, signal)
+}
+
+/**
+ * Reobserve one frozen Host Git precondition without performing a repository effect.
+ * @param dependencies - Local Host inspection capabilities.
+ * @param expected - complete frozen writable-world evidence.
+ * @param signal - observation cancellation.
+ * @returns nothing after exact evidence matches.
+ * @throws {NoEffectMutationError} when current durable evidence disproves the precondition.
+ * @throws {RetryableMutationError} when no complete bounded observation is available.
+ */
+export async function verifyFrozenHostOperationWorld(
+  dependencies: LocalHostWorldVerificationDependencies,
+  expected: HostGitMutationPrecondition,
+  signal: AbortSignal,
+): Promise<void> {
+  await observeAndValidateExpected(dependencies, expected, signal)
+}
+
+async function observeAndValidateExpected(
+  dependencies: LocalHostWorldVerificationDependencies,
+  expected: HostGitMutationPrecondition,
+  signal: AbortSignal,
+): Promise<StableMutationObservation> {
+  const binding = expected.binding
   let selected
   try {
     selected = await inspectStableLocalProjectSelection(
@@ -2468,7 +2501,7 @@ async function observeAndValidate(
       dependencies.workspaces,
       dependencies.git,
       dependencies.config,
-      { hostId: binding.hostId, directoryLocator: boundWorktree(record) },
+      { hostId: binding.hostId, directoryLocator: binding.expectedInspection.trusted.canonicalWorktreePath },
       signal,
       dependencies.identityReader,
       {
@@ -2501,7 +2534,6 @@ async function observeAndValidate(
     /* v8 ignore stop */
     throw new RetryableMutationError('unavailable')
   }
-  const expected = record.request.expected
   if (preEffectBaseline.kind !== 'complete') throw new RetryableMutationError('unavailable')
   if (status.fingerprint.digest !== expected.status.digest
     || canonicalDigest('saki/host-operation-head/v1', status.head)

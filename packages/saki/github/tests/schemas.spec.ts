@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  GITHUB_ISSUE_DETAIL_BODY_UTF8_LIMIT,
   GITHUB_RATE_OBSERVATION_LIMIT,
   GITHUB_TAG_PEEL_DEPTH_LIMIT,
   GitHubProviderError,
   computeGitHubProjectBoardFingerprint,
+  githubBranchSafetyFactSchema,
+  githubBranchSafetyReadRequestSchema,
   githubAccountId,
   githubAccountIdSchema,
   githubAppId,
@@ -23,6 +26,8 @@ import {
   githubInstallationProfileSchema,
   githubInstallationReadRequestSchema,
   githubIssueStateSetInspectionSchema,
+  githubIssueDetailFactSchema,
+  githubIssueDetailReadRequestSchema,
   githubIssueId,
   githubIssueIdSchema,
   githubIssueReadRequestSchema,
@@ -161,6 +166,8 @@ describe('GitHub id and request admission', () => {
       [githubInstallationReadRequestSchema, INSTALLATION_REQUEST],
       [githubRepositoryReadRequestSchema, { kind: 'repository', ...repository }],
       [githubIssueReadRequestSchema, { kind: 'issue', ...repository, issueId: ISSUE.id }],
+      [githubIssueDetailReadRequestSchema, { kind: 'issue-detail', ...repository, issueId: ISSUE.id }],
+      [githubBranchSafetyReadRequestSchema, { kind: 'branch-safety', ...repository, branch: 'feature/issue-30' }],
       [githubProjectReadRequestSchema, { kind: 'project', installation: INSTALLATION_PROFILE, projectId: PROJECT_ID }],
       [githubTagReferenceReadRequestSchema, { kind: 'tag-reference', ...repository, tagName: TAG_NAME }],
       [githubTagObjectReadRequestSchema, {
@@ -183,10 +190,38 @@ describe('GitHub id and request admission', () => {
       ...SCAN_REQUEST,
       rateLimitReserve: -1,
     }).success).toBe(false)
+    expect(githubBranchSafetyReadRequestSchema.safeParse({
+      kind: 'branch-safety', ...repository, branch: 'bad\0branch',
+    }).success).toBe(false)
+    expect(githubBranchSafetyReadRequestSchema.safeParse({
+      kind: 'branch-safety', ...repository, branch: '\ud800',
+    }).success).toBe(false)
   })
 })
 
 describe('raw GitHub facts', () => {
+  it('admits complete bounded Issue bodies and fail-closed branch safety facts', () => {
+    expect(githubIssueDetailFactSchema.parse({ ...ISSUE, body: '' })).toEqual({ ...ISSUE, body: '' })
+    expect(githubIssueDetailFactSchema.safeParse({
+      ...ISSUE,
+      body: 'x'.repeat(GITHUB_ISSUE_DETAIL_BODY_UTF8_LIMIT + 1),
+    }).success).toBe(false)
+    expect(githubIssueDetailFactSchema.safeParse({ ...ISSUE, body: '\ud800' }).success).toBe(false)
+    expect(githubIssueDetailFactSchema.safeParse({ ...ISSUE, body: 'hidden\0data' }).success).toBe(false)
+
+    for (const fact of [
+      { kind: 'safe', branchExists: true, observedAt: OBSERVED_AT },
+      { kind: 'protected', branchExists: true, observedAt: OBSERVED_AT },
+      { kind: 'protected', branchExists: false, observedAt: OBSERVED_AT },
+      { kind: 'legacy-protection-unknown', branchExists: false, observedAt: OBSERVED_AT },
+    ] as const) {
+      expect(githubBranchSafetyFactSchema.parse(fact)).toEqual(fact)
+    }
+    expect(githubBranchSafetyFactSchema.safeParse({
+      kind: 'safe', branchExists: false, observedAt: OBSERVED_AT,
+    }).success).toBe(false)
+  })
+
   it('admits every raw Project item content kind and rate observation kind', () => {
     const contents = [
       { kind: 'issue', issue: ISSUE },
@@ -470,6 +505,10 @@ describe('complete Project-board candidate', () => {
       fences: withCounts(items.length, 2),
     }
     expect(computeGitHubProjectBoardFingerprint(source).digest).toMatch(/^[0-9a-f]{64}$/)
+    expectCandidateSuccess({
+      ...SCAN_WITHOUT_FINGERPRINT,
+      items: [item('PVTI_draft', 0, { kind: 'draft-issue', title: 'Draft' })],
+    })
     expect(computeGitHubProjectBoardFingerprint({
       ...source,
       fields: [...source.fields].reverse(),
@@ -591,6 +630,10 @@ describe('closed failures, mutation vocabulary, and invariant companion', () => 
       observedAt: OBSERVED_AT,
     }
     expect(githubProjectItemPositionSetInspectionSchema.parse(inspection)).toEqual(inspection)
+    expect(githubProjectItemPositionSetInspectionSchema.parse({
+      ...inspection,
+      snapshot: { ...snapshot, membership: { state: 'absent' } },
+    }).snapshot.membership).toEqual({ state: 'absent' })
     expect(githubProjectItemPositionSetInspectionSchema.safeParse({
       ...inspection,
       snapshot: {

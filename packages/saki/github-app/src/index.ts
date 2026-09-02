@@ -21,9 +21,11 @@ import type {
 import { translateGitHubError } from './errors.ts'
 import { readInstallation } from './installation.ts'
 import {
+  readBranchSafety,
   readCommit,
   readCompareCommits,
   readIssue,
+  readIssueDetail,
   readProject,
   readReleaseByTag,
   readRepository,
@@ -111,6 +113,12 @@ export class SakiGitHubApp extends SakiGitHub {
         }
         if (admitted.kind === 'issue') {
           return await readIssue(admitted, privateKey, this.config, operationSignal, queue)
+        }
+        if (admitted.kind === 'issue-detail') {
+          return await readIssueDetail(admitted, privateKey, this.config, operationSignal, queue)
+        }
+        if (admitted.kind === 'branch-safety') {
+          return await readBranchSafety(admitted, privateKey, this.config, operationSignal, queue)
         }
         if (admitted.kind === 'project') {
           return await readProject(admitted, privateKey, this.config, operationSignal, queue)

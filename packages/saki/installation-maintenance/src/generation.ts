@@ -16,7 +16,11 @@ import type {
   SakiInstallationId,
   SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
-import { sakiStateCapability, sakiStateControlPlaneMigrationPlan } from './state-version.ts'
+import {
+  sakiStateCapability,
+  sakiStateControlPlaneMigrationPlan,
+  sakiStateHostExecutionMigrationPlan,
+} from './state-version.ts'
 
 /** Identity materialized in one new current Saki generation. */
 export interface NewSakiGenerationIdentity {
@@ -78,11 +82,19 @@ async function materializeHostExecutionAndSeal(
   retainedHostExecution?: KvUnitSnapshot,
 ): Promise<void> {
   const hostExecution = sakiStateCapability.writable.hostExecution
-  await facility.materialize(
-    hostExecution,
-    retainedHostExecution ?? emptySnapshot(hostExecution),
-    { targetBackend: 'candidate', signal },
-  )
+  if (retainedHostExecution === undefined) {
+    await facility.materialize(
+      hostExecution,
+      emptySnapshot(hostExecution),
+      { targetBackend: 'candidate', signal },
+    )
+  } else {
+    await facility.migrate(sakiStateHostExecutionMigrationPlan, {
+      sourceBackend: 'source',
+      targetBackend: 'candidate',
+      signal,
+    })
+  }
   await facility.materialize(
     sakiStorageGenerationDomainSpec,
     sealSnapshot(identity),
@@ -123,14 +135,14 @@ export async function materializeFreshSakiGeneration(
 }
 
 /**
- * Migrate exact retained v2-v5 control state into a missing current SQLite database and add its seal.
+ * Migrate exact retained v2-v6 control state into a missing current SQLite database and add its seal.
  * Product relationships must be validated before this generic transformation is called and
  * are validated again against the complete current candidate by the outer operation.
  * @param sourceDatabasePath - exact closed retained source selected by manifest or legacy config.
  * @param targetDatabasePath - missing candidate `state.sqlite` path on different media.
  * @param identity - retained Installation plus fresh generation and build provenance.
  * @param signal - cancellation through migration and seal materialization.
- * @param retainedHostExecution - exact v5 Host Operation snapshot, absent for pre-v5 sources.
+ * @param retainedHostExecution - exact v5 or v6 Host Operation snapshot, absent for pre-v5 sources.
  */
 export async function migrateSakiGeneration(
   sourceDatabasePath: string,

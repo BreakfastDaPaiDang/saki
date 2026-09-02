@@ -18,6 +18,10 @@ import type {
   ProjectGitStatusObservation,
   ProjectGitStatusSeedMaterial,
   ProjectSelectionProjection,
+  SessionId,
+  SakiAgentProfileId,
+  SakiAgentRunId,
+  SakiWorkSessionId,
   TrustedProjectSelectionObservation,
   WorkspaceId,
 } from '@breakfastdapaidang/saki-execution'
@@ -40,6 +44,7 @@ import type {
   RegisterDevelopmentProjectIntent,
   SakiAccessExchangeResult,
   SakiAccessLogoutResult,
+  SakiAgentRunProjection,
   SakiBoardProjection,
   SakiBoardMutationOverlayProjection,
   SakiBoardRemoteFingerprint,
@@ -61,6 +66,8 @@ import type {
   SakiQuery,
   SakiQueryResult,
   SakiResourceBindingId,
+  SakiWorkAssignmentId,
+  SakiWorkItemDetailProjection,
 } from './types.ts'
 
 /** Display-only placeholder Principal id used by authenticated fixtures. */
@@ -76,6 +83,9 @@ const DUPLICATE_RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000006' as S
 const STAGE_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000010' as SakiControlIntentId
 const UNSTAGE_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000011' as SakiControlIntentId
 const COMMIT_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000012' as SakiControlIntentId
+const CURRENT_AGENT_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000020' as SakiControlIntentId
+const CANCELED_AGENT_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000021' as SakiControlIntentId
+const RECONCILIATION_AGENT_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000022' as SakiControlIntentId
 const CREATE_WORK_ITEM_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000013' as SakiControlIntentId
 const MOVE_WORK_ITEM_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000014' as SakiControlIntentId
 const CREATE_WORK_ITEM_RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000013' as SakiIntentReceiptId
@@ -83,6 +93,19 @@ const MOVE_WORK_ITEM_RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000014'
 const STAGE_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000010' as HostOperationId
 const UNSTAGE_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000011' as HostOperationId
 const COMMIT_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000012' as HostOperationId
+const AGENT_PROFILE_ID = 'agent-profile-00000000-0000-4000-8000-000000000020' as SakiAgentProfileId
+const CURRENT_ASSIGNMENT_ID = 'assignment-00000000-0000-4000-8000-000000000020' as SakiWorkAssignmentId
+const CANCELED_ASSIGNMENT_ID = 'assignment-00000000-0000-4000-8000-000000000021' as SakiWorkAssignmentId
+const RECONCILIATION_ASSIGNMENT_ID = 'assignment-00000000-0000-4000-8000-000000000022' as SakiWorkAssignmentId
+const CURRENT_WORK_SESSION_ID = 'work-session-00000000-0000-4000-8000-000000000020' as SakiWorkSessionId
+const CANCELED_WORK_SESSION_ID = 'work-session-00000000-0000-4000-8000-000000000021' as SakiWorkSessionId
+const RECONCILIATION_WORK_SESSION_ID = 'work-session-00000000-0000-4000-8000-000000000022' as SakiWorkSessionId
+const CURRENT_AGENT_RUN_ID = 'agent-run-00000000-0000-4000-8000-000000000020' as SakiAgentRunId
+const CANCELED_AGENT_RUN_ID = 'agent-run-00000000-0000-4000-8000-000000000021' as SakiAgentRunId
+const RECONCILIATION_AGENT_RUN_ID = 'agent-run-00000000-0000-4000-8000-000000000022' as SakiAgentRunId
+const CURRENT_DSH_SESSION_ID = 'session-00000000-0000-4000-8000-000000000020' as SessionId
+const CANCELED_DSH_SESSION_ID = 'session-00000000-0000-4000-8000-000000000021' as SessionId
+const RECONCILIATION_DSH_SESSION_ID = 'session-00000000-0000-4000-8000-000000000022' as SessionId
 const GITHUB_APP_ID = '12345' as GitHubAppId
 const GITHUB_INSTALLATION_ID = '12345678' as GitHubInstallationId
 const GITHUB_ACCOUNT_ID = 'O_fixture_account' as GitHubAccountId
@@ -940,6 +963,117 @@ export const SAKI_BOARD_PROJECTION_FIXTURES = Object.freeze({
     mutationOverlays: [],
   } as const satisfies SakiBoardProjection,
 })
+
+const AGENT_PROFILE_PROJECTION = {
+  id: AGENT_PROFILE_ID,
+  version: 1,
+  agentPresetId: 'development',
+} as const
+
+const AGENT_MODEL_PROJECTION = {
+  provider: 'controllable-fake',
+  model: 'fixture-model',
+} as const
+
+/** Browser-safe current and recent manual Agent Run summaries. */
+export const SAKI_AGENT_RUN_PROJECTION_FIXTURES = Object.freeze({
+  running: {
+    id: CURRENT_AGENT_RUN_ID,
+    revision: 2,
+    assignmentId: CURRENT_ASSIGNMENT_ID,
+    workSessionId: CURRENT_WORK_SESSION_ID,
+    sessionId: CURRENT_DSH_SESSION_ID,
+    source: {
+      kind: 'manual-give-to-agent',
+      intentId: CURRENT_AGENT_INTENT_ID,
+      projectId: PROJECT_ID,
+      workItemId: BOARD_WORK_ITEM_ID,
+    },
+    profile: AGENT_PROFILE_PROJECTION,
+    model: AGENT_MODEL_PROJECTION,
+    state: 'running',
+    recovery: { state: 'resumable' },
+    createdAt: BOARD_CONFIRMED_AT + 20_000,
+    updatedAt: BOARD_CONFIRMED_AT + 40_000,
+  } as const satisfies SakiAgentRunProjection,
+  canceled: {
+    id: CANCELED_AGENT_RUN_ID,
+    revision: 3,
+    assignmentId: CANCELED_ASSIGNMENT_ID,
+    workSessionId: CANCELED_WORK_SESSION_ID,
+    sessionId: CANCELED_DSH_SESSION_ID,
+    source: {
+      kind: 'manual-give-to-agent',
+      intentId: CANCELED_AGENT_INTENT_ID,
+      projectId: PROJECT_ID,
+      workItemId: BOARD_WORK_ITEM_ID,
+    },
+    profile: AGENT_PROFILE_PROJECTION,
+    model: AGENT_MODEL_PROJECTION,
+    state: 'canceled',
+    recovery: { state: 'terminal', reason: 'authority-revoked' },
+    createdAt: BOARD_CONFIRMED_AT - 80_000,
+    updatedAt: BOARD_CONFIRMED_AT - 70_000,
+  } as const satisfies SakiAgentRunProjection,
+  reconciliationRequired: {
+    id: RECONCILIATION_AGENT_RUN_ID,
+    revision: 4,
+    assignmentId: RECONCILIATION_ASSIGNMENT_ID,
+    workSessionId: RECONCILIATION_WORK_SESSION_ID,
+    sessionId: RECONCILIATION_DSH_SESSION_ID,
+    source: {
+      kind: 'manual-give-to-agent',
+      intentId: RECONCILIATION_AGENT_INTENT_ID,
+      projectId: PROJECT_ID,
+      workItemId: BOARD_WORK_ITEM_ID,
+    },
+    profile: AGENT_PROFILE_PROJECTION,
+    model: AGENT_MODEL_PROJECTION,
+    state: 'reconciliation-required',
+    recovery: { state: 'required', reason: 'effect-unknown' },
+    createdAt: BOARD_CONFIRMED_AT - 40_000,
+    updatedAt: BOARD_CONFIRMED_AT - 20_000,
+  } as const satisfies SakiAgentRunProjection,
+})
+
+/** Assigned Work Item detail with one current Run and bounded recent execution history. */
+export const SAKI_WORK_ITEM_DETAIL_PROJECTION_FIXTURE = Object.freeze({
+  type: 'work-item-detail',
+  projectId: PROJECT_ID,
+  workItemId: BOARD_WORK_ITEM_ID,
+  definition: {
+    title: 'Ship the read-only GitHub Board projection',
+    url: 'https://github.example.invalid/BreakfastDaPaiDang/saki/issues/27',
+    number: 27,
+    status: 'in-progress',
+    intendedOutcome: 'Expose one recoverable Work Item execution view to the Host Operator.',
+    acceptanceCriteria: [
+      'The current Agent Run links to the primary Work Session.',
+      'Recent terminal and reconciliation states remain display-safe.',
+    ],
+    blockage: [],
+  },
+  assignment: {
+    id: CURRENT_ASSIGNMENT_ID,
+    revision: 1,
+    state: 'active',
+    primaryWorkSessionId: CURRENT_WORK_SESSION_ID,
+    createdAt: BOARD_CONFIRMED_AT + 20_000,
+    updatedAt: BOARD_CONFIRMED_AT + 40_000,
+  },
+  primaryWorkSession: {
+    id: CURRENT_WORK_SESSION_ID,
+    revision: 1,
+    state: 'open',
+    createdAt: BOARD_CONFIRMED_AT + 20_000,
+    updatedAt: BOARD_CONFIRMED_AT + 40_000,
+  },
+  currentAgentRun: SAKI_AGENT_RUN_PROJECTION_FIXTURES.running,
+  recentAgentRuns: [
+    SAKI_AGENT_RUN_PROJECTION_FIXTURES.reconciliationRequired,
+    SAKI_AGENT_RUN_PROJECTION_FIXTURES.canceled,
+  ],
+} as const satisfies SakiWorkItemDetailProjection)
 
 /** Project Settings Projection examples for saved, activating, and activated synchronization states. */
 export const SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES = Object.freeze({

@@ -29,7 +29,7 @@ import {
   sakiHostExecutionDomainSpec,
   type LocalHostOperationRecord,
 } from '@breakfastdapaidang/saki-execution-local'
-import { validateGitOperationLinks } from '../src/state-validation.ts'
+import { validateAgentOperationLinks, validateGitOperationLinks } from '../src/state-validation.ts'
 
 const INTENT_ID = 'intent-00000000-0000-4000-8000-000000000071' as SakiControlIntentId
 const RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000071' as SakiIntentReceiptId
@@ -57,9 +57,11 @@ const TRUSTED_INSPECTION = {
   comparison: { fileMode: true, symlinks: true, autocrlf: false },
 }
 
+type GitHostOperationRequest = Exclude<HostOperationRequest, { readonly type: 'start-agent-run' }>
+
 interface LinkedFixture {
   readonly intent: GitOperationIntentRecord
-  readonly request: HostOperationRequest
+  readonly request: GitHostOperationRequest
   readonly preparation: NonNullable<GitOperationIntentRecord['preparation']>
   readonly preparedSnapshot: HostOperationSnapshot
   readonly operation: LocalHostOperationRecord
@@ -67,7 +69,7 @@ interface LinkedFixture {
   readonly availableAdmission: BindingWriteAdmissionRecord
 }
 
-function linkedFixture(requestType: HostOperationRequest['type'] = 'stage-files'): LinkedFixture {
+function linkedFixture(requestType: GitHostOperationRequest['type'] = 'stage-files'): LinkedFixture {
   const expectation = {
     projectId: PROJECT_ID,
     expectedRegistryRevision: 1,
@@ -124,9 +126,11 @@ function linkedFixture(requestType: HostOperationRequest['type'] = 'stage-files'
     worktree: browserIntent.expected.expectedWorktree,
     preEffectBaseline: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline,
   }
-  const request = hostOperationRequestSchema.parse(requestType === 'commit'
+  const parsedRequest = hostOperationRequestSchema.parse(requestType === 'commit'
     ? { type: requestType, source, expected, message: browserIntent.message }
     : { type: requestType, source, expected, changes: browserIntent.changes })
+  if (parsedRequest.type === 'start-agent-run') throw new Error('Git operation fixture parsed as Agent Run')
+  const request = parsedRequest
   const requestFingerprint = {
     version: 1 as const,
     digest: canonicalDigest('saki/host-operation-request/v1', request),
@@ -162,7 +166,7 @@ function linkedFixture(requestType: HostOperationRequest['type'] = 'stage-files'
     updatedAt: 2,
   })
   const operationRecord = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     request,
     preparationRevision: 0,
     snapshot: preparedSnapshot,
@@ -274,13 +278,13 @@ function preparedProtocolConflictIntent(fixture: LinkedFixture): GitOperationInt
   })
 }
 
-function preparedOperation(request: HostOperationRequest, updatedAt = 2): LocalHostOperationRecord {
+function preparedOperation(request: GitHostOperationRequest, updatedAt = 2): LocalHostOperationRecord {
   const requestFingerprint = {
     version: 1 as const,
     digest: canonicalDigest('saki/host-operation-request/v1', request),
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     request,
     preparationRevision: 0,
     snapshot: {
@@ -306,6 +310,7 @@ function mismatchedOperation(fixture: LinkedFixture): LocalHostOperationRecord {
       status: { version: 1, digest: '9'.repeat(64) },
     },
   })
+  if (request.type === 'start-agent-run') throw new Error('Git operation fixture parsed as Agent Run')
   return preparedOperation(request)
 }
 
@@ -390,6 +395,8 @@ function domainsFromEntries(
 ): readonly [Domain<typeof sakiControlPlaneDomainSpec>, Domain<typeof sakiHostExecutionDomainSpec>] {
   const controlTables = new Map<string, ReturnType<typeof readonlyTable>>([
     ['git_operation_intents', readonlyTable(intents)],
+    ['agent_runs', readonlyTable([])],
+    ['execution_dispatches', readonlyTable([])],
     ['binding_write_admissions', readonlyTable(admissions)],
   ])
   const operationTable = readonlyTable(operations)
@@ -417,6 +424,13 @@ function readonlyTable(entries: readonly (readonly [string, unknown])[]) {
 }
 
 describe('current Saki Git-operation cross-domain validation', () => {
+  it('is ignored by Agent-operation validation', () => {
+    const fixture = linkedFixture()
+    const [controlPlane, hostExecution] = domains([], [fixture.operation], [])
+
+    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
   it('accepts a reserved Intent with the prepared, not-accepted Host Operation from a safe crash gap', () => {
     const fixture = linkedFixture()
     const [controlPlane, hostExecution] = domains(

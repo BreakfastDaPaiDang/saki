@@ -22,13 +22,15 @@ Dispatch delivery is at least once. A local scheduler, recovered poller, or futu
 
 The [fenced idempotent admission proposal](2026-08-18-saki-fenced-idempotent-dispatch-admission.md) owns the exact `pending`, `claimed`, `accepted`, cancellation, rejection, and reconciliation transitions. It requires the Host to prepare one durable Host Operation before any effect and the control plane to accept that mapping under the current fencing token before the Host starts it.
 
+The [manual Give-to-Agent decision](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md) partially implements this proposal for one explicit Ready-to-Run action. It persists a Work Assignment, primary Work Session, Agent Run, Execution Dispatch, and expected-revision Dispatch Claim, then uses the shared Host Operation lifecycle and Binding Write Admission. Automatic claiming, Intervention Requests, Attention Inbox, persistent Agent Identity delivery, and generalized multi-Dispatch orchestration remain proposed.
+
 An Intervention Request is a durable control-plane record with a stable id, kind, Project and subject references, target Principal or role, requested decision or input schema, blocking scope, causal Intent, Dispatch, Work Session, or Agent Run references, current revision, lifecycle state, optional deadline, and escalation policy. Initial kinds cover input, approval, credential authorization, acceptance, conflict resolution, and reconciliation. Notification acknowledgement and request resolution are separate facts, and expiry cannot produce approval.
 
 The first authorized response at the expected revision wins. A response enters through a new Control Intent, obtains its own Actor attribution, and can satisfy a declared condition but cannot grant additional authority. If the response must reach a model, the Work Session receives an attributed, reconstructable event or durable reference. A live DSH question or approval provider may bridge an open request into the current turn. After process loss, Saki resumes through a later attributed turn rather than pretending the suspended tool call survived.
 
 Attention Inbox is a query projection, not a persisted queue. It joins open Work Assignments, Intervention Requests, failed or reconciliation-required Dispatches, and selected Signals for one Principal or Agent Identity. Each entry links to its owning record and exposes available Control Intents; dismissing a notification does not resolve the owner. The name remains distinct from Work Management `Inbox`, which is a Work Item Status.
 
-Version 0.1.0 exposes a simplified Host Operator Attention Inbox and persists Execution Dispatch and Intervention Request records. Persistent Agent Identity inboxes, Project Coordinator assignment, cross-Host delivery, Feishu or QQ adapters, and general scheduled work remain later consumers of the same records.
+The implemented manual slice persists Execution Dispatch records. The remaining version 0.1.0 proposal exposes a simplified Host Operator Attention Inbox and persists Intervention Request records. Persistent Agent Identity inboxes, Project Coordinator assignment, cross-Host delivery, Feishu or QQ adapters, and general scheduled work remain later consumers of the same records.
 
 ## Alternatives considered
 

@@ -4,6 +4,8 @@ import { constants as bufferConstants } from 'node:buffer'
 import { isDeepStrictEqual } from 'node:util'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import {
   advanceLocalGitMutation,
   cancelPublishingOperation,
@@ -35,6 +37,7 @@ import type {
   InspectProjectSelectionResult,
   ReadProjectDiffRequest,
   ReadProjectDiffResult,
+  StartAgentRunHostOperationRequest,
 } from '@breakfastdapaidang/saki-execution'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
@@ -54,8 +57,17 @@ import {
   localHostOperationRequestFingerprint,
   MIN_OPERATION_MAX_INDEX_BYTES,
   sakiHostExecutionDomainSpec,
+  type LocalHostAgentRunOperationRecord,
+  type LocalHostGitOperationRecord,
   type LocalHostOperationRecord,
 } from './operation-state.ts'
+import {
+  advanceLocalAgentRun,
+  cancelLocalAgentRun,
+  disposeLocalAgentRuns,
+  inspectLocalAgentRun,
+  resumeSucceededLocalAgentRun,
+} from './agent-run.ts'
 
 /** Local Git observation, baseline, and operation resource limits. */
 export interface Config {
@@ -104,7 +116,10 @@ const GIT_VERSION_DECODER = new TextDecoder('utf-8', { fatal: true })
 
 /** Local Host Execution provider with durable operations and disposal-bound calls. */
 export class LocalSakiHostExecution extends SakiHostExecution {
-  static inject = ['fs', 'storageDomain', 'subprocess', 'workspaceRegistry']
+  static inject = [
+    'agentPresets', 'agents', 'fs', 'sessionPersistence', 'sessions',
+    'storageDomain', 'subprocess', 'workspaceRegistry',
+  ]
   static Config: z<Config> = z.object({
     gitCommandTimeoutMs: z.natural().min(1).max(MAX_TIMER_DELAY_MS).default(10_000),
     gitTerminationGraceMs: z.natural().min(1).max(MAX_TIMER_DELAY_MS).default(250),
@@ -135,6 +150,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
   private readonly lifetime = new AbortController()
   private readonly active = new Set<Promise<unknown>>()
   private readonly liveOperations = new Map<HostOperationReference['id'], LiveHostOperation>()
+  private readonly liveAgentRuns = new Map<SessionId, AgentHandle>()
   private readonly changedListeners = new Set<(change: HostOperationChange) => void>()
   private operationTail: Promise<void> = Promise.resolve()
 
@@ -144,6 +160,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     ctx.effect(() => async () => {
       this.lifetime.abort(new Error('Saki Local Host Execution disposed'))
       while (this.active.size > 0) await Promise.allSettled([...this.active])
+      await disposeLocalAgentRuns(this.liveAgentRuns)
       this.liveOperations.clear()
       this.changedListeners.clear()
       await this.operationDomain?.close()
@@ -222,7 +239,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     const fused = AbortSignal.any([signal, this.lifetime.signal])
     return await this.track(this.enqueueOperation(async () => {
       fused.throwIfAborted()
-      const operationId = hostOperationIdFor(request.source.intentId)
+      const operationId = hostOperationIdFor(request.source)
       const table = this.requireOperationTable()
       const fingerprint = localHostOperationRequestFingerprint(request)
       const existing = table.get(operationId)
@@ -268,9 +285,19 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       fused.throwIfAborted()
       let record = this.requireOperation(operation)
       if (isTerminalHostOperation(record.snapshot)) {
+        if (record.request.type === 'start-agent-run') {
+          const inspected = await inspectLocalAgentRun(
+            this.agentRunDependencies(),
+            record as LocalHostAgentRunOperationRecord,
+            next => this.persistOperation(next),
+            fused,
+          )
+          this.liveOperations.delete(operation.id)
+          return { ok: true, snapshot: inspected.snapshot as HostOperationSnapshot<K> }
+        }
         const advanced = await advanceLocalGitMutation(
           this.gitMutationDependencies(),
-          record,
+          record as LocalHostGitOperationRecord,
           /* v8 ignore next -- terminal advance only cleans private artifacts;
            * its persistence sink is unreachable. */
           next => this.persistOperation(next),
@@ -328,12 +355,19 @@ export class LocalSakiHostExecution extends SakiHostExecution {
           snapshot: record.snapshot as HostOperationSnapshot<K>,
         }
       }
-      const advanced = await advanceLocalGitMutation(
-        this.gitMutationDependencies(),
-        record,
-        next => this.persistOperation(next),
-        fused,
-      )
+      const advanced = record.request.type === 'start-agent-run'
+        ? await advanceLocalAgentRun(
+          this.agentRunDependencies(),
+          record as LocalHostAgentRunOperationRecord,
+          next => this.persistOperation(next),
+          fused,
+        )
+        : await advanceLocalGitMutation(
+          this.gitMutationDependencies(),
+          record as LocalHostGitOperationRecord,
+          next => this.persistOperation(next),
+          fused,
+        )
       if (advanced.kind === 'retryable') {
         return {
           ok: false,
@@ -344,11 +378,33 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       /* v8 ignore next -- every non-retryable mutation advance carries a terminal record;
        * fail loud if that engine contract regresses. */
       if (!isTerminalHostOperation(advanced.record.snapshot)) {
-        throw new Error('Saki Local Git mutation advanced without a terminal snapshot')
+        throw new Error('Saki Local Host Operation advanced without a terminal snapshot')
       }
       this.liveOperations.delete(operation.id)
       return { ok: true, snapshot: advanced.record.snapshot as HostOperationSnapshot<K> }
     }))
+  }
+
+  override async resumeAgentRun(
+    operation: HostOperationReference<'start-agent-run'>,
+    request: StartAgentRunHostOperationRequest,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await this.withSerializedOperation(operation, signal, async (initial, fused) => {
+      if (initial.request.type !== 'start-agent-run' || !isDeepStrictEqual(initial.request, request)) {
+        throw new Error(`Saki Agent Run Host Operation '${operation.id}' disagrees with its exact recovery request`)
+      }
+      const record = await inspectLocalAgentRun(
+        this.agentRunDependencies(),
+        initial as LocalHostAgentRunOperationRecord,
+        next => this.persistOperation(next),
+        fused,
+      )
+      if (record.snapshot.state !== 'succeeded') {
+        throw new Error(`Saki Agent Run Host Operation '${operation.id}' is not exactly succeeded`)
+      }
+      await resumeSucceededLocalAgentRun(this.agentRunDependencies(), record, fused)
+    })
   }
 
   override async inspectOperation<K extends HostOperationKind>(
@@ -357,17 +413,27 @@ export class LocalSakiHostExecution extends SakiHostExecution {
   ): Promise<HostOperationSnapshot<K>> {
     return await this.withSerializedOperation(operation, signal, async (initial, fused) => {
       let record = initial
+      if (record.request.type === 'start-agent-run') {
+        const inspected = await inspectLocalAgentRun(
+          this.agentRunDependencies(),
+          record as LocalHostAgentRunOperationRecord,
+          next => this.persistOperation(next),
+          fused,
+        )
+        if (isTerminalHostOperation(inspected.snapshot)) this.liveOperations.delete(operation.id)
+        return inspected.snapshot as HostOperationSnapshot<K>
+      }
       if (record.snapshot.state === 'publishing') {
         const recovered = await recoverPublishingOperation(
           this.gitMutationDependencies(),
-          record,
+          record as LocalHostGitOperationRecord,
           next => this.persistOperation(next),
           fused,
         )
         record = recovered.record
       }
       if (isTerminalHostOperation(record.snapshot)) {
-        await cleanupTerminalGitMutation(this.gitMutationDependencies(), record)
+        await cleanupTerminalGitMutation(this.gitMutationDependencies(), record as LocalHostGitOperationRecord)
         this.liveOperations.delete(operation.id)
       }
       return record.snapshot as HostOperationSnapshot<K>
@@ -382,14 +448,34 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     return await this.withSerializedOperation(operation, signal, async (initial, fused) => {
       let record = initial
       if (isTerminalHostOperation(record.snapshot)) {
-        await cleanupTerminalGitMutation(this.gitMutationDependencies(), record)
+        if (record.request.type === 'start-agent-run') {
+          record = await inspectLocalAgentRun(
+            this.agentRunDependencies(),
+            record as LocalHostAgentRunOperationRecord,
+            next => this.persistOperation(next),
+            fused,
+          )
+        } else {
+          await cleanupTerminalGitMutation(this.gitMutationDependencies(), record as LocalHostGitOperationRecord)
+        }
         this.liveOperations.delete(operation.id)
         return record.snapshot as HostOperationSnapshot<K>
       }
       if (record.snapshot.state === 'publishing') {
+        if (record.request.type === 'start-agent-run') {
+          const canceled = await cancelLocalAgentRun(
+            this.agentRunDependencies(),
+            record as LocalHostAgentRunOperationRecord,
+            reason,
+            next => this.persistOperation(next),
+            fused,
+          )
+          if (isTerminalHostOperation(canceled.snapshot)) this.liveOperations.delete(operation.id)
+          return canceled.snapshot as HostOperationSnapshot<K>
+        }
         record = await cancelPublishingOperation(
           this.gitMutationDependencies(),
-          record,
+          record as LocalHostGitOperationRecord,
           reason,
           next => this.persistOperation(next),
           fused,
@@ -510,11 +596,23 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       git: this.git,
       config: this.config,
       identityReader: readLocalAdministrativeDirectoryIdentity,
-      isOperationDurable: (record: LocalHostOperationRecord) => isDeepStrictEqual(
+      isOperationDurable: (record: LocalHostGitOperationRecord) => isDeepStrictEqual(
         this.requireOperationTable().get(record.snapshot.operation.id),
         record,
       ),
       ...(internals === undefined ? {} : { internals }),
+    }
+  }
+
+  private agentRunDependencies() {
+    return {
+      ctx: this.ctx,
+      agents: this.ctx.agents,
+      agentPresets: this.ctx.agentPresets,
+      sessions: this.ctx.sessions,
+      sessionPersistence: this.ctx.sessionPersistence,
+      handles: this.liveAgentRuns,
+      world: this.gitMutationDependencies(),
     }
   }
 
@@ -557,8 +655,9 @@ class LocalHostOperationAcceptance extends HostOperationAcceptance {
   }
 }
 
-function hostOperationIdFor(intentId: HostOperationRequest['source']['intentId']): HostOperationReference['id'] {
-  return intentId.replace(/^intent-/u, 'host-operation-') as HostOperationReference['id']
+function hostOperationIdFor(source: HostOperationRequest['source']): HostOperationReference['id'] {
+  const id = source.kind === 'control-intent' ? source.intentId : source.dispatchId
+  return id.replace(/^(?:intent|dispatch)-/u, 'host-operation-') as HostOperationReference['id']
 }
 
 function createPreparedOperationRecord<K extends HostOperationKind>(
@@ -569,7 +668,7 @@ function createPreparedOperationRecord<K extends HostOperationKind>(
   const preparedAt = Date.now()
   const operation = { id, hostId: request.expected.binding.hostId, type: request.type }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     request,
     preparationRevision: 0,
     snapshot: {
@@ -625,7 +724,11 @@ export function assertSupportedGitVersion(bytes: Uint8Array, stderr: Uint8Array)
 export { GitCommandError } from './git-runner.ts'
 export { MIN_OPERATION_MAX_INDEX_BYTES } from './operation-state.ts'
 export { sanitizeRemote } from './inspection.ts'
-export { sakiHostExecutionDomainSpec } from './operation-state.ts'
-export type { LocalHostOperationRecord } from './operation-state.ts'
+export {
+  sakiHostExecutionDomainMigrations,
+  sakiHostExecutionDomainSpec,
+  sakiHostExecutionV1DomainSpec,
+} from './operation-state.ts'
+export type { LocalHostGitOperationRecordV1, LocalHostOperationRecord } from './operation-state.ts'
 
 export default LocalSakiHostExecution

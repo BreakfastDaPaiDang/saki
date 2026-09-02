@@ -1,8 +1,12 @@
 /** Public value types for Saki Host Execution. @module @breakfastdapaidang/saki-execution/types */
 
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { MessageId, TextBlock, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 
+export type { MessageId } from '@deepseek-ai/dsh-llm'
+export type { SessionId } from '@deepseek-ai/dsh-session'
 export type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 
 /** Stable identity of one enrolled Saki Host. */
@@ -13,6 +17,18 @@ export type SakiResourceBindingId = Branded<'SakiResourceBindingId'>
 
 /** Stable idempotency identity of one Saki Control Intent. */
 export type SakiControlIntentId = Branded<'SakiControlIntentId'>
+
+/** Stable identity of one versioned Saki Development Agent Profile. */
+export type SakiAgentProfileId = Branded<'SakiAgentProfileId'>
+
+/** Stable identity of one Saki Execution Dispatch. */
+export type SakiExecutionDispatchId = Branded<'SakiExecutionDispatchId'>
+
+/** Stable identity of one Saki Agent Run. */
+export type SakiAgentRunId = Branded<'SakiAgentRunId'>
+
+/** Stable user-visible identity of one Saki Work Session. */
+export type SakiWorkSessionId = Branded<'SakiWorkSessionId'>
 
 /** Stable identity of one durable Host Operation. */
 export type HostOperationId = Branded<'HostOperationId'>
@@ -493,8 +509,8 @@ export type ReadProjectDiffResult =
   | { readonly ok: true; readonly page: ProjectGitDiffPage }
   | { readonly ok: false; readonly reason: ProjectGitDiffFailureReason }
 
-/** Immutable product command that owns one Host Operation. */
-export type HostOperationSource = {
+/** Direct Control Intent that owns one structured Git Host Operation. */
+export interface ControlIntentHostOperationSource {
   readonly kind: 'control-intent'
   readonly intentId: SakiControlIntentId
   /** Intent revision that froze the Host request, not its later current lifecycle revision. */
@@ -502,7 +518,17 @@ export type HostOperationSource = {
   readonly payloadDigest: string
 }
 
-/** Exact complete Git evidence required before a structured mutation. */
+/** Stable Execution Dispatch that owns one Agent-start Host Operation. */
+export interface ExecutionDispatchHostOperationSource {
+  readonly kind: 'execution-dispatch'
+  readonly dispatchId: SakiExecutionDispatchId
+  readonly payloadDigest: string
+}
+
+/** Immutable product command that owns one Host Operation. */
+export type HostOperationSource = ControlIntentHostOperationSource | ExecutionDispatchHostOperationSource
+
+/** Exact complete Git evidence required before one writable Host operation. */
 export interface HostGitMutationPrecondition {
   readonly binding: ActiveHostProjectBinding
   readonly status: ProjectGitStatusFingerprint
@@ -521,7 +547,7 @@ export interface SelectedProjectGitChange {
 /** Prepare a literal selected-file index mutation. */
 export interface StageFilesHostOperationRequest {
   readonly type: 'stage-files'
-  readonly source: HostOperationSource
+  readonly source: ControlIntentHostOperationSource
   readonly expected: HostGitMutationPrecondition
   readonly changes: readonly SelectedProjectGitChange[]
 }
@@ -529,7 +555,7 @@ export interface StageFilesHostOperationRequest {
 /** Prepare a literal selected-file reset of the index only. */
 export interface UnstageFilesHostOperationRequest {
   readonly type: 'unstage-files'
-  readonly source: HostOperationSource
+  readonly source: ControlIntentHostOperationSource
   readonly expected: HostGitMutationPrecondition
   readonly changes: readonly SelectedProjectGitChange[]
 }
@@ -537,9 +563,57 @@ export interface UnstageFilesHostOperationRequest {
 /** Prepare one hook-free, unsigned deterministic Git Commit. */
 export interface CommitHostOperationRequest {
   readonly type: 'commit'
-  readonly source: HostOperationSource
+  readonly source: ControlIntentHostOperationSource
   readonly expected: HostGitMutationPrecondition
   readonly message: string
+}
+
+/** Provenance of the exact initial input for one Saki Agent Run. */
+export interface SakiAgentRunMessageSource {
+  readonly kind: 'saki-agent-run'
+  readonly dispatchId: SakiExecutionDispatchId
+  readonly agentRunId: SakiAgentRunId
+  readonly workSessionId: SakiWorkSessionId
+}
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    /** Initial product input frozen by a Saki Execution Dispatch. */
+    readonly 'saki-agent-run': SakiAgentRunMessageSource
+  }
+}
+
+/** Exact bounded text-only UserMessage preallocated for one Agent Run. */
+export type StartAgentRunInputMessage = UserMessage & {
+  readonly id: MessageId
+  readonly role: 'user'
+  readonly content: [TextBlock]
+  readonly source: SakiAgentRunMessageSource
+}
+
+/** Immutable Development Agent Profile values mounted by the target Host. */
+export interface StartAgentRunProfile {
+  readonly id: SakiAgentProfileId
+  readonly version: number
+  readonly agentPresetId: string
+  readonly modelRoute: {
+    readonly provider: string
+    readonly model: string
+  }
+}
+
+/** Prepare one exact Saki Agent Run and its initial durable input. */
+export interface StartAgentRunHostOperationRequest {
+  readonly type: 'start-agent-run'
+  readonly source: ExecutionDispatchHostOperationSource
+  readonly expected: HostGitMutationPrecondition
+  readonly run: {
+    readonly agentRunId: SakiAgentRunId
+    readonly workSessionId: SakiWorkSessionId
+    readonly sessionId: SessionId
+    readonly profile: StartAgentRunProfile
+    readonly input: StartAgentRunInputMessage
+  }
 }
 
 /** One selected row resolved to a repository-relative path by the Host. */
@@ -591,6 +665,15 @@ export interface CommitHostOperationResult {
   readonly committer: ProjectGitCommitSignature
 }
 
+/** Stable evidence that one intended Agent Run and its exact initial input exist. */
+export interface StartAgentRunHostOperationResult {
+  readonly type: 'start-agent-run'
+  readonly agentRunId: SakiAgentRunId
+  readonly workSessionId: SakiWorkSessionId
+  readonly sessionId: SessionId
+  readonly inputMessageId: MessageId
+}
+
 /** Declaration-merge extensible Host Operation request/result map. */
 export interface HostOperationRequestMap {
   readonly 'stage-files': {
@@ -604,6 +687,10 @@ export interface HostOperationRequestMap {
   readonly commit: {
     readonly request: CommitHostOperationRequest
     readonly result: CommitHostOperationResult
+  }
+  readonly 'start-agent-run': {
+    readonly request: StartAgentRunHostOperationRequest
+    readonly result: StartAgentRunHostOperationResult
   }
 }
 
@@ -643,7 +730,7 @@ export interface HostOperationAdmissionExpectation<K extends HostOperationKind =
   readonly bindingId: SakiResourceBindingId
   readonly bindingRevision: number
   readonly preparation: HostOperationPreparation<K>
-  readonly source: HostOperationSource
+  readonly source: HostOperationRequest<K>['source']
 }
 
 /** Current control-plane decision for one effect-boundary admission check. */
@@ -684,7 +771,7 @@ export type HostOperationAdmissionEvidence =
 interface HostOperationSnapshotBase<K extends HostOperationKind> {
   readonly operation: HostOperationReference<K>
   readonly revision: number
-  readonly source: HostOperationSource
+  readonly source: HostOperationRequest<K>['source']
   readonly requestFingerprint: HostOperationRequestFingerprint
   readonly bindingId: SakiResourceBindingId
   readonly bindingRevision: number

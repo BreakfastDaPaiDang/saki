@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { isLoopbackHostname } from '@deepseek-ai/dsh-client-connection'
+import type {} from '@deepseek-ai/dsh-llm'
 import type { Domain, DomainChanged, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type {} from '@breakfastdapaidang/saki-execution'
@@ -22,6 +23,7 @@ import {
   configureGitHubSynchronizationIntentSchema,
   createWorkItemIntentSchema,
   createCommitIntentSchema,
+  giveWorkItemToAgentIntentSchema,
   githubWorkItemRecoveryId,
   githubWorkItemRecoveryRecordSchema,
   HOST_OPERATOR_ACTIONS,
@@ -67,6 +69,14 @@ import {
   type GitHubWorkItemRecoveryTable,
 } from './work-item-operations.ts'
 import {
+  AgentOperations,
+  type AgentOperationIntentTable,
+  type AgentRunTable,
+  type ExecutionDispatchTable,
+  type WorkAssignmentTable,
+  type WorkSessionTable,
+} from './agent-operations.ts'
+import {
   bootstrapDigest,
   constantTimeTextEqual,
   cookieDigest,
@@ -102,8 +112,10 @@ import type {
   ConfigureGitHubSynchronizationIntent,
   CreateWorkItemIntent,
   CreateCommitIntent,
+  GiveWorkItemToAgentIntent,
   SakiGitOperationIntent,
   SakiGitOperationIntentReceipt,
+  SakiGiveWorkItemToAgentIntentReceipt,
   SakiWorkItemIntentReceipt,
   StageFilesIntent,
   MoveWorkItemIntent,
@@ -164,6 +176,18 @@ export interface Config {
   cookieName?: string
   /** Maximum lifetime of one durable GitHub complete-scan lease. */
   githubScanAttemptTtlMs?: number
+  /** Lifetime of one recoverable Execution Dispatch claim before its fencing token advances. */
+  agentDispatchClaimTtlMs?: number
+  /** Template copied into the first immutable Agent Profile of each new Project. */
+  defaultAgentProfile?: {
+    /** Existing DSH Agent Preset mounted for the Project's development runs. */
+    agentPresetId: string
+    /** Explicit provider/model route; absence leaves agent dispatch unavailable. */
+    modelRouteRequest?: {
+      provider: string
+      model: string
+    } | null
+  }
 }
 
 /** Local launcher channel for one clear initial-bootstrap or reauthentication secret. */
@@ -300,6 +324,17 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     terminalRetentionMs: z.natural().min(1).default(7 * 24 * 60 * 60 * 1_000),
     cookieName: z.string().pattern(/^[A-Za-z0-9_]+$/).default('saki_session'),
     githubScanAttemptTtlMs: z.natural().min(1_000).max(86_400_000).default(5 * 60 * 1_000),
+    agentDispatchClaimTtlMs: z.natural().min(1_000).max(5 * 60 * 1_000).default(30_000),
+    defaultAgentProfile: z.object({
+      agentPresetId: z.string().min(1).max(200).pattern(/^[a-z0-9][a-z0-9-]*$/).default('standard'),
+      modelRouteRequest: z.union([
+        z.const(null),
+        z.object({
+          provider: z.string().min(1).max(200).required(),
+          model: z.string().min(1).max(200).required(),
+        }),
+      ]).default(null),
+    }).default({ agentPresetId: 'standard', modelRouteRequest: null }),
   })
 
   private controlStateTable!: ControlStateTable
@@ -316,8 +351,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private githubWorkItemRecoveryTable!: GitHubWorkItemRecoveryTable
   private gitOperationIntentTable!: GitOperationIntentTable
   private bindingWriteAdmissionTable!: BindingWriteAdmissionTable
+  private agentOperationIntentTable!: AgentOperationIntentTable
+  private workAssignmentTable!: WorkAssignmentTable
+  private workSessionTable!: WorkSessionTable
+  private agentRunTable!: AgentRunTable
+  private executionDispatchTable!: ExecutionDispatchTable
   private projects!: DevelopmentProjects
   private gitOperations!: GitOperations
+  private agentOperations!: AgentOperations
   private githubSynchronization!: GitHubProjectSynchronization
   private githubWorkItemOperations!: GitHubWorkItemOperations
   private githubSynchronizationConsumer: GitHubSynchronizationConsumer | undefined
@@ -380,7 +421,9 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     ctx.on('domain/changed', (change: DomainChanged) => {
       if (change.domain !== sakiControlPlaneDomainSpec.name) return
       if (change.table === 'registration_intents' || change.table === 'github_sync_configuration_intents'
-        || change.table === 'git_operation_intents') return
+        || change.table === 'git_operation_intents' || change.table === 'agent_operation_intents'
+        || change.table === 'work_assignments' || change.table === 'work_sessions'
+        || change.table === 'agent_runs' || change.table === 'execution_dispatches') return
       if (change.table === 'github_work_item_intents' || change.table === 'github_work_item_recovery') {
         this.notify(['board'])
         return
@@ -427,6 +470,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     }
     let gitOperationsForDisposal: GitOperations | undefined
     let workItemOperationsForDisposal: GitHubWorkItemOperations | undefined
+    let agentOperationsForDisposal: AgentOperations | undefined
     this.ctx.effect(() => async () => {
       this.operationAdmissionOpen = false
       this.lifetime.abort(new Error('saki control plane is disposing'))
@@ -436,6 +480,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ...this.intentOperationTails.values(),
         gitOperationsForDisposal?.dispose() ?? Promise.resolve(),
         workItemOperationsForDisposal?.dispose() ?? Promise.resolve(),
+        agentOperationsForDisposal?.dispose() ?? Promise.resolve(),
       ])
       await closeOpenedDomains(
         [domain, storageGenerationDomain],
@@ -456,6 +501,11 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     this.githubWorkItemRecoveryTable = domain.table('github_work_item_recovery')
     this.gitOperationIntentTable = domain.table('git_operation_intents')
     this.bindingWriteAdmissionTable = domain.table('binding_write_admissions')
+    this.agentOperationIntentTable = domain.table('agent_operation_intents')
+    this.workAssignmentTable = domain.table('work_assignments')
+    this.workSessionTable = domain.table('work_sessions')
+    this.agentRunTable = domain.table('agent_runs')
+    this.executionDispatchTable = domain.table('execution_dispatches')
 
     let settleStartup!: () => void
     this.startupSettled = new Promise((resolve) => { settleStartup = resolve })
@@ -490,6 +540,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         authorityCurrent: actor => this.intentAuthorityCurrent(actor, 'development-project:register'),
         validateActorReference: (actor) => {
           this.validateRegistrationActorReference(actor)
+        },
+        defaultAgentProfileTemplate: {
+          agentPresetId: this.config.defaultAgentProfile.agentPresetId,
+          modelRouteRequest: this.config.defaultAgentProfile.modelRouteRequest ?? null,
         },
         ensureBindingWriteAdmission: binding => this.gitOperations.ensureBindingWriteAdmission(binding),
       })
@@ -574,11 +628,47 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         projects.registry,
         recoverableMissingBindingIds,
       )
+      this.agentOperations = new AgentOperations({
+        intentTable: this.agentOperationIntentTable,
+        assignmentTable: this.workAssignmentTable,
+        workSessionTable: this.workSessionTable,
+        agentRunTable: this.agentRunTable,
+        dispatchTable: this.executionDispatchTable,
+        admissionTable: this.bindingWriteAdmissionTable,
+        execution: this.ctx.sakiHostExecution,
+        projects: this.projects,
+        mutationContext: projectId => this.githubSynchronization.mutationContext(projectId),
+        authorityCurrent: (actor, action) => this.intentAuthorityCurrent(actor, action),
+        validateActorReference: (actor) => { this.validateRegistrationActorReference(actor) },
+        resolveModelRoute: async (route, signal) => {
+          const llm = this.ctx.get('llm')
+          if (llm === undefined) throw new Error('Saki Agent dispatch requires an LLM runtime')
+          await llm.resolveModelInfo(route.provider, route.model, signal)
+        },
+        moveWorkItem: async (intent, actor, signal) => {
+          if (this.hasControlIntentConflict(intent.intentId, 'work-item')) {
+            return { ok: false, reason: 'conflict' }
+          }
+          return await this.githubWorkItemOperations.submit(intent, actor, signal)
+        },
+        claimTtlMs: this.config.agentDispatchClaimTtlMs,
+        notifyChanged: () => { this.notify(['project-changes', 'board']) },
+        lifetime: this.lifetime.signal,
+      })
+      agentOperationsForDisposal = this.agentOperations
+      const agentOperations = this.agentOperations.validateDurableState(
+        new Set([
+          ...otherIntentIds,
+          ...gitOperations.intents.map(intent => intent.id),
+        ]),
+        projects.registry,
+      )
       validateDisjointControlIntentIds(
         projects.intents,
         githubSynchronization.intents,
         workItems.intents,
         gitOperations.intents,
+        agentOperations.intents,
       )
       validateCurrentSakiState(
         domain,
@@ -590,10 +680,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       await this.reconcileAccess(Date.now())
       await this.projects.initializeValidated(projects, this.lifetime.signal)
       const disposeHostOperationChanges = this.ctx.sakiHostExecution.onChanged(
-        (change) => { this.gitOperations.hostChanged(change) },
+        (change) => {
+          this.gitOperations.hostChanged(change)
+          this.agentOperations.hostChanged(change)
+        },
       )
       this.ctx.effect(() => disposeHostOperationChanges, 'saki-control-plane.hostOperationChanges')
       await this.gitOperations.initializeValidated(gitOperations)
+      await this.agentOperations.initializeValidated(agentOperations)
       await this.githubSynchronization.initializeValidated(githubSynchronization, this.lifetime.signal)
       await this.githubWorkItemOperations.initializeValidated(workItems)
       this.lifetime.signal.throwIfAborted()
@@ -826,9 +920,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
             if (!this.authorized(authentication, 'development-project:register')) {
               return { ok: false, reason: 'denied' }
             }
-            if (this.requireGitHubSynchronizationConfigurationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitOperationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitHubWorkItemIntentTable().get(parsed.intentId) !== undefined) {
+            if (this.hasControlIntentConflict(parsed.intentId, 'registration')) {
               return { ok: false, reason: 'conflict' }
             }
             return await this.registerDevelopmentProject(authentication, parsed, operationSignal)
@@ -845,9 +937,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
             if (!this.authorized(authentication, 'github-synchronization:configure')) {
               return { ok: false, reason: 'denied' }
             }
-            if (this.requireRegistrationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitOperationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitHubWorkItemIntentTable().get(parsed.intentId) !== undefined) {
+            if (this.hasControlIntentConflict(parsed.intentId, 'github-synchronization')) {
               return { ok: false, reason: 'conflict' }
             }
             return await this.githubSynchronization.configure(
@@ -899,6 +989,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ))
         break
       }
+      case 'give-work-item-to-agent': {
+        const parsed = giveWorkItemToAgentIntentSchema.parse(intent) as GiveWorkItemToAgentIntent
+        result = this.runOwnedOperation(signal, operationSignal => this.enqueueIntentOperation(
+          parsed.intentId,
+          () => this.submitAgentOperation(authentication, parsed, operationSignal),
+        ))
+        break
+      }
       /* v8 ignore next 2 -- SakiIntent is closed and Host wire parsing rejects unknown tags before dispatch. */
       default: return assertNever(intent)
     }
@@ -917,9 +1015,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       ? 'project-changes:stage'
       : intent.type === 'unstage-files' ? 'project-changes:unstage' : 'project-commit:create'
     if (!this.authorized(authentication, action)) return { ok: false, reason: 'denied' }
-    if (this.requireRegistrationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitHubWorkItemIntentTable().get(intent.intentId) !== undefined) {
+    if (this.hasControlIntentConflict(intent.intentId, 'git-operation')) {
       return { ok: false, reason: 'conflict' }
     }
     return await this.gitOperations.submit(intent, this.currentControlIntentActor(), signal)
@@ -933,12 +1029,35 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     signal.throwIfAborted()
     const action = intent.type === 'create-work-item' ? 'work-item:create' : 'work-item:move'
     if (!this.authorized(authentication, action)) return { ok: false, reason: 'denied' }
-    if (this.requireRegistrationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitOperationIntentTable().get(intent.intentId) !== undefined) {
+    if (this.hasControlIntentConflict(intent.intentId, 'work-item')) {
       return { ok: false, reason: 'conflict' }
     }
     return await this.githubWorkItemOperations.submit(intent, this.currentControlIntentActor(), signal)
+  }
+
+  private async submitAgentOperation(
+    authentication: SakiAuthenticationContext,
+    intent: GiveWorkItemToAgentIntent,
+    signal: AbortSignal,
+  ): Promise<SakiGiveWorkItemToAgentIntentReceipt> {
+    signal.throwIfAborted()
+    if (!this.authorized(authentication, 'work-item:give-to-agent')) return { ok: false, reason: 'denied' }
+    if (this.hasControlIntentConflict(intent.intentId, 'agent-operation')) {
+      return { ok: false, reason: 'conflict' }
+    }
+    return await this.agentOperations.submit(intent, this.currentControlIntentActor(), signal)
+  }
+
+  private hasControlIntentConflict(
+    intentId: SakiControlIntentId,
+    owner: 'registration' | 'github-synchronization' | 'git-operation' | 'work-item' | 'agent-operation',
+  ): boolean {
+    return (owner !== 'registration' && this.requireRegistrationIntentTable().get(intentId) !== undefined)
+      || (owner !== 'github-synchronization'
+        && this.requireGitHubSynchronizationConfigurationIntentTable().get(intentId) !== undefined)
+      || (owner !== 'git-operation' && this.requireGitOperationIntentTable().get(intentId) !== undefined)
+      || (owner !== 'work-item' && this.requireGitHubWorkItemIntentTable().get(intentId) !== undefined)
+      || (owner !== 'agent-operation' && this.requireAgentOperationIntentTable().get(intentId) !== undefined)
   }
 
   private currentControlIntentActor(): ControlIntentActor {
@@ -1661,6 +1780,11 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       || this.requireGitHubWorkItemRecoveryTable().size !== 0
       || this.requireGitOperationIntentTable().size !== 0
       || this.requireBindingWriteAdmissionTable().size !== 0
+      || this.requireAgentOperationIntentTable().size !== 0
+      || this.requireWorkAssignmentTable().size !== 0
+      || this.requireWorkSessionTable().size !== 0
+      || this.requireAgentRunTable().size !== 0
+      || this.requireExecutionDispatchTable().size !== 0
   }
 
   private assertOnlyProvisioningRow<K extends string, V>(table: KvTable<K, V>, key: K): void {
@@ -1700,6 +1824,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private installGitHubSynchronizationConsumer(): void {
     const providerFiber = this.ctx.inject(['sakiGitHub'], (providerContext: Context) => {
       const detachWorkItemOperations = this.githubWorkItemOperations.attach(providerContext.sakiGitHub)
+      const detachAgentOperations = this.agentOperations.attachGitHub(providerContext.sakiGitHub)
       const consumer = new GitHubSynchronizationConsumer({
         synchronization: this.githubSynchronization,
         github: providerContext.sakiGitHub,
@@ -1712,6 +1837,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       consumer.wake()
       providerContext.effect(() => async () => {
         detachWorkItemOperations()
+        detachAgentOperations()
         this.githubSynchronizationConsumer = undefined
         await consumer.dispose()
       }, 'saki-control-plane.githubSynchronizationConsumer')
@@ -1773,6 +1899,26 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private requireBindingWriteAdmissionTable(): BindingWriteAdmissionTable {
     return this.bindingWriteAdmissionTable
+  }
+
+  private requireAgentOperationIntentTable(): AgentOperationIntentTable {
+    return this.agentOperationIntentTable
+  }
+
+  private requireWorkAssignmentTable(): WorkAssignmentTable {
+    return this.workAssignmentTable
+  }
+
+  private requireWorkSessionTable(): WorkSessionTable {
+    return this.workSessionTable
+  }
+
+  private requireAgentRunTable(): AgentRunTable {
+    return this.agentRunTable
+  }
+
+  private requireExecutionDispatchTable(): ExecutionDispatchTable {
+    return this.executionDispatchTable
   }
 
   private requireInstallation(id: SakiInstallationId): InstallationRecord {

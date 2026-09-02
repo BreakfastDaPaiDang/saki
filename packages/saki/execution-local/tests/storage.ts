@@ -6,6 +6,14 @@ import Storage from '@deepseek-ai/dsh-storage'
 import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
 import * as StorageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 
+/** Satisfy Agent Run-only services in Git-focused Local Host tests. */
+export function provideInertLocalAgentRunDependencies(ctx: Context): void {
+  ctx.provide('agentPresets', {} as never)
+  ctx.provide('agents', {} as never)
+  ctx.provide('sessionPersistence', {} as never)
+  ctx.provide('sessions', {} as never)
+}
+
 /** Mount one isolated durable domain backend for a Local Host provider test. */
 export async function mountLocalHostOperationStorage(
   ctx: Context,
@@ -16,4 +24,5 @@ export async function mountLocalHostOperationStorage(
   await ctx.plugin(Storage)
   await ctx.plugin(StorageSqlite, { path: join(root, 'saki.db'), journalMode: 'delete' })
   await ctx.plugin(StorageDomain, { backend: 'sqlite' })
+  provideInertLocalAgentRunDependencies(ctx)
 }

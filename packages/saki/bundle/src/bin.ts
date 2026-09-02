@@ -12,7 +12,7 @@ import { boot, installFailLoud, loadOverlayPatches } from '@deepseek-ai/dsh-app-
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { announceSakiReadiness } from './index.ts'
-import { sakiPreparedStoragePatch, sakiServingInstallationOptions } from './launcher.ts'
+import { sakiAgentPresetsPatch, sakiPreparedStoragePatch, sakiServingInstallationOptions } from './launcher.ts'
 
 const NAME = 'saki'
 const ROOT_CONFIG = fileURLToPath(new URL('../cordis.yml', import.meta.url))
@@ -63,6 +63,7 @@ try {
       try {
         const patches = [
           ...loadOverlayPatches(NAME, BUNDLE_PATCH),
+          sakiAgentPresetsPatch(),
           sakiPreparedStoragePatch(prepared.databasePath),
         ]
         const startup = announceSakiReadiness(

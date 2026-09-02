@@ -219,6 +219,7 @@
       "entry": [
         "tests/**/*.spec.ts",
         "tests/**/*.e2e.ts",
+        "tests/fixtures/controllable-fake-llm.ts",
         "tests/fixtures/pending-readiness.ts"
       ],
       "project": [
@@ -228,10 +229,22 @@
       "ignoreDependencies": [
         "@breakfastdapaidang/saki-github-app",
         "@breakfastdapaidang/saki-host-api",
+        "@deepseek-ai/dsh-agent-instructions",
+        "@deepseek-ai/dsh-agent-loop",
         "@deepseek-ai/dsh-credentials-windows-dpapi",
+        "@deepseek-ai/dsh-fs-observation-policy",
+        "@deepseek-ai/dsh-fs-sandbox",
+        "@deepseek-ai/dsh-persona",
+        "@deepseek-ai/dsh-pwsh-sandbox",
+        "@deepseek-ai/dsh-sandbox-local",
+        "@deepseek-ai/dsh-sandbox-policy",
+        "@deepseek-ai/dsh-session-checkpoint-policy",
         "@deepseek-ai/dsh-session-persistence-jsonl",
+        "@deepseek-ai/dsh-shell-env",
         "@deepseek-ai/dsh-storage-json",
-        "@deepseek-ai/dsh-subprocess-local"
+        "@deepseek-ai/dsh-subprocess-local",
+        "@deepseek-ai/dsh-tool-fs",
+        "@deepseek-ai/dsh-tool-pwsh"
       ]
     },
     "packages/saki/installation-maintenance": {

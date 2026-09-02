@@ -18,7 +18,9 @@ Status: proposed
 
 提议中的 [domain KV 存储与 Workspace](2026-07-24-domain-kv-storage-and-workspace.zh.md) Agent Note 拥有 DSH Workspace 的 `fs.realpath` 唯一性与不可变记录；本提案拥有 Saki 更高层的绑定身份、Git 观察、rebind 与 lease 语义。提议中的 [Installation 维护](2026-08-18-saki-forward-migrations-and-installation-maintenance.zh.md) Agent Note 拥有替换 Host 恢复，并把 `needs-rebind` 接入该生命周期。
 
-已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.zh.md)建立首个稳定 Project 与 Resource Binding id、重复 worktree 身份检查和启动重新验证。已实现的[结构化 Git 决策](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.zh.md)会为已绑定状态、Diff 与直接 mutation 重新验证精确 active Binding 及其 revision，并为每个 Binding 设置一个持久 write-admission owner。本 Agent Note 保持 proposed，因为重绑定、退役、repair、Execution Lease、后继 Session 与物理 worktree 生命周期尚未实现。
+已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.zh.md)建立首个稳定 Project 与 Resource Binding id、重复 worktree 身份检查和启动重新验证。已实现的[结构化 Git 决策](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.zh.md)会为已绑定状态、Diff 与直接 mutation 重新验证精确 active Binding 及其 revision，并为每个 Binding 设置一个持久 write-admission owner。
+
+[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)把 `BindingWriteAdmission.agent-run` 设为一次手动 Agent 启动的长期可写所有者，使其与直接 Git operation 竞争同一条 row。独立 Execution Lease、rebind、retirement、repair、后继 Session 与物理 worktree 生命周期仍处于 proposed 状态。
 
 ## 考虑过的方案
 

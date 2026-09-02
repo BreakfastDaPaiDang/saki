@@ -44,7 +44,9 @@ const CONTROL_PLANE_CONFIG = {
   sessionTtlMs: 3_600_000,
   terminalRetentionMs: 86_400_000,
   githubScanAttemptTtlMs: 300_000,
+  agentDispatchClaimTtlMs: 30_000,
   cookieName: COOKIE_NAME,
+  defaultAgentProfile: { agentPresetId: 'standard' },
 } as const
 
 interface RunningHarness {

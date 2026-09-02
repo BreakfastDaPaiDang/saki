@@ -20,6 +20,7 @@ import type {
   HostOperationStartResult,
   ReadProjectDiffRequest,
   ReadProjectDiffResult,
+  StartAgentRunHostOperationRequest,
 } from './types.ts'
 
 export { canonicalDigest, compareCanonicalText, exactBytesDigest } from './canonical.ts'
@@ -30,6 +31,7 @@ export {
   computeProjectGitStatusFingerprint,
   computeProjectGitStatusSeedDigest,
   computeProjectInspectionFingerprint,
+  computeStartAgentRunPayloadDigest,
   inheritedChangeBaselineIdentityMaterial,
   projectGitStatusFingerprintMaterial,
   projectGitStatusSeedMaterial,
@@ -97,6 +99,8 @@ export {
   appliedProjectGitChangeSchema,
   commitHostOperationRequestSchema,
   commitHostOperationResultSchema,
+  controlIntentHostOperationSourceSchema,
+  executionDispatchHostOperationSourceSchema,
   hostGitMutationPreconditionSchema,
   hostOperationChangeSchema,
   hostOperationIdSchema,
@@ -109,10 +113,20 @@ export {
   hostOperationSourceSchema,
   MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES,
   MAX_HOST_OPERATION_SELECTED_CHANGES,
+  MAX_START_AGENT_RUN_INPUT_UTF8_BYTES,
+  sakiAgentRunIdSchema,
+  sakiAgentRunMessageSourceSchema,
+  sakiAgentProfileIdSchema,
   sakiControlIntentIdSchema,
+  sakiExecutionDispatchIdSchema,
+  sakiWorkSessionIdSchema,
   selectedProjectGitChangeSchema,
   stageFilesHostOperationRequestSchema,
   stageFilesHostOperationResultSchema,
+  startAgentRunHostOperationRequestSchema,
+  startAgentRunHostOperationResultSchema,
+  startAgentRunInputMessageSchema,
+  startAgentRunProfileSchema,
   unstageFilesHostOperationRequestSchema,
   unstageFilesHostOperationResultSchema,
   sakiResourceBindingIdSchema,
@@ -125,6 +139,8 @@ export type {
   CommitHostOperationRequest,
   CommitHostOperationResult,
   CompleteInheritedChangeBaseline,
+  ControlIntentHostOperationSource,
+  ExecutionDispatchHostOperationSource,
   InheritedChangeBaseline,
   InheritedChangeBaselineBounds,
   InheritedChangeBaselineEntry,
@@ -198,15 +214,26 @@ export type {
   RepositoryAdministrativeIdentity,
   RepositoryComparisonObservation,
   SafeGitRemoteObservation,
+  SakiAgentRunId,
+  SakiAgentRunMessageSource,
+  SakiAgentProfileId,
   SakiControlIntentId,
   SakiHostExecutionOperationMap,
   SakiHostExecutionRequest,
   SakiHostExecutionResult,
   SakiHostId,
+  SakiExecutionDispatchId,
   SakiResourceBindingId,
+  MessageId,
+  SessionId,
+  SakiWorkSessionId,
   SelectedProjectGitChange,
   StageFilesHostOperationRequest,
   StageFilesHostOperationResult,
+  StartAgentRunHostOperationRequest,
+  StartAgentRunHostOperationResult,
+  StartAgentRunInputMessage,
+  StartAgentRunProfile,
   TrustedProjectSelectionObservation,
   UnavailableInheritedChangeBaseline,
   UnstageFilesHostOperationRequest,
@@ -306,6 +333,22 @@ export abstract class SakiHostExecution extends Service {
     acceptance: HostOperationAcceptance,
     signal: AbortSignal,
   ): Promise<HostOperationStartResult<K>>
+
+  /**
+   * Restore the live handle for one control-plane-validated running Agent Run
+   * from the exact succeeded Host Operation and durable Session evidence.
+   * This recovery never wakes the Agent or submits model input.
+   * @param operation - exact succeeded StartAgentRun Host Operation reference.
+   * @param request - complete immutable request retained by the validated control plane.
+   * @param signal - required startup lifetime and cancellation.
+   * @returns after the matching live Agent handle has been restored for the exact Session.
+   * @throws when the operation, request, physical Session evidence, or live Agent conflicts or is unavailable.
+   */
+  abstract resumeAgentRun(
+    operation: HostOperationReference<'start-agent-run'>,
+    request: StartAgentRunHostOperationRequest,
+    signal: AbortSignal,
+  ): Promise<void>
 
   /**
    * Inspect and recover one durable Host Operation without starting a new external effect.

@@ -117,7 +117,7 @@ describe('Saki maintenance CLI', () => {
       phase: 'ready',
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 6,
+      stateVersion: 7,
       generationJson: {
         leaf: `generations/${STORAGE_GENERATION_ID}/generation.json`,
         byteLength: 1,
@@ -128,7 +128,7 @@ describe('Saki maintenance CLI', () => {
       formatVersion: 1,
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 6,
+      stateVersion: 7,
       createdByBuildId: CURRENT_SAKI_BUILD_ID,
       databaseLeaf: 'state.sqlite',
     })
@@ -144,7 +144,7 @@ describe('Saki maintenance CLI', () => {
           databasePath: resolve('hidden-generation.sqlite'),
         },
         sourceVersion: 2 as const,
-        targetVersion: 6 as const,
+        targetVersion: 7 as const,
       })),
     } satisfies SakiMaintenanceOperations
     const signal = new AbortController().signal
@@ -171,7 +171,7 @@ describe('Saki maintenance CLI', () => {
       backupId: BACKUP_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
       sourceVersion: 2,
-      targetVersion: 6,
+      targetVersion: 7,
     })
     expect(operations.backup).toHaveBeenCalledWith(backupCommand.options, signal)
     expect(operations.verify).toHaveBeenCalledWith(verifyCommand.options, BACKUP_ID, signal)
