@@ -14,7 +14,10 @@ import { dirname, join } from 'node:path'
 import type { KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
 import { descriptorOf, type DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
-import { sakiHostExecutionV1DomainSpec } from '@breakfastdapaidang/saki-execution-local'
+import {
+  sakiHostExecutionV1DomainSpec,
+  sakiHostExecutionV2DomainSpec,
+} from '@breakfastdapaidang/saki-execution-local'
 import type {
   SakiBuildId,
   SakiInstallationId,
@@ -51,15 +54,18 @@ import {
   sakiControlPlaneV4DomainSpec,
   sakiControlPlaneV5DomainSpec,
   sakiControlPlaneV6DomainSpec,
+  sakiControlPlaneV7DomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
+  sakiStorageGenerationV5DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
   storageGenerationV3SealRecordSchema,
   storageGenerationV4SealRecordSchema,
+  storageGenerationV5SealRecordSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
   captureSqliteArtifactSet,
@@ -98,6 +104,7 @@ const CANDIDATE_ID =
 const OTHER_GENERATION_ID =
   'storage-generation-00000000-0000-4000-8000-000000000099' as SakiStorageGenerationId
 const BUILD_ID = 'saki-build-recovery-test' as SakiBuildId
+const PREVIOUS_WRITABLE_BUILD_ID = 'saki-build-0.1.0-b07' as SakiBuildId
 const OLD_BUILD_ID = LEGACY_B03_BUILD_ID
 const HISTORICAL_GENERATION_ID =
   'installation-generation-00000000-0000-4000-8000-000000000009'
@@ -356,6 +363,110 @@ async function materializeHistoricalSealedGeneration(
   } finally {
     await backend.close()
   }
+}
+
+async function materializePreviousWritableGeneration(
+  databasePath: string,
+  storageGenerationId: SakiStorageGenerationId,
+  controlPlaneSnapshot: KvUnitSnapshot,
+  signal: AbortSignal,
+): Promise<void> {
+  const units: readonly { readonly spec: DomainSpec; readonly snapshot: KvUnitSnapshot }[] = [
+    { spec: sakiControlPlaneV7DomainSpec, snapshot: controlPlaneSnapshot },
+    {
+      spec: sakiHostExecutionV2DomainSpec,
+      snapshot: {
+        global: null,
+        tables: Object.fromEntries(
+          Object.keys(sakiHostExecutionV2DomainSpec.tables).map(table => [table, {}]),
+        ),
+      },
+    },
+    {
+      spec: sakiStorageGenerationV5DomainSpec,
+      snapshot: {
+        global: null,
+        tables: {
+          storage_generation: {
+            [STORAGE_GENERATION_KEY]: storageGenerationV5SealRecordSchema.parse({
+              schemaVersion: 5,
+              installationId: INSTALLATION_ID,
+              storageGenerationId,
+              stateVersion: 7,
+              createdByBuildId: PREVIOUS_WRITABLE_BUILD_ID,
+            }),
+          },
+        },
+      },
+    },
+  ]
+  const backend = new SqliteStorageBackend({ path: databasePath, journalMode: 'delete' })
+  try {
+    const closed = backend.kv.closed
+    if (closed === undefined) throw new Error('test SQLite backend has no closed operations')
+    for (const unit of units) {
+      await closed.withReservedUnit(unit.spec.name, signal, async (lease) => {
+        const result = await lease.materializeMissing(descriptorOf(unit.spec), unit.snapshot)
+        if (result.outcome !== 'durable') throw result.cause
+      })
+    }
+  } finally {
+    await backend.close()
+  }
+}
+
+function previousWritableControlPlaneSnapshot(source: 'fresh' | 'upgrade'): KvUnitSnapshot {
+  if (source === 'fresh') {
+    return {
+      global: null,
+      tables: Object.fromEntries(
+        Object.keys(sakiControlPlaneV7DomainSpec.tables).map(table => [table, {}]),
+      ),
+    }
+  }
+  const v3Snapshot = sakiControlPlaneMigrationPlan.steps[0]!.migrate(historicalSnapshot())
+  const v4Snapshot = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3Snapshot)
+  const v5Snapshot = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4Snapshot)
+  const v6Snapshot = sakiControlPlaneMigrationPlan.steps[3]!.migrate(v5Snapshot)
+  return sakiControlPlaneMigrationPlan.steps[4]!.migrate(v6Snapshot)
+}
+
+async function publishPreviousWritableCandidate(
+  root: string,
+  phase: 'provisioning' | 'ready' | undefined,
+  source: 'fresh' | 'upgrade',
+  signal: AbortSignal,
+): Promise<string> {
+  const generationDirectory = join(root, 'generations', CANDIDATE_ID)
+  await mkdir(generationDirectory, { recursive: true })
+  const databasePath = join(generationDirectory, 'state.sqlite')
+  await materializePreviousWritableGeneration(
+    databasePath,
+    CANDIDATE_ID,
+    previousWritableControlPlaneSnapshot(source),
+    signal,
+  )
+  const generationBytes = renderGenerationManifest(
+    INSTALLATION_ID,
+    CANDIDATE_ID,
+    7,
+    PREVIOUS_WRITABLE_BUILD_ID,
+  )
+  await writeFile(join(generationDirectory, 'generation.json'), generationBytes)
+  const generation = JSON.parse(generationBytes.toString('utf8')) as Parameters<
+    typeof renderInstallationManifest
+  >[1]
+  if (phase !== undefined) {
+    await writeFile(
+      join(root, 'installation.json'),
+      renderInstallationManifest(
+        phase,
+        generation,
+        generationManifestReference(CANDIDATE_ID, generationBytes),
+      ),
+    )
+  }
+  return databasePath
 }
 
 async function createJournalBackup(
@@ -751,6 +862,36 @@ describe('active Saki operation recovery', () => {
     await expect(readFile(candidate.databasePath)).resolves.not.toHaveLength(0)
   })
 
+  it('settles a previous writable build fresh journal after its v7 manifest was published', async () => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(5_000)
+    const journal = createOperationJournal({
+      kind: 'fresh',
+      operationId: createSakiMaintenanceOperationId(),
+      installationId: INSTALLATION_ID,
+      candidateStorageGenerationId: CANDIDATE_ID,
+    })
+    await publishActiveOperation(root, journal, signal)
+    const databasePath = await publishPreviousWritableCandidate(
+      root,
+      'provisioning',
+      'fresh',
+      signal,
+    )
+
+    await recoverActiveSakiOperation(root, join(root, 'legacy.sqlite'), signal)
+
+    await expect(readActiveOperation(root, signal)).resolves.toBeUndefined()
+    await expect(readInstallationManifest(root, signal)).resolves.toMatchObject({
+      value: {
+        phase: 'provisioning',
+        stateVersion: 7,
+        storageGenerationId: CANDIDATE_ID,
+      },
+    })
+    await expect(readFile(databasePath)).resolves.not.toHaveLength(0)
+  })
+
   it('refuses to clean a fresh candidate when another manifest authority exists', async () => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(2_000)
@@ -951,6 +1092,38 @@ describe('active Saki operation recovery', () => {
       legacyDatabasePath: prepared.legacyPath,
       currentBuildId: BUILD_ID,
     }, signal, async () => undefined)).rejects.toMatchObject({ code: 'upgrade-required' })
+  })
+
+  it('rolls back a previous writable build v7 candidate before its authority commit', async () => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(10_000)
+    const legacyPath = join(root, 'legacy.sqlite')
+    await materializeHistorical(legacyPath, signal)
+    const journal = createOperationJournal({
+      kind: 'upgrade',
+      operationId: createSakiMaintenanceOperationId(),
+      installationId: INSTALLATION_ID,
+      ...V2_UPGRADE_SOURCE,
+      backupId: createSakiRecoveryBackupId(),
+      candidateStorageGenerationId: CANDIDATE_ID,
+    })
+    if (journal.kind !== 'upgrade') throw new Error('test journal changed kind')
+    await publishActiveOperation(root, journal, signal)
+    const backupPath = await createJournalBackup(root, journal, legacyPath, signal)
+    const databasePath = await publishPreviousWritableCandidate(
+      root,
+      undefined,
+      'upgrade',
+      signal,
+    )
+    const candidatePath = dirname(databasePath)
+
+    await recoverActiveSakiOperation(root, legacyPath, signal)
+
+    await expect(readActiveOperation(root, signal)).resolves.toBeUndefined()
+    expect(await exists(candidatePath)).toBe(false)
+    expect(await exists(backupPath)).toBe(false)
+    await expect(readFile(legacyPath)).resolves.not.toHaveLength(0)
   })
 
   it('settles an interrupted upgrade while an exact selected v3 source remains authoritative', async () => {
@@ -1232,7 +1405,7 @@ describe('active Saki operation recovery', () => {
   it.each([
     ['provisioning', 'provisioning', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
     ['another Installation', 'ready', OTHER_INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
-    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 7],
+    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 8],
     ['the candidate generation', 'ready', INSTALLATION_ID, CANDIDATE_ID, 2],
   ] as const)(
     'retains an upgrade when published authority selects %s',
@@ -1429,5 +1602,42 @@ describe('active Saki operation recovery', () => {
         storageGenerationId: CANDIDATE_ID,
       })
     })
+  })
+
+  it('settles a previous writable build upgrade journal after its v7 authority commit', async () => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(10_000)
+    const legacyPath = join(root, 'legacy.sqlite')
+    await materializeHistorical(legacyPath, signal)
+    const journal = createOperationJournal({
+      kind: 'upgrade',
+      operationId: createSakiMaintenanceOperationId(),
+      installationId: INSTALLATION_ID,
+      ...V2_UPGRADE_SOURCE,
+      backupId: createSakiRecoveryBackupId(),
+      candidateStorageGenerationId: CANDIDATE_ID,
+    })
+    if (journal.kind !== 'upgrade') throw new Error('test journal changed kind')
+    await publishActiveOperation(root, journal, signal)
+    const backupPath = await createJournalBackup(root, journal, legacyPath, signal)
+    const databasePath = await publishPreviousWritableCandidate(
+      root,
+      'ready',
+      'upgrade',
+      signal,
+    )
+
+    await recoverActiveSakiOperation(root, legacyPath, signal)
+
+    await expect(readActiveOperation(root, signal)).resolves.toBeUndefined()
+    await expect(readInstallationManifest(root, signal)).resolves.toMatchObject({
+      value: {
+        phase: 'ready',
+        stateVersion: 7,
+        storageGenerationId: CANDIDATE_ID,
+      },
+    })
+    await expect(readFile(databasePath)).resolves.not.toHaveLength(0)
+    expect(await exists(backupPath)).toBe(true)
   })
 })

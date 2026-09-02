@@ -1,4 +1,7 @@
 - insert:
+    - id: timer
+      name: '@deepseek-ai/cordis-plugin-timer'
+
     - id: storage
       name: '@deepseek-ai/dsh-storage'
 

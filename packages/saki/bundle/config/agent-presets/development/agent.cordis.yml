@@ -13,6 +13,11 @@
   config:
     maxBytes: 65536
 
+- id: request-intervention
+  name: '@breakfastdapaidang/saki-tool-intervention'
+  config:
+    openingRecoveryRetryDelayMs: 1000
+
 - id: tool-pwsh
   name: '@deepseek-ai/dsh-tool-pwsh'
   disabled: !!js process.platform !== 'win32'

@@ -3,6 +3,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
+import type { CallId } from '@deepseek-ai/dsh-llm'
 import type { SakiGitHub, GitHubBranchSafetyFact, GitHubIssueDetailFact } from '@breakfastdapaidang/saki-github'
 import {
   canonicalDigest,
@@ -12,11 +13,13 @@ import {
 import type {
   HostOperationAdmissionDecision,
   HostOperationAdmissionExpectation,
+  HostOperationAdmissionSource,
   HostOperationChange,
   HostOperationPreparation,
   HostOperationReceipt,
   HostOperationReference,
   HostOperationSnapshot,
+  InterventionOpeningEvidence,
   SakiAgentRunId,
   SakiExecutionDispatchId,
   SakiHostExecution,
@@ -36,6 +39,9 @@ import {
   executionDispatchRecordSchema,
   workAssignmentRecordSchema,
   workSessionRecordSchema,
+  interventionRequestRecordSchema,
+  MAX_AGENT_RUN_DISPATCHES,
+  MAX_INTERVENTION_ANSWER_CHARS,
 } from './spec.ts'
 import type {
   AgentOperationIntentRecord,
@@ -47,8 +53,10 @@ import type {
   ExecutionDispatchRecord,
   WorkAssignmentRecord,
   WorkSessionRecord,
+  InterventionRequestRecord,
 } from './spec.ts'
 import type {
+  AnswerInterventionIntent,
   GiveWorkItemToAgentIntent,
   MoveWorkItemIntent,
   SakiBoardWorkItemProjection,
@@ -56,11 +64,26 @@ import type {
   SakiDispatchClaimId,
   SakiGiveWorkItemToAgentIntentReceipt,
   SakiGiveWorkItemToAgentReceipt,
+  SakiAnswerInterventionReceipt,
   SakiIntentReceiptId,
+  SakiInterventionRequestId,
+  SakiAnswerInterventionIntentReceipt,
   SakiResourceBindingId,
   SakiWorkAssignmentId,
   SakiWorkItemIntentReceipt,
 } from './types.ts'
+
+/** Stable Development Agent request admitted from the model-facing tool. */
+export interface SakiAgentInterventionRequest {
+  readonly sessionId: StartAgentRunHostOperationRequest['run']['sessionId']
+  readonly toolCallId: CallId
+  readonly prompt: string
+}
+
+/** Result of durably opening or replaying one Agent-requested Intervention. */
+export type SakiAgentInterventionRequestResult =
+  | { readonly ok: true; readonly interventionId: SakiInterventionRequestId }
+  | { readonly ok: false; readonly reason: 'conflict' | 'unavailable' }
 
 /** Durable accepted manual-Agent Intent table. */
 export type AgentOperationIntentTable = KvTable<SakiControlIntentId, AgentOperationIntentRecord>
@@ -72,10 +95,13 @@ export type WorkSessionTable = KvTable<SakiWorkSessionId, WorkSessionRecord>
 export type AgentRunTable = KvTable<SakiAgentRunId, AgentRunRecord>
 /** Durable Execution Dispatch table. */
 export type ExecutionDispatchTable = KvTable<SakiExecutionDispatchId, ExecutionDispatchRecord>
+/** Durable Intervention Request table; Attention and My Work remain projections. */
+export type InterventionRequestTable = KvTable<SakiInterventionRequestId, InterventionRequestRecord>
 
-type AgentAction = 'work-item:give-to-agent'
+type AgentAction = 'work-item:give-to-agent' | 'intervention:answer'
 type GitHubReader = Pick<SakiGitHub, 'read'>
 type AgentResult = SakiGiveWorkItemToAgentIntentReceipt
+type InterventionAnswerResult = SakiAnswerInterventionIntentReceipt
 type AgentConflictReason = Extract<
   SakiGiveWorkItemToAgentReceipt,
   { readonly state: 'conflict' }
@@ -91,6 +117,7 @@ interface AgentOperationsOptions {
   readonly workSessionTable: WorkSessionTable
   readonly agentRunTable: AgentRunTable
   readonly dispatchTable: ExecutionDispatchTable
+  readonly interventionTable: InterventionRequestTable
   readonly admissionTable: BindingWriteAdmissionTable
   readonly execution: SakiHostExecution
   readonly projects: DevelopmentProjects
@@ -114,10 +141,13 @@ interface AgentOperationsOptions {
 /** Fully cross-validated manual Agent operation state in recovery order. */
 export interface ValidatedAgentOperationsState {
   readonly intents: readonly AgentOperationIntentRecord[]
+  readonly interventions: readonly InterventionRequestRecord[]
   readonly runningAgentRuns: readonly {
     readonly operation: HostOperationReference<'start-agent-run'>
     readonly request: StartAgentRunHostOperationRequest
   }[]
+  readonly openingInterventionIds: readonly SakiInterventionRequestId[]
+  readonly answerPendingInterventionIds: readonly SakiInterventionRequestId[]
 }
 
 type ReadonlyTable<K extends string, V> = Pick<KvTable<K, V>, 'entries' | 'get' | 'size'>
@@ -131,7 +161,12 @@ class RecordCasConflict extends Error {}
 export class AgentOperations {
   private readonly intentTails = new Map<SakiControlIntentId, Promise<void>>()
   private readonly bindingTails = new Map<SakiResourceBindingId, Promise<void>>()
+  private readonly runInterventionTails = new Map<SakiAgentRunId, Promise<void>>()
+  private readonly interventionTails = new Map<SakiInterventionRequestId, Promise<void>>()
   private readonly active = new Set<Promise<void>>()
+  private readonly admitOperation: HostOperationAdmissionSource = (expectation, signal) => (
+    this.admit(expectation, signal)
+  )
   private github: GitHubReader | undefined
 
   constructor(private readonly options: AgentOperationsOptions) {}
@@ -165,6 +200,7 @@ export class AgentOperations {
       this.options.workSessionTable,
       this.options.agentRunTable,
       this.options.dispatchTable,
+      this.options.interventionTable,
       this.options.admissionTable,
       registry,
       otherIntentIds,
@@ -186,11 +222,30 @@ export class AgentOperations {
       this.options.lifetime.throwIfAborted()
       await this.enqueueIntent(intent.id, () => this.resume(intent.id, this.options.lifetime))
     }
+    for (const interventionId of state.answerPendingInterventionIds) {
+      this.options.lifetime.throwIfAborted()
+      await enqueueKeyedOperation(this.interventionTails, interventionId, async () => {
+        await this.resumeInterventionAnswer(
+          this.requireIntervention(interventionId) as AnsweredIntervention,
+          this.options.lifetime,
+        )
+      })
+    }
+    for (const interventionId of state.openingInterventionIds) {
+      this.options.lifetime.throwIfAborted()
+      await this.finalizeInterventionOpening(interventionId, this.options.lifetime, 'startup')
+    }
   }
 
   /** Wait for every notification-driven recovery attempt to settle. */
   async dispose(): Promise<void> {
-    await Promise.all([...this.active, ...this.intentTails.values(), ...this.bindingTails.values()])
+    await Promise.all([
+      ...this.active,
+      ...this.intentTails.values(),
+      ...this.bindingTails.values(),
+      ...this.runInterventionTails.values(),
+      ...this.interventionTails.values(),
+    ])
   }
 
   /**
@@ -203,11 +258,31 @@ export class AgentOperations {
       .find(candidate => candidate.preparation?.operation.id === change.operation.id)
     if (dispatch === undefined) return
     const intent = this.options.intentTable.get(dispatch.intentId)
-    if (intent === undefined || terminal(agentOperationIntentRecordSchema.parse(intent).phase)) return
-    const work = this.enqueueIntent(dispatch.intentId, () => this.resume(dispatch.intentId, this.options.lifetime))
-      .then(() => undefined, () => undefined)
-    this.active.add(work)
-    void work.finally(() => { this.active.delete(work) })
+    const work = intent === undefined
+      ? this.resumeChangedInterventionDispatch(dispatch)
+      : terminal(agentOperationIntentRecordSchema.parse(intent).phase)
+        ? undefined
+        : this.enqueueIntent(dispatch.intentId, () => this.resume(dispatch.intentId, this.options.lifetime))
+    if (work === undefined) return
+    const settled = work.then(() => undefined, () => undefined)
+    this.active.add(settled)
+    void settled.finally(() => { this.active.delete(settled) })
+  }
+
+  private resumeChangedInterventionDispatch(dispatch: ExecutionDispatchRecord): Promise<unknown> | undefined {
+    const intervention = [...this.options.interventionTable.entries()]
+      .map(([, value]) => interventionRequestRecordSchema.parse(value))
+      .find(candidate => 'answer' in candidate
+        && candidate.answer !== undefined
+        && candidate.answer.dispatchId === dispatch.id
+        && candidate.answer.payload.intent.intentId === dispatch.intentId)
+    if (intervention?.state !== 'answered') return undefined
+    return enqueueKeyedOperation(this.interventionTails, intervention.id, () => (
+      this.resumeInterventionAnswer(
+        this.requireIntervention(intervention.id) as AnsweredIntervention,
+        this.options.lifetime,
+      )
+    ))
   }
 
   /**
@@ -251,6 +326,718 @@ export class AgentOperations {
       await this.putExact(this.options.intentTable, record.id, record, agentOperationIntentRecordSchema)
       return await this.resume(record.id, signal)
     })
+  }
+
+  /**
+   * Persist or replay one Agent-requested Intervention before the tool returns.
+   * @param request - exact calling Session, Tool Call, and operator question.
+   * @param signal - caller cancellation before the durable write.
+   * @returns stable request identity or a bounded rejection.
+   */
+  async requestIntervention(
+    request: SakiAgentInterventionRequest,
+    signal: AbortSignal,
+  ): Promise<SakiAgentInterventionRequestResult> {
+    signal.throwIfAborted()
+    const runs = [...this.options.agentRunTable.entries()]
+      .map(([, value]) => agentRunRecordSchema.parse(value))
+      .filter(run => run.sessionId === request.sessionId)
+    if (runs.length !== 1) return { ok: false, reason: 'unavailable' }
+    const matchedRun = runs[0] as AgentRunRecord
+    const interventionId = (
+      `intervention-${derivedUuid(matchedRun.id, `intervention:${request.toolCallId}`)}`
+    ) as SakiInterventionRequestId
+    return await enqueueKeyedOperation(this.runInterventionTails, matchedRun.id, () => (
+      enqueueKeyedOperation(this.interventionTails, interventionId, async () => {
+        const run = this.requireRun(matchedRun.id)
+        const existingValue = this.options.interventionTable.get(interventionId)
+        if (existingValue !== undefined) {
+          const existing = interventionRequestRecordSchema.parse(existingValue)
+          return existing.state === 'opening'
+          && existing.cause.agentRunId === run.id
+          && existing.cause.workSessionId === run.workSessionId
+          && existing.cause.sessionId === request.sessionId
+          && existing.cause.toolCallId === request.toolCallId
+          && existing.requiredAnswer.prompt === request.prompt
+            ? { ok: true, interventionId }
+            : { ok: false, reason: 'conflict' }
+        }
+        if (run.dispatchIds.length >= MAX_AGENT_RUN_DISPATCHES) {
+          return { ok: false, reason: 'conflict' }
+        }
+        if (run.state !== 'starting' && run.state !== 'running' && run.state !== 'resume-pending') {
+          return { ok: false, reason: 'conflict' }
+        }
+        const assignment = this.requireAssignment(run.assignmentId)
+        const workSession = this.requireWorkSession(run.workSessionId)
+        const origin = this.requireIntent(run.intentId)
+        const initialDispatchId = run.dispatchIds[0] as SakiExecutionDispatchId
+        const latestDispatchId = run.dispatchIds.at(-1) as SakiExecutionDispatchId
+        const admissionValue = this.options.admissionTable.get(run.bindingId)
+        if (admissionValue === undefined || workSession.state !== 'open' || assignment.agentRunId !== run.id
+        || assignment.primaryWorkSessionId !== run.workSessionId) {
+          return { ok: false, reason: 'unavailable' }
+        }
+        const initialDispatch = this.requireDispatch(initialDispatchId)
+        const latestDispatch = this.requireDispatch(latestDispatchId)
+        const admission = bindingWriteAdmissionRecordSchema.parse(admissionValue)
+        const exactAcceptedOwner = admissionMatchesAgentOperation(admission, origin)
+        && admission.phase === 'accepted'
+        const acceptedInitialPublication = run.state === 'starting'
+        && assignment.state === 'assigned'
+        && origin.phase === 'dispatching'
+        && run.dispatchIds.length === 1
+        && initialDispatch.state === 'accepted'
+        && dispatchMatchesIntent(initialDispatch, origin)
+        const deliveredRun = run.state === 'running'
+        && (((assignment.state === 'assigned' || assignment.state === 'active')
+          && origin.phase === 'dispatching')
+          || (assignment.state === 'active' && origin.phase === 'started'))
+        && dispatchHasExactSucceededRun(latestDispatch, run)
+        const interventions = [...this.options.interventionTable.entries()]
+          .map(([, value]) => interventionRequestRecordSchema.parse(value))
+        const predecessor = interventions.find((candidate): candidate is Extract<
+          InterventionRequestRecord,
+          { readonly state: 'answered' }
+        > => candidate.state === 'answered'
+        && candidate.owner.agentRunId === run.id
+        && candidate.answer.dispatchId === latestDispatch.id)
+        const acceptedAnswerPublication = predecessor !== undefined
+        && assignment.state === 'active'
+        && origin.phase === 'started'
+        && latestDispatch.state === 'accepted'
+        && isDeepStrictEqual(run.inputPlan, predecessor.answer.inputPlan)
+        && interventionAnswerDispatchMatches(latestDispatch, predecessor, run)
+        && ((run.state === 'resume-pending' && run.blockingInterventionId === predecessor.id)
+          || (run.state === 'running' && run.blockingInterventionId === undefined
+            && dispatchHasExactSucceededRun(latestDispatch, run)))
+        if (!exactAcceptedOwner
+        || (!acceptedInitialPublication && !deliveredRun && !acceptedAnswerPublication)) {
+          return { ok: false, reason: 'unavailable' }
+        }
+        const ignoredPredecessorId = acceptedAnswerPublication
+          ? predecessor.id
+          : undefined
+        const alreadyBlocking = interventions
+          .some(candidate => candidate.owner.agentRunId === run.id
+          && candidate.id !== ignoredPredecessorId
+          && candidate.state !== 'resolved' && candidate.state !== 'reconciliation-required')
+        if (alreadyBlocking) return { ok: false, reason: 'conflict' }
+        const now = Date.now()
+        const candidate = interventionRequestRecordSchema.safeParse({
+          id: interventionId,
+          schemaVersion: 1,
+          revision: 0,
+          kind: 'text-input',
+          projectId: run.projectId,
+          owner: { kind: 'agent-run', agentRunId: run.id, workSessionId: run.workSessionId },
+          subject: { kind: 'agent-run', agentRunId: run.id },
+          targetPrincipalId: assignment.ownerPrincipalId,
+          requiredAnswer: {
+            kind: 'text',
+            prompt: request.prompt,
+            maxLength: MAX_INTERVENTION_ANSWER_CHARS,
+          },
+          blockingScope: { kind: 'agent-run', agentRunId: run.id },
+          cause: {
+            kind: 'agent-request',
+            agentRunId: run.id,
+            workSessionId: run.workSessionId,
+            sessionId: request.sessionId,
+            toolCallId: request.toolCallId,
+          },
+          returnAddress: {
+            kind: 'agent-run',
+            projectId: run.projectId,
+            workItemId: run.workItemId,
+            workSessionId: run.workSessionId,
+            agentRunId: run.id,
+          },
+          state: 'opening',
+          createdAt: now,
+          updatedAt: now,
+        })
+        if (!candidate.success) return { ok: false, reason: 'conflict' }
+        await this.putExact(
+          this.options.interventionTable,
+          interventionId,
+          candidate.data,
+          interventionRequestRecordSchema,
+        )
+        return { ok: true, interventionId }
+      })
+    ))
+  }
+
+  /**
+   * Advance one opening only after the exact successful tool result and its
+   * completed turn are durable in the owning Session.
+   * @param interventionId - durable request to inspect and recover.
+   * @param signal - recovery lifetime and cancellation.
+   * @param recovery - live handoff waits for the turn; startup classifies an abandoned partial turn.
+   * @returns current opening outcome.
+   */
+  async finalizeInterventionOpening(
+    interventionId: SakiInterventionRequestId,
+    signal: AbortSignal,
+    recovery: 'live' | 'startup' = 'live',
+  ): Promise<'open' | 'pending' | 'reconciliation-required'> {
+    return await enqueueKeyedOperation(this.interventionTails, interventionId, async () => {
+      signal.throwIfAborted()
+      const intervention = this.requireIntervention(interventionId)
+      if (intervention.state === 'reconciliation-required') return 'reconciliation-required'
+      if (intervention.state !== 'opening') return 'open'
+      let run = this.requireRun(intervention.owner.agentRunId)
+      const evidence: InterventionOpeningEvidence = await this.options.execution.inspectInterventionOpening({
+        hostId: this.requireDispatch(run.dispatchIds[0] as SakiExecutionDispatchId).hostId,
+        sessionId: intervention.cause.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+        callId: intervention.cause.toolCallId,
+        interventionId,
+        expectedQuestion: intervention.requiredAnswer.prompt,
+        expectedToolResult: {
+          content: [{ type: 'text', text: JSON.stringify({ interventionId }) }],
+        },
+      }, signal)
+      signal.throwIfAborted()
+      if (evidence.kind === 'absent' || evidence.kind === 'pending') {
+        if (recovery === 'live') return 'pending'
+        await this.reconcileIntervention(
+          intervention,
+          evidence.kind === 'absent' ? 'protocol' : 'effect-unknown',
+        )
+        return 'reconciliation-required'
+      }
+      if (evidence.kind === 'conflict') {
+        await this.reconcileIntervention(intervention, 'evidence-conflict')
+        return 'reconciliation-required'
+      }
+      run = this.requireRun(intervention.owner.agentRunId)
+      if (run.state === 'starting' || run.state === 'resume-pending') return 'pending'
+      if (run.state === 'running') {
+        const assignment = this.requireAssignment(run.assignmentId)
+        const origin = this.requireIntent(run.intentId)
+        const otherActive = [...this.options.interventionTable.entries()]
+          .map(([, value]) => interventionRequestRecordSchema.parse(value))
+          .some(candidate => candidate.id !== intervention.id
+            && candidate.owner.agentRunId === run.id
+            && candidate.state !== 'resolved' && candidate.state !== 'reconciliation-required')
+        if ((assignment.state === 'assigned' || assignment.state === 'active')
+          && origin.phase === 'dispatching') return 'pending'
+        if (assignment.state !== 'active' || origin.phase !== 'started') {
+          await this.reconcileIntervention(intervention, 'protocol')
+          return 'reconciliation-required'
+        }
+        if (otherActive) return 'pending'
+        run = await this.updateRun(run, {
+          state: 'waiting',
+          blockingInterventionId: intervention.id,
+        })
+      } else if (run.state !== 'waiting' || run.blockingInterventionId !== intervention.id) {
+        await this.reconcileIntervention(intervention, 'protocol')
+        return 'reconciliation-required'
+      }
+      const openedAt = Math.max(intervention.updatedAt, Date.now())
+      await this.updateIntervention(intervention, { state: 'open', openedAt })
+      this.options.notifyChanged()
+      return 'open'
+    })
+  }
+
+  private async finalizeRunOpenings(runId: SakiAgentRunId, signal: AbortSignal): Promise<void> {
+    for (const interventionId of this.openingInterventionIdsForRun(runId)) {
+      await this.finalizeInterventionOpening(interventionId, signal)
+    }
+  }
+
+  private async reconcileRunOpenings(
+    runId: SakiAgentRunId,
+    reason: 'effect-unknown' | 'evidence-conflict' | 'protocol',
+  ): Promise<void> {
+    for (const interventionId of this.openingInterventionIdsForRun(runId)) {
+      await enqueueKeyedOperation(this.interventionTails, interventionId, async () => {
+        const current = this.requireIntervention(interventionId)
+        if (current.state === 'opening') await this.reconcileIntervention(current, reason)
+      })
+    }
+  }
+
+  private openingInterventionIdsForRun(runId: SakiAgentRunId): SakiInterventionRequestId[] {
+    return [...this.options.interventionTable.entries()]
+      .map(([, value]) => interventionRequestRecordSchema.parse(value))
+      .filter(intervention => intervention.state === 'opening'
+        && intervention.owner.agentRunId === runId)
+      .map(intervention => intervention.id)
+      .sort()
+  }
+
+  /**
+   * Accept or replay the first authorized expected-revision answer and deliver
+   * it through a new Dispatch to the same Agent Run and Session.
+   * @param intent - authority-free browser answer and expected request revision.
+   * @param actor - trusted current Principal and Grant attribution.
+   * @param signal - submission and delivery-attempt cancellation.
+   * @returns durable answer acceptance, delivery, conflict, or recovery state.
+   */
+  async answerIntervention(
+    intent: AnswerInterventionIntent,
+    actor: ControlIntentActor,
+    signal: AbortSignal,
+  ): Promise<InterventionAnswerResult> {
+    return await enqueueKeyedOperation(this.interventionTails, intent.interventionId, async () => {
+      signal.throwIfAborted()
+      let intervention = this.requireIntervention(intent.interventionId)
+      if (hasInterventionAnswer(intervention)) {
+        if (!isDeepStrictEqual(intervention.answer.payload.intent, intent)) {
+          return answerConflict(intervention, intent, 'already-answered')
+        }
+        return await this.resumeInterventionAnswer(intervention, signal)
+      }
+      if (intervention.state !== 'open') {
+        return answerConflict(intervention, intent, 'owner-unavailable')
+      }
+      if (intervention.revision !== intent.expectedInterventionRevision) {
+        return answerConflict(intervention, intent, 'expected-revision')
+      }
+      if (intent.answer.text.length > intervention.requiredAnswer.maxLength) {
+        return answerConflict(intervention, intent, 'invalid-answer')
+      }
+      if (actor.principalId !== intervention.targetPrincipalId
+        || !this.options.authorityCurrent(actor, 'intervention:answer')) {
+        return { ok: false, reason: 'denied' }
+      }
+      const owner = intervention.owner
+      const run = this.requireRun(owner.agentRunId)
+      const assignment = this.requireAssignment(run.assignmentId)
+      const workSession = this.requireWorkSession(owner.workSessionId)
+      const original = this.requireIntent(run.intentId)
+      const admissionValue = this.options.admissionTable.get(run.bindingId)
+      const admission = admissionValue === undefined
+        ? undefined
+        : bindingWriteAdmissionRecordSchema.parse(admissionValue)
+      const currentBinding = this.options.projects.currentActiveBinding(run.projectId)
+      if (run.state !== 'waiting' || run.blockingInterventionId !== intervention.id
+        || run.workSessionId !== owner.workSessionId
+        || assignment.ownerPrincipalId !== actor.principalId || assignment.state !== 'active'
+        || workSession.state !== 'open'
+        || admission === undefined || admission.state !== 'agent-run' || admission.phase !== 'accepted'
+        || !admissionMatchesAgentOperation(admission, original)
+        || typeof currentBinding === 'string'
+        || currentBinding.binding.id !== run.bindingId
+        || currentBinding.binding.revision !== admission.bindingRevision) {
+        return answerConflict(intervention, intent, 'owner-unavailable')
+      }
+      signal.throwIfAborted()
+      const input = interventionAnswerInput(intervention, intent, actor)
+      const acceptedAt = Math.max(intervention.updatedAt, Date.now())
+      try {
+        intervention = await this.updateIntervention(intervention, {
+          state: 'answered',
+          answer: {
+            receiptId: receiptId(intent.intentId),
+            payloadDigest: canonicalDigest('saki/answer-intervention/v1', { intent, actor }),
+            payload: { intent, actor },
+            acceptedAt,
+            dispatchId: input.source.dispatchId,
+            inputPlan: {
+              messageId: input.id,
+              payloadDigest: computeStartAgentRunPayloadDigest(input),
+            },
+          },
+        })
+      } catch (error) {
+        if (!(error instanceof RecordCasConflict)) throw error
+        const winner = this.requireIntervention(intent.interventionId)
+        if (hasInterventionAnswer(winner)
+          && isDeepStrictEqual(winner.answer.payload.intent, intent)) {
+          return await this.resumeInterventionAnswer(winner, signal)
+        }
+        return answerConflict(winner, intent, 'already-answered')
+      }
+      this.options.notifyChanged()
+      return await this.resumeInterventionAnswer(intervention as AnsweredIntervention, signal)
+    })
+  }
+
+  private async resumeInterventionAnswer(
+    initial: AnswerBearingIntervention,
+    signal: AbortSignal,
+  ): Promise<InterventionAnswerResult> {
+    let intervention = this.requireIntervention(initial.id) as AnswerBearingIntervention
+    if (intervention.state === 'resolved') {
+      await this.finalizeRunOpenings(intervention.owner.agentRunId, this.options.lifetime)
+      return { ok: true, receipt: answerReceipt(intervention) }
+    }
+    if (intervention.state === 'reconciliation-required') {
+      return { ok: false, reason: 'reconciliation-required', receipt: answerReceipt(intervention) }
+    }
+    const materialized = await this.materializeInterventionAnswer(intervention, signal)
+    if (!materialized.ok) return materialized.result
+    intervention = materialized.intervention
+    const dispatch = materialized.dispatch
+    if (dispatch.state === 'reconciliation-required') {
+      return await this.reconcileInterventionAnswer(
+        intervention,
+        dispatch,
+        dispatch.terminalReason === 'effect-unknown' || dispatch.terminalReason === 'evidence-conflict'
+          ? dispatch.terminalReason
+          : 'protocol',
+      )
+    }
+    if (dispatch.state === 'canceled') {
+      return await this.reconcileInterventionAnswer(intervention, dispatch, 'protocol')
+    }
+    if (dispatch.state !== 'accepted') {
+      const claimed = await this.claim(dispatch)
+      if (claimed === undefined) return answerUnavailable(intervention)
+      const interrupted = await this.prepareAndAcceptInterventionAnswer(intervention, claimed, signal)
+      if (interrupted !== undefined) return interrupted
+      return await this.resumeInterventionAnswer(
+        this.requireIntervention(intervention.id) as AnsweredIntervention,
+        signal,
+      )
+    }
+    return await this.driveAcceptedInterventionAnswer(intervention, dispatch, signal)
+  }
+
+  private async materializeInterventionAnswer(
+    intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
+    signal: AbortSignal,
+  ): Promise<
+    | {
+      readonly ok: true
+      readonly intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>
+      readonly dispatch: ExecutionDispatchRecord
+    }
+    | { readonly ok: false; readonly result: InterventionAnswerResult }
+  > {
+    const { answer } = intervention
+    let run = this.requireRun(intervention.owner.agentRunId)
+    let dispatchValue = this.options.dispatchTable.get(answer.dispatchId)
+    if (dispatchValue === undefined) {
+      const waiting = run.state === 'waiting' && run.blockingInterventionId === intervention.id
+      const alreadyResumePending = run.state === 'resume-pending'
+        && run.blockingInterventionId === intervention.id
+        && isDeepStrictEqual(run.inputPlan, answer.inputPlan)
+        && run.dispatchIds.at(-1) === answer.dispatchId
+      if (!waiting && !alreadyResumePending) {
+        return { ok: false, result: await this.reconcileInterventionAnswer(intervention, undefined, 'protocol') }
+      }
+      const current = this.options.projects.currentActiveBinding(intervention.projectId)
+      if (typeof current === 'string' || current.binding.id !== run.bindingId) {
+        return { ok: false, result: await this.reconcileInterventionAnswer(intervention, undefined, 'protocol') }
+      }
+      let inspected: Awaited<ReturnType<SakiHostExecution['inspectProject']>>
+      try {
+        inspected = await this.options.execution.inspectProject({ binding: current.binding }, signal)
+      } catch {
+        signal.throwIfAborted()
+        return { ok: false, result: answerUnavailable(intervention) }
+      }
+      signal.throwIfAborted()
+      if (!inspected.ok) {
+        return inspected.reason === 'unavailable'
+          ? { ok: false, result: answerUnavailable(intervention) }
+          : { ok: false, result: await this.reconcileInterventionAnswer(intervention, undefined, 'protocol') }
+      }
+      if (inspected.observation.index.kind !== 'tree'
+        || inspected.preEffectBaseline.kind !== 'complete'
+        || !inspected.observation.structuredMutation.available) {
+        return { ok: false, result: answerUnavailable(intervention) }
+      }
+      const input = interventionAnswerInput(
+        intervention,
+        answer.payload.intent,
+        answer.payload.actor,
+      )
+      if (input.id !== answer.inputPlan.messageId
+        || computeStartAgentRunPayloadDigest(input) !== answer.inputPlan.payloadDigest) {
+        return { ok: false, result: await this.reconcileInterventionAnswer(intervention, undefined, 'evidence-conflict') }
+      }
+      const request: StartAgentRunHostOperationRequest = {
+        type: 'start-agent-run',
+        source: {
+          kind: 'execution-dispatch',
+          dispatchId: answer.dispatchId,
+          payloadDigest: answer.inputPlan.payloadDigest,
+        },
+        expected: {
+          binding: current.binding,
+          status: inspected.observation.fingerprint,
+          head: inspected.observation.head,
+          index: inspected.observation.index,
+          worktree: inspected.observation.worktree,
+          preEffectBaseline: inspected.preEffectBaseline,
+        },
+        run: {
+          agentRunId: run.id,
+          workSessionId: run.workSessionId,
+          sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+          profile: run.profile,
+          input,
+        },
+      }
+      const now = Date.now()
+      const dispatch = executionDispatchRecordSchema.parse({
+        id: answer.dispatchId,
+        schemaVersion: 1,
+        revision: 0,
+        intentId: answer.payload.intent.intentId,
+        agentRunId: run.id,
+        workSessionId: run.workSessionId,
+        hostId: current.binding.hostId,
+        bindingId: run.bindingId,
+        payloadDigest: answer.inputPlan.payloadDigest,
+        hostRequest: request,
+        state: 'pending',
+        latestFencingToken: 0,
+        createdAt: now,
+        updatedAt: now,
+      })
+      if (waiting) {
+        run = await this.updateRun(run, {
+          state: 'resume-pending',
+          inputPlan: answer.inputPlan,
+          dispatchIds: [...run.dispatchIds, answer.dispatchId],
+          hostResult: undefined,
+        })
+      }
+      await this.putExact(this.options.dispatchTable, dispatch.id, dispatch, executionDispatchRecordSchema)
+      dispatchValue = dispatch
+    }
+    const dispatch = executionDispatchRecordSchema.parse(dispatchValue)
+    if (!interventionAnswerDispatchMatches(dispatch, intervention, run)) {
+      return { ok: false, result: await this.reconcileInterventionAnswer(intervention, dispatch, 'evidence-conflict') }
+    }
+    const deliveredPrefix = run.state === 'running'
+      && run.blockingInterventionId === undefined
+      && isDeepStrictEqual(run.inputPlan, answer.inputPlan)
+      && run.dispatchIds.at(-1) === answer.dispatchId
+      && dispatchHasExactSucceededRun(dispatch, run)
+    const reconciliationPrefix = interventionAnswerReconciliationPrefixMatches(dispatch, intervention, run)
+    if (!deliveredPrefix && !reconciliationPrefix && (run.state !== 'resume-pending'
+      || run.blockingInterventionId !== intervention.id
+      || !isDeepStrictEqual(run.inputPlan, answer.inputPlan)
+      || run.dispatchIds.at(-1) !== answer.dispatchId)) {
+      return { ok: false, result: await this.reconcileInterventionAnswer(intervention, dispatch, 'protocol') }
+    }
+    return { ok: true, intervention, dispatch }
+  }
+
+  private async prepareAndAcceptInterventionAnswer(
+    intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
+    claimed: ClaimedExecutionDispatch,
+    signal: AbortSignal,
+  ): Promise<InterventionAnswerResult | undefined> {
+    const prepared = await this.options.execution.prepareOperation<'start-agent-run'>(
+      claimed.hostRequest,
+      this.admitOperation,
+      signal,
+    )
+    signal.throwIfAborted()
+    if (!prepared.ok) {
+      return prepared.reason === 'unavailable'
+        ? answerUnavailable(intervention)
+        : await this.reconcileInterventionAnswer(intervention, claimed, 'protocol')
+    }
+    assertDispatchPrepared(claimed, prepared.preparation, prepared.snapshot)
+    if (prepared.snapshot.state !== 'prepared') {
+      return await this.reconcileInterventionAnswer(intervention, claimed, 'protocol')
+    }
+    const currentValue = this.options.dispatchTable.get(claimed.id)
+    if (currentValue === undefined) return answerUnavailable(intervention)
+    const current = executionDispatchRecordSchema.parse(currentValue)
+    if (!sameDispatchClaimOwner(current, claimed)) return answerUnavailable(intervention)
+    let dispatch: ExecutionDispatchRecord
+    try {
+      dispatch = await this.updateDispatch(claimed, {
+        preparation: prepared.preparation,
+        operationSnapshot: prepared.snapshot,
+      })
+    } catch (error) {
+      if (error instanceof RecordCasConflict) return answerUnavailable(intervention)
+      throw error
+    }
+    const retainedClaim = dispatch as ClaimedExecutionDispatch
+    if (retainedClaim.claim.expiresAt <= Date.now()) return answerUnavailable(intervention)
+    if (this.currentInterventionAnswerAdmission(intervention, retainedClaim) === undefined) {
+      return await this.reconcileInterventionAnswer(intervention, retainedClaim, 'protocol')
+    }
+    const accepted = await this.acceptClaimedDispatch(
+      retainedClaim,
+      prepared.preparation,
+      prepared.snapshot,
+      current => this.currentInterventionAnswerAdmission(intervention, current) !== undefined,
+    )
+    return accepted === undefined ? answerUnavailable(intervention) : undefined
+  }
+
+  private async acceptClaimedDispatch(
+    claimed: ClaimedExecutionDispatch,
+    preparation: HostOperationPreparation<'start-agent-run'>,
+    snapshot: HostOperationSnapshot<'start-agent-run'>,
+    claimRemainsAdmissible: (current: ClaimedExecutionDispatch) => boolean,
+  ): Promise<ExecutionDispatchRecord | undefined> {
+    try {
+      return await this.options.dispatchTable.update(claimed.id, (value) => {
+        const current = executionDispatchRecordSchema.parse(value)
+        if (!sameDispatchClaim(current, claimed) || current.claim.expiresAt <= Date.now()
+          || !claimRemainsAdmissible(current)) {
+          throw new DispatchClaimLost()
+        }
+        return executionDispatchRecordSchema.parse(Object.fromEntries(Object.entries({
+          ...current,
+          revision: current.revision + 1,
+          state: 'accepted',
+          claim: undefined,
+          acceptedFencingToken: claimed.claim.fencingToken,
+          preparation,
+          operationSnapshot: snapshot,
+          updatedAt: Math.max(current.updatedAt, Date.now()),
+        }).filter(([, value]) => value !== undefined)))
+      })
+    } catch (error) {
+      const replayValue = this.options.dispatchTable.get(claimed.id)
+      if (replayValue !== undefined) {
+        const replay = executionDispatchRecordSchema.parse(replayValue)
+        if (replay.revision === claimed.revision + 1
+          && replay.state === 'accepted'
+          && replay.acceptedFencingToken === claimed.claim.fencingToken
+          && isDeepStrictEqual(replay.preparation, preparation)
+          && isDeepStrictEqual(replay.operationSnapshot, snapshot)) return replay
+      }
+      if (error instanceof DispatchClaimLost) return undefined
+      throw error
+    }
+  }
+
+  private currentInterventionAnswerAdmission(
+    intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
+    dispatch: ExecutionDispatchRecord,
+  ): Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> | undefined {
+    const parsedRun = this.requireRun(intervention.owner.agentRunId)
+    const assignment = this.requireAssignment(parsedRun.assignmentId)
+    const origin = this.requireIntent(parsedRun.intentId)
+    const admission = bindingWriteAdmissionRecordSchema.parse(this.options.admissionTable.get(parsedRun.bindingId))
+    const actor = intervention.answer.payload.actor
+    const current = this.options.projects.currentActiveBinding(intervention.projectId)
+    return parsedRun.state === 'resume-pending'
+      && parsedRun.blockingInterventionId === intervention.id
+      && parsedRun.dispatchIds.at(-1) === dispatch.id
+      && isDeepStrictEqual(parsedRun.inputPlan, intervention.answer.inputPlan)
+      && assignment.state === 'active'
+      && assignment.ownerPrincipalId === intervention.targetPrincipalId
+      && actor.principalId === intervention.targetPrincipalId
+      && this.options.authorityCurrent(actor, 'intervention:answer')
+      && interventionAnswerDispatchMatches(dispatch, intervention, parsedRun)
+      && admissionMatchesAgentOperation(admission, origin)
+      && admission.phase === 'accepted'
+      && typeof current !== 'string'
+      && current.binding.id === parsedRun.bindingId
+      && current.binding.revision === admission.bindingRevision
+      && isDeepStrictEqual(current.binding, dispatch.hostRequest.expected.binding)
+      ? admission
+      : undefined
+  }
+
+  private async driveAcceptedInterventionAnswer(
+    intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
+    dispatch: ExecutionDispatchRecord,
+    signal: AbortSignal,
+  ): Promise<InterventionAnswerResult> {
+    const preparation = dispatch.preparation as NonNullable<ExecutionDispatchRecord['preparation']>
+    let inspected = await this.options.execution.inspectOperation(preparation.operation, signal)
+    signal.throwIfAborted()
+    assertDispatchSnapshot(dispatch, inspected)
+    const inspectedResult = await this.resolveInterventionAnswerSnapshot(intervention, dispatch, inspected)
+    if (inspectedResult !== undefined) return inspectedResult
+    dispatch = await this.updateDispatch(dispatch, { operationSnapshot: inspected })
+    const replay = await this.options.execution.prepareOperation<'start-agent-run'>(
+      dispatch.hostRequest,
+      this.admitOperation,
+      signal,
+    )
+    signal.throwIfAborted()
+    if (!replay.ok) {
+      return replay.reason === 'unavailable'
+        ? answerUnavailable(intervention)
+        : await this.reconcileInterventionAnswer(intervention, dispatch, 'protocol')
+    }
+    assertDispatchPrepared(dispatch, replay.preparation, replay.snapshot)
+    const started = await this.options.execution.startOperation(replay.preparation.operation, replay.acceptance, signal)
+    signal.throwIfAborted()
+    assertDispatchSnapshot(dispatch, started.snapshot)
+    inspected = started.snapshot
+    dispatch = await this.updateDispatch(dispatch, { operationSnapshot: inspected })
+    return await this.resolveInterventionAnswerSnapshot(intervention, dispatch, inspected)
+      ?? answerUnavailable(intervention)
+  }
+
+  private async resolveInterventionAnswerSnapshot(
+    intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
+    dispatch: ExecutionDispatchRecord,
+    snapshot: HostOperationSnapshot<'start-agent-run'>,
+  ): Promise<InterventionAnswerResult | undefined> {
+    if (snapshot.state === 'succeeded') {
+      return await this.finishInterventionAnswer(intervention, dispatch, snapshot.result, snapshot)
+    }
+    if (snapshot.state === 'reconciliation-required') {
+      return await this.reconcileInterventionAnswer(intervention, dispatch, snapshot.reason)
+    }
+    if (snapshot.state === 'failed' || snapshot.state === 'canceled') {
+      return await this.reconcileInterventionAnswer(intervention, dispatch, 'protocol')
+    }
+    return undefined
+  }
+
+  private async finishInterventionAnswer(
+    intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
+    dispatch: ExecutionDispatchRecord,
+    result: StartAgentRunHostOperationResult,
+    snapshot: HostOperationSnapshot<'start-agent-run'>,
+  ): Promise<InterventionAnswerResult> {
+    if (result.agentRunId !== intervention.owner.agentRunId
+      || result.workSessionId !== intervention.owner.workSessionId
+      || result.sessionId !== dispatch.hostRequest.run.sessionId
+      || result.inputMessageId !== intervention.answer.inputPlan.messageId) {
+      return await this.reconcileInterventionAnswer(intervention, dispatch, 'evidence-conflict')
+    }
+    if (!isDeepStrictEqual(dispatch.operationSnapshot, snapshot)) {
+      dispatch = await this.updateDispatch(dispatch, { operationSnapshot: snapshot })
+    }
+    let run = this.requireRun(intervention.owner.agentRunId)
+    if (run.state === 'resume-pending') {
+      run = await this.updateRun(run, {
+        state: 'running',
+        blockingInterventionId: undefined,
+        hostResult: result,
+      })
+    }
+    const resolvedAt = Math.max(intervention.updatedAt, Date.now())
+    const resolved = await this.updateIntervention(intervention, { state: 'resolved', resolvedAt }) as ResolvedIntervention
+    await this.finalizeRunOpenings(run.id, this.options.lifetime)
+    this.options.notifyChanged()
+    return { ok: true, receipt: answerReceipt(resolved) }
+  }
+
+  private async reconcileInterventionAnswer(
+    intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
+    dispatch: ExecutionDispatchRecord | undefined,
+    reason: 'effect-unknown' | 'evidence-conflict' | 'protocol',
+  ): Promise<InterventionAnswerResult> {
+    await this.reconcileRunOpenings(intervention.owner.agentRunId, reason)
+    if (dispatch !== undefined && dispatch.state !== 'reconciliation-required') {
+      await this.updateDispatch(dispatch, {
+        state: 'reconciliation-required',
+        claim: undefined,
+        terminalReason: reason,
+      })
+    }
+    const run = this.requireRun(intervention.owner.agentRunId)
+    if (run.state === 'resume-pending') {
+      await this.updateRun(run, { state: 'reconciliation-required' })
+    }
+    const reconciled = await this.reconcileIntervention(intervention, reason) as ReconciledAnsweredIntervention
+    return { ok: false, reason: 'reconciliation-required', receipt: answerReceipt(reconciled) }
   }
 
   private async resolveEligibility(
@@ -502,7 +1289,12 @@ export class AgentOperations {
     while (true) {
       signal.throwIfAborted()
       let record = this.requireIntent(intentId)
-      if (terminal(record.phase)) return resultFor(record)
+      if (terminal(record.phase)) {
+        if (record.phase === 'started') {
+          await this.finalizeRunOpenings(record.agentRunId, this.options.lifetime)
+        }
+        return resultFor(record)
+      }
       await this.materializeChildren(record)
       record = this.requireIntent(intentId)
       const dispatch = this.requireDispatch(record.dispatchId)
@@ -537,11 +1329,12 @@ export class AgentOperations {
     const request = record.hostRequest
     const assignment = workAssignmentRecordSchema.parse({
       id: record.assignmentId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       intentId: record.id,
       projectId: record.payload.intent.projectId,
       workItemId: record.payload.intent.workItemId,
+      ownerPrincipalId: record.payload.actor.principalId,
       primaryWorkSessionId: record.workSessionId,
       agentRunId: record.agentRunId,
       state: 'assigned',
@@ -564,7 +1357,7 @@ export class AgentOperations {
     })
     const run = agentRunRecordSchema.parse({
       id: record.agentRunId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       intentId: record.id,
       assignmentId: record.assignmentId,
@@ -615,7 +1408,7 @@ export class AgentOperations {
       run.id,
       run,
       agentRunRecordSchema,
-      ['revision', 'state', 'hostResult', 'updatedAt'],
+      ['revision', 'state', 'hostResult', 'blockingInterventionId', 'inputPlan', 'dispatchIds', 'updatedAt'],
     )
     await this.putInitial(
       this.options.dispatchTable,
@@ -751,7 +1544,7 @@ export class AgentOperations {
   ): Promise<HostOperationReceipt<'start-agent-run'>> {
     const prepared = await this.options.execution.prepareOperation<'start-agent-run'>(
       record.hostRequest,
-      (expectation, admissionSignal) => this.admit(expectation, admissionSignal),
+      this.admitOperation,
       signal,
     )
     signal.throwIfAborted()
@@ -805,49 +1598,14 @@ export class AgentOperations {
       return { ok: false, result: unavailable(record) }
     }
     await this.acceptAdmission(record)
-    const accepted = await this.acceptClaimedDispatch(record, retainedClaim, prepared.preparation, prepared.snapshot)
+    const accepted = await this.acceptClaimedDispatch(
+      retainedClaim,
+      prepared.preparation,
+      prepared.snapshot,
+      () => this.acceptanceAuthorityIsCurrent(record),
+    )
     if (accepted === undefined) return { ok: false, result: unavailable(record) }
     return { ok: true }
-  }
-
-  private async acceptClaimedDispatch(
-    record: AgentOperationIntentRecord,
-    claimed: ClaimedExecutionDispatch,
-    preparation: HostOperationPreparation<'start-agent-run'>,
-    snapshot: HostOperationSnapshot<'start-agent-run'>,
-  ): Promise<ExecutionDispatchRecord | undefined> {
-    try {
-      return await this.options.dispatchTable.update(claimed.id, (value) => {
-        const current = executionDispatchRecordSchema.parse(value)
-        if (!sameDispatchClaim(current, claimed) || current.claim.expiresAt <= Date.now()
-          || !this.acceptanceAuthorityIsCurrent(record)) {
-          throw new DispatchClaimLost()
-        }
-        const candidate = Object.fromEntries(Object.entries({
-          ...current,
-          revision: current.revision + 1,
-          state: 'accepted',
-          claim: undefined,
-          acceptedFencingToken: claimed.claim.fencingToken,
-          preparation,
-          operationSnapshot: snapshot,
-          updatedAt: Math.max(current.updatedAt, Date.now()),
-        }).filter(([, candidateValue]) => candidateValue !== undefined))
-        return executionDispatchRecordSchema.parse(candidate)
-      })
-    } catch (error) {
-      const replayValue = this.options.dispatchTable.get(claimed.id)
-      if (replayValue !== undefined) {
-        const replay = executionDispatchRecordSchema.parse(replayValue)
-        if (replay.revision === claimed.revision + 1
-          && replay.state === 'accepted'
-          && replay.acceptedFencingToken === claimed.claim.fencingToken
-          && isDeepStrictEqual(replay.preparation, preparation)
-          && isDeepStrictEqual(replay.operationSnapshot, snapshot)) return replay
-      }
-      if (error instanceof DispatchClaimLost) return undefined
-      throw error
-    }
   }
 
   private acceptanceAuthorityIsCurrent(record: AgentOperationIntentRecord): boolean {
@@ -972,6 +1730,7 @@ export class AgentOperations {
     const assignment = this.requireAssignment(record.assignmentId)
     if (assignment.state !== 'active') await this.updateAssignment(assignment, { state: 'active' })
     record = await this.updateIntent(record, { phase: 'started' })
+    await this.finalizeRunOpenings(record.agentRunId, this.options.lifetime)
     this.options.notifyChanged()
     return resultFor(record)
   }
@@ -1072,14 +1831,11 @@ export class AgentOperations {
     if (dispatchValue === undefined) return Promise.resolve({ kind: 'denied', reason: 'not-current' })
     const dispatch = executionDispatchRecordSchema.parse(dispatchValue)
     const intentValue = this.options.intentTable.get(dispatch.intentId)
-    if (intentValue === undefined) return Promise.resolve({ kind: 'denied', reason: 'not-current' })
+    if (intentValue === undefined) {
+      return Promise.resolve(this.admitInterventionAnswer(expectation, dispatch))
+    }
     const intent = agentOperationIntentRecordSchema.parse(intentValue)
-    if (intent.phase !== 'dispatching' || dispatch.state !== 'accepted'
-      || dispatch.acceptedFencingToken === undefined || dispatch.preparation === undefined
-      || !isDeepStrictEqual(expectation.source, dispatch.hostRequest.source)
-      || !isDeepStrictEqual(expectation.preparation, dispatch.preparation)
-      || expectation.bindingId !== dispatch.bindingId
-      || expectation.bindingRevision !== dispatch.hostRequest.expected.binding.revision) {
+    if (intent.phase !== 'dispatching' || !dispatchMatchesAdmissionExpectation(dispatch, expectation)) {
       return Promise.resolve({ kind: 'denied', reason: 'not-current' })
     }
     const admissionValue = this.options.admissionTable.get(dispatch.bindingId)
@@ -1100,10 +1856,33 @@ export class AgentOperations {
     return Promise.resolve({ kind: 'accepted', admissionRevision: admission.data.revision })
   }
 
+  private admitInterventionAnswer(
+    expectation: HostOperationAdmissionExpectation,
+    dispatch: ExecutionDispatchRecord,
+  ): HostOperationAdmissionDecision {
+    const intervention = [...this.options.interventionTable.entries()]
+      .map(([, value]) => interventionRequestRecordSchema.parse(value))
+      .find(candidate => candidate.state === 'answered'
+        && candidate.answer.dispatchId === dispatch.id
+        && candidate.answer.payload.intent.intentId === dispatch.intentId)
+    if (intervention?.state !== 'answered') return { kind: 'denied', reason: 'not-current' }
+    if (!dispatchMatchesAdmissionExpectation(dispatch, expectation)) {
+      return { kind: 'denied', reason: 'not-current' }
+    }
+    if (!this.options.authorityCurrent(intervention.answer.payload.actor, 'intervention:answer')) {
+      return { kind: 'denied', reason: 'authority-revoked' }
+    }
+    const admission = this.currentInterventionAnswerAdmission(intervention, dispatch)
+    return admission === undefined
+      ? { kind: 'denied', reason: 'not-current' }
+      : { kind: 'accepted', admissionRevision: admission.revision }
+  }
+
   private async reconcile(
     record: AgentOperationIntentRecord,
     reason: 'effect-unknown' | 'evidence-conflict' | 'protocol',
   ): Promise<AgentOperationIntentRecord> {
+    await this.reconcileRunOpenings(record.agentRunId, reason)
     const dispatch = this.requireDispatch(record.dispatchId)
     if (dispatch.state !== 'reconciliation-required') {
       await this.updateDispatch(dispatch, {
@@ -1179,6 +1958,10 @@ export class AgentOperations {
     return agentRunRecordSchema.parse(this.options.agentRunTable.get(id))
   }
 
+  private requireIntervention(id: SakiInterventionRequestId): InterventionRequestRecord {
+    return interventionRequestRecordSchema.parse(this.options.interventionTable.get(id))
+  }
+
   private async updateIntent(
     current: AgentOperationIntentRecord,
     patch: Partial<Pick<AgentOperationIntentRecord, 'phase' | 'terminalReason'>>,
@@ -1216,9 +1999,40 @@ export class AgentOperations {
 
   private async updateRun(
     current: AgentRunRecord,
-    patch: Partial<Pick<AgentRunRecord, 'state' | 'hostResult'>>,
+    patch: Partial<Pick<
+      AgentRunRecord,
+      'state' | 'hostResult' | 'blockingInterventionId' | 'inputPlan' | 'dispatchIds'
+    >>,
   ): Promise<AgentRunRecord> {
     return await updateRecord(this.options.agentRunTable, current.id, current, patch, agentRunRecordSchema)
+  }
+
+  private async updateIntervention(
+    current: InterventionRequestRecord,
+    patch: Partial<InterventionRequestRecord>,
+  ): Promise<InterventionRequestRecord> {
+    return await updateRecord(
+      this.options.interventionTable,
+      current.id,
+      current,
+      patch,
+      interventionRequestRecordSchema,
+    )
+  }
+
+  private async reconcileIntervention(
+    intervention: InterventionRequestRecord,
+    reason: 'effect-unknown' | 'evidence-conflict' | 'protocol',
+  ): Promise<InterventionRequestRecord> {
+    const now = Math.max(intervention.updatedAt, Date.now())
+    const next = await this.updateIntervention(intervention, {
+      state: 'reconciliation-required',
+      openedAt: 'openedAt' in intervention ? intervention.openedAt : now,
+      reason,
+      reconciliationRequiredAt: now,
+    })
+    this.options.notifyChanged()
+    return next
   }
 
   private async putExact<K extends string, V>(
@@ -1292,6 +2106,19 @@ function sameDispatchClaimOwner(
     && current.claim.executorHostId === expected.claim.executorHostId
 }
 
+function dispatchMatchesAdmissionExpectation(
+  dispatch: ExecutionDispatchRecord,
+  expectation: HostOperationAdmissionExpectation,
+): boolean {
+  return dispatch.state === 'accepted'
+    && dispatch.acceptedFencingToken !== undefined
+    && dispatch.preparation !== undefined
+    && isDeepStrictEqual(expectation.source, dispatch.hostRequest.source)
+    && isDeepStrictEqual(expectation.preparation, dispatch.preparation)
+    && expectation.bindingId === dispatch.bindingId
+    && expectation.bindingRevision === dispatch.hostRequest.expected.binding.revision
+}
+
 function admissionMatchesAgentOperation(
   admission: BindingWriteAdmissionRecord,
   record: AgentOperationIntentRecord,
@@ -1317,6 +2144,7 @@ function admissionMatchesAgentOperation(
  * @param workSessionTable - preallocated primary Work Sessions.
  * @param agentRunTable - preallocated Agent Runs and Host results.
  * @param dispatchTable - preallocated Execution Dispatches and Host evidence.
+ * @param interventionTable - independently revisioned operator requests and answer winners.
  * @param admissionTable - shared Resource Binding write-admission rows.
  * @param registry - validated Project Registry, or absence before provisioning.
  * @param otherIntentIds - Control Intent ids already owned by other durable families.
@@ -1329,6 +2157,7 @@ export function validateAgentOperationsDurableState(
   workSessionTable: ReadonlyTable<SakiWorkSessionId, WorkSessionRecord>,
   agentRunTable: ReadonlyTable<SakiAgentRunId, AgentRunRecord>,
   dispatchTable: ReadonlyTable<SakiExecutionDispatchId, ExecutionDispatchRecord>,
+  interventionTable: ReadonlyTable<SakiInterventionRequestId, InterventionRequestRecord>,
   admissionTable: ReadonlyTable<SakiResourceBindingId, BindingWriteAdmissionRecord>,
   registry: DevelopmentProjectRegistryRecord | undefined,
   otherIntentIds: ReadonlySet<SakiControlIntentId>,
@@ -1341,11 +2170,37 @@ export function validateAgentOperationsDurableState(
     validateActorReference(intent.payload.actor)
     return intent
   })
+  const interventions = parseTable(interventionTable, interventionRequestRecordSchema, 'Intervention Request')
+  const intentIds = new Set<SakiControlIntentId>(intents.map(intent => intent.id))
+  const answerIntentIds = new Set<SakiControlIntentId>()
+  const answerDispatchIds = new Set<SakiExecutionDispatchId>()
+  for (const intervention of interventions) {
+    if (!hasInterventionAnswer(intervention)) continue
+    const { intent, actor } = intervention.answer.payload
+    if (intentIds.has(intent.intentId)
+      || otherIntentIds.has(intent.intentId)
+      || answerIntentIds.has(intent.intentId)) {
+      throw new Error(`Saki Control Intent '${intent.intentId}' is retained by multiple Intent kinds`)
+    }
+    answerIntentIds.add(intent.intentId)
+    if (answerDispatchIds.has(intervention.answer.dispatchId)) {
+      throw new Error(`Saki Execution Dispatch '${intervention.answer.dispatchId}' is retained by multiple Interventions`)
+    }
+    answerDispatchIds.add(intervention.answer.dispatchId)
+    validateActorReference(actor)
+  }
   if (registry === undefined) {
-    if (intents.length + assignmentTable.size + workSessionTable.size + agentRunTable.size + dispatchTable.size > 0) {
+    if (intents.length + assignmentTable.size + workSessionTable.size + agentRunTable.size
+      + dispatchTable.size + interventions.length > 0) {
       throw new Error('Saki Agent operation state exists without the Project Registry')
     }
-    return { intents: [], runningAgentRuns: [] }
+    return {
+      intents: [],
+      interventions: [],
+      runningAgentRuns: [],
+      openingInterventionIds: [],
+      answerPendingInterventionIds: [],
+    }
   }
   const intentById = new Map(intents.map(intent => [intent.id, intent]))
   const assignments = parseTable(assignmentTable, workAssignmentRecordSchema, 'Work Assignment')
@@ -1356,6 +2211,17 @@ export function validateAgentOperationsDurableState(
   const sessionById = new Map(sessions.map(value => [value.id, value]))
   const runById = new Map(runs.map(value => [value.id, value]))
   const dispatchById = new Map(dispatches.map(value => [value.id, value]))
+  const interventionById = new Map(interventions.map(value => [value.id, value]))
+  const answeredInterventionByIntentId = new Map(interventions.flatMap(intervention => (
+    hasInterventionAnswer(intervention)
+      ? [[intervention.answer.payload.intent.intentId, intervention] as const]
+      : []
+  )))
+  const answeredInterventionByDispatchId = new Map(interventions.flatMap(intervention => (
+    hasInterventionAnswer(intervention)
+      ? [[intervention.answer.dispatchId, intervention] as const]
+      : []
+  )))
   const admissions = parseTable(admissionTable, bindingWriteAdmissionRecordSchema, 'Binding write admission')
   const admissionById = new Map(admissions.map(value => [value.id, value]))
   for (const intent of intents) {
@@ -1401,11 +2267,14 @@ export function validateAgentOperationsDurableState(
       )) {
       throw new Error('nonterminal Saki Agent operation has an inconsistent terminal write prefix')
     }
+    const startedRunState = run?.state === 'running'
+      || run?.state === 'waiting'
+      || run?.state === 'resume-pending'
+      || run?.state === 'reconciliation-required'
     if (intent.phase === 'started' && (assignment?.state !== 'active'
       || session?.state !== 'open'
-      || run?.state !== 'running'
-      || dispatch?.state !== 'accepted'
-      || !dispatchHasExactSucceededRun(dispatch, run))) {
+      || !startedRunState
+      || !initialDispatchProvesStartedIntent(dispatch, intent))) {
       throw new Error('started Saki Agent operation has an inconsistent child lifecycle')
     }
     if (intent.phase === 'reconciliation-required' && (assignment?.state !== 'reconciliation-required'
@@ -1419,9 +2288,6 @@ export function validateAgentOperationsDurableState(
       || session?.state !== 'canceled' || run?.state !== 'canceled'
       || !dispatchProvesCanceledDelivery(dispatch))) {
       throw new Error('canceled Saki Agent operation retains a nonterminal child or possible-effect Host snapshot')
-    }
-    if (run?.state === 'running' && !dispatchHasExactSucceededRun(dispatch, run)) {
-      throw new Error('running Saki Agent Run lacks its exact succeeded Dispatch evidence')
     }
     const admission = admissionById.get(intent.projectContext.resourceBindingId)
     const ownedAdmission = admission?.state === 'agent-run'
@@ -1477,9 +2343,188 @@ export function validateAgentOperationsDurableState(
       throw new Error('orphan or mismatched Agent Run')
     }
   }
+  const activeInterventionsByRun = new Map<SakiAgentRunId, InterventionRequestRecord[]>()
+  for (const intervention of interventions) {
+    const run = runById.get(intervention.owner.agentRunId)
+    const assignment = run === undefined ? undefined : assignmentById.get(run.assignmentId)
+    const session = run === undefined ? undefined : sessionById.get(run.workSessionId)
+    if (run === undefined || assignment === undefined || session === undefined
+      || intervention.owner.workSessionId !== run.workSessionId
+      || intervention.projectId !== run.projectId
+      || intervention.targetPrincipalId !== assignment.ownerPrincipalId
+      || intervention.cause.agentRunId !== run.id
+      || intervention.cause.workSessionId !== run.workSessionId
+      || intervention.cause.sessionId !== run.sessionId
+      || !interventionSubjectMatchesRun(intervention, run)
+      || intervention.blockingScope.agentRunId !== run.id
+      || !interventionReturnAddressMatchesRun(intervention, run)) {
+      throw new Error('Saki Intervention Request has inconsistent ownership')
+    }
+    const blocksThisRun = run.blockingInterventionId === intervention.id
+    const answerDispatch = hasInterventionAnswer(intervention)
+      ? dispatchById.get(intervention.answer.dispatchId)
+      : undefined
+    const exactAnswerCompletionPrefix = intervention.state === 'answered'
+      && answerDispatch?.state === 'accepted'
+      && run.state === 'running'
+      && run.blockingInterventionId === undefined
+      && run.dispatchIds.at(-1) === answerDispatch.id
+      && isDeepStrictEqual(run.inputPlan, intervention.answer.inputPlan)
+      && interventionAnswerDispatchMatches(answerDispatch, intervention, run)
+      && dispatchHasExactSucceededRun(answerDispatch, run)
+    const exactAnswerReconciliationPrefix = intervention.state === 'answered'
+      && interventionAnswerReconciliationPrefixMatches(answerDispatch, intervention, run)
+    const origin = intentById.get(run.intentId)
+    const initialDispatch = dispatchById.get(run.dispatchIds[0] as SakiExecutionDispatchId)
+    const blockingIntervention = run.blockingInterventionId === undefined
+      ? undefined
+      : interventionById.get(run.blockingInterventionId)
+    const blockingAnswerDispatch = blockingIntervention?.state === 'answered'
+      ? dispatchById.get(blockingIntervention.answer.dispatchId)
+      : undefined
+    const exactAnswerPublicationSuccessor = !blocksThisRun
+      && run.state === 'resume-pending'
+      && blockingIntervention?.state === 'answered'
+      && blockingAnswerDispatch?.state === 'accepted'
+      && blockingIntervention.answer.dispatchId === run.dispatchIds.at(-1)
+    if (intervention.state === 'opening') {
+      const exactInitialPublicationOpening = !blocksThisRun
+        && initialDispatch?.state === 'accepted'
+        && (run.state === 'starting' || run.state === 'running')
+        && (assignment.state === 'assigned' || (run.state === 'running' && assignment.state === 'active'))
+        && origin?.phase === 'dispatching'
+      const exactStableOpening = !blocksThisRun
+        && run.state === 'running'
+        && assignment.state === 'active'
+        && origin?.phase === 'started'
+      if ((!blocksThisRun
+        && !exactInitialPublicationOpening && !exactStableOpening && !exactAnswerPublicationSuccessor)
+        || (blocksThisRun && run.state !== 'waiting')) {
+        throw new Error('opening Saki Intervention disagrees with its Agent Run')
+      }
+    } else if (intervention.state === 'open') {
+      if (!blocksThisRun || run.state !== 'waiting') {
+        throw new Error('open Saki Intervention lacks its waiting Agent Run')
+      }
+    } else if (intervention.state === 'answered') {
+      if ((!blocksThisRun || (run.state !== 'waiting' && run.state !== 'resume-pending'))
+        && !exactAnswerCompletionPrefix && !exactAnswerReconciliationPrefix) {
+        throw new Error('answered Saki Intervention has an inconsistent Agent Run prefix')
+      }
+    } else if (intervention.state === 'resolved' && blocksThisRun) {
+      throw new Error('resolved Saki Intervention still blocks its Agent Run')
+    }
+    if (intervention.state === 'opening' || intervention.state === 'open' || intervention.state === 'answered') {
+      const active = activeInterventionsByRun.get(run.id) ?? []
+      active.push(intervention)
+      activeInterventionsByRun.set(run.id, active)
+    }
+    if (!hasInterventionAnswer(intervention)) continue
+    if (answerDispatch === undefined) {
+      if (intervention.state !== 'answered' && intervention.state !== 'reconciliation-required') {
+        throw new Error('resolved Saki Intervention lacks its answer Dispatch')
+      }
+      continue
+    }
+    if (!interventionAnswerDispatchMatches(answerDispatch, intervention, run)) {
+      throw new Error('Saki Intervention answer Dispatch disagrees with its owner')
+    }
+    if (intervention.state === 'resolved' && !run.dispatchIds.includes(answerDispatch.id)) {
+      throw new Error('resolved Saki Intervention answer is absent from its Agent Run')
+    }
+    if (intervention.state === 'resolved'
+      && !dispatchHasExactSucceededInterventionAnswer(answerDispatch, intervention, run)) {
+      throw new Error('resolved Saki Intervention lacks exact succeeded answer Dispatch evidence')
+    }
+  }
+  for (const [runId, active] of activeInterventionsByRun) {
+    if (active.length <= 1) continue
+    const run = runById.get(runId)
+    const predecessor = active.find(intervention => intervention.state === 'answered')
+    const successor = active.find(intervention => intervention.state === 'opening')
+    const answerDispatch = predecessor?.state === 'answered'
+      ? dispatchById.get(predecessor.answer.dispatchId)
+      : undefined
+    const exactAnswerPublicationHandoff = active.length === 2
+      && run !== undefined
+      && predecessor?.state === 'answered'
+      && successor?.state === 'opening'
+      && answerDispatch?.state === 'accepted'
+      && answerDispatch.id === run.dispatchIds.at(-1)
+      && interventionAnswerDispatchMatches(answerDispatch, predecessor, run)
+      && ((run.state === 'resume-pending' && run.blockingInterventionId === predecessor.id)
+        || (run.state === 'running' && run.blockingInterventionId === undefined
+          && dispatchHasExactSucceededRun(answerDispatch, run)))
+    if (!exactAnswerPublicationHandoff) {
+      throw new Error('Saki Agent Run has multiple active Intervention Requests')
+    }
+  }
+  for (const run of runs) {
+    const intent = intentById.get(run.intentId) as AgentOperationIntentRecord
+    const missingDispatchIds = run.dispatchIds.filter(id => !dispatchById.has(id))
+    const missingResumeDispatch = missingDispatchIds.length === 1
+      ? answeredInterventionByDispatchId.get(missingDispatchIds[0] as SakiExecutionDispatchId)
+      : undefined
+    const exactMissingResumePrefix = missingResumeDispatch?.state === 'answered'
+      && run.state === 'resume-pending'
+      && run.dispatchIds.at(-1) === missingDispatchIds[0]
+      && run.blockingInterventionId === missingResumeDispatch.id
+      && isDeepStrictEqual(run.inputPlan, missingResumeDispatch.answer.inputPlan)
+    if (missingDispatchIds.length > 0 && !exactMissingResumePrefix) {
+      throw new Error('Saki Agent Run has a mismatched or absent Execution Dispatch')
+    }
+    const dispatchSequence = run.dispatchIds.map(id => dispatchById.get(id))
+    for (const dispatch of dispatchSequence.slice(1)) {
+      if (dispatch === undefined) continue
+      const intervention = answeredInterventionByDispatchId.get(dispatch.id)
+      if (intervention === undefined) {
+        throw new Error('Saki Agent Run has an unattributed resume Dispatch')
+      }
+    }
+    const latestDispatchId = run.dispatchIds.at(-1) as SakiExecutionDispatchId
+    const latestDispatch = dispatchSequence.at(-1)
+    const latestAnswer = answeredInterventionByDispatchId.get(latestDispatchId)
+    const expectedInputPlan = latestAnswer !== undefined
+      ? latestAnswer.answer.inputPlan
+      : {
+        messageId: intent.hostRequest.run.input.id,
+        payloadDigest: intent.hostRequest.source.payloadDigest,
+      }
+    if (!isDeepStrictEqual(run.inputPlan, expectedInputPlan)) {
+      throw new Error('Saki Agent Run current input plan disagrees with its ordered Dispatches')
+    }
+    if ((run.state === 'running' || run.state === 'waiting')
+      && !dispatchHasExactSucceededRun(latestDispatch, run)) {
+      throw new Error('running Saki Agent Run lacks its exact succeeded Dispatch evidence')
+    }
+    if (run.state === 'resume-pending') {
+      const intervention = answeredInterventionByDispatchId.get(latestDispatchId)
+      if (intervention?.state !== 'answered' || run.blockingInterventionId !== intervention.id) {
+        throw new Error('resume-pending Saki Agent Run lacks its answered Intervention')
+      }
+    }
+    if (run.blockingInterventionId !== undefined) {
+      const blocking = interventionById.get(run.blockingInterventionId)
+      if (blocking === undefined || blocking.owner.agentRunId !== run.id
+        || blocking.state === 'resolved') {
+        throw new Error('Saki Agent Run has an invalid blocking Intervention')
+      }
+    }
+  }
   for (const dispatch of dispatches) {
     const intent = intentById.get(dispatch.intentId)
-    if (intent === undefined || !dispatchMatchesIntent(dispatch, intent)) {
+    if (intent !== undefined) {
+      if (!dispatchMatchesIntent(dispatch, intent)) {
+        throw new Error('orphan or mismatched Execution Dispatch')
+      }
+      continue
+    }
+    const intervention = answeredInterventionByIntentId.get(dispatch.intentId)
+    const run = intervention === undefined ? undefined : runById.get(intervention.owner.agentRunId)
+    if (intervention === undefined || run === undefined) {
+      throw new Error('orphan or mismatched Execution Dispatch')
+    }
+    if (!interventionAnswerDispatchMatches(dispatch, intervention, run)) {
       throw new Error('orphan or mismatched Execution Dispatch')
     }
   }
@@ -1500,7 +2545,7 @@ export function validateAgentOperationsDurableState(
     .filter(run => run.state === 'running')
     .toSorted(byCreatedAtThenId)
     .map((run) => {
-      const dispatchId = run.dispatchIds[0] as SakiExecutionDispatchId
+      const dispatchId = run.dispatchIds.at(-1) as SakiExecutionDispatchId
       const dispatch = dispatchById.get(dispatchId) as ExecutionDispatchRecord
       const preparation = dispatch.preparation as HostOperationPreparation<'start-agent-run'>
       const { operation } = preparation
@@ -1511,7 +2556,16 @@ export function validateAgentOperationsDurableState(
     })
   return {
     intents: intents.toSorted(byCreatedAtThenId),
+    interventions: interventions.toSorted(byCreatedAtThenId),
     runningAgentRuns,
+    openingInterventionIds: interventions
+      .filter(intervention => intervention.state === 'opening')
+      .toSorted(byCreatedAtThenId)
+      .map(intervention => intervention.id),
+    answerPendingInterventionIds: interventions
+      .filter(intervention => intervention.state === 'answered')
+      .toSorted(byCreatedAtThenId)
+      .map(intervention => intervention.id),
   }
 }
 
@@ -1527,6 +2581,7 @@ function assignmentMatchesIntent(
     && assignment.intentId === intent.id
     && assignment.projectId === intent.payload.intent.projectId
     && assignment.workItemId === intent.payload.intent.workItemId
+    && assignment.ownerPrincipalId === intent.payload.actor.principalId
     && assignment.primaryWorkSessionId === intent.workSessionId
     && assignment.agentRunId === intent.agentRunId
     && assignment.createdAt === intent.createdAt
@@ -1555,12 +2610,25 @@ function agentRunMatchesIntent(run: AgentRunRecord, intent: AgentOperationIntent
     && run.bindingId === intent.projectContext.resourceBindingId
     && isDeepStrictEqual(run.profile, intent.profile)
     && run.sessionId === intent.hostRequest.run.sessionId
-    && isDeepStrictEqual(run.inputPlan, {
-      messageId: intent.hostRequest.run.input.id,
-      payloadDigest: intent.hostRequest.source.payloadDigest,
-    })
-    && isDeepStrictEqual(run.dispatchIds, [intent.dispatchId])
+    && run.dispatchIds[0] === intent.dispatchId
     && run.createdAt === intent.createdAt
+}
+
+function interventionSubjectMatchesRun(
+  intervention: InterventionRequestRecord,
+  run: AgentRunRecord,
+): boolean {
+  return intervention.subject.agentRunId === run.id
+}
+
+function interventionReturnAddressMatchesRun(
+  intervention: InterventionRequestRecord,
+  run: AgentRunRecord,
+): boolean {
+  return intervention.returnAddress.projectId === run.projectId
+    && intervention.returnAddress.workItemId === run.workItemId
+    && intervention.returnAddress.workSessionId === run.workSessionId
+    && intervention.returnAddress.agentRunId === run.id
 }
 
 function dispatchMatchesIntent(
@@ -1578,14 +2646,59 @@ function dispatchMatchesIntent(
     && dispatch.createdAt === intent.createdAt
 }
 
+function initialDispatchProvesStartedIntent(
+  dispatch: ExecutionDispatchRecord | undefined,
+  intent: AgentOperationIntentRecord,
+): boolean {
+  const snapshot = dispatch?.operationSnapshot
+  return dispatch?.state === 'accepted'
+    && dispatchMatchesIntent(dispatch, intent)
+    && snapshot?.state === 'succeeded'
+    && snapshot.result.type === 'start-agent-run'
+    && snapshot.result.agentRunId === intent.agentRunId
+    && snapshot.result.workSessionId === intent.workSessionId
+    && snapshot.result.sessionId === intent.hostRequest.run.sessionId
+    && snapshot.result.inputMessageId === intent.hostRequest.run.input.id
+}
+
 function dispatchHasExactSucceededRun(
   dispatch: ExecutionDispatchRecord | undefined,
   run: AgentRunRecord | undefined,
 ): boolean {
   return dispatch?.preparation !== undefined
     && dispatch.operationSnapshot?.state === 'succeeded'
-    && run?.state === 'running'
+    && (run?.state === 'running' || run?.state === 'waiting')
     && isDeepStrictEqual(dispatch.operationSnapshot.result, run.hostResult)
+}
+
+function dispatchHasExactSucceededInterventionAnswer(
+  dispatch: ExecutionDispatchRecord,
+  intervention: ResolvedIntervention,
+  run: AgentRunRecord,
+): boolean {
+  const snapshot = dispatch.operationSnapshot
+  return dispatch.state === 'accepted'
+    && dispatch.preparation !== undefined
+    && snapshot?.state === 'succeeded'
+    && snapshot.result.type === 'start-agent-run'
+    && snapshot.result.agentRunId === run.id
+    && snapshot.result.workSessionId === run.workSessionId
+    && snapshot.result.sessionId === run.sessionId
+    && snapshot.result.inputMessageId === intervention.answer.inputPlan.messageId
+}
+
+function interventionAnswerReconciliationPrefixMatches(
+  dispatch: ExecutionDispatchRecord | undefined,
+  intervention: AnsweredIntervention,
+  run: AgentRunRecord,
+): boolean {
+  return dispatch?.state === 'reconciliation-required'
+    && run.state === 'reconciliation-required'
+    && run.blockingInterventionId === intervention.id
+    && run.hostResult === undefined
+    && run.dispatchIds.at(-1) === dispatch.id
+    && isDeepStrictEqual(run.inputPlan, intervention.answer.inputPlan)
+    && interventionAnswerDispatchMatches(dispatch, intervention, run)
 }
 
 function dispatchProvesCanceledDelivery(dispatch: ExecutionDispatchRecord | undefined): boolean {
@@ -1692,6 +2805,176 @@ function renderRunInput(input: {
   ].join('\n')
 }
 
+function interventionAnswerInput(
+  intervention: InterventionRequestRecord,
+  intent: AnswerInterventionIntent,
+  actor: ControlIntentActor,
+): StartAgentRunInputMessage {
+  const dispatchId = (
+    `dispatch-${derivedUuid(intent.intentId, 'intervention-answer-dispatch')}`
+  ) as SakiExecutionDispatchId
+  return {
+    id: derivedUuid(intent.intentId, 'intervention-answer-message') as StartAgentRunInputMessage['id'],
+    role: 'user',
+    content: [{
+      type: 'text',
+      text: `Operator response to your intervention request:\n\n${intent.answer.text}`,
+    }],
+    source: {
+      kind: 'saki-intervention-answer',
+      interventionId: intervention.id,
+      answerIntentId: intent.intentId,
+      dispatchId,
+      agentRunId: intervention.owner.agentRunId,
+      workSessionId: intervention.owner.workSessionId,
+      actor,
+    },
+  }
+}
+
+function interventionAnswerDispatchMatches(
+  dispatch: ExecutionDispatchRecord,
+  intervention: AnsweredIntervention | ResolvedIntervention | ReconciledAnsweredIntervention,
+  run: AgentRunRecord,
+): boolean {
+  const { answer } = intervention
+  const input = interventionAnswerInput(intervention, answer.payload.intent, answer.payload.actor)
+  const source = dispatch.hostRequest.run.input.source
+  return source.kind === 'saki-intervention-answer'
+    && dispatch.id === answer.dispatchId
+    && dispatch.intentId === answer.payload.intent.intentId
+    && dispatch.agentRunId === run.id
+    && dispatch.workSessionId === run.workSessionId
+    && dispatch.bindingId === run.bindingId
+    && dispatch.hostId === dispatch.hostRequest.expected.binding.hostId
+    && dispatch.payloadDigest === answer.inputPlan.payloadDigest
+    && dispatch.hostRequest.source.dispatchId === dispatch.id
+    && dispatch.hostRequest.source.payloadDigest === dispatch.payloadDigest
+    && dispatch.hostRequest.run.agentRunId === run.id
+    && dispatch.hostRequest.run.workSessionId === run.workSessionId
+    && dispatch.hostRequest.run.sessionId === run.sessionId
+    && isDeepStrictEqual(dispatch.hostRequest.run.profile, run.profile)
+    && isDeepStrictEqual(dispatch.hostRequest.run.input, input)
+    && input.id === answer.inputPlan.messageId
+    && computeStartAgentRunPayloadDigest(input) === answer.inputPlan.payloadDigest
+    && source.interventionId === intervention.id
+    && source.answerIntentId === answer.payload.intent.intentId
+    && isDeepStrictEqual(source.actor, answer.payload.actor)
+}
+
+function answerConflict(
+  intervention: InterventionRequestRecord,
+  intent: AnswerInterventionIntent,
+  reason: Extract<SakiAnswerInterventionReceipt, { readonly state: 'conflict' }>['reason'],
+): InterventionAnswerResult {
+  return {
+    ok: false,
+    reason: 'conflict',
+    receipt: {
+      id: receiptId(intent.intentId),
+      intentId: intent.intentId,
+      type: 'answer-intervention',
+      interventionId: intervention.id,
+      interventionRevision: intervention.revision,
+      state: 'conflict',
+      reason,
+    },
+  }
+}
+
+type AnsweredIntervention = Extract<InterventionRequestRecord, { readonly state: 'answered' }>
+type ResolvedIntervention = Extract<InterventionRequestRecord, { readonly state: 'resolved' }>
+type ReconciledAnsweredIntervention = Extract<
+  InterventionRequestRecord,
+  { readonly state: 'reconciliation-required' }
+> & { readonly answer: NonNullable<Extract<
+  InterventionRequestRecord,
+  { readonly state: 'reconciliation-required' }
+>['answer']> }
+type AnswerBearingIntervention = AnsweredIntervention | ResolvedIntervention | ReconciledAnsweredIntervention
+
+function hasInterventionAnswer(record: InterventionRequestRecord): record is AnswerBearingIntervention {
+  return record.state === 'answered'
+    || record.state === 'resolved'
+    || isReconciledAnsweredIntervention(record)
+}
+
+function isReconciledAnsweredIntervention(
+  record: InterventionRequestRecord,
+): record is ReconciledAnsweredIntervention {
+  return record.state === 'reconciliation-required' && record.answer !== undefined
+}
+
+function answerReceipt(record: AnsweredIntervention): Extract<
+  SakiAnswerInterventionReceipt,
+  { readonly state: 'answered' }
+>
+function answerReceipt(record: ResolvedIntervention): Extract<
+  SakiAnswerInterventionReceipt,
+  { readonly state: 'resolved' }
+>
+function answerReceipt(record: ReconciledAnsweredIntervention): Extract<
+  SakiAnswerInterventionReceipt,
+  { readonly state: 'reconciliation-required' }
+>
+function answerReceipt(
+  record: AnsweredIntervention | ResolvedIntervention | ReconciledAnsweredIntervention,
+): SakiAnswerInterventionReceipt {
+  const base = {
+    id: record.answer.receiptId,
+    intentId: record.answer.payload.intent.intentId,
+    type: 'answer-intervention' as const,
+    interventionId: record.id,
+    interventionRevision: record.revision,
+  }
+  if (record.state === 'answered') {
+    return { ...base, state: 'answered', dispatchId: record.answer.dispatchId }
+  }
+  if (record.state === 'resolved') {
+    return { ...base, state: 'resolved', dispatchId: record.answer.dispatchId }
+  }
+  return {
+    ...base,
+    state: 'reconciliation-required',
+    reason: record.reason,
+    dispatchId: record.answer.dispatchId,
+  }
+}
+
+function answerUnavailable(record: AnsweredIntervention): InterventionAnswerResult {
+  return { ok: false, reason: 'unavailable', receipt: answerReceipt(record) }
+}
+
+function assertDispatchPrepared(
+  dispatch: ExecutionDispatchRecord,
+  preparation: HostOperationPreparation,
+  snapshot: HostOperationSnapshot,
+): asserts preparation is HostOperationPreparation<'start-agent-run'> {
+  assertDispatchSnapshot(dispatch, snapshot)
+  if (preparation.operation.type !== 'start-agent-run'
+    || preparation.operation.hostId !== dispatch.hostId
+    || preparation.operation.id !== snapshot.operation.id
+    || !isDeepStrictEqual(preparation.requestFingerprint, snapshot.requestFingerprint)) {
+    throw new Error('Host preparation disagrees with its Saki Intervention answer Dispatch')
+  }
+}
+
+function assertDispatchSnapshot(
+  dispatch: ExecutionDispatchRecord,
+  snapshot: HostOperationSnapshot,
+): asserts snapshot is HostOperationSnapshot<'start-agent-run'> {
+  hostOperationSnapshotSchema.parse(snapshot)
+  if (snapshot.operation.type !== 'start-agent-run'
+    || snapshot.operation.hostId !== dispatch.hostId
+    || snapshot.source.kind !== 'execution-dispatch'
+    || snapshot.source.dispatchId !== dispatch.id
+    || snapshot.source.payloadDigest !== dispatch.payloadDigest
+    || snapshot.bindingId !== dispatch.bindingId
+    || snapshot.bindingRevision !== dispatch.hostRequest.expected.binding.revision) {
+    throw new Error('Host snapshot disagrees with its Saki Intervention answer Dispatch')
+  }
+}
+
 function childIds(intent: GiveWorkItemToAgentIntent) {
   const id = (kind: string) => derivedUuid(intent.intentId, kind)
   return {
@@ -1705,8 +2988,8 @@ function childIds(intent: GiveWorkItemToAgentIntent) {
   }
 }
 
-function derivedUuid(intentId: SakiControlIntentId, kind: string): string {
-  const bytes = createHash('sha256').update(`${intentId}\0${kind}`, 'utf8').digest().subarray(0, 16)
+function derivedUuid(seed: string, kind: string): string {
+  const bytes = createHash('sha256').update(`${seed}\0${kind}`, 'utf8').digest().subarray(0, 16)
   bytes.writeUInt8((bytes.readUInt8(6) & 0x0f) | 0x40, 6)
   bytes.writeUInt8((bytes.readUInt8(8) & 0x3f) | 0x80, 8)
   const hex = bytes.toString('hex')

@@ -365,6 +365,7 @@ function currentDomains(
     work_sessions: readonlyTable(new Map()),
     agent_runs: readonlyTable(new Map()),
     execution_dispatches: readonlyTable(new Map()),
+    intervention_requests: readonlyTable(new Map()),
   }
   const controlPlane = {
     name: sakiControlPlaneDomainSpec.name,

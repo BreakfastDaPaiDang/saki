@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Saki 私有控制面模块拥有本地 Installation 置备、Installation Access、Development Project Registry、可恢复的项目登记与结构化 Git Intent、可恢复且由 GitHub 支持的 `CreateWorkItem` 与 `MoveWorkItem` saga、手动 Give-to-Agent dispatch，以及持久 GitHub Board 同步。它要求维护层先发布固定且已经验证的 `ctx.sakiInstallationState`，其中包含活跃 Installation 与 storage generation 标识，再注册 `ctx.sakiControlPlane`；调用方使用收窄的 `SakiAccess` 与 `SakiControlPlaneModule` 接口，而不访问存储表。仅供 Host 使用的 `./host` 入口把传输凭据解析为可信的进程内 `SakiAuthenticationContext`，面向浏览器的 `./fixtures` 入口则发布经过脱敏的访问、检查、登记、Project-index、Development-Workspace、Changes、有界 Diff、结构化 Git 操作、Board、Project Settings、Work Item detail 与 Agent Run 状态。
+Saki 私有控制面模块拥有本地 Installation 置备、Installation Access、Development Project Registry、可恢复的项目登记与结构化 Git Intent、可恢复且由 GitHub 支持的 `CreateWorkItem` 与 `MoveWorkItem` saga、手动 Give-to-Agent dispatch、持久 Intervention 回答、Principal-scoped My Work 与 Attention，以及持久 GitHub Board 同步。它要求维护层先发布固定且已经验证的 `ctx.sakiInstallationState`，其中包含活跃 Installation 与 storage generation 标识，再注册 `ctx.sakiControlPlane`；调用方使用收窄的 `SakiAccess` 与 `SakiControlPlaneModule` 接口，而不访问存储表。仅供 Host 使用的 `./host` 入口把传输凭据解析为可信的进程内 `SakiAuthenticationContext`，面向浏览器的 `./fixtures` 入口则发布经过脱敏的访问、检查、登记、Project-index、Development-Workspace、Changes、有界 Diff、结构化 Git 操作、Board、Project Settings、Work Item detail 与 Agent Run 状态。
 
 `SAKI_GIT_CHANGES_PROJECTION_FIXTURES` 覆盖干净、已暂存、未暂存、未跟踪、继承、无法归因与冲突状态事实。`SAKI_GIT_DIFF_PROJECTION_FIXTURES` 提供有界成功与观察已陈旧示例；`SAKI_GIT_OPERATION_RESULT_FIXTURES` 提供类型化的成功、冲突、失败、取消与 effect 未知回执。`SAKI_BOARD_PROJECTION_FIXTURES` 覆盖未配置、等待首个 checkpoint、mapping 重验，以及 freshness 已陈旧且带有当前失败证据的已确认视图；`SAKI_BOARD_MUTATION_OVERLAY_FIXTURES` 覆盖 optimistic、targeted-confirmed、conflict、partial-failure、reconciliation 与 repair 状态；`SAKI_WORK_ITEM_RESULT_FIXTURES` 覆盖成功与可恢复回执。`SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES` 覆盖已保存、激活中与已激活视图。已配置 fixture 把同步与配置 revision、已确认 Board generation、checkpoint、mapping evidence、失败与 freshness evidence、扫描状态、实际 mutation availability 与 mutation overlay 作为一组具有明确关系的示例予以保留。
 
@@ -10,7 +10,7 @@ Saki 私有控制面模块拥有本地 Installation 置备、Installation Access
 
 版本化的 `control_state` 置备所有者只记录稳定的子记录引用，以及 `provisioning` 或 `ready` 阶段。其 Installation id 必须与维护层验证的活跃 Installation 相同；被中断的置备恢复前也会执行这项校验。`installations`、`hosts`、`principals` 与 `grants` 表按品牌类型 id 保留各自带修订号的实体生命周期和历史。每个当前标识均由类型专属前缀与规范 UUID 文本组成；物理 storage generation 使用 `storage-generation-`。只有精确的 v2 迁移输入会保留历史 `installation-generation-` 字段。Principal 类型采用封闭的 `human | automation` 判别字段。置备流程会创建一名人类 Host Operator，并在每次启动时校验所引用 Principal 的类型；无关的自动化 Principal 是合法记录，但置备流程不会创建自动化 Grant。Installation 只选择当前本地 Saki Host，不拥有 storage generation 的选择权。启动时会先以纯读取方式校验全部置备、访问、Project、Binding 与 Intent 记录；只有完整库存均有效，系统才会协调或恢复任何状态。
 
-保留的迁移链消费精确 B03 v2-v6 状态，并且只生成当前 v7 记录。其中相邻 v5-to-v6 步骤会加入 Work Item Intent 与 targeted-recovery 表。v6-to-v7 步骤会加入空的手动 Agent table，为每个保留 Project 加入一条不含 Model Route 的默认 Agent Profile，向已置备的 Host Operator 授予 Give-to-Agent action，并保留每条既有 write-admission row。可变的当前 schema 只校验迁移后的 v7 output。
+保留的迁移链消费精确 B03 v2-v7 状态，并且只生成当前 v8 记录。其中相邻 v5-to-v6 步骤会加入 Work Item Intent 与 targeted-recovery 表。v6-to-v7 步骤会加入空的手动 Agent table，为每个保留 Project 加入一条不含 Model Route 的默认 Agent Profile，向已置备的 Host Operator 授予 Give-to-Agent action，并保留每条既有 write-admission row。v7-to-v8 步骤会显式记录 Assignment owner，增加 waiting 与 resume-pending Run 状态和 Intervention table，并向 Host Operator 授予 answer action。可变的当前 schema 只校验迁移后的 v8 output。
 
 `installation_access` 是一条版本化聚合记录，包含带修订号的 Bootstrap Challenge 与 Browser Session 条目。其 id 在所属 Access id 后追加 `:challenge:<ordinal>` 或 `:session:<ordinal>` 与规范十进制序号。只增不减的挑战序号和会话序号生成确定性条目 id，每个校验摘要都绑定其条目 id。每次成功交换都会执行一次带预期修订号的更新：消费选中的挑战、撤销其他状态为 `issued` 的挑战，并插入恰好一个会话。即使详细终态条目已经清理，该聚合仍保留不可变的首次 bootstrap 完成摘要；清理不会降低两类序号的高水位。
 
@@ -22,7 +22,9 @@ Saki 私有控制面模块拥有本地 Installation 置备、Installation Access
 
 `agent_operation_intents`、`work_assignments`、`work_sessions`、`agent_runs` 与 `execution_dispatches` 拥有手动 Ready-to-Run 路径。提交会重新验证当前 GitHub Issue body 与 branch safety、活动 Binding 与完整 inherited-change baseline、Host Operator authority、验收条件、Blockage 和默认 Agent Profile，随后要求当前 LLM adapter 在持久接受前解析精确的 provider/model route。解析失败会返回 `model-route-unavailable`，不会保留 Agent operation 记录或启动生成。接受 Intent 会固定完整模型可见输入，并在唤醒前预分配每个子记录 identity。短期 Dispatch Claim 会对一次交付进行 fencing；同一个 executor 可以在预期 revision 上续期该 claim，并且等待 Host 工作结束后的最终 acceptance compare-and-set 会要求该精确 claim 仍是当前 claim 且尚未过期。共享 `agent-run` write admission 则拥有生命周期更长的可写 Run。只有 Host 确认精确 Session、Run 与输入 MessageId 后，一条稳定的子 `MoveWorkItem` Intent 才会把 Work Item 移到 In progress。精确 replay 会复用这些记录；未知或冲突 evidence 会停下等待对账。恢复原理由[手动 dispatch 决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)说明。
 
-启动流程会先根据精确的 succeeded Host Operation 与物理 Session evidence 恢复每个已经过交叉验证的 running Agent，随后才协调保留的手动 Intent 或进入 ready。在 acceptance 前取消会记录 canceled Dispatch；acceptance 后取消会保留 accepted receipt 与终态 Host snapshot。live Agent disposal 必须成功，之后子记录取消与 write-admission release 才能持久化。合法的终态多记录前缀保持单调，重启会幂等完成这些前缀。
+`intervention_requests` 拥有可在重启后恢复的 Development Agent 问题及其首个已接受回答。Saki 工具会在结束提问轮次之前提交 `opening`；精确 Session evidence 会先把所属 Run 改为带有一个 blocker 的 `waiting`，随后请求才变成 `open`。`answer-intervention` 使用请求 revision 及当前 Principal、Grant、Assignment、Session、Binding 与 write-admission 事实选定一个回答，随后为同一个 Run 与物理 Session 创建一条携带稳定回答 MessageId 的新有序 Dispatch。只有 Local Host flush 并确认该输入后才会清除 blocker。My Work 与 Attention 直接从当前 owner record 派生，不存在 inbox table 或全局 revision；本地可用 eligibility 可以生成一个候选 Action Offer，但提交仍会重新检查 live authority 与 operation condition。写入与恢复顺序的理由由[持久 Intervention 决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-durable-intervention-answer.zh.md)说明。
+
+启动流程会先根据精确的 succeeded Host Operation 与物理 Session evidence 恢复每个已经过交叉验证的 running Agent，随后才协调保留的手动 Intent、opening Intervention、已接受回答，或进入 ready。在 acceptance 前取消会记录 canceled Dispatch；acceptance 后取消会保留 accepted receipt 与终态 Host snapshot。live Agent disposal 必须成功，之后子记录取消与 write-admission release 才能持久化。合法的终态与 Intervention 多记录前缀保持单调，重启会幂等完成这些前缀。
 
 每次被接受的检查都包含面向浏览器的安全 Git 事实和继承变更 baseline；其中明文路径与文件内容会替换为精确摘要和有界元数据。采集时间与耗时仍作为证据保留，但不会造成 baseline 身份漂移。每次执行 Workspace 列举、创建或恢复前，控制面都会把保留的规范 worktree 路径作为不可信 locator 交给新的 Host 检查，并比较所需的 Git、规范路径、Git 管理目录文件系统对象与 Workspace 证据。因此，在同一路径替换 clone 或 Git 管理目录会使 Binding 进入 `repair-required`；先前保留的 Projection 或可信路径观察本身绝不授权后续 effect。
 
@@ -36,7 +38,7 @@ Board mapping 只使用已配置的 GitHub node id。已配置 Repository 中匹
 
 ## 访问与控制操作
 
-`SakiAccess` 读取封闭的 Access Projection、交换启动器机密值，并登出当前 Browser Session。Bootstrap 与登出只能修改 Installation Access。主模块暴露稳定的 Installation 与 Host 身份标识；只读的项目选择检查、Project-index、Development-Workspace、Changes、Diff、Board 与 Project Settings 查询；持久化的 `register-development-project`、`configure-github-synchronization`、StageFiles、UnstageFiles、CreateCommit、`CreateWorkItem`、`MoveWorkItem` 与 `give-work-item-to-agent` Intent；以及提交后的 Projection 失效通知。Changes 只发布仓库级 eligibility 与封闭原因，不替浏览器选择文件；每次 StageFiles 或 UnstageFiles 提交都携带自己的 selection，并用新鲜观察重新校验。Cached Board query 是纯持久读取。Interactive query 会持久请求一条高优先级扫描，并在不等待 GitHub 的情况下返回当前 Projection。仅写入 Intent 阶段不会使 Project 视图失效；Registry、write admission、Host Operation、Work Item、Agent operation 或同步更新提交后会使受影响视图失效。一个失效通知 listener 失败时，系统只发出固定且不含凭据的诊断，不会阻止后续 listener 运行；每项注册仍可独立 dispose（资源释放）。
+`SakiAccess` 读取封闭的 Access Projection、交换启动器机密值，并登出当前 Browser Session。Bootstrap 与登出只能修改 Installation Access。主模块暴露稳定的 Installation 与 Host 身份标识；只读的项目选择检查、Project-index、Development-Workspace、Changes、Diff、Board、Project Settings、My Work 与 Attention 查询；持久化的 `register-development-project`、`configure-github-synchronization`、StageFiles、UnstageFiles、CreateCommit、`CreateWorkItem`、`MoveWorkItem`、`give-work-item-to-agent` 与 `answer-intervention` Intent；以及提交后的 Projection 失效通知。Changes 只发布仓库级 eligibility 与封闭原因，不替浏览器选择文件；每次 StageFiles 或 UnstageFiles 提交都携带自己的 selection，并用新鲜观察重新校验。Cached Board query 与两项 Principal-scoped work query 都是纯持久读取。Interactive Board query 会持久请求一条高优先级扫描，并在不等待 GitHub 的情况下返回当前 Projection。仅写入 Intent 阶段不会使 Project 视图失效；Registry、write admission、Host Operation、Work Item、Agent operation、Intervention 或同步更新提交后会使受影响视图失效。一个失效通知 listener 失败时，系统只发出固定且不含凭据的诊断，不会阻止后续 listener 运行；每项注册仍可独立 dispose（资源释放）。
 
 该模块可选消费 `ctx.sakiGitHub`。没有此 Provider 的 composition 仍能加载，并暴露未配置或缓存状态。Provider 存在时，内含 Consumer 会按 interactive-first 顺序处理持久 scan attempt、只通过 aggregate owner 发布完整候选结果、通过 targeted inspection 恢复可恢复的 Work Item saga，并在 dispose 时取消活跃工作并等待完全停稳。同一 Project 的每次 scan write 都通过同一条逐 Project operation tail 串行，因此其原子存储更新只有一个 writer。逐 Project 同步配置拥有 active 与 background polling interval 及 background rate reserve；控制面插件只拥有 attempt lease lifetime。完整发布协议参见 [ADR 0013](../../../docs/adr/0013-polling-first-staged-github-synchronization.zh.md)。
 
@@ -61,16 +63,16 @@ Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机
 
 ## 模型体验
 
-无，因为该模块为 Host 固定 Give-to-Agent 输入，但自身不注册工具、prompt section 或 Session event。Route 预检只解析 adapter metadata，不会发送生成请求。
+无，因为该模块只会固定由 Host 拥有的 payload，不注册模型侧工具、prompt section 或 Session event。
 
 #### KV Cache 影响
 
-控制面不会组装 provider request 或可复用 prefix；Local Host 拥有已固定 user turn 的交付，并在模型组装前过滤恢复 wake。
+控制面不会组装 provider request 或可复用 prefix；它会固定 Give-to-Agent 输入与后续 Intervention 回答以供 Local Host 交付，而独立的 Saki Intervention 工具拥有其模型侧投影。Route 预检只解析 adapter metadata，不会发送生成请求；Local Host 会在模型组装前过滤恢复 wake，而已接受的 Intervention 回答是既有 Session prefix 之后仅追加的输入。
 
 ## 已知限制与暂缓事项
 
 - **只支持一个本地 Host Operator**：尚未实现 GitHub 登录、组织成员关系、多用户、远程 Host 或非回环部署。
 - **只支持显式 operation**：尚未实现 Resource Binding 重绑定与退役、自动领取、仓库或 Board 自动变更、mapping repair、reconciliation repair 与 inherited-change 人工接管。StageFiles、UnstageFiles、CreateCommit、`CreateWorkItem`、`MoveWorkItem` 与 Give-to-Agent 都是显式操作员 Intent；repair overlay 不会自动执行它们，浏览器输入也不能指定仓库路径或 Provider 拥有的 GitHub target id。预期 revision CAS 的失败方会保留已创建或接纳的可复用 DSH Workspace，而不创建 Saki Project 或 Resource Binding；控制面不会删除本次登记可能并非独占的 Workspace。
 - **只支持启动器恢复**：本地访问恢复需要重新启动具备权限的启动器，不提供只依赖浏览器的凭据恢复流程。
-- **只提供 Projection fixture**：Work Item detail 与当前/最近 Agent Run contract 具有面向浏览器的 fixture，但本切片不为它们增加控制面 query 或 view builder。
+- **Detail Projection 仍只提供 fixture**：My Work 与 Attention 可以查询，但 Work Item detail 与当前/最近 Agent Run contract 仍只有面向浏览器的 fixture，没有控制面 query 或 view builder。
 - **只解析精确 route**：手动 Give-to-Agent 会验证当前 LLM runtime、已登记的 provider adapter 与精确 model metadata，但不会启动生成。它不会建立生产 provider authorization，也不会验证 credential availability、quota 或 account health。

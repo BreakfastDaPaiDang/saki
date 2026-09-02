@@ -48,6 +48,8 @@
     "@breakfastdapaidang/saki-github-app": "workspace:^",
     "@breakfastdapaidang/saki-host-api": "workspace:^",
     "@breakfastdapaidang/saki-installation-maintenance": "workspace:^",
+    "@breakfastdapaidang/saki-tool-intervention": "workspace:^",
+    "@deepseek-ai/cordis-plugin-timer": "workspace:^",
     "@deepseek-ai/dsh-app-boot": "workspace:^",
     "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-agent-instructions": "workspace:^",

@@ -19,6 +19,7 @@ import {
   sakiControlPlaneV4DomainSpec,
   sakiControlPlaneV5DomainSpec,
   sakiControlPlaneV6DomainSpec,
+  sakiControlPlaneV7DomainSpec,
 } from '../src/migration.ts'
 import {
   v4GitHubConfigurationIntentRecordSchema,
@@ -42,6 +43,10 @@ const PROJECT_ID = 'project-00000000-0000-4000-8000-000000000006'
 const AGENT_PROFILE_ID = 'agent-profile-00000000-0000-4000-8000-000000000006'
 const BINDING_ID = 'binding-00000000-0000-4000-8000-000000000007'
 const WORKSPACE_ID = 'workspace-00000000-0000-4000-8000-000000000008'
+const ASSIGNMENT_ID = 'assignment-00000000-0000-4000-8000-000000000010'
+const WORK_SESSION_ID = 'work-session-00000000-0000-4000-8000-000000000011'
+const AGENT_RUN_ID = 'agent-run-00000000-0000-4000-8000-000000000012'
+const AGENT_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000013'
 
 function historicalSnapshot(detached = false) {
   const actor = {
@@ -474,7 +479,8 @@ describe('Saki control-plane retained migrations', () => {
 
     expect(sakiControlPlaneV5DomainSpec.version).toBe(5)
     expect(sakiControlPlaneV6DomainSpec.version).toBe(6)
-    expect(sakiControlPlaneDomainSpec.version).toBe(7)
+    expect(sakiControlPlaneV7DomainSpec.version).toBe(7)
+    expect(sakiControlPlaneDomainSpec.version).toBe(8)
     expect(sakiControlPlaneMigrationPlan.steps[3]).toMatchObject({
       from: { name: 'saki_control_plane', version: 5 },
       to: { name: 'saki_control_plane', version: 6 },
@@ -696,14 +702,15 @@ describe('Saki control-plane retained migrations', () => {
     }).toThrow('deterministic bootstrap completion evidence')
   })
 
-  it('declares strict adjacent v2 through current v7 steps and keeps historical action vocabularies frozen', () => {
+  it('declares strict adjacent v2 through current v8 steps and keeps historical action vocabularies frozen', () => {
     expect(sakiControlPlaneV2DomainSpec.version).toBe(2)
     expect(sakiControlPlaneV3DomainSpec.version).toBe(3)
     expect(sakiControlPlaneV4DomainSpec.version).toBe(4)
     expect(sakiControlPlaneV5DomainSpec.version).toBe(5)
     expect(sakiControlPlaneV6DomainSpec.version).toBe(6)
-    expect(sakiControlPlaneDomainSpec.version).toBe(7)
-    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(5)
+    expect(sakiControlPlaneV7DomainSpec.version).toBe(7)
+    expect(sakiControlPlaneDomainSpec.version).toBe(8)
+    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(6)
     expect(sakiControlPlaneMigrationPlan.steps[0]).toMatchObject({
       from: { name: 'saki_control_plane', version: 2 },
       to: { name: 'saki_control_plane', version: 3 },
@@ -724,6 +731,10 @@ describe('Saki control-plane retained migrations', () => {
       from: { name: 'saki_control_plane', version: 6 },
       to: { name: 'saki_control_plane', version: 7 },
     })
+    expect(sakiControlPlaneMigrationPlan.steps[5]).toMatchObject({
+      from: { name: 'saki_control_plane', version: 7 },
+      to: { name: 'saki_control_plane', version: 8 },
+    })
     expect(Object.keys(sakiControlPlaneV2DomainSpec.tables).sort()).toEqual(
       Object.keys(sakiControlPlaneV3DomainSpec.tables).sort(),
     )
@@ -739,7 +750,7 @@ describe('Saki control-plane retained migrations', () => {
       'github_work_item_intents',
       'github_work_item_recovery',
     ].sort())
-    expect(Object.keys(sakiControlPlaneDomainSpec.tables).sort())
+    expect(Object.keys(sakiControlPlaneV7DomainSpec.tables).sort())
       .toEqual([
         ...Object.keys(sakiControlPlaneV6DomainSpec.tables),
         'agent_operation_intents',
@@ -748,6 +759,8 @@ describe('Saki control-plane retained migrations', () => {
         'agent_runs',
         'execution_dispatches',
       ].sort())
+    expect(Object.keys(sakiControlPlaneDomainSpec.tables).sort())
+      .toEqual([...Object.keys(sakiControlPlaneV7DomainSpec.tables), 'intervention_requests'].sort())
 
     const source = historicalSnapshot()
     const historicalControl = source.tables.control_state['control-state']
@@ -870,15 +883,106 @@ describe('Saki control-plane retained migrations', () => {
       agent_runs: {},
       execution_dispatches: {},
     })
-    expect(sakiControlPlaneDomainSpec.tables.grants.valueSchema.parse(
+    const v7Grant = sakiControlPlaneV7DomainSpec.tables.grants.valueSchema.parse(
       v7.tables['grants']![GRANT_ID],
-    )).toMatchObject({
+    )
+    expect(v7Grant).toMatchObject({
       revision: migratedGrant.revision + 2,
       actions: [...migratedGrant.actions, 'work-item:create', 'work-item:move', 'work-item:give-to-agent'],
     })
-    for (const [table, spec] of Object.entries(sakiControlPlaneDomainSpec.tables)) {
+    for (const [table, spec] of Object.entries(sakiControlPlaneV7DomainSpec.tables)) {
       for (const value of Object.values(v7.tables[table] ?? {})) spec.valueSchema.parse(value)
     }
+    const otherGrant = sakiControlPlaneV7DomainSpec.tables.grants.valueSchema.parse({
+      ...v7Grant,
+      id: OTHER_GRANT_ID,
+      revision: 41,
+    })
+    v7.tables['grants']![OTHER_GRANT_ID] = otherGrant
+    const v8 = sakiControlPlaneMigrationPlan.steps[5]!.migrate(v7)
+    expect(v8.tables['intervention_requests']).toEqual({})
+    expect(v8.tables['grants']![OTHER_GRANT_ID]).toEqual(otherGrant)
+    expect(sakiControlPlaneDomainSpec.tables.grants.valueSchema.parse(
+      v8.tables['grants']![GRANT_ID],
+    )).toMatchObject({
+      revision: migratedGrant.revision + 3,
+      actions: [
+        ...migratedGrant.actions,
+        'work-item:create',
+        'work-item:move',
+        'work-item:give-to-agent',
+        'my-work:read',
+        'attention:read',
+        'intervention:answer',
+      ],
+    })
+    for (const [table, spec] of Object.entries(sakiControlPlaneDomainSpec.tables)) {
+      for (const value of Object.values(v8.tables[table] ?? {})) spec.valueSchema.parse(value)
+    }
+  })
+
+  it('derives each v8 Assignment owner from its exact v7 Agent operation Intent', () => {
+    const assignment = {
+      id: ASSIGNMENT_ID,
+      schemaVersion: 1,
+      revision: 2,
+      intentId: AGENT_INTENT_ID,
+      projectId: PROJECT_ID,
+      workItemId: `work-item-${'a'.repeat(64)}`,
+      primaryWorkSessionId: WORK_SESSION_ID,
+      agentRunId: AGENT_RUN_ID,
+      state: 'active',
+      createdAt: 10,
+      updatedAt: 11,
+    }
+    const run = {
+      id: AGENT_RUN_ID,
+      schemaVersion: 1,
+      revision: 3,
+    }
+    const ownerLink = {
+      assignmentId: ASSIGNMENT_ID,
+      agentRunId: AGENT_RUN_ID,
+      workSessionId: WORK_SESSION_ID,
+      projectContext: { projectId: PROJECT_ID },
+      payload: {
+        actor: { principalId: PRINCIPAL_ID },
+        intent: { workItemId: assignment.workItemId },
+      },
+    }
+    const source = {
+      global: null,
+      tables: {
+        control_state: {},
+        grants: {},
+        agent_operation_intents: { [AGENT_INTENT_ID]: ownerLink },
+        work_assignments: { [ASSIGNMENT_ID]: assignment },
+        agent_runs: { [AGENT_RUN_ID]: run },
+      },
+    }
+    const migrated = sakiControlPlaneMigrationPlan.steps[5]!.migrate(source)
+
+    expect(migrated.tables['work_assignments']![ASSIGNMENT_ID]).toEqual({
+      ...assignment,
+      schemaVersion: 2,
+      ownerPrincipalId: PRINCIPAL_ID,
+    })
+    expect(migrated.tables['agent_runs']![AGENT_RUN_ID]).toEqual({ ...run, schemaVersion: 2 })
+    expect(migrated.tables['intervention_requests']).toEqual({})
+
+    expect(() => sakiControlPlaneMigrationPlan.steps[5]!.migrate({
+      ...source,
+      tables: { ...source.tables, agent_operation_intents: {} },
+    })).toThrow(`v7 Work Assignment '${ASSIGNMENT_ID}' lacks its exact Agent operation owner`)
+    expect(() => sakiControlPlaneMigrationPlan.steps[5]!.migrate({
+      ...source,
+      tables: {
+        ...source.tables,
+        agent_operation_intents: {
+          [AGENT_INTENT_ID]: { ...ownerLink, agentRunId: 'agent-run-ffffffff-ffff-4fff-8fff-ffffffffffff' },
+        },
+      },
+    })).toThrow(`v7 Work Assignment '${ASSIGNMENT_ID}' lacks its exact Agent operation owner`)
   })
 
   it('adds one deterministic unavailable default Agent Profile to every migrated v6 Project', () => {

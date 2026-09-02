@@ -1,4 +1,5 @@
 import { Context } from '@deepseek-ai/cordis'
+import { CallId } from '@deepseek-ai/dsh-llm'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { describe, expect, it, vi } from 'vitest'
 import { githubIssueId, githubRepositoryDatabaseId, githubRepositoryId } from '@breakfastdapaidang/saki-github'
@@ -25,6 +26,7 @@ import type {
   HostOperationSnapshot,
   HostOperationStartResult,
   InspectProjectResult,
+  InterventionOpeningEvidence,
   StartAgentRunHostOperationRequest,
 } from '@breakfastdapaidang/saki-execution'
 import { AgentOperations } from '../src/agent-operations.ts'
@@ -38,6 +40,8 @@ import {
   developmentProjectRegistryRecordSchema,
   executionDispatchRecordSchema,
   giveWorkItemToAgentIntentSchema,
+  interventionRequestRecordSchema,
+  MAX_INTERVENTION_PROMPT_CHARS,
   resourceBindingRecordSchema,
   workAssignmentRecordSchema,
   workSessionRecordSchema,
@@ -49,10 +53,12 @@ import type {
   ControlIntentActor,
   DevelopmentProjectRegistryRecord,
   ExecutionDispatchRecord,
+  InterventionRequestRecord,
   WorkAssignmentRecord,
   WorkSessionRecord,
 } from '../src/spec.ts'
 import type {
+  AnswerInterventionIntent,
   GiveWorkItemToAgentIntent,
   MoveWorkItemIntent,
   SakiAgentRunId,
@@ -62,6 +68,7 @@ import type {
   SakiExecutionDispatchId,
   SakiGrantId,
   SakiInstallationId,
+  SakiInterventionRequestId,
   SakiPrincipalId,
   SakiResourceBindingId,
   SakiStorageGenerationId,
@@ -118,6 +125,1783 @@ describe('manual Give-to-Agent operations', () => {
       ...admission,
       dispatchId: 'dispatch-55555555-5555-4555-8555-555555555555',
     }).success).toBe(false)
+  })
+
+  it('opens an Intervention and resumes the same Agent Run and Session with the attributed answer', async () => {
+    const test = harness()
+    const started = await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    expect(started).toMatchObject({ ok: true, receipt: { state: 'started' } })
+    const initialRun = only(test.runs)
+
+    const requested = await test.operations.requestIntervention({
+      sessionId: initialRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_need_operator'),
+      prompt: 'Which migration path should I use?',
+    }, AbortSignal.timeout(5_000))
+    if (!requested.ok) throw new Error('test Intervention was not created')
+    expect(await test.operations.finalizeInterventionOpening(
+      requested.interventionId,
+      AbortSignal.timeout(5_000),
+    )).toBe('open')
+    const open = interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId))
+    expect(open).toMatchObject({ state: 'open', targetPrincipalId: PRINCIPAL_ID })
+    expect(only(test.runs)).toMatchObject({
+      state: 'waiting',
+      blockingInterventionId: requested.interventionId,
+    })
+
+    const dirty = SAKI_GIT_CHANGES_PROJECTION_FIXTURES.dirty.result
+    if (!dirty.ok || !test.eligibility.projectInspection.ok) {
+      throw new Error('test Git evidence is unavailable')
+    }
+    test.eligibility.projectInspection = {
+      ...test.eligibility.projectInspection,
+      observation: dirty.observation,
+    }
+    test.execution.beginNextOperation()
+    const answer: AnswerInterventionIntent = {
+      type: 'answer-intervention',
+      intentId: 'intent-91919191-9191-4191-8191-919191919191' as SakiControlIntentId,
+      interventionId: requested.interventionId,
+      expectedInterventionRevision: open.revision,
+      answer: { kind: 'text', text: 'Use the exact adjacent v7 to v8 migration.' },
+    }
+    const resolved = await test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000))
+
+    expect(resolved).toMatchObject({ ok: true, receipt: { state: 'resolved' } })
+    const resumedRun = only(test.runs)
+    expect(resumedRun).toMatchObject({
+      id: initialRun.id,
+      sessionId: initialRun.sessionId,
+      state: 'running',
+    })
+    expect(resumedRun.dispatchIds).toHaveLength(2)
+    expect([...test.dispatches.records.values()].at(-1)?.hostRequest.run.input).toMatchObject({
+      role: 'user',
+      source: {
+        kind: 'saki-intervention-answer',
+        interventionId: requested.interventionId,
+        answerIntentId: answer.intentId,
+        agentRunId: initialRun.id,
+        workSessionId: initialRun.workSessionId,
+      },
+    })
+    expect([...test.dispatches.records.values()].at(-1)?.hostRequest.expected.status)
+      .toEqual(dirty.observation.fingerprint)
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId)))
+      .toMatchObject({ state: 'resolved' })
+    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+    const finalDispatch = [...test.dispatches.records.values()].at(-1)
+    const validated = test.operations.validateDurableState(new Set(), test.registry)
+    expect(validated.interventions).toHaveLength(1)
+    expect(validated.openingInterventionIds).toEqual([])
+    expect(validated.answerPendingInterventionIds).toEqual([])
+    expect(validated.runningAgentRuns).toEqual([{
+      operation: finalDispatch?.preparation?.operation,
+      request: finalDispatch?.hostRequest,
+    }])
+  })
+
+  it('admits an Intervention from the exact accepted initial Run while Host success is publishing', async () => {
+    const test = harness()
+    let releaseStart!: () => void
+    let observeStart!: () => void
+    const startGate = new Promise<void>((resolve) => { releaseStart = resolve })
+    const startObserved = new Promise<void>((resolve) => { observeStart = resolve })
+    test.execution.afterStart = async () => {
+      observeStart()
+      await startGate
+    }
+
+    const submitting = test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    await startObserved
+    const startingRun = only(test.runs)
+    expect(startingRun).toMatchObject({ state: 'starting' })
+    const requested = await test.operations.requestIntervention({
+      sessionId: startingRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_during_initial_publication'),
+      prompt: 'Which path should this accepted Agent Run take?',
+    }, AbortSignal.timeout(5_000))
+    if (!requested.ok) throw new Error('test Intervention was not created')
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+    const acceptedInitialDispatch = only(test.dispatches)
+    test.dispatches.records.set(
+      acceptedInitialDispatch.id,
+      claimedDispatchForCorruption(acceptedInitialDispatch, 'dispatch-claim-11111111-2222-4111-8111-111111111111'),
+    )
+    expect(() => test.operations.validateDurableState(new Set(), test.registry))
+      .toThrow('opening Saki Intervention disagrees with its Agent Run')
+    test.dispatches.records.set(acceptedInitialDispatch.id, acceptedInitialDispatch)
+    expect(await test.operations.finalizeInterventionOpening(
+      requested.interventionId,
+      AbortSignal.timeout(5_000),
+    )).toBe('pending')
+
+    let releaseRunning!: () => void
+    let observeRunning!: () => void
+    const runningGate = new Promise<void>((resolve) => { releaseRunning = resolve })
+    const runningObserved = new Promise<void>((resolve) => { observeRunning = resolve })
+    test.runs.afterNextUpdate = async () => {
+      observeRunning()
+      await runningGate
+    }
+    releaseStart()
+    await runningObserved
+    expect(only(test.runs)).toMatchObject({ state: 'running' })
+    expect(only(test.assignments)).toMatchObject({ state: 'assigned' })
+    expect(await test.operations.finalizeInterventionOpening(
+      requested.interventionId,
+      AbortSignal.timeout(5_000),
+    )).toBe('pending')
+    releaseRunning()
+    expect(await submitting).toMatchObject({ ok: true, receipt: { state: 'started' } })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId)))
+      .toMatchObject({ state: 'open' })
+    expect(only(test.runs)).toMatchObject({
+      state: 'waiting',
+      blockingInterventionId: requested.interventionId,
+    })
+  })
+
+  it('admits an initial Intervention after Assignment activation but before Intent completion', async () => {
+    const test = harness()
+    let releaseAssignment!: () => void
+    let observeAssignment!: () => void
+    const assignmentGate = new Promise<void>((resolve) => { releaseAssignment = resolve })
+    const assignmentObserved = new Promise<void>((resolve) => { observeAssignment = resolve })
+    test.assignments.afterNextUpdate = async () => {
+      observeAssignment()
+      await assignmentGate
+    }
+
+    const submitting = test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    await assignmentObserved
+    const run = only(test.runs)
+    expect(run).toMatchObject({ state: 'running' })
+    expect(only(test.assignments)).toMatchObject({ state: 'active' })
+    expect(only(test.intents)).toMatchObject({ phase: 'dispatching' })
+    const requested = await test.operations.requestIntervention({
+      sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_during_intent_completion'),
+      prompt: 'Which path should this delivered Agent Run take?',
+    }, AbortSignal.timeout(5_000))
+    if (!requested.ok) throw new Error('test Intervention was not created')
+    expect(await test.operations.finalizeInterventionOpening(
+      requested.interventionId,
+      AbortSignal.timeout(5_000),
+    )).toBe('pending')
+
+    releaseAssignment()
+    expect(await submitting).toMatchObject({ ok: true, receipt: { state: 'started' } })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId)))
+      .toMatchObject({ state: 'open' })
+    expect(only(test.runs)).toMatchObject({
+      state: 'waiting',
+      blockingInterventionId: requested.interventionId,
+    })
+  })
+
+  it('admits one successor Intervention while an accepted answer input is publishing', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_first_question')
+    test.execution.beginNextOperation()
+    let releaseStart!: () => void
+    let observeStart!: () => void
+    const startGate = new Promise<void>((resolve) => { releaseStart = resolve })
+    const startObserved = new Promise<void>((resolve) => { observeStart = resolve })
+    test.execution.afterStart = async () => {
+      observeStart()
+      await startGate
+    }
+    const answering = test.operations.answerIntervention({
+      type: 'answer-intervention',
+      intentId: 'intent-62626262-6262-4262-8262-626262626262' as SakiControlIntentId,
+      interventionId: open.id,
+      expectedInterventionRevision: open.revision,
+      answer: { kind: 'text', text: 'Continue, but ask for the remaining choice.' },
+    }, actor(), AbortSignal.timeout(5_000))
+
+    await startObserved
+    const resumingRun = only(test.runs)
+    expect(resumingRun).toMatchObject({
+      state: 'resume-pending',
+      blockingInterventionId: open.id,
+    })
+    const successor = await test.operations.requestIntervention({
+      sessionId: resumingRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_successor_question'),
+      prompt: 'Which remaining choice should I use?',
+    }, AbortSignal.timeout(5_000))
+    if (!successor.ok) throw new Error('successor Intervention was not created')
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+    const acceptedAnswerDispatch = [...test.dispatches.records.values()].at(-1)
+    if (acceptedAnswerDispatch === undefined) throw new Error('answer Dispatch is absent')
+    test.dispatches.records.set(
+      acceptedAnswerDispatch.id,
+      claimedDispatchForCorruption(acceptedAnswerDispatch, 'dispatch-claim-22222222-3333-4222-8222-222222222222'),
+    )
+    expect(() => test.operations.validateDurableState(new Set(), test.registry))
+      .toThrow('opening Saki Intervention disagrees with its Agent Run')
+    test.dispatches.records.set(acceptedAnswerDispatch.id, acceptedAnswerDispatch)
+    expect(await test.operations.finalizeInterventionOpening(
+      successor.interventionId,
+      AbortSignal.timeout(5_000),
+    )).toBe('pending')
+
+    let releaseRunning!: () => void
+    let observeRunning!: () => void
+    const runningGate = new Promise<void>((resolve) => { releaseRunning = resolve })
+    const runningObserved = new Promise<void>((resolve) => { observeRunning = resolve })
+    test.runs.afterNextUpdate = async () => {
+      observeRunning()
+      await runningGate
+    }
+    releaseStart()
+    await runningObserved
+    expect(only(test.runs)).toMatchObject({ state: 'running' })
+    expect(only(test.runs).blockingInterventionId).toBeUndefined()
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'answered' })
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+    expect(await test.operations.finalizeInterventionOpening(
+      successor.interventionId,
+      AbortSignal.timeout(5_000),
+    )).toBe('pending')
+    releaseRunning()
+    expect(await answering).toMatchObject({ ok: true, receipt: { state: 'resolved' } })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'resolved' })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(successor.interventionId)))
+      .toMatchObject({ state: 'open' })
+    expect(only(test.runs)).toMatchObject({
+      state: 'waiting',
+      blockingInterventionId: successor.interventionId,
+    })
+  })
+
+  it('admits one successor after answer delivery but before its predecessor resolves', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_answer_delivery_predecessor')
+    test.execution.beginNextOperation()
+    let releaseRunning!: () => void
+    let observeRunning!: () => void
+    const runningGate = new Promise<void>((resolve) => { releaseRunning = resolve })
+    const runningObserved = new Promise<void>((resolve) => { observeRunning = resolve })
+    test.execution.afterStart = () => {
+      test.runs.afterNextUpdate = async () => {
+        observeRunning()
+        await runningGate
+      }
+    }
+    const answering = test.operations.answerIntervention({
+      type: 'answer-intervention',
+      intentId: 'intent-63636363-6363-4363-8363-636363636363' as SakiControlIntentId,
+      interventionId: open.id,
+      expectedInterventionRevision: open.revision,
+      answer: { kind: 'text', text: 'Continue into the next exact question.' },
+    }, actor(), AbortSignal.timeout(5_000))
+
+    await runningObserved
+    const run = only(test.runs)
+    expect(run).toMatchObject({ state: 'running' })
+    expect(run.blockingInterventionId).toBeUndefined()
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'answered' })
+    const successor = await test.operations.requestIntervention({
+      sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_after_answer_delivery'),
+      prompt: 'Which exact follow-up should I use?',
+    }, AbortSignal.timeout(5_000))
+    if (!successor.ok) throw new Error('successor Intervention was not created')
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+    expect(await test.operations.finalizeInterventionOpening(
+      successor.interventionId,
+      AbortSignal.timeout(5_000),
+    )).toBe('pending')
+
+    releaseRunning()
+    expect(await answering).toMatchObject({ ok: true, receipt: { state: 'resolved' } })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(successor.interventionId)))
+      .toMatchObject({ state: 'open' })
+    expect(only(test.runs)).toMatchObject({
+      state: 'waiting',
+      blockingInterventionId: successor.interventionId,
+    })
+  })
+
+  it('serializes concurrent Intervention requests by Agent Run', async () => {
+    const test = harness()
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const run = only(test.runs)
+    const results = await Promise.all([
+      test.operations.requestIntervention({
+        sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+        toolCallId: CallId('call_concurrent_a'),
+        prompt: 'Should this Run take path A?',
+      }, AbortSignal.timeout(5_000)),
+      test.operations.requestIntervention({
+        sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+        toolCallId: CallId('call_concurrent_b'),
+        prompt: 'Should this Run take path B?',
+      }, AbortSignal.timeout(5_000)),
+    ])
+
+    expect(results.filter(result => result.ok)).toHaveLength(1)
+    expect(results.filter(result => !result.ok)).toEqual([{ ok: false, reason: 'conflict' }])
+    expect(test.interventions.size).toBe(1)
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+  })
+
+  it('reconciles an initial-publication opening before its Run leaves the valid prefix', async () => {
+    const test = harness()
+    test.execution.startMode = 'reconciliation'
+    let requested: { readonly ok: true; readonly interventionId: SakiInterventionRequestId } | undefined
+    test.execution.afterStart = async () => {
+      const run = only(test.runs)
+      const result = await test.operations.requestIntervention({
+        sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+        toolCallId: CallId('call_initial_reconciliation'),
+        prompt: 'Can this ambiguous initial delivery continue?',
+      }, AbortSignal.timeout(5_000))
+      if (!result.ok) throw new Error('test Intervention was not created')
+      requested = result
+      test.interventions.simulateCrashAfterUpdateWhen(
+        intervention => intervention.state === 'reconciliation-required',
+      )
+    }
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(SimulatedProcessCrash)
+    if (requested === undefined) throw new Error('test Intervention identity was not retained')
+    test.restart()
+
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId)))
+      .toMatchObject({ state: 'reconciliation-required', reason: 'effect-unknown' })
+    expect(only(test.runs)).toMatchObject({ state: 'starting' })
+  })
+
+  it('reconciles a successor opening before an ambiguous answer changes its Run', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_answer_reconciliation_predecessor')
+    test.execution.beginNextOperation()
+    test.execution.startMode = 'reconciliation'
+    let successor: { readonly ok: true; readonly interventionId: SakiInterventionRequestId } | undefined
+    test.execution.afterStart = async () => {
+      const run = only(test.runs)
+      const result = await test.operations.requestIntervention({
+        sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+        toolCallId: CallId('call_answer_reconciliation_successor'),
+        prompt: 'Can this ambiguous answer delivery continue?',
+      }, AbortSignal.timeout(5_000))
+      if (!result.ok) throw new Error('successor Intervention was not created')
+      successor = result
+      test.interventions.simulateCrashAfterUpdateWhen(
+        intervention => intervention.id === result.interventionId
+          && intervention.state === 'reconciliation-required',
+      )
+    }
+    const answer = interventionAnswer(
+      open,
+      'intent-64646464-6464-4464-8464-646464646464',
+      'Attempt the exact answer delivery.',
+    )
+
+    await expect(test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(SimulatedProcessCrash)
+    if (successor === undefined) throw new Error('successor Intervention identity was not retained')
+    test.restart()
+
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'answered' })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(successor.interventionId)))
+      .toMatchObject({ state: 'reconciliation-required', reason: 'effect-unknown' })
+    expect(only(test.runs)).toMatchObject({ state: 'resume-pending' })
+  })
+
+  it('recovers after answer reconciliation reaches the Run before its Intervention', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_answer_reconciliation_crash')
+    test.execution.beginNextOperation()
+    test.execution.startMode = 'reconciliation'
+    test.runs.simulateCrashAfterUpdateWhen(run => run.state === 'reconciliation-required')
+    const answer = interventionAnswer(
+      open,
+      'intent-67676767-6767-4767-8767-676767676767',
+      'Record this ambiguous delivery durably.',
+    )
+
+    await expect(test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(SimulatedProcessCrash)
+    expect(interventionRequestRecordSchema.parse(test.interventions.records.get(open.id)))
+      .toMatchObject({ state: 'answered' })
+    expect([...test.dispatches.records.values()].at(-1))
+      .toMatchObject({ state: 'reconciliation-required', terminalReason: 'effect-unknown' })
+    expect(only(test.runs)).toMatchObject({
+      state: 'reconciliation-required',
+      blockingInterventionId: open.id,
+    })
+    test.restart()
+
+    const state = test.operations.validateDurableState(new Set(), test.registry)
+    expect(state.answerPendingInterventionIds).toEqual([open.id])
+    await test.operations.initializeValidated(state)
+
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id))).toMatchObject({
+      state: 'reconciliation-required',
+      reason: 'effect-unknown',
+    })
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+  })
+
+  it('recovers an answered predecessor before finalizing its successor opening', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_restart_predecessor')
+    test.execution.beginNextOperation()
+    let successor: { readonly ok: true; readonly interventionId: SakiInterventionRequestId } | undefined
+    test.execution.afterStart = async () => {
+      const run = only(test.runs)
+      const result = await test.operations.requestIntervention({
+        sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+        toolCallId: CallId('call_restart_successor'),
+        prompt: 'Which follow-up survives this restart?',
+      }, AbortSignal.timeout(5_000))
+      if (!result.ok) throw new Error('successor Intervention was not created')
+      successor = result
+      throw new SimulatedProcessCrash('process stopped after answer input execution began')
+    }
+    const answer = interventionAnswer(
+      open,
+      'intent-65656565-6565-4565-8565-656565656565',
+      'Deliver this answer before recovering its successor.',
+    )
+
+    await expect(test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(SimulatedProcessCrash)
+    if (successor === undefined) throw new Error('successor Intervention identity was not retained')
+    test.restart()
+    const state = test.operations.validateDurableState(new Set(), test.registry)
+    expect(state.answerPendingInterventionIds).toEqual([open.id])
+    expect(state.openingInterventionIds).toEqual([successor.interventionId])
+
+    await test.operations.initializeValidated(state)
+
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'resolved' })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(successor.interventionId)))
+      .toMatchObject({ state: 'open' })
+    expect(only(test.runs)).toMatchObject({
+      state: 'waiting',
+      blockingInterventionId: successor.interventionId,
+    })
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+  })
+
+  it('returns deterministic Intervention restart work without inventing an Inbox queue', async () => {
+    const test = harness()
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const run = only(test.runs)
+    const requested = await test.operations.requestIntervention({
+      sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_restart_inventory'),
+      prompt: 'Which path survives restart?',
+    }, AbortSignal.timeout(5_000))
+    if (!requested.ok) throw new Error('test Intervention was not created')
+
+    expect(test.operations.validateDurableState(new Set(), test.registry)).toMatchObject({
+      openingInterventionIds: [requested.interventionId],
+      answerPendingInterventionIds: [],
+    })
+    await test.operations.finalizeInterventionOpening(requested.interventionId, AbortSignal.timeout(5_000))
+    const open = interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId))
+    if (open.state !== 'open') throw new Error('test Intervention did not open')
+    test.execution.beginNextOperation()
+    test.execution.prepareMode = 'unavailable'
+    const answerIntentId = 'intent-92929292-9292-4292-8292-929292929292' as SakiControlIntentId
+    expect(await test.operations.answerIntervention({
+      type: 'answer-intervention',
+      intentId: answerIntentId,
+      interventionId: open.id,
+      expectedInterventionRevision: open.revision,
+      answer: { kind: 'text', text: 'Use the retained path.' },
+    }, actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'unavailable',
+      receipt: { state: 'answered' },
+    })
+
+    const pending = test.operations.validateDurableState(new Set(), test.registry)
+    expect(pending.openingInterventionIds).toEqual([])
+    expect(pending.answerPendingInterventionIds).toEqual([requested.interventionId])
+    expect(() => test.operations.validateDurableState(new Set([answerIntentId]), test.registry))
+      .toThrow(`Saki Control Intent '${answerIntentId}' is retained by multiple Intent kinds`)
+
+    const answered = interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId))
+    if (answered.state !== 'answered') throw new Error('test Intervention did not retain its answer')
+    test.dispatches.records.delete(answered.answer.dispatchId)
+    expect(test.operations.validateDurableState(new Set(), test.registry).answerPendingInterventionIds)
+      .toEqual([requested.interventionId])
+    test.dispatches.records.delete(only(test.runs).dispatchIds[0]!)
+    expect(() => test.operations.validateDurableState(new Set(), test.registry))
+      .toThrow('lacks a preallocated child')
+  })
+
+  it('keeps Agent-requested Intervention identity stable and never settles a pending opening by timeout', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    const test = harness()
+    expect(await test.operations.requestIntervention({
+      sessionId: 'session-11111111-1111-4111-8111-111111111111' as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_unknown'),
+      prompt: 'This Run does not exist.',
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'unavailable' })
+
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const run = only(test.runs)
+    const request = {
+      sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_stable_opening'),
+      prompt: 'Should this wait for operator evidence?',
+    }
+    expect(await test.operations.requestIntervention({
+      ...request,
+      toolCallId: CallId('call_oversized'),
+      prompt: 'p'.repeat(MAX_INTERVENTION_PROMPT_CHARS + 1),
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
+    expect(await test.operations.requestIntervention({
+      ...request,
+      toolCallId: CallId('call_unsafe_display'),
+      prompt: 'Unsafe\u007fquestion',
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
+    const first = await test.operations.requestIntervention(request, AbortSignal.timeout(5_000))
+    if (!first.ok) throw new Error('test Intervention was not created')
+    expect(await test.operations.requestIntervention(request, AbortSignal.timeout(5_000))).toEqual(first)
+    expect(await test.operations.requestIntervention({
+      ...request,
+      prompt: 'A changed question cannot reuse the same Tool Call.',
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
+    expect(await test.operations.requestIntervention({
+      ...request,
+      toolCallId: CallId('call_second_active'),
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
+
+    test.execution.interventionOpeningEvidence = { kind: 'pending' }
+    expect(await test.operations.finalizeInterventionOpening(
+      first.interventionId,
+      AbortSignal.timeout(5_000),
+    )).toBe('pending')
+    vi.advanceTimersByTime(60_000)
+    const initialDispatch = [...test.dispatches.records.values()][0]!
+    test.operations.hostChanged({
+      operation: {
+        id: 'host-operation-12121212-1212-4212-8212-121212121212' as HostOperationId,
+        hostId: initialDispatch.hostId,
+        type: 'start-agent-run',
+      },
+      revision: 9,
+    })
+    await test.operations.dispose()
+
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(first.interventionId)))
+      .toMatchObject({ state: 'opening', revision: 0 })
+    expect(only(test.runs)).toMatchObject({ state: 'running' })
+    vi.useRealTimers()
+  })
+
+  it('reuses a Tool Call identity only while its exact Intervention is opening', async () => {
+    const resolved = harness()
+    const resolvedRecord = await createResolvedIntervention(resolved, 'call_reused_after_resolution')
+    const resolvedRun = only(resolved.runs)
+    expect(await resolved.operations.requestIntervention({
+      sessionId: resolvedRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: resolvedRecord.cause.toolCallId,
+      prompt: resolvedRecord.requiredAnswer.prompt,
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
+
+    const reconciled = harness()
+    const { open } = await createOpenIntervention(reconciled, 'call_reused_after_reconciliation', false)
+    reconciled.execution.interventionOpeningEvidence = { kind: 'conflict' }
+    expect(await reconciled.operations.finalizeInterventionOpening(
+      open.id,
+      AbortSignal.timeout(5_000),
+      'startup',
+    )).toBe('reconciliation-required')
+    const reconciledRun = only(reconciled.runs)
+    expect(await reconciled.operations.requestIntervention({
+      sessionId: reconciledRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: open.cause.toolCallId,
+      prompt: open.requiredAnswer.prompt,
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
+  })
+
+  it('rejects an Intervention that could not reserve one later answer Dispatch', async () => {
+    const test = harness()
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    for (let index = 1; index < 32; index += 1) {
+      const run = only(test.runs)
+      const requested = await test.operations.requestIntervention({
+        sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+        toolCallId: CallId(`call_capacity_${index}`),
+        prompt: `Choose exact capacity path ${index}.`,
+      }, AbortSignal.timeout(5_000))
+      if (!requested.ok) throw new Error('capacity Intervention was not created')
+      expect(await test.operations.finalizeInterventionOpening(
+        requested.interventionId,
+        AbortSignal.timeout(5_000),
+      )).toBe('open')
+      const open = interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId))
+      if (open.state !== 'open') throw new Error('capacity Intervention did not open')
+      test.execution.beginNextOperation()
+      expect(await test.operations.answerIntervention(
+        interventionAnswer(
+          open,
+          `intent-aaaaaaaa-aaaa-4aaa-8aaa-${index.toString(16).padStart(12, '0')}`,
+          `Use capacity path ${index}.`,
+        ),
+        actor(),
+        AbortSignal.timeout(5_000),
+      )).toMatchObject({ ok: true, receipt: { state: 'resolved' } })
+    }
+    const fullRun = only(test.runs)
+    expect(fullRun.dispatchIds).toHaveLength(32)
+    const retainedCount = test.interventions.size
+
+    expect(await test.operations.requestIntervention({
+      sessionId: fullRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_capacity_overflow'),
+      prompt: 'This answer would require a thirty-third Dispatch.',
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
+    expect(test.interventions.size).toBe(retainedCount)
+
+    test.restart()
+    const recovered = test.operations.validateDurableState(new Set(), test.registry)
+    expect(recovered.openingInterventionIds).toEqual([])
+    expect(recovered.answerPendingInterventionIds).toEqual([])
+    await test.operations.initializeValidated(recovered)
+  })
+
+  it('recovers the opening write split without allocating another Intervention', async () => {
+    const test = harness()
+    const { open, requested } = await createOpenIntervention(test, 'call_opening_crash', false)
+    expect(open.state).toBe('opening')
+    test.runs.simulateCrashAfterUpdateWhen(run => run.state === 'waiting')
+
+    await expect(test.operations.finalizeInterventionOpening(
+      requested.interventionId,
+      AbortSignal.timeout(5_000),
+    )).rejects.toThrow(SimulatedProcessCrash)
+    test.restart()
+    const restartState = test.operations.validateDurableState(new Set(), test.registry)
+    expect(restartState.openingInterventionIds).toEqual([requested.interventionId])
+
+    await test.operations.initializeValidated(restartState)
+
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId)))
+      .toMatchObject({ state: 'open', revision: 1 })
+    expect(only(test.runs)).toMatchObject({
+      state: 'waiting',
+      blockingInterventionId: requested.interventionId,
+    })
+    expect(test.interventions.size).toBe(1)
+  })
+
+  it('rejects new requests while the Run waits and rejects an unavailable Assignment before persistence', async () => {
+    const waiting = harness()
+    const { open } = await createOpenIntervention(waiting, 'call_waiting_request')
+    const run = only(waiting.runs)
+    expect(await waiting.operations.requestIntervention({
+      sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_while_waiting'),
+      prompt: 'Can another request bypass the blocker?',
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
+    expect(await waiting.operations.finalizeInterventionOpening(open.id, AbortSignal.timeout(5_000))).toBe('open')
+
+    const unavailable = harness()
+    await unavailable.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const assignment = only(unavailable.assignments)
+    unavailable.assignments.records.set(assignment.id, workAssignmentRecordSchema.parse({
+      ...assignment,
+      state: 'canceled',
+    }))
+    const unavailableRun = only(unavailable.runs)
+    expect(await unavailable.operations.requestIntervention({
+      sessionId: unavailableRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_unavailable_assignment'),
+      prompt: 'This request has no active Assignment.',
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'unavailable' })
+    expect(unavailable.interventions.size).toBe(0)
+  })
+
+  it('reconciles confirmed opening evidence that cannot attach to the retained Run prefix', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_bad_run_prefix', false)
+    const run = only(test.runs)
+    test.runs.records.set(run.id, agentRunRecordSchema.parse({
+      ...run,
+      state: 'waiting',
+      blockingInterventionId: 'intervention-25252525-2525-4525-8525-252525252525',
+    }))
+
+    expect(await test.operations.finalizeInterventionOpening(open.id, AbortSignal.timeout(5_000)))
+      .toBe('reconciliation-required')
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'reconciliation-required', reason: 'protocol' })
+  })
+
+  it.each([
+    ['absent', { kind: 'absent' }],
+    ['pending', { kind: 'pending' }],
+    ['conflicting', { kind: 'conflict', reason: 'tool-result-mismatch' }],
+  ] as const)('classifies an abandoned %s opening from retained Host evidence', async (_kind, evidence) => {
+    const test = harness()
+    const { requested } = await createOpenIntervention(test, `call_startup_${_kind}`, false)
+    test.execution.interventionOpeningEvidence = evidence
+    test.restart()
+    const state = test.operations.validateDurableState(new Set(), test.registry)
+
+    await test.operations.initializeValidated(state)
+
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId)))
+      .toMatchObject({
+        state: 'reconciliation-required',
+        reason: _kind === 'conflicting' ? 'evidence-conflict' : _kind === 'pending' ? 'effect-unknown' : 'protocol',
+      })
+    expect(only(test.runs)).toMatchObject({ state: 'running' })
+  })
+
+  it('does not overwrite an opening that another serialized recovery already reconciled', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_serialized_opening_recovery', false)
+    let releaseInspection!: () => void
+    let observeInspection!: () => void
+    const inspectionGate = new Promise<void>((resolve) => { releaseInspection = resolve })
+    const inspectionObserved = new Promise<void>((resolve) => { observeInspection = resolve })
+    test.execution.inspectInterventionOpening = async () => {
+      observeInspection()
+      await inspectionGate
+      return { kind: 'confirmed', turn: 1, step: 1 }
+    }
+    const finalizing = test.operations.finalizeInterventionOpening(open.id, AbortSignal.timeout(5_000))
+    await inspectionObserved
+
+    const retainedIntent = only(test.intents)
+    test.intents.records.set(retainedIntent.id, agentOperationIntentRecordSchema.parse({
+      ...retainedIntent,
+      phase: 'dispatching',
+    }))
+    test.execution.inspectMode = 'reconciliation'
+    let observeOpeningScan!: () => void
+    const openingScanObserved = new Promise<void>((resolve) => { observeOpeningScan = resolve })
+    const entries = test.interventions.entries.bind(test.interventions)
+    test.interventions.entries = () => {
+      observeOpeningScan()
+      return entries()
+    }
+    const reconciling = test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    await openingScanObserved
+
+    const reconciledAt = Math.max(open.updatedAt, Date.now())
+    test.interventions.records.set(open.id, interventionRequestRecordSchema.parse({
+      ...open,
+      revision: open.revision + 1,
+      state: 'reconciliation-required',
+      openedAt: reconciledAt,
+      reason: 'protocol',
+      reconciliationRequiredAt: reconciledAt,
+      updatedAt: reconciledAt,
+    }))
+    releaseInspection()
+
+    expect(await finalizing).toBe('pending')
+    expect(await reconciling).toMatchObject({ ok: false, reason: 'reconciliation-required' })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'reconciliation-required', reason: 'protocol', revision: open.revision + 1 })
+  })
+
+  it('rejects stale, invalid, and unauthorized answers without changing the open winner slot', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_answer_boundaries')
+    const stale = interventionAnswer(open, 'intent-13131313-1313-4313-8313-131313131313', 'stale')
+    expect(await test.operations.answerIntervention({
+      ...stale,
+      expectedInterventionRevision: open.revision + 1,
+    }, actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'expected-revision' },
+    })
+
+    test.interventions.records.set(open.id, interventionRequestRecordSchema.parse({
+      ...open,
+      requiredAnswer: { ...open.requiredAnswer, maxLength: 3 },
+    }))
+    expect(await test.operations.answerIntervention(
+      interventionAnswer(open, 'intent-14141414-1414-4414-8414-141414141414', 'four'),
+      actor(),
+      AbortSignal.timeout(5_000),
+    )).toMatchObject({
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'invalid-answer' },
+    })
+    expect(await test.operations.answerIntervention(
+      interventionAnswer(open, 'intent-15151515-1515-4515-8515-151515151515', 'yes'),
+      { ...actor(), principalId: 'principal-16161616-1616-4616-8616-161616161616' as SakiPrincipalId },
+      AbortSignal.timeout(5_000),
+    )).toEqual({ ok: false, reason: 'denied' })
+    test.authorityCurrent = false
+    expect(await test.operations.answerIntervention(
+      interventionAnswer(open, 'intent-17171717-1717-4717-8717-171717171717', 'yes'),
+      actor(),
+      AbortSignal.timeout(5_000),
+    )).toEqual({ ok: false, reason: 'denied' })
+
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'open', revision: open.revision })
+    expect(test.dispatches.size).toBe(1)
+  })
+
+  it('retains one competing answer winner, its return facts, and an idempotent receipt', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_competing_answers')
+    const returnAddress = open.returnAddress
+    test.execution.beginNextOperation()
+    const first = interventionAnswer(
+      open,
+      'intent-18181818-1818-4818-8818-181818181818',
+      'Use the first durable answer.',
+    )
+    const second = interventionAnswer(
+      open,
+      'intent-19191919-1919-4919-8919-191919191919',
+      'Use the competing answer.',
+    )
+
+    const [winner, loser] = await Promise.all([
+      test.operations.answerIntervention(first, actor(), AbortSignal.timeout(5_000)),
+      test.operations.answerIntervention(second, actor(), AbortSignal.timeout(5_000)),
+    ])
+
+    expect(winner).toMatchObject({ ok: true, receipt: { state: 'resolved', intentId: first.intentId } })
+    expect(loser).toMatchObject({
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'already-answered' },
+    })
+    const resolved = interventionRequestRecordSchema.parse(test.interventions.get(open.id))
+    expect(resolved).toMatchObject({
+      state: 'resolved',
+      returnAddress,
+      answer: { payload: { intent: first, actor: actor() } },
+    })
+    expect(await test.operations.answerIntervention(first, actor(), AbortSignal.timeout(5_000))).toEqual(winner)
+    expect(test.dispatches.size).toBe(2)
+    expect(test.execution.startCount).toBe(2)
+  })
+
+  it.each(['same answer', 'competing answer'] as const)(
+    'adopts one concurrently committed %s after losing the request revision CAS',
+    async (winnerKind) => {
+      const toolCallId = `call_concurrent_${winnerKind.replace(' ', '_')}`
+      const winningIntentId = winnerKind === 'same answer'
+        ? 'intent-56565656-5656-4656-8656-565656565656'
+        : 'intent-57575757-5757-4757-8757-575757575757'
+      const submittedIntentId = 'intent-56565656-5656-4656-8656-565656565656'
+      const donor = harness()
+      const { open: donorOpen } = await createOpenIntervention(donor, toolCallId)
+      donor.execution.beginNextOperation()
+      donor.execution.prepareMode = 'unavailable'
+      await donor.operations.answerIntervention(
+        interventionAnswer(donorOpen, winningIntentId, winnerKind),
+        actor(),
+        AbortSignal.timeout(5_000),
+      )
+      const committed = interventionRequestRecordSchema.parse(donor.interventions.get(donorOpen.id))
+      if (committed.state !== 'answered') throw new Error('concurrent answer fixture was not accepted')
+      const laterCommitted = interventionRequestRecordSchema.parse({
+        ...committed,
+        answer: { ...committed.answer, acceptedAt: committed.answer.acceptedAt + 60_000 },
+        updatedAt: committed.updatedAt + 60_000,
+      })
+
+      const test = harness()
+      const { open } = await createOpenIntervention(test, toolCallId)
+      test.execution.beginNextOperation()
+      test.interventions.beforeNextUpdate = () => {
+        test.interventions.records.set(open.id, laterCommitted)
+      }
+      const result = await test.operations.answerIntervention(
+        interventionAnswer(open, submittedIntentId, 'same answer'),
+        actor(),
+        AbortSignal.timeout(5_000),
+      )
+
+      expect(result).toMatchObject(winnerKind === 'same answer'
+        ? { ok: true, receipt: { state: 'resolved', intentId: submittedIntentId } }
+        : { ok: false, reason: 'conflict', receipt: { state: 'conflict', reason: 'already-answered' } })
+    },
+  )
+
+  it('uses Host change notification to finish an accepted answer without a second answer Intent', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_host_change')
+    const answer = interventionAnswer(
+      open,
+      'intent-21212121-2121-4121-8121-212121212121',
+      'Continue when the retained Host operation changes.',
+    )
+    test.execution.beginNextOperation()
+    test.execution.startMode = 'unavailable'
+    expect(await test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'answered' } })
+    const answerDispatch = [...test.dispatches.records.values()].at(-1)!
+    if (answerDispatch.preparation === undefined) throw new Error('test answer Dispatch lacks Host preparation')
+    test.execution.startMode = 'success'
+
+    test.operations.hostChanged({
+      operation: answerDispatch.preparation.operation,
+      revision: (answerDispatch.operationSnapshot?.revision ?? 0) + 1,
+    })
+    await test.operations.dispose()
+
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'resolved', answer: { payload: { intent: answer } } })
+    expect(only(test.runs)).toMatchObject({ state: 'running' })
+    expect(test.dispatches.size).toBe(2)
+  })
+
+  it.each(['authority', 'Binding'] as const)(
+    'rechecks answer %s after Host preparation before accepting its Dispatch',
+    async (revoked) => {
+      const test = harness()
+      const { open } = await createOpenIntervention(test, `call_answer_prepare_${revoked}`)
+      const initialStartCount = test.execution.startCount
+      test.execution.beginNextOperation()
+      test.execution.afterPrepare = () => {
+        if (revoked === 'authority') test.authorityCurrent = false
+        else test.bindingCurrent = false
+      }
+
+      expect(await test.operations.answerIntervention(
+        interventionAnswer(open, 'intent-48484848-4848-4848-8848-484848484848', 'Keep the answer without delivering it.'),
+        actor(),
+        AbortSignal.timeout(5_000),
+      )).toMatchObject({
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'protocol' },
+      })
+      expect(test.execution.startCount).toBe(initialStartCount)
+      expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id))).toMatchObject({
+        state: 'reconciliation-required',
+        answer: { payload: { actor: actor() } },
+      })
+      expect(only(test.runs)).toMatchObject({ state: 'reconciliation-required' })
+      expect([...test.dispatches.records.values()].at(-1)).toMatchObject({
+        state: 'reconciliation-required',
+        operationSnapshot: { state: 'prepared', admission: { kind: 'not-accepted' } },
+        terminalReason: 'protocol',
+      })
+    },
+  )
+
+  it.each([
+    ['deleted after preparation', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        const dispatch = [...test.dispatches.records.values()].at(-1)
+        if (dispatch === undefined) throw new Error('answer Dispatch is absent')
+        test.dispatches.records.delete(dispatch.id)
+      }
+    }, 'unavailable'],
+    ['claimed by another executor after preparation', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        const dispatch = [...test.dispatches.records.values()].at(-1)
+        if (dispatch?.state !== 'claimed') throw new Error('answer Dispatch is not claimed')
+        test.dispatches.records.set(dispatch.id, executionDispatchRecordSchema.parse({
+          ...dispatch,
+          claim: {
+            ...dispatch.claim,
+            id: 'dispatch-claim-60606060-6060-4060-8060-606060606060',
+          },
+        }))
+      }
+    }, 'unavailable'],
+    ['revision-changed before preparation persistence', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.beforeNextUpdate = () => {
+          const dispatch = [...test.dispatches.records.values()].at(-1)
+          if (dispatch === undefined) throw new Error('answer Dispatch is absent')
+          test.dispatches.records.set(dispatch.id, executionDispatchRecordSchema.parse({
+            ...dispatch,
+            revision: dispatch.revision + 1,
+          }))
+        }
+      }
+    }, 'unavailable'],
+    ['rejected by storage before preparation persistence', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.beforeNextUpdate = () => { throw new Error('injected preparation storage failure') }
+      }
+    }, 'throws'],
+    ['expired while preparation persistence completed', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.beforeNextUpdate = () => {
+          const dispatch = [...test.dispatches.records.values()].at(-1)
+          if (dispatch?.state !== 'claimed') throw new Error('answer Dispatch is not claimed')
+          const now = Date.now()
+          test.dispatches.records.set(dispatch.id, executionDispatchRecordSchema.parse({
+            ...dispatch,
+            claim: { ...dispatch.claim, issuedAt: now - 1, expiresAt: now + 1 },
+          }))
+        }
+        test.dispatches.afterNextUpdate = async () => {
+          await new Promise(resolve => setTimeout(resolve, 5))
+        }
+      }
+    }, 'unavailable'],
+    ['lost atomically during acceptance', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.afterNextUpdate = () => {
+          test.dispatches.beforeNextUpdate = () => { test.authorityCurrent = false }
+        }
+      }
+    }, 'unavailable'],
+    ['committed before its storage acknowledgement was lost', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.afterNextUpdate = () => {
+          test.dispatches.afterNextUpdate = () => { throw new Error('injected acceptance acknowledgement loss') }
+        }
+      }
+    }, 'resolved'],
+    ['rejected by storage before acceptance', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.afterNextUpdate = () => {
+          test.dispatches.beforeNextUpdate = () => { throw new Error('injected acceptance storage failure') }
+        }
+      }
+    }, 'throws'],
+    ['deleted by storage before acceptance failure recovery', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.afterNextUpdate = () => {
+          test.dispatches.beforeNextUpdate = () => {
+            const dispatch = [...test.dispatches.records.values()].at(-1)
+            if (dispatch === undefined) throw new Error('answer Dispatch is absent')
+            test.dispatches.records.delete(dispatch.id)
+            throw new Error('injected acceptance deletion')
+          }
+        }
+      }
+    }, 'throws'],
+  ] as const)(
+    'handles an answer Dispatch %s',
+    async (_description, arrange, outcome) => {
+      const test = harness()
+      const { open } = await createOpenIntervention(test, `call_claim_race_${outcome}_${_description}`)
+      const answer = interventionAnswer(
+        open,
+        'intent-61616161-6161-4161-8161-616161616161',
+        'Retain the answer across this Dispatch claim race.',
+      )
+      test.execution.beginNextOperation()
+      arrange(test)
+
+      const attempt = test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000))
+      if (outcome === 'throws') {
+        await expect(attempt).rejects.toThrow('injected')
+      } else {
+        expect(await attempt).toMatchObject(outcome === 'resolved'
+          ? { ok: true, receipt: { state: 'resolved' } }
+          : { ok: false, reason: 'unavailable', receipt: { state: 'answered' } })
+      }
+    },
+  )
+
+  it('leaves an accepted answer pending while another executor owns its Dispatch claim', async () => {
+    const test = harness()
+    const answered = await createAnsweredIntervention(test, 'call_foreign_answer_claim')
+    const dispatch = test.dispatches.records.get(answered.answer.dispatchId)
+    if (dispatch?.state !== 'claimed') throw new Error('answer Dispatch is not claimed')
+    test.dispatches.records.set(dispatch.id, executionDispatchRecordSchema.parse({
+      ...dispatch,
+      claim: {
+        ...dispatch.claim,
+        executorHostId: 'host-70707070-7070-4070-8070-707070707070',
+      },
+    }))
+
+    expect(await test.operations.answerIntervention(
+      answered.answer.payload.intent,
+      actor(),
+      AbortSignal.timeout(5_000),
+    )).toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'answered' } })
+  })
+
+  it.each(['authority', 'Binding', 'Host expectation'] as const)(
+    'rechecks answer %s after Dispatch acceptance before Host admission',
+    async (revoked) => {
+      const test = harness()
+      const { open } = await createOpenIntervention(test, `call_answer_admission_${revoked}`)
+      const initialStartCount = test.execution.startCount
+      test.execution.beginNextOperation()
+      if (revoked === 'Host expectation') {
+        test.execution.admissionExpectation = expectation => ({
+          ...expectation,
+          bindingRevision: expectation.bindingRevision + 1,
+        })
+      } else {
+        test.execution.beforeAdmission = () => {
+          if (revoked === 'authority') test.authorityCurrent = false
+          else test.bindingCurrent = false
+        }
+      }
+
+      expect(await test.operations.answerIntervention(
+        interventionAnswer(open, 'intent-49494949-4949-4949-8949-494949494949', 'Keep the answer pending until authority returns.'),
+        actor(),
+        AbortSignal.timeout(5_000),
+      )).toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'answered' } })
+      expect(test.execution.startCount).toBe(initialStartCount + 1)
+      expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+        .toMatchObject({ state: 'answered', answer: { payload: { actor: actor() } } })
+      expect(only(test.runs)).toMatchObject({
+        state: 'resume-pending',
+        blockingInterventionId: open.id,
+      })
+      expect([...test.dispatches.records.values()].at(-1)).toMatchObject({
+        state: 'accepted',
+        operationSnapshot: { state: 'prepared', admission: { kind: 'not-accepted' } },
+      })
+    },
+  )
+
+  it.each([
+    ['a conflicting Host preparation', 'prepare', 'source-conflict', 'protocol'],
+    ['a terminal Host preparation', 'prepare', 'terminal-failed', 'protocol'],
+    ['a reconciliation-required start', 'start', 'reconciliation', 'effect-unknown'],
+    ['a failed start', 'start', 'failed', 'protocol'],
+    ['a canceled start', 'start', 'canceled-source', 'protocol'],
+    ['mismatched success evidence', 'start', 'mismatched-result', 'evidence-conflict'],
+  ] as const)('reconciles an accepted answer after %s', async (_description, phase, mode, reason) => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, `call_${mode}`)
+    const answer = interventionAnswer(
+      open,
+      'intent-22222222-2222-4222-8222-222222222222',
+      'Retain this answer even when delivery needs reconciliation.',
+    )
+    test.execution.beginNextOperation()
+    if (phase === 'prepare') test.execution.prepareMode = mode
+    else test.execution.startMode = mode
+
+    const reconciled = await test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000))
+    expect(reconciled).toMatchObject({
+      ok: false,
+      reason: 'reconciliation-required',
+      receipt: { state: 'reconciliation-required', reason },
+    })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id))).toMatchObject({
+      state: 'reconciliation-required',
+      reason,
+      returnAddress: open.returnAddress,
+      answer: { payload: { intent: answer } },
+    })
+    expect(only(test.runs)).toMatchObject({ state: 'reconciliation-required' })
+    expect([...test.dispatches.records.values()].at(-1)).toMatchObject({
+      state: 'reconciliation-required',
+      terminalReason: reason,
+    })
+    expect(await test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000)))
+      .toEqual(reconciled)
+  })
+
+  it.each(['preparation', 'snapshot'] as const)(
+    'rejects mismatched Host %s evidence before accepting an answer Dispatch',
+    async (kind) => {
+      const test = harness()
+      const { open } = await createOpenIntervention(test, `call_mismatched_host_${kind}`)
+      test.execution.beginNextOperation()
+      test.execution.prepareResult = receipt => kind === 'preparation'
+        ? {
+          ...receipt,
+          preparation: {
+            ...receipt.preparation,
+            operation: {
+              ...receipt.preparation.operation,
+              id: 'host-operation-71717171-7171-4171-8171-717171717171' as HostOperationId,
+            },
+          },
+        }
+        : {
+          ...receipt,
+          snapshot: { ...receipt.snapshot, bindingRevision: receipt.snapshot.bindingRevision + 1 },
+        }
+
+      await expect(test.operations.answerIntervention(
+        interventionAnswer(
+          open,
+          'intent-71717171-7171-4171-8171-717171717171',
+          'Reject mismatched Host evidence.',
+        ),
+        actor(),
+        AbortSignal.timeout(5_000),
+      )).rejects.toThrow(kind === 'preparation'
+        ? 'Host preparation disagrees with its Saki Intervention answer Dispatch'
+        : 'Host snapshot disagrees with its Saki Intervention answer Dispatch')
+    },
+  )
+
+  it.each([
+    ['an unavailable inspection', (test: Harness) => {
+      test.eligibility.projectInspection = { ok: false, reason: 'unavailable' }
+    }, 'answered', undefined],
+    ['a thrown inspection', (test: Harness) => {
+      test.execution.projectInspectionError = new Error('test inspection failed')
+    }, 'answered', undefined],
+    ['a stale Binding inspection', (test: Harness) => {
+      test.eligibility.projectInspection = { ok: false, reason: 'binding-stale' }
+    }, 'reconciliation-required', 'protocol'],
+    ['an unavailable structured mutation', (test: Harness) => {
+      updateProjectInspection(test, current => ({
+        ...current,
+        observation: {
+          ...current.observation,
+          structuredMutation: { available: false, blockers: ['unmerged'] },
+        },
+      }))
+    }, 'answered', undefined],
+  ] as const)('keeps the answer durable after %s', async (_description, arrange, state, reason) => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, `call_inspection_${state}_${_description}`)
+    const answer = interventionAnswer(
+      open,
+      'intent-23232323-2323-4323-8323-232323232323',
+      'Do not lose this accepted response.',
+    )
+    test.execution.beginNextOperation()
+    arrange(test)
+
+    const result = await test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000))
+
+    expect(result).toMatchObject(state === 'answered'
+      ? { ok: false, reason: 'unavailable', receipt: { state: 'answered' } }
+      : { ok: false, reason: 'reconciliation-required', receipt: { state, reason } })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state, ...(reason === undefined ? {} : { reason }), answer: { payload: { intent: answer } } })
+    expect(test.operations.validateDurableState(new Set(), test.registry).answerPendingInterventionIds)
+      .toEqual(state === 'answered' ? [open.id] : [])
+  })
+
+  it.each([
+    ['lost its Dispatch outside a resumable Run prefix', (test: Harness, answered: Extract<InterventionRequestRecord, { readonly state: 'answered' }>) => {
+      test.dispatches.records.delete(answered.answer.dispatchId)
+      const run = only(test.runs)
+      test.runs.records.set(run.id, agentRunRecordSchema.parse({
+        ...run,
+        state: 'allocated',
+        blockingInterventionId: undefined,
+      }))
+    }, 'protocol'],
+    ['lost its Binding before recreating a missing Dispatch', (test: Harness, answered: Extract<InterventionRequestRecord, { readonly state: 'answered' }>) => {
+      test.dispatches.records.delete(answered.answer.dispatchId)
+      test.bindingCurrent = false
+    }, 'protocol'],
+    ['retained a mismatched input plan before recreating a missing Dispatch', (test: Harness, answered: Extract<InterventionRequestRecord, { readonly state: 'answered' }>) => {
+      test.dispatches.records.delete(answered.answer.dispatchId)
+      const inputPlan = { ...answered.answer.inputPlan, payloadDigest: 'f'.repeat(64) }
+      test.interventions.records.set(answered.id, interventionRequestRecordSchema.parse({
+        ...answered,
+        answer: { ...answered.answer, inputPlan },
+      }))
+      const run = only(test.runs)
+      test.runs.records.set(run.id, agentRunRecordSchema.parse({ ...run, inputPlan }))
+    }, 'evidence-conflict'],
+    ['retained a Dispatch for another answer Intent', (test: Harness, answered: Extract<InterventionRequestRecord, { readonly state: 'answered' }>) => {
+      const dispatch = test.dispatches.records.get(answered.answer.dispatchId)
+      if (dispatch === undefined) throw new Error('answer Dispatch is absent')
+      test.dispatches.records.set(dispatch.id, executionDispatchRecordSchema.parse({
+        ...dispatch,
+        intentId: 'intent-62626262-6262-4262-8262-626262626262',
+      }))
+    }, 'evidence-conflict'],
+    ['retained its Dispatch outside every resumable Run prefix', (test: Harness) => {
+      const run = only(test.runs)
+      test.runs.records.set(run.id, agentRunRecordSchema.parse({
+        ...run,
+        state: 'allocated',
+        blockingInterventionId: undefined,
+      }))
+    }, 'protocol'],
+  ] as const)(
+    'reconciles an answer that %s',
+    async (_description, arrange, reason) => {
+      const test = harness()
+      const answered = await createAnsweredIntervention(test, `call_materialization_${reason}_${_description}`)
+      arrange(test, answered)
+
+      expect(await test.operations.answerIntervention(
+        answered.answer.payload.intent,
+        actor(),
+        AbortSignal.timeout(5_000),
+      )).toMatchObject({
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason },
+      })
+    },
+  )
+
+  it.each([
+    ['reconciliation-required inspection', 'reconciliation', 'success', 'reconciliation-required', 'effect-unknown'],
+    ['failed inspection', 'failed', 'success', 'reconciliation-required', 'protocol'],
+    ['canceled inspection', 'canceled-source', 'success', 'reconciliation-required', 'protocol'],
+    ['unavailable replay preparation', 'current', 'unavailable', 'answered', undefined],
+    ['conflicting replay preparation', 'current', 'source-conflict', 'reconciliation-required', 'protocol'],
+  ] as const)(
+    'recovers an accepted answer after %s',
+    async (_description, inspectMode, prepareMode, state, reason) => {
+      const test = harness()
+      const { open } = await createOpenIntervention(test, `call_accepted_${inspectMode}_${prepareMode}`)
+      const answer = interventionAnswer(
+        open,
+        'intent-58585858-5858-4858-8858-585858585858',
+        'Resume this accepted answer from retained Host evidence.',
+      )
+      test.execution.beginNextOperation()
+      test.execution.startMode = 'unavailable'
+      expect(await test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000)))
+        .toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'answered' } })
+      test.execution.inspectMode = inspectMode
+      test.execution.prepareMode = prepareMode
+
+      const recovered = await test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000))
+
+      expect(recovered).toMatchObject(state === 'answered'
+        ? { ok: false, reason: 'unavailable', receipt: { state } }
+        : { ok: false, reason: 'reconciliation-required', receipt: { state, reason } })
+    },
+  )
+
+  it.each(['canceled', 'reconciliation-required'] as const)(
+    'reconciles a retained %s answer Dispatch before another Host attempt',
+    async (state) => {
+      const test = harness()
+      const answered = await createAnsweredIntervention(test, `call_retained_${state}`)
+      const dispatch = [...test.dispatches.records.values()].at(-1)
+      if (dispatch === undefined) throw new Error('answer Dispatch is absent')
+      test.dispatches.records.set(dispatch.id, executionDispatchRecordSchema.parse({
+        ...dispatch,
+        state,
+        claim: undefined,
+        terminalReason: state === 'canceled' ? 'authority-revoked' : 'protocol',
+      }))
+
+      expect(await test.operations.answerIntervention(
+        answered.answer.payload.intent,
+        actor(),
+        AbortSignal.timeout(5_000),
+      )).toMatchObject({
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'protocol' },
+      })
+    },
+  )
+
+  it('rejects an answer until the Agent request is confirmed open', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_not_open', false)
+    const answer: AnswerInterventionIntent = {
+      type: 'answer-intervention',
+      intentId: 'intent-24242424-2424-4424-8424-242424242424' as SakiControlIntentId,
+      interventionId: open.id,
+      expectedInterventionRevision: open.revision,
+      answer: { kind: 'text', text: 'Too early.' },
+    }
+
+    expect(await test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({
+        ok: false,
+        reason: 'conflict',
+        receipt: { state: 'conflict', reason: 'owner-unavailable' },
+      })
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'opening', revision: 0 })
+  })
+
+  it('fails closed when a durable Intervention owner relation disappears before use', async () => {
+    const requesting = harness()
+    await requesting.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const requestingRun = only(requesting.runs)
+    requesting.admissions.records.delete(requestingRun.bindingId)
+    expect(await requesting.operations.requestIntervention({
+      sessionId: requestingRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: CallId('call_missing_request_admission'),
+      prompt: 'This request has lost its write admission.',
+    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'unavailable' })
+
+    const opening = harness()
+    const { open: openingRecord } = await createOpenIntervention(opening, 'call_owner_drift', false)
+    const openingAssignment = only(opening.assignments)
+    opening.assignments.records.set(openingAssignment.id, workAssignmentRecordSchema.parse({
+      ...openingAssignment,
+      state: 'canceled',
+    }))
+    expect(await opening.operations.finalizeInterventionOpening(
+      openingRecord.id,
+      AbortSignal.timeout(5_000),
+    )).toBe('reconciliation-required')
+
+    const answering = harness()
+    const { open } = await createOpenIntervention(answering, 'call_missing_answer_admission')
+    answering.admissions.records.delete(only(answering.runs).bindingId)
+    expect(await answering.operations.answerIntervention(
+      interventionAnswer(open, 'intent-45454545-4545-4545-8545-454545454545', 'Do not deliver without an owner.'),
+      actor(),
+      AbortSignal.timeout(5_000),
+    )).toMatchObject({
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'owner-unavailable' },
+    })
+  })
+
+  it.each([
+    ['after accepting the answer', (test: Harness) => {
+      test.interventions.simulateCrashAfterUpdateWhen(intervention => intervention.state === 'answered')
+    }],
+    ['after recording the resume plan', (test: Harness) => {
+      test.runs.simulateCrashAfterUpdateWhen(run => run.state === 'resume-pending')
+    }],
+    ['after recording successful delivery', (test: Harness) => {
+      test.runs.simulateCrashAfterUpdateWhen(run => run.state === 'running' && run.dispatchIds.length === 2)
+    }],
+  ] as const)('recovers the same answer and Run when the process stops %s', async (_checkpoint, inject) => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, `call_${_checkpoint.replaceAll(' ', '_')}`)
+    const answer = interventionAnswer(
+      open,
+      'intent-20202020-2020-4020-8020-202020202020',
+      'Resume this exact Run.',
+    )
+    test.execution.beginNextOperation()
+    inject(test)
+
+    await expect(test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(SimulatedProcessCrash)
+    test.restart()
+    const restartState = test.operations.validateDurableState(new Set(), test.registry)
+    expect(restartState.answerPendingInterventionIds).toEqual([open.id])
+
+    await test.operations.initializeValidated(restartState)
+
+    expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
+      .toMatchObject({ state: 'resolved', answer: { payload: { intent: answer } } })
+    expect(only(test.runs).state).toBe('running')
+    expect(only(test.runs).dispatchIds).toEqual([...test.dispatches.records.keys()])
+    expect(Object.hasOwn(only(test.runs), 'blockingInterventionId')).toBe(false)
+    expect(test.dispatches.size).toBe(2)
+    expect(test.operations.validateDurableState(new Set(), test.registry).answerPendingInterventionIds)
+      .toEqual([])
+  })
+
+  it('persists the Agent-requested Intervention relation owned by its exact Agent Run', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_relation_variants', false)
+    const run = only(test.runs)
+    expect(open).toMatchObject({
+      owner: { kind: 'agent-run', agentRunId: run.id, workSessionId: run.workSessionId },
+      subject: { kind: 'agent-run', agentRunId: run.id },
+      blockingScope: { kind: 'agent-run', agentRunId: run.id },
+      cause: { kind: 'agent-request', agentRunId: run.id, workSessionId: run.workSessionId },
+      returnAddress: {
+        kind: 'agent-run',
+        projectId: run.projectId,
+        workItemId: run.workItemId,
+        workSessionId: run.workSessionId,
+        agentRunId: run.id,
+      },
+    })
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+  })
+
+  it.each([
+    ['an unknown owner Run', (test: Harness, intervention: InterventionRequestRecord) => {
+      const agentRunId = 'agent-run-26262626-2626-4626-8626-262626262626' as SakiAgentRunId
+      test.interventions.records.set(intervention.id, interventionRequestRecordSchema.parse({
+        ...intervention,
+        owner: { ...intervention.owner, agentRunId },
+        cause: { ...intervention.cause, agentRunId },
+        subject: { ...intervention.subject, agentRunId },
+        blockingScope: { ...intervention.blockingScope, agentRunId },
+        returnAddress: { ...intervention.returnAddress, agentRunId },
+      }))
+    }, 'inconsistent ownership'],
+    ['another Project', (test: Harness, intervention: InterventionRequestRecord) => {
+      const projectId = 'project-27272727-2727-4727-8727-272727272727' as SakiDevelopmentProjectId
+      test.interventions.records.set(intervention.id, interventionRequestRecordSchema.parse({
+        ...intervention,
+        projectId,
+        returnAddress: { ...intervention.returnAddress, projectId },
+      }))
+    }, 'inconsistent ownership'],
+    ['another Principal', (test: Harness, intervention: InterventionRequestRecord) => {
+      test.interventions.records.set(intervention.id, interventionRequestRecordSchema.parse({
+        ...intervention,
+        targetPrincipalId: 'principal-28282828-2828-4828-8828-282828282828',
+      }))
+    }, 'inconsistent ownership'],
+    ['another subject Run', (test: Harness, intervention: InterventionRequestRecord) => {
+      test.interventions.records.set(intervention.id, interventionRequestRecordSchema.parse({
+        ...intervention,
+        subject: { kind: 'agent-run', agentRunId: 'agent-run-29292929-2929-4929-8929-292929292929' },
+      }))
+    }, 'inconsistent ownership'],
+    ['another physical Session cause', (test: Harness, intervention: InterventionRequestRecord) => {
+      test.interventions.records.set(intervention.id, interventionRequestRecordSchema.parse({
+        ...intervention,
+        cause: { ...intervention.cause, sessionId: 'session-34343434-3434-4434-8434-343434343434' },
+      }))
+    }, 'inconsistent ownership'],
+    ['another blocking Run', (test: Harness, intervention: InterventionRequestRecord) => {
+      test.interventions.records.set(intervention.id, interventionRequestRecordSchema.parse({
+        ...intervention,
+        blockingScope: {
+          kind: 'agent-run',
+          agentRunId: 'agent-run-29292929-2929-4929-8929-292929292929',
+        },
+      }))
+    }, 'inconsistent ownership'],
+    ['another return Work Item', (test: Harness, intervention: InterventionRequestRecord) => {
+      test.interventions.records.set(intervention.id, interventionRequestRecordSchema.parse({
+        ...intervention,
+        returnAddress: { ...intervention.returnAddress, workItemId: `work-item-${'3'.repeat(64)}` },
+      }))
+    }, 'inconsistent ownership'],
+  ] as const)('rejects an Intervention owned by %s', async (_description, corrupt, message) => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, `call_corrupt_${_description}`, false)
+    corrupt(test, open)
+
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).toThrow(message)
+  })
+
+  it('rejects impossible Intervention lifecycle and Dispatch graph combinations', async () => {
+    const opening = harness()
+    const { open: openingRecord } = await createOpenIntervention(opening, 'call_bad_opening_lifecycle', false)
+    const openingRun = only(opening.runs)
+    opening.runs.records.set(openingRun.id, agentRunRecordSchema.parse({
+      ...openingRun,
+      state: 'waiting',
+      blockingInterventionId: 'intervention-31313131-3131-4131-8131-313131313131',
+    }))
+    expect(() => opening.operations.validateDurableState(new Set(), opening.registry))
+      .toThrow('opening Saki Intervention disagrees with its Agent Run')
+
+    const opened = harness()
+    await createOpenIntervention(opened, 'call_bad_open_lifecycle')
+    const openedRun = only(opened.runs)
+    opened.runs.records.set(openedRun.id, agentRunRecordSchema.parse({
+      ...openedRun,
+      state: 'running',
+      blockingInterventionId: undefined,
+    }))
+    expect(() => opened.operations.validateDurableState(new Set(), opened.registry))
+      .toThrow('open Saki Intervention lacks its waiting Agent Run')
+
+    const answered = harness()
+    const answeredRecord = await createAnsweredIntervention(answered, 'call_bad_answered_lifecycle')
+    const answeredRun = only(answered.runs)
+    const initialResult = [...answered.dispatches.records.values()][0]?.operationSnapshot
+    if (initialResult?.state !== 'succeeded') throw new Error('test initial Host result is absent')
+    answered.runs.records.set(answeredRun.id, agentRunRecordSchema.parse({
+      ...answeredRun,
+      state: 'running',
+      blockingInterventionId: undefined,
+      hostResult: {
+        ...initialResult.result,
+        inputMessageId: answeredRecord.answer.inputPlan.messageId,
+      },
+    }))
+    expect(() => answered.operations.validateDurableState(new Set(), answered.registry))
+      .toThrow('answered Saki Intervention has an inconsistent Agent Run prefix')
+
+    const resolved = harness()
+    const resolvedRecord = await createResolvedIntervention(resolved, 'call_bad_resolved_lifecycle')
+    const resolvedRun = only(resolved.runs)
+    resolved.runs.records.set(resolvedRun.id, agentRunRecordSchema.parse({
+      ...resolvedRun,
+      state: 'waiting',
+      blockingInterventionId: resolvedRecord.id,
+    }))
+    expect(() => resolved.operations.validateDurableState(new Set(), resolved.registry))
+      .toThrow('resolved Saki Intervention still blocks its Agent Run')
+
+    const missingDispatch = harness()
+    const missingRecord = await createResolvedIntervention(missingDispatch, 'call_missing_answer_dispatch')
+    missingDispatch.dispatches.records.delete(missingRecord.answer.dispatchId)
+    expect(() => missingDispatch.operations.validateDurableState(new Set(), missingDispatch.registry))
+      .toThrow('resolved Saki Intervention lacks its answer Dispatch')
+
+    const mismatchedDispatch = harness()
+    const mismatchedRecord = await createResolvedIntervention(mismatchedDispatch, 'call_mismatched_answer_dispatch')
+    const answerDispatch = mismatchedDispatch.dispatches.records.get(mismatchedRecord.answer.dispatchId)!
+    mismatchedDispatch.dispatches.records.set(answerDispatch.id, executionDispatchRecordSchema.parse({
+      ...answerDispatch,
+      intentId: 'intent-32323232-3232-4232-8232-323232323232',
+    }))
+    expect(() => mismatchedDispatch.operations.validateDurableState(new Set(), mismatchedDispatch.registry))
+      .toThrow('Saki Intervention answer Dispatch disagrees with its owner')
+
+    const historical = harness()
+    const historicalRecord = await createResolvedIntervention(
+      historical,
+      'call_historical_answer_dispatch',
+      'intent-35353535-3535-4535-8535-353535353535' as SakiControlIntentId,
+    )
+    await createResolvedIntervention(
+      historical,
+      'call_latest_answer_dispatch',
+      'intent-36363636-3636-4636-8636-363636363636' as SakiControlIntentId,
+    )
+    const historicalDispatch = historical.dispatches.records.get(historicalRecord.answer.dispatchId)!
+    historical.dispatches.records.set(historicalDispatch.id, executionDispatchRecordSchema.parse({
+      ...historicalDispatch,
+      state: 'reconciliation-required',
+      terminalReason: 'protocol',
+    }))
+    expect(() => historical.operations.validateDurableState(new Set(), historical.registry))
+      .toThrow('resolved Saki Intervention lacks exact succeeded answer Dispatch evidence')
+
+    expect(openingRecord.state).toBe('opening')
+    expect(answeredRecord.state).toBe('answered')
+  })
+
+  it('rejects independently valid corruption in the Intervention Dispatch graph', async () => {
+    const duplicateAnswerDispatch = harness()
+    const firstResolved = await createResolvedIntervention(
+      duplicateAnswerDispatch,
+      'call_duplicate_dispatch_first',
+      'intent-63636363-6363-4363-8363-636363636363' as SakiControlIntentId,
+    )
+    const secondResolved = await createResolvedIntervention(
+      duplicateAnswerDispatch,
+      'call_duplicate_dispatch_second',
+      'intent-64646464-6464-4464-8464-646464646464' as SakiControlIntentId,
+    )
+    duplicateAnswerDispatch.interventions.records.set(secondResolved.id, interventionRequestRecordSchema.parse({
+      ...secondResolved,
+      answer: { ...secondResolved.answer, dispatchId: firstResolved.answer.dispatchId },
+    }))
+    expect(() => duplicateAnswerDispatch.operations.validateDurableState(new Set(), duplicateAnswerDispatch.registry))
+      .toThrow('is retained by multiple Interventions')
+
+    const absentResolvedDispatch = harness()
+    await createResolvedIntervention(absentResolvedDispatch, 'call_resolved_absent_from_run')
+    const absentRun = only(absentResolvedDispatch.runs)
+    absentResolvedDispatch.runs.records.set(absentRun.id, agentRunRecordSchema.parse({
+      ...absentRun,
+      dispatchIds: [absentRun.dispatchIds[0]],
+    }))
+    expect(() => absentResolvedDispatch.operations.validateDurableState(new Set(), absentResolvedDispatch.registry))
+      .toThrow('resolved Saki Intervention answer is absent from its Agent Run')
+
+    const multipleOpenings = harness()
+    const { open: firstOpening } = await createOpenIntervention(multipleOpenings, 'call_multiple_openings', false)
+    const secondOpeningId = 'intervention-65656565-6565-4565-8565-656565656565' as SakiInterventionRequestId
+    multipleOpenings.interventions.records.set(secondOpeningId, interventionRequestRecordSchema.parse({
+      ...firstOpening,
+      id: secondOpeningId,
+      cause: { ...firstOpening.cause, toolCallId: CallId('call_second_opening') },
+    }))
+    expect(() => multipleOpenings.operations.validateDurableState(new Set(), multipleOpenings.registry))
+      .toThrow('multiple active Intervention Requests')
+
+    const unattributedResume = harness()
+    const unattributed = await createResolvedIntervention(unattributedResume, 'call_unattributed_resume')
+    unattributedResume.interventions.records.delete(unattributed.id)
+    expect(() => unattributedResume.operations.validateDurableState(new Set(), unattributedResume.registry))
+      .toThrow('has an unattributed resume Dispatch')
+
+    const invalidResumePending = harness()
+    await invalidResumePending.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const pendingRun = only(invalidResumePending.runs)
+    invalidResumePending.runs.records.set(pendingRun.id, agentRunRecordSchema.parse({
+      ...pendingRun,
+      state: 'resume-pending',
+      hostResult: undefined,
+      blockingInterventionId: 'intervention-69696969-6969-4969-8969-696969696969',
+    }))
+    expect(() => invalidResumePending.operations.validateDurableState(new Set(), invalidResumePending.registry))
+      .toThrow('resume-pending Saki Agent Run lacks its answered Intervention')
+
+    const invalidBlocker = harness()
+    const { open: deletedBlocker } = await createOpenIntervention(invalidBlocker, 'call_deleted_blocker')
+    invalidBlocker.interventions.records.delete(deletedBlocker.id)
+    expect(() => invalidBlocker.operations.validateDurableState(new Set(), invalidBlocker.registry))
+      .toThrow('has an invalid blocking Intervention')
+
+    const orphanDispatch = harness()
+    await orphanDispatch.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const originalDispatch = only(orphanDispatch.dispatches)
+    const orphanDispatchId = 'dispatch-67676767-6767-4767-8767-676767676767' as SakiExecutionDispatchId
+    const orphanInput = {
+      ...originalDispatch.hostRequest.run.input,
+      source: { ...originalDispatch.hostRequest.run.input.source, dispatchId: orphanDispatchId },
+    }
+    const orphanDigest = computeStartAgentRunPayloadDigest(orphanInput)
+    orphanDispatch.dispatches.records.set(orphanDispatchId, executionDispatchRecordSchema.parse({
+      ...originalDispatch,
+      id: orphanDispatchId,
+      intentId: 'intent-67676767-6767-4767-8767-676767676767',
+      payloadDigest: orphanDigest,
+      hostRequest: {
+        ...originalDispatch.hostRequest,
+        source: { ...originalDispatch.hostRequest.source, dispatchId: orphanDispatchId, payloadDigest: orphanDigest },
+        run: {
+          ...originalDispatch.hostRequest.run,
+          input: orphanInput,
+        },
+      },
+      state: 'pending',
+      latestFencingToken: 0,
+      acceptedFencingToken: undefined,
+      preparation: undefined,
+      operationSnapshot: undefined,
+    }))
+    expect(() => orphanDispatch.operations.validateDurableState(new Set(), orphanDispatch.registry))
+      .toThrow('orphan or mismatched Execution Dispatch')
+
+    const extraAnswerDispatch = harness()
+    const answered = await createResolvedIntervention(extraAnswerDispatch, 'call_extra_answer_dispatch')
+    const answerDispatch = extraAnswerDispatch.dispatches.records.get(answered.answer.dispatchId)
+    if (answerDispatch === undefined) throw new Error('answer Dispatch is absent')
+    const extraDispatchId = 'dispatch-68686868-6868-4868-8868-686868686868' as SakiExecutionDispatchId
+    const extraInput = {
+      ...answerDispatch.hostRequest.run.input,
+      source: { ...answerDispatch.hostRequest.run.input.source, dispatchId: extraDispatchId },
+    }
+    const extraDigest = computeStartAgentRunPayloadDigest(extraInput)
+    extraAnswerDispatch.dispatches.records.set(extraDispatchId, executionDispatchRecordSchema.parse({
+      ...answerDispatch,
+      id: extraDispatchId,
+      payloadDigest: extraDigest,
+      hostRequest: {
+        ...answerDispatch.hostRequest,
+        source: { ...answerDispatch.hostRequest.source, dispatchId: extraDispatchId, payloadDigest: extraDigest },
+        run: {
+          ...answerDispatch.hostRequest.run,
+          input: extraInput,
+        },
+      },
+      state: 'pending',
+      latestFencingToken: 0,
+      acceptedFencingToken: undefined,
+      preparation: undefined,
+      operationSnapshot: undefined,
+    }))
+    expect(() => extraAnswerDispatch.operations.validateDurableState(new Set(), extraAnswerDispatch.registry))
+      .toThrow('orphan or mismatched Execution Dispatch')
   })
 
   it('rejects internally inconsistent durable Agent operation records', async () => {
@@ -866,11 +2650,12 @@ describe('manual Give-to-Agent operations', () => {
     const retained = only(test.intents)
     test.assignments.records.set(retained.assignmentId, workAssignmentRecordSchema.parse({
       id: retained.assignmentId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       intentId: retained.id,
       projectId: 'project-60606060-6060-4060-8060-606060606060',
       workItemId: retained.payload.intent.workItemId,
+      ownerPrincipalId: retained.payload.actor.principalId,
       primaryWorkSessionId: retained.workSessionId,
       agentRunId: retained.agentRunId,
       state: 'assigned',
@@ -2371,7 +4156,10 @@ describe('manual Give-to-Agent operations', () => {
     const empty = harness()
     expect(empty.operations.validateDurableState(new Set(), undefined)).toEqual({
       intents: [],
+      interventions: [],
       runningAgentRuns: [],
+      openingInterventionIds: [],
+      answerPendingInterventionIds: [],
     })
 
     const retained = harness()
@@ -3150,10 +4938,12 @@ class FakeAgentExecution extends SakiHostExecution {
   cancelError: Error | undefined
   resumeError: Error | undefined
   inspectError: Error | undefined
+  projectInspectionError: Error | undefined
+  interventionOpeningEvidence: InterventionOpeningEvidence = { kind: 'confirmed', turn: 1, step: 1 }
   afterPrepare: (() => void) | undefined
   beforeAdmission: (() => void) | undefined
   admissionExpectation: ((value: HostOperationAdmissionExpectation) => HostOperationAdmissionExpectation) | undefined
-  afterStart: (() => void) | undefined
+  afterStart: (() => void | Promise<void>) | undefined
   prepareResult: ((value: Extract<HostOperationReceipt<'start-agent-run'>, { readonly ok: true }>) =>
   Extract<HostOperationReceipt<'start-agent-run'>, { readonly ok: true }>) | undefined
   request: StartAgentRunHostOperationRequest | undefined
@@ -3164,11 +4954,24 @@ class FakeAgentExecution extends SakiHostExecution {
 
   constructor(private readonly project: () => InspectProjectResult) { super(new Context()) }
 
+  beginNextOperation(): void {
+    this.request = undefined
+    this.admission = undefined
+    this.preparation = undefined
+    this.snapshot = undefined
+  }
+
   async inspectProjectSelection(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
     return { ok: false, reason: 'unavailable' }
   }
 
-  async inspectProject(): Promise<InspectProjectResult> { return this.project() }
+  async inspectProject(): Promise<InspectProjectResult> {
+    if (this.projectInspectionError !== undefined) throw this.projectInspectionError
+    return this.project()
+  }
+  async inspectInterventionOpening(): Promise<InterventionOpeningEvidence> {
+    return this.interventionOpeningEvidence
+  }
   async readDiff(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
     return { ok: false, reason: 'unavailable' }
   }
@@ -3322,7 +5125,7 @@ class FakeAgentExecution extends SakiHostExecution {
           }
     const afterStart = this.afterStart
     this.afterStart = undefined
-    afterStart?.()
+    await afterStart?.()
     return { ok: true, snapshot: this.snapshot } as HostOperationStartResult<K>
   }
 
@@ -3486,6 +5289,7 @@ interface Harness {
   readonly sessions: MemoryTable<SakiWorkSessionId, WorkSessionRecord>
   readonly runs: MemoryTable<SakiAgentRunId, AgentRunRecord>
   readonly dispatches: MemoryTable<SakiExecutionDispatchId, ExecutionDispatchRecord>
+  readonly interventions: MemoryTable<SakiInterventionRequestId, InterventionRequestRecord>
   readonly admissions: MemoryTable<SakiResourceBindingId, BindingWriteAdmissionRecord>
   readonly execution: FakeAgentExecution
   readonly registry: DevelopmentProjectRegistryRecord
@@ -3623,6 +5427,7 @@ function harness(): Harness {
   const sessions = new MemoryTable<SakiWorkSessionId, WorkSessionRecord>()
   const runs = new MemoryTable<SakiAgentRunId, AgentRunRecord>()
   const dispatches = new MemoryTable<SakiExecutionDispatchId, ExecutionDispatchRecord>()
+  const interventions = new MemoryTable<SakiInterventionRequestId, InterventionRequestRecord>()
   const admissions = new MemoryTable<SakiResourceBindingId, BindingWriteAdmissionRecord>([[
     BINDING_ID,
     bindingWriteAdmissionRecordSchema.parse({
@@ -3658,6 +5463,7 @@ function harness(): Harness {
       workSessionTable: sessions,
       agentRunTable: runs,
       dispatchTable: dispatches,
+      interventionTable: interventions,
       admissionTable: admissions,
       execution,
       projects: {
@@ -3729,6 +5535,7 @@ function harness(): Harness {
     sessions,
     runs,
     dispatches,
+    interventions,
     admissions,
     execution,
     get registry() { return eligibility.registry },
@@ -3870,6 +5677,122 @@ function actor(): ControlIntentActor {
     grantId: GRANT_ID,
     grantRevision: 1,
   }
+}
+
+function claimedDispatchForCorruption(
+  dispatch: ExecutionDispatchRecord,
+  claimId: string,
+): ExecutionDispatchRecord {
+  const now = Date.now()
+  return executionDispatchRecordSchema.parse({
+    ...dispatch,
+    state: 'claimed',
+    claim: {
+      id: claimId,
+      executorHostId: HOST_ID,
+      fencingToken: dispatch.latestFencingToken,
+      issuedAt: now,
+      expiresAt: now + 30_000,
+    },
+    updatedAt: Math.max(dispatch.updatedAt, now),
+  })
+}
+
+async function createOpenIntervention(
+  test: Harness,
+  toolCallId: string,
+  finalize?: true,
+): Promise<{
+  readonly requested: { readonly ok: true; readonly interventionId: SakiInterventionRequestId }
+  readonly open: Extract<InterventionRequestRecord, { readonly state: 'open' }>
+}>
+async function createOpenIntervention(
+  test: Harness,
+  toolCallId: string,
+  finalize: false,
+): Promise<{
+  readonly requested: { readonly ok: true; readonly interventionId: SakiInterventionRequestId }
+  readonly open: Extract<InterventionRequestRecord, { readonly state: 'opening' }>
+}>
+async function createOpenIntervention(
+  test: Harness,
+  toolCallId: string,
+  finalize = true,
+): Promise<{
+  readonly requested: { readonly ok: true; readonly interventionId: SakiInterventionRequestId }
+  readonly open: InterventionRequestRecord
+}> {
+  const started = await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+  if (!started.ok) throw new Error('test Agent Run was not started')
+  const run = only(test.runs)
+  const requested = await test.operations.requestIntervention({
+    sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+    toolCallId: CallId(toolCallId),
+    prompt: 'Which exact path should this Agent Run take?',
+  }, AbortSignal.timeout(5_000))
+  if (!requested.ok) throw new Error('test Intervention was not created')
+  if (finalize) {
+    const outcome = await test.operations.finalizeInterventionOpening(
+      requested.interventionId,
+      AbortSignal.timeout(5_000),
+    )
+    if (outcome !== 'open') throw new Error('test Intervention did not open')
+  }
+  const open = interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId))
+  if (finalize ? open.state !== 'open' : open.state !== 'opening') {
+    throw new Error('test Intervention has an unexpected opening state')
+  }
+  return { requested, open }
+}
+
+function interventionAnswer(
+  intervention: Extract<InterventionRequestRecord, { readonly state: 'open' }>,
+  intentId: string,
+  text: string,
+): AnswerInterventionIntent {
+  return {
+    type: 'answer-intervention',
+    intentId: intentId as SakiControlIntentId,
+    interventionId: intervention.id,
+    expectedInterventionRevision: intervention.revision,
+    answer: { kind: 'text', text },
+  }
+}
+
+async function createAnsweredIntervention(
+  test: Harness,
+  toolCallId: string,
+): Promise<Extract<InterventionRequestRecord, { readonly state: 'answered' }>> {
+  const { open } = await createOpenIntervention(test, toolCallId)
+  test.execution.beginNextOperation()
+  test.execution.prepareMode = 'unavailable'
+  const result = await test.operations.answerIntervention(
+    interventionAnswer(open, 'intent-33333333-3333-4333-8333-333333333333', 'Keep this answer pending.'),
+    actor(),
+    AbortSignal.timeout(5_000),
+  )
+  if (result.ok || result.reason !== 'unavailable') throw new Error('test answer did not remain pending')
+  const answered = interventionRequestRecordSchema.parse(test.interventions.get(open.id))
+  if (answered.state !== 'answered') throw new Error('test Intervention is not answered')
+  return answered
+}
+
+async function createResolvedIntervention(
+  test: Harness,
+  toolCallId: string,
+  answerIntentId = 'intent-34343434-3434-4434-8434-343434343434' as SakiControlIntentId,
+): Promise<Extract<InterventionRequestRecord, { readonly state: 'resolved' }>> {
+  const { open } = await createOpenIntervention(test, toolCallId)
+  test.execution.beginNextOperation()
+  const result = await test.operations.answerIntervention(
+    interventionAnswer(open, answerIntentId, 'Resolve this answer.'),
+    actor(),
+    AbortSignal.timeout(5_000),
+  )
+  if (!result.ok) throw new Error('test answer did not resolve')
+  const resolved = interventionRequestRecordSchema.parse(test.interventions.get(open.id))
+  if (resolved.state !== 'resolved') throw new Error('test Intervention is not resolved')
+  return resolved
 }
 
 function only<K extends string, V>(table: MemoryTable<K, V>): V {

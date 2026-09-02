@@ -22,7 +22,7 @@ Dispatch 采用至少一次交付。本地 scheduler、恢复后的 poller 或�
 
 [带 fencing 的幂等 admission 提案](2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)拥有确切的 `pending`、`claimed`、`accepted`、cancellation、rejection 与 reconciliation 转换。它要求 Host 在产生副作用前准备一条持久 Host Operation，并要求控制面在 Host 启动 operation 前使用当前 fencing token 接受该映射。
 
-[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)针对一项显式 Ready-to-Run 操作部分实现了本提案。它持久化一条 Work Assignment、主要 Work Session、Agent Run、Execution Dispatch 与 expected-revision Dispatch Claim，然后使用共享的 Host Operation 生命周期与 Binding Write Admission。自动领取、Intervention Request、Attention Inbox、持久 Agent Identity 交付与通用多 Dispatch orchestration 仍处于 proposed 状态。
+[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)通过 Work Assignment、主要 Work Session、Agent Run、Execution Dispatch、expected-revision Dispatch Claim、共享 Host Operation 生命周期与 Binding Write Admission，实现了一项显式 Ready-to-Run 操作。[持久 Intervention 回答决策](../../implemented/feature/2026-08-18-saki-durable-intervention-answer.zh.md)增加了文本输入 Intervention Request、同一 Run 与 Session 上的后续回答 Dispatch，以及 Principal-scoped Host Operator My Work 与 Attention Projection。自动领取、持久 Agent Identity 交付、通知 adapter 与通用恢复交互仍处于 proposed 状态。
 
 Intervention Request 是持久控制面记录，包含稳定 id、kind、Project 与 subject reference、目标 Principal 或角色、所需决定或 input schema、阻塞范围、因果 Intent、Dispatch、Work Session 或 Agent Run reference、当前 revision、生命周期状态、可选 deadline 与 escalation policy。初始 kind 覆盖输入、审批、凭据授权、验收、冲突解决和对账。通知确认与请求解决是不同事实，过期不能产生批准。
 
@@ -30,7 +30,7 @@ Intervention Request 是持久控制面记录，包含稳定 id、kind、Project
 
 Attention Inbox 是 query projection，不是持久队列。它为一个 Principal 或 Agent Identity 连接开放 Work Assignment、Intervention Request、失败或需要对账的 Dispatch，以及选定 Signal。每个条目都链接到拥有它的记录，并公开可执行 Control Intent；关闭通知不会解决拥有记录。该名称与 Work Management 中作为 Work Item Status 的 `Inbox` 保持区别。
 
-已实现的手动切片会持久化 Execution Dispatch 记录。0.1.0 的其余提案会公开简化的 Host Operator Attention Inbox，并持久化 Intervention Request 记录。持久 Agent Identity inbox、Project Coordinator assignment、跨 Host 交付、飞书或 QQ adapter 与通用定时工作仍是这些记录的后续 Consumer。
+已实现的手动与 Intervention 决策会持久化 Execution Dispatch 与 Intervention Request 记录，并公开简化的 Host Operator My Work 与 Attention Projection。持久 Agent Identity inbox、Project Coordinator assignment、跨 Host 交付、飞书或 QQ adapter 与通用定时工作仍是这些记录的后续 Consumer。
 
 ## 考虑过的方案
 
@@ -61,4 +61,4 @@ Attention Inbox 是 query projection，不是持久队列。它为一个 Princip
 
 ## 风险
 
-Dispatch 安全依赖每个 Host 实现都遵守[该 admission 提案](2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)中的 preparation、current-fence acceptance 与 start 顺序；违反协议的 adapter 仍可能重复副作用，必须隔离并进入 reconciliation。持久 Intervention Request 无法恢复任意 provider 或 tool stack frame；DSH 缺少可恢复 continuation 时，初始实现必须使用后续带归因 Session turn。Attention projection 连接多个 Project 后可能开销较高，但在测量前保存复制 inbox row 会制造更难处理的一致性问题。后续通知 adapter 也需要去重与隐私 policy，同时不能成为授权通道。
+Dispatch 安全依赖每个 Host 实现都遵守[该 admission 提案](2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)中的 preparation、current-fence acceptance 与 start 顺序；违反协议的 adapter 仍可能重复副作用，必须隔离并进入 reconciliation。持久 Intervention Request 无法恢复任意 provider 或 tool stack frame；DSH 缺少可恢复 continuation 时，已实现的 Host Operator 路径会使用后续带归因 Session turn。Attention projection 连接多个 Project 后可能开销较高，但在测量前保存复制 inbox row 会制造更难处理的一致性问题。后续通知 adapter 也需要去重与隐私 policy，同时不能成为授权通道。

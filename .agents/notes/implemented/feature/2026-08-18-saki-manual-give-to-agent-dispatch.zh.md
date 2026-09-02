@@ -28,7 +28,7 @@ Host Operation 成功表示预期 Agent Run、Session 与精确输入已经获�
 
 `SakiWorkItemDetailProjection` 与 `SakiAgentRunProjection` 固定前端交接，但本切片不增加 query。它们的严格 wire schema 只公开有界且经过解析的 Issue definition、Assignment 与主要 Work Session reference、不透明 Run source、可安全显示的 Profile 与 Model fact、时间戳，以及明确的 resumable、terminal 或 reconciliation recovery state；其中不包含规范路径、凭据或 Host snapshot。
 
-状态版本 7 使用 `saki_control_plane@7` 保存手动 Agent record，使用 `saki_host_execution@2` 保存 `StartAgentRun` Host record，并使用 `saki_storage_generation@5`。相邻 migration 会加入空的手动 Agent table 与默认 Agent Profile reference，并把保留的 Host v1 record 迁移到 v2，但不改变其不可变 request 或 evidence。
+当前状态版本 8 使用 `saki_control_plane@8` 保存手动 Agent record，使用 `saki_host_execution@3` 保存 `StartAgentRun` Host record，并使用 `saki_storage_generation@6`。冻结的 v7/v2/v5 schema 会保留原始手动启动格式。相邻 migration 会增加显式 Assignment ownership、Run waiting 与 resume-pending 状态、Intervention table 和当前 answer message source，但不会改变保留的原始启动 request 或 evidence。
 
 ## Alternatives considered
 
@@ -46,8 +46,8 @@ Host Operation 成功表示预期 Agent Run、Session 与精确输入已经获�
 
 ## Related proposals
 
-本决策只对更广泛的 [dispatch、intervention 与 Attention Inbox](../../proposed/architecture/2026-08-18-saki-durable-dispatch-intervention-and-attention.zh.md)、[带 fencing 的 dispatch 准入](../../proposed/architecture/2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)、[可恢复 Control Intent](../../proposed/architecture/2026-08-18-saki-recoverable-control-intents.zh.md)、[稳定 Resource Binding](../../proposed/architecture/2026-08-18-saki-stable-resource-bindings.zh.md)与 [Work Session lineage](../../proposed/architecture/2026-08-17-saki-work-sessions-over-dsh-lineage.zh.md) Agent Note 中的手动 Ready-to-Run 部分形成 partial supersession。这些 proposal 仍然有效，因为它们还覆盖自动领取、intervention 与 attention、通用 effect、rebind 与 retirement，或多个 Session 与 coordinator。
+本决策只对更广泛的 [dispatch 与 attention](../../proposed/architecture/2026-08-18-saki-durable-dispatch-intervention-and-attention.zh.md)、[带 fencing 的 dispatch 准入](../../proposed/architecture/2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)、[可恢复 Control Intent](../../proposed/architecture/2026-08-18-saki-recoverable-control-intents.zh.md)、[稳定 Resource Binding](../../proposed/architecture/2026-08-18-saki-stable-resource-bindings.zh.md)与 [Work Session lineage](../../proposed/architecture/2026-08-17-saki-work-sessions-over-dsh-lineage.zh.md) Agent Note 中的手动 Ready-to-Run 部分形成 partial supersession。[持久 Intervention 回答决策](2026-08-18-saki-durable-intervention-answer.zh.md)以本决策的精确 Run 与 admission 为基础增加后续操作员输入。这些 proposal 仍然有效，因为它们还覆盖自动领取、其他交互、通用 effect、rebind 与 retirement，或多个 Session 与 coordinator。
 
 ## Consequences
 
-手动路径在接受显式 Intent 前不会启动模型生成，在崩溃前后保持单一 writer，并且只在取得新的 Git 与 branch-safety evidence 后接管已有仓库。恢复的代价是多记录状态机，并且为了安全可能要求操作者对账，而不会最大化可用性。自动领取、生产 provider authorization、credential 与 account health、intervention 及通用多 Dispatch Run orchestration 不属于本切片。
+手动路径在接受显式 Intent 前不会启动模型生成，在崩溃前后保持单一 writer，并且只在取得新的 Git 与 branch-safety evidence 后接管已有仓库。恢复的代价是多记录状态机，并且为了安全可能要求操作者对账，而不会最大化可用性。自动领取、生产 provider authorization、credential 与 account health、其他 Intervention kind 和通用定时 dispatch 不属于本决策。

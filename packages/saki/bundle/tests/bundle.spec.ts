@@ -36,6 +36,7 @@ describe('Saki bundle package', () => {
       }>
     }>)[0]!.insert
     expect(insert.map(entry => [entry.id, entry.name])).toEqual([
+      ['timer', '@deepseek-ai/cordis-plugin-timer'],
       ['storage', '@deepseek-ai/dsh-storage'],
       ['storage-json', '@deepseek-ai/dsh-storage-json'],
       ['saki-storage-sqlite', '@deepseek-ai/dsh-storage-sqlite'],
@@ -133,6 +134,8 @@ describe('Saki bundle package', () => {
     }>
 
     expect(Object.keys(manifest.dependencies ?? {})).toEqual(expect.arrayContaining([
+      '@breakfastdapaidang/saki-tool-intervention',
+      '@deepseek-ai/cordis-plugin-timer',
       '@deepseek-ai/dsh-agent',
       '@deepseek-ai/dsh-agent-instructions',
       '@deepseek-ai/dsh-agent-loop',
@@ -155,6 +158,7 @@ describe('Saki bundle package', () => {
     expect(preset.map(entry => [entry.id, entry.name])).toEqual([
       ['persona', '@deepseek-ai/dsh-persona'],
       ['agent-instructions', '@deepseek-ai/dsh-agent-instructions'],
+      ['request-intervention', '@breakfastdapaidang/saki-tool-intervention'],
       ['tool-pwsh', '@deepseek-ai/dsh-tool-pwsh'],
       ['filesystem', 'cordis:group'],
     ])

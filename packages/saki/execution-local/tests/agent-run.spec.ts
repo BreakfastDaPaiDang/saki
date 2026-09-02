@@ -29,9 +29,15 @@ import {
   type HostOperationAdmissionSource,
   type SakiAgentProfileId,
   type SakiAgentRunId,
+  type SakiControlIntentId,
   type SakiExecutionDispatchId,
+  type SakiGrantId,
   type SakiHostId,
+  type SakiInstallationId,
+  type SakiInterventionRequestId,
+  type SakiPrincipalId,
   type SakiResourceBindingId,
+  type SakiStorageGenerationId,
   type SakiWorkSessionId,
   type StartAgentRunHostOperationRequest,
   type StartAgentRunInputMessage,
@@ -41,6 +47,7 @@ import LocalSakiHostExecution, {
   type Config,
   type LocalHostOperationRecord,
   sakiHostExecutionDomainSpec,
+  sakiHostExecutionV2DomainSpec,
 } from '../src/index.ts'
 import { disposeLocalAgentRuns, waitForInputRecord } from '../src/agent-run.ts'
 import { GitCommandError, type GitRunner } from '../src/git-runner.ts'
@@ -57,6 +64,15 @@ const WORK_SESSION_ID = 'work-session-44444444-4444-4444-8444-444444444444' as S
 const AGENT_PROFILE_ID = 'agent-profile-55555555-5555-4555-8555-555555555555' as SakiAgentProfileId
 const SESSION_ID = 'session-66666666-6666-4666-8666-666666666666' as StartAgentRunHostOperationRequest['run']['sessionId']
 const MESSAGE_ID = '77777777-7777-4777-8777-777777777777' as StartAgentRunInputMessage['id']
+const ANSWER_DISPATCH_ID = 'dispatch-88888888-8888-4888-8888-888888888888' as SakiExecutionDispatchId
+const ANSWER_MESSAGE_ID = '99999999-9999-4999-8999-999999999999' as StartAgentRunInputMessage['id']
+const INTERVENTION_ID = 'intervention-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as SakiInterventionRequestId
+const ANSWER_INTENT_ID = 'intent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' as SakiControlIntentId
+const INSTALLATION_ID = 'installation-cccccccc-cccc-4ccc-8ccc-cccccccccccc' as SakiInstallationId
+const STORAGE_GENERATION_ID =
+  'storage-generation-dddddddd-dddd-4ddd-8ddd-dddddddddddd' as SakiStorageGenerationId
+const PRINCIPAL_ID = 'principal-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' as SakiPrincipalId
+const GRANT_ID = 'grant-ffffffff-ffff-4fff-8fff-ffffffffffff' as SakiGrantId
 
 const CONFIG: Required<Config> = {
   gitCommandTimeoutMs: 10_000,
@@ -124,6 +140,100 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(agent.session.events.filter(event => event.type === 'user/message').map(event => event.data.id))
       .toEqual([MESSAGE_ID])
   }, 30_000)
+
+  it('delivers one attributed answer through a second Dispatch to the same Run and Session', async () => {
+    const harness = await agentRunHarness([stopResponse('initial done'), stopResponse('answer received')])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const initial = await startAgentRunRequest(harness.execution, binding, signal)
+    const preparedInitial = await harness.execution.prepareOperation(initial, accepted(7), signal)
+    expect(preparedInitial.ok).toBe(true)
+    if (!preparedInitial.ok) return
+    await harness.execution.startOperation(preparedInitial.preparation.operation, preparedInitial.acceptance, signal)
+    const agent = harness.context.agents.get(SESSION_ID)
+    expect(agent).toBeDefined()
+    if (agent === undefined) return
+    await agent.whenIdle()
+
+    const input = interventionAnswerInput()
+    const answer = interventionAnswerRequest(initial, input)
+    const preparedAnswer = await harness.execution.prepareOperation(answer, accepted(8), signal)
+    expect(preparedAnswer.ok).toBe(true)
+    if (!preparedAnswer.ok) return
+
+    const started = await harness.execution.startOperation(
+      preparedAnswer.preparation.operation,
+      preparedAnswer.acceptance,
+      signal,
+    )
+
+    expect(started).toMatchObject({
+      ok: true,
+      snapshot: {
+        state: 'succeeded',
+        result: {
+          type: 'start-agent-run',
+          agentRunId: AGENT_RUN_ID,
+          workSessionId: WORK_SESSION_ID,
+          sessionId: SESSION_ID,
+          inputMessageId: ANSWER_MESSAGE_ID,
+        },
+      },
+    })
+    if (!started.ok || started.snapshot.state !== 'succeeded') return
+    const currentRecord = {
+      schemaVersion: 3 as const,
+      request: answer,
+      preparationRevision: preparedAnswer.preparation.preparationRevision,
+      snapshot: started.snapshot,
+      effectPlan: { kind: 'agent-run' as const, publication: 'applied-recorded' as const, result: started.snapshot.result },
+    }
+    expect(sakiHostExecutionDomainSpec.tables.operations.valueSchema.safeParse(currentRecord).success).toBe(true)
+    expect(sakiHostExecutionV2DomainSpec.tables.operations.valueSchema.safeParse({
+      ...currentRecord,
+      schemaVersion: 2,
+    }).success).toBe(false)
+    expect(harness.context.agents.get(SESSION_ID)).toBe(agent)
+    await agent.whenIdle()
+    expect(harness.adapter.requests).toHaveLength(2)
+    expect(harness.adapter.requests[1]?.messages.filter(message => message.role === 'user').map(message => message.id))
+      .toEqual([MESSAGE_ID, ANSWER_MESSAGE_ID])
+    expect(harness.adapter.requests[1]?.messages.find(message => message.id === ANSWER_MESSAGE_ID)).toEqual(input)
+    expect(agent.session.events.filter(event => event.type === 'user/message').map(event => event.data.id))
+      .toEqual([MESSAGE_ID, ANSWER_MESSAGE_ID])
+    expect(agent.session.events.filter(event => event.type === 'agent/inbox/spliced')
+      .flatMap(event => event.data.inserted)
+      .filter(message => message.id === ANSWER_MESSAGE_ID)).toEqual([input])
+  }, 90_000)
+
+  it('delivers an answer after restoring the owning Run without creating another Session', async () => {
+    const { operation, request: initial, restarted, signal } = await restartedSucceededAgentRun([
+      stopResponse('answer after restart'),
+    ])
+    await restarted.execution.resumeAgentRun(operation, initial, signal)
+    const restored = restarted.context.agents.get(SESSION_ID)
+    expect(restored).toBeDefined()
+    if (restored === undefined) return
+    const input = interventionAnswerInput()
+    const answer = interventionAnswerRequest(initial, input)
+    const prepared = await restarted.execution.prepareOperation(answer, accepted(9), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) return
+
+    const started = await restarted.execution.startOperation(
+      prepared.preparation.operation,
+      prepared.acceptance,
+      signal,
+    )
+
+    expect(started).toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+    expect(restarted.context.agents.get(SESSION_ID)).toBe(restored)
+    await restored.whenIdle()
+    expect(restarted.adapter.requests).toHaveLength(1)
+    expect(restarted.adapter.requests[0]?.messages.filter(message => message.role === 'user').map(message => message.id))
+      .toEqual([MESSAGE_ID, ANSWER_MESSAGE_ID])
+    expect(restarted.adapter.requests[0]?.messages.find(message => message.id === ANSWER_MESSAGE_ID)).toEqual(input)
+  }, 90_000)
 
   it('fails without an Agent effect when the frozen repository changes before start', async () => {
     const harness = await agentRunHarness([])
@@ -1221,7 +1331,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     const persistence = operationPersistence(harness.execution)
     const { completedAt: _completedAt, result: _result, ...base } = started.snapshot
     await persistence.original({
-      schemaVersion: 2,
+      schemaVersion: 3,
       request,
       preparationRevision: prepared.preparation.preparationRevision,
       effectPlan: { kind: 'agent-run', publication: 'applied-recorded', result: started.snapshot.result },
@@ -2086,6 +2196,46 @@ function agentRunInput(text: string): StartAgentRunInputMessage {
   }) as StartAgentRunInputMessage
 }
 
+function interventionAnswerInput(): StartAgentRunInputMessage {
+  return freezeMessage({
+    id: ANSWER_MESSAGE_ID,
+    role: 'user',
+    content: [{ type: 'text', text: 'Operator answer: proceed.' }],
+    source: {
+      kind: 'saki-intervention-answer',
+      interventionId: INTERVENTION_ID,
+      answerIntentId: ANSWER_INTENT_ID,
+      dispatchId: ANSWER_DISPATCH_ID,
+      agentRunId: AGENT_RUN_ID,
+      workSessionId: WORK_SESSION_ID,
+      actor: {
+        installationId: INSTALLATION_ID,
+        storageGenerationId: STORAGE_GENERATION_ID,
+        hostId: HOST_ID,
+        principalId: PRINCIPAL_ID,
+        principalRevision: 4,
+        grantId: GRANT_ID,
+        grantRevision: 9,
+      },
+    },
+  }) as StartAgentRunInputMessage
+}
+
+function interventionAnswerRequest(
+  initial: StartAgentRunHostOperationRequest,
+  input: StartAgentRunInputMessage,
+): StartAgentRunHostOperationRequest {
+  return {
+    ...initial,
+    source: {
+      kind: 'execution-dispatch',
+      dispatchId: ANSWER_DISPATCH_ID,
+      payloadDigest: computeStartAgentRunPayloadDigest(input),
+    },
+    run: { ...initial.run, input },
+  }
+}
+
 async function createAgentHandle(
   harness: AgentRunHarness,
   binding: ActiveHostProjectBinding,
@@ -2124,7 +2274,7 @@ async function agentRunHarness(responses: StreamChunk[][]): Promise<AgentRunHarn
   return await mountAgentRunHarness(await createAgentRunWorld(), responses)
 }
 
-async function restartedSucceededAgentRun() {
+async function restartedSucceededAgentRun(responses: StreamChunk[][] = []) {
   const world = await createAgentRunWorld()
   const first = await mountAgentRunHarness(world, [stopResponse('done')])
   const signal = new AbortController().signal
@@ -2148,7 +2298,7 @@ async function restartedSucceededAgentRun() {
   return {
     operation: prepared.preparation.operation,
     request,
-    restarted: await mountAgentRunHarness(world, []),
+    restarted: await mountAgentRunHarness(world, responses),
     signal,
   }
 }

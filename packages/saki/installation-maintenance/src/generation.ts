@@ -135,14 +135,14 @@ export async function materializeFreshSakiGeneration(
 }
 
 /**
- * Migrate exact retained v2-v6 control state into a missing current SQLite database and add its seal.
+ * Migrate exact retained v2-v7 control state into a missing current SQLite database and add its seal.
  * Product relationships must be validated before this generic transformation is called and
  * are validated again against the complete current candidate by the outer operation.
  * @param sourceDatabasePath - exact closed retained source selected by manifest or legacy config.
  * @param targetDatabasePath - missing candidate `state.sqlite` path on different media.
  * @param identity - retained Installation plus fresh generation and build provenance.
  * @param signal - cancellation through migration and seal materialization.
- * @param retainedHostExecution - exact v5 or v6 Host Operation snapshot, absent for pre-v5 sources.
+ * @param retainedHostExecution - exact v5-v7 Host Operation snapshot, absent for pre-v5 sources.
  */
 export async function migrateSakiGeneration(
   sourceDatabasePath: string,

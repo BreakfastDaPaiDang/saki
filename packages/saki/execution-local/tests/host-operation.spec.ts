@@ -43,6 +43,7 @@ import LocalSakiHostExecution, {
   sakiHostExecutionDomainMigrations,
   sakiHostExecutionDomainSpec,
   sakiHostExecutionV1DomainSpec,
+  sakiHostExecutionV2DomainSpec,
   type Config,
 } from '../src/index.ts'
 import {
@@ -7164,10 +7165,13 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
   }, 45_000)
 
   it('initializes the durable operations table when migrating an empty snapshot', () => {
-    expect(sakiHostExecutionDomainMigrations.steps[0]!.migrate({
+    const migratedV2 = sakiHostExecutionDomainMigrations.steps[0]!.migrate({
       tables: {},
       global: null,
-    })).toEqual({ tables: { operations: {} }, global: null })
+    })
+    expect(migratedV2).toEqual({ tables: { operations: {} }, global: null })
+    expect(sakiHostExecutionDomainMigrations.steps[1]!.migrate({ tables: {}, global: null }))
+      .toEqual({ tables: { operations: {} }, global: null })
   })
 
   it('fails a replayed historical detached Commit before effect', async () => {
@@ -7225,14 +7229,19 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
         admission: { kind: 'not-accepted' },
       },
     })
-    const migrated = sakiHostExecutionDomainMigrations.steps[0]!.migrate({
+    const migratedV2 = sakiHostExecutionDomainMigrations.steps[0]!.migrate({
       tables: { operations: { [operation.id]: historicalRecord } },
       global: null,
     })
+    const versionTwoRecord = sakiHostExecutionV2DomainSpec.tables.operations.valueSchema.parse(
+      migratedV2.tables['operations']![operation.id],
+    )
+    expect(versionTwoRecord).toEqual({ ...historicalRecord, schemaVersion: 2 })
+    const migrated = sakiHostExecutionDomainMigrations.steps[1]!.migrate(migratedV2)
     const record = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse(
       migrated.tables['operations']![operation.id],
     )
-    expect(record).toEqual({ ...historicalRecord, schemaVersion: 2 })
+    expect(record).toEqual({ ...historicalRecord, schemaVersion: 3 })
     expect(record.request).toEqual(historicalRecord.request)
     expect(record.snapshot.requestFingerprint).toEqual(historicalRecord.snapshot.requestFingerprint)
     const operationTable = (execution as unknown as {

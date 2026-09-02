@@ -27,6 +27,8 @@ import {
   inspectProjectRequestSchema,
   inspectProjectResultSchema,
   commitHostOperationResultSchema,
+  inspectInterventionOpeningRequestSchema,
+  interventionOpeningEvidenceSchema,
   hostOperationPreparationSchema,
   hostOperationRequestSchema,
   hostOperationSnapshotSchema,
@@ -60,7 +62,9 @@ import {
   projectSelectionInspectionSchema,
   safeGitRemoteObservationSchema,
   safeGitRemoteObservationKey,
+  sakiInterventionAnswerMessageSourceSchema,
   stageFilesHostOperationResultSchema,
+  startAgentRunHostOperationRequestV2Schema,
   startAgentRunHostOperationRequestSchema,
   startAgentRunHostOperationResultSchema,
 } from '../src/schemas.ts'
@@ -1354,6 +1358,65 @@ describe('InheritedChangeBaseline schemas', () => {
     expect(startAgentRunHostOperationResultSchema.parse(result)).toEqual(result)
   })
 
+  it('admits one attributed Intervention answer through StartAgentRun while preserving the exact v2 request schema', () => {
+    const { request } = startAgentRunFixture()
+    const sourceInput = {
+      kind: 'saki-intervention-answer',
+      interventionId: 'intervention-88888888-8888-4888-8888-888888888888',
+      answerIntentId: 'intent-99999999-9999-4999-8999-999999999999',
+      dispatchId: request.source.dispatchId,
+      agentRunId: request.run.agentRunId,
+      workSessionId: request.run.workSessionId,
+      actor: {
+        installationId: 'installation-11111111-1111-4111-8111-111111111111',
+        storageGenerationId: 'storage-generation-22222222-2222-4222-8222-222222222222',
+        hostId: request.expected.binding.hostId,
+        principalId: 'principal-33333333-3333-4333-8333-333333333333',
+        principalRevision: 4,
+        grantId: 'grant-44444444-4444-4444-8444-444444444444',
+        grantRevision: 5,
+      },
+    } as const
+    const source = sakiInterventionAnswerMessageSourceSchema.parse(sourceInput)
+    const input = { ...request.run.input, source }
+    const answerRequest = {
+      ...request,
+      source: { ...request.source, payloadDigest: computeStartAgentRunPayloadDigest(input) },
+      run: { ...request.run, input },
+    }
+
+    expect(source).toEqual(sourceInput)
+    expect(startAgentRunHostOperationRequestSchema.parse(answerRequest)).toEqual(answerRequest)
+    expect(hostOperationRequestSchema.parse(answerRequest)).toEqual(answerRequest)
+    expect(startAgentRunHostOperationRequestV2Schema.safeParse(answerRequest).success).toBe(false)
+  })
+
+  it('bounds Intervention-opening inspection to stable coordinates and closed evidence', () => {
+    const request = {
+      hostId: HOST_ID,
+      sessionId: 'session-55555555-5555-4555-8555-555555555555',
+      callId: 'request-intervention-1',
+      interventionId: 'intervention-66666666-6666-4666-8666-666666666666',
+      expectedQuestion: 'Which exact path should this Agent Run take?',
+      expectedToolResult: {
+        content: [{
+          type: 'text',
+          text: '{"interventionId":"intervention-66666666-6666-4666-8666-666666666666"}',
+        }],
+      },
+    }
+    expect(inspectInterventionOpeningRequestSchema.parse(request)).toEqual(request)
+    for (const evidence of [
+      { kind: 'absent' },
+      { kind: 'pending' },
+      { kind: 'confirmed', turn: 1, step: 2 },
+      { kind: 'conflict' },
+    ]) {
+      expect(interventionOpeningEvidenceSchema.safeParse(evidence).success).toBe(true)
+    }
+    expect(interventionOpeningEvidenceSchema.safeParse({ kind: 'confirmed', turn: 0, step: 1 }).success).toBe(false)
+  })
+
   it('keeps Dispatch claims out of immutable StartAgentRun input and correlates every stable id', () => {
     const { request } = startAgentRunFixture()
     const change = boundStatusFixture().observation.changes[0]!
@@ -1776,6 +1839,10 @@ describe('InheritedChangeBaseline schemas', () => {
         return { ok: false, reason: 'unavailable' }
       }
 
+      async inspectInterventionOpening(): Promise<{ readonly kind: 'absent' }> {
+        return { kind: 'absent' }
+      }
+
       async prepareOperation(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
         return { ok: false, reason: 'unavailable' }
       }
@@ -1792,6 +1859,7 @@ describe('InheritedChangeBaseline schemas', () => {
     await expect(execution.inspectProjectSelection()).resolves.toEqual({ ok: false, reason: 'unavailable' })
     await expect(execution.inspectProject()).resolves.toEqual({ ok: false, reason: 'unavailable' })
     await expect(execution.readDiff()).resolves.toEqual({ ok: false, reason: 'unavailable' })
+    await expect(execution.inspectInterventionOpening()).resolves.toEqual({ kind: 'absent' })
     await expect(execution.prepareOperation()).resolves.toEqual({ ok: false, reason: 'unavailable' })
     await ctx.fiber.dispose()
   })

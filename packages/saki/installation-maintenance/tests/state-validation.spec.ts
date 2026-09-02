@@ -166,7 +166,7 @@ function linkedFixture(requestType: GitHostOperationRequest['type'] = 'stage-fil
     updatedAt: 2,
   })
   const operationRecord = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 2,
+    schemaVersion: 3,
     request,
     preparationRevision: 0,
     snapshot: preparedSnapshot,
@@ -284,7 +284,7 @@ function preparedOperation(request: GitHostOperationRequest, updatedAt = 2): Loc
     digest: canonicalDigest('saki/host-operation-request/v1', request),
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     request,
     preparationRevision: 0,
     snapshot: {

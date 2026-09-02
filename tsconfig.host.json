@@ -260,6 +260,7 @@
     { "path": "./packages/saki/execution" },
     { "path": "./packages/saki/execution-local" },
     { "path": "./packages/saki/control-plane" },
+    { "path": "./packages/saki/tool-intervention" },
     { "path": "./packages/saki/installation-maintenance" },
     { "path": "./packages/saki/host-api/tsconfig.host.json" },
     { "path": "./packages/saki/bundle" },

@@ -60,12 +60,21 @@ export const storageGenerationV4SealRecordSchema = z.object({
   createdByBuildId: sakiBuildIdSchema,
 }).strict()
 
-/** Required singleton that binds a current v7 database to its Installation and physical generation. */
-export const storageGenerationSealRecordSchema = z.object({
+/** Exact historical singleton that binds a v7 database to its Installation and physical generation. */
+export const storageGenerationV5SealRecordSchema = z.object({
   schemaVersion: z.literal(5),
   installationId: sakiInstallationIdSchema,
   storageGenerationId: sakiStorageGenerationIdSchema,
   stateVersion: z.literal(7),
+  createdByBuildId: sakiBuildIdSchema,
+}).strict()
+
+/** Required singleton that binds a current v8 database to its Installation and physical generation. */
+export const storageGenerationSealRecordSchema = z.object({
+  schemaVersion: z.literal(6),
+  installationId: sakiInstallationIdSchema,
+  storageGenerationId: sakiStorageGenerationIdSchema,
+  stateVersion: z.literal(8),
   createdByBuildId: sakiBuildIdSchema,
 }).strict()
 
@@ -83,6 +92,9 @@ export type StorageGenerationV3SealRecord = z.infer<typeof storageGenerationV3Se
 
 /** Parsed exact historical v6 storage-generation seal. */
 export type StorageGenerationV4SealRecord = z.infer<typeof storageGenerationV4SealRecordSchema>
+
+/** Parsed exact historical v7 storage-generation seal. */
+export type StorageGenerationV5SealRecord = z.infer<typeof storageGenerationV5SealRecordSchema>
 
 /** Exact storage-generation identity domain retained for v3 reads and upgrades. */
 export const sakiStorageGenerationV1DomainSpec = defineDomain({
@@ -128,10 +140,21 @@ export const sakiStorageGenerationV4DomainSpec = defineDomain({
   },
 })
 
+/** Exact storage-generation identity domain retained for v7 reads and upgrades. */
+export const sakiStorageGenerationV5DomainSpec = defineDomain({
+  name: 'saki_storage_generation',
+  version: 5,
+  tables: {
+    storage_generation: domainTable<typeof STORAGE_GENERATION_KEY, StorageGenerationV5SealRecord>(
+      storageGenerationV5SealRecordSchema,
+    ),
+  },
+})
+
 /** Separate required current storage-generation identity domain. */
 export const sakiStorageGenerationDomainSpec = defineDomain({
   name: 'saki_storage_generation',
-  version: 5,
+  version: 6,
   tables: {
     storage_generation: domainTable<typeof STORAGE_GENERATION_KEY, StorageGenerationSealRecord>(
       storageGenerationSealRecordSchema,
@@ -140,11 +163,11 @@ export const sakiStorageGenerationDomainSpec = defineDomain({
 })
 
 /**
- * Create the exact singleton stored in a new v7 generation.
+ * Create the exact singleton stored in a new v8 generation.
  * @param installationId - Installation retained across physical generations.
  * @param storageGenerationId - new physical generation identity.
  * @param createdByBuildId - provenance of the creating build.
- * @returns strict seal record for `saki_storage_generation@5`.
+ * @returns strict seal record for `saki_storage_generation@6`.
  */
 export function createStorageGenerationSeal(
   installationId: SakiInstallationId,
@@ -152,10 +175,10 @@ export function createStorageGenerationSeal(
   createdByBuildId: SakiBuildId,
 ): StorageGenerationSealRecord {
   return storageGenerationSealRecordSchema.parse({
-    schemaVersion: 5,
+    schemaVersion: 6,
     installationId,
     storageGenerationId,
-    stateVersion: 7,
+    stateVersion: 8,
     createdByBuildId,
   })
 }

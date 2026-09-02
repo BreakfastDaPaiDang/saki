@@ -36,8 +36,8 @@ describe('Saki Development Agent runtime composition', () => {
       events: [],
       modelRequests: 0,
       tools: process.platform === 'win32'
-        ? ['edit', 'pwsh', 'read', 'write']
-        : ['edit', 'read', 'write'],
+        ? ['edit', 'pwsh', 'read', 'request_intervention', 'write']
+        : ['edit', 'read', 'request_intervention', 'write'],
     })
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 })

@@ -32,9 +32,11 @@ The Service Definition has no configuration. Each Service Provider owns its exec
 
 ## Durable Agent starts
 
-`StartAgentRun` carries an `execution-dispatch` source, exact writable Git precondition, preallocated Agent Run, Work Session, DSH Session and input MessageId, frozen Agent Profile and Model Route, and one complete text-only `UserMessage`. Its payload digest covers that message and its `saki-agent-run` source. Preparation is inert; start requires the accepted Dispatch mapping and current `agent-run` Binding Write Admission. The stable result repeats all four Run, Work Session, Session, and input identities.
+`StartAgentRun` carries an `execution-dispatch` source, exact writable Git precondition, preallocated Agent Run, Work Session, DSH Session and input MessageId, frozen Agent Profile and Model Route, and one complete text-only `UserMessage`. Its payload digest covers that message and either its initial `saki-agent-run` source or attributed `saki-intervention-answer` source. Preparation is inert; start requires the accepted Dispatch mapping and current `agent-run` Binding Write Admission. The stable result repeats all four Run, Work Session, Session, and input identities.
 
-Host success proves that the intended Session and original input are durable, not that the model turn finished. Exact replay reuses one Host Operation. Providers inspect complete Session history before delivery: only absence permits the original input, while canceled, replaced, unknown, or conflicting evidence must not be resent. See the [manual dispatch decision](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md).
+Host success proves that the intended Session and dispatched input are durable, not that the model turn finished. Exact replay reuses one Host Operation. Providers inspect complete Session history before delivery: only absence permits the dispatched input, while canceled, replaced, unknown, or conflicting evidence must not be resent. See the [manual dispatch decision](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md).
+
+An Intervention answer uses a new Dispatch and stable MessageId but retains the owning Agent Run, Work Session, and Session. Its source records the Intervention Request, answer Control Intent, and immutable Actor attribution. Delivery uses the ordinary `StartAgentRun` operation and `user/message` event; there is no answer-specific Host effect or direct Session write. `inspectInterventionOpening` separately returns only `absent`, `pending`, exact `confirmed` turn/step evidence, or `conflict` after reading the durable `request_intervention` call, its exact successful model-facing result, and the completed final step and turn. It never exposes or mutates the Session.
 
 `resumeAgentRun` is a startup-only recovery operation for a control-plane-validated running Run and its exact succeeded `StartAgentRun` operation and request. A Provider restores the live Agent handle only when the physical Session header and original input match that request. It adds no input, wake, or model request; missing, unavailable, or conflicting Host, Session, or Agent evidence rejects startup.
 
@@ -44,7 +46,7 @@ Host success proves that the intended Session and original input are durable, no
 
 #### What the model sees
 
-Inspection, Diff, and structured Git operations add nothing. A started `StartAgentRun` delivers its exact text-only user message through the selected DSH Session; the message source retains the Dispatch, Agent Run, and Work Session ids.
+Inspection, Diff, and structured Git operations add nothing. A started `StartAgentRun` delivers its exact text-only user message through the selected DSH Session; an initial source retains the Dispatch, Agent Run, and Work Session ids, while an answer source additionally retains its Intervention, answer Intent, and Actor attribution.
 
 #### Token effect
 
@@ -52,7 +54,7 @@ Zero direct tokens for inspection, Diff, preparation, and structured Git operati
 
 #### KV Cache effect
 
-The original input is a new user turn rather than part of the reusable prefix. Recovery-only wake messages are excluded before model assembly.
+Each initial input or Intervention answer is a new user turn rather than part of the reusable prefix. Recovery-only wake messages are excluded before model assembly.
 
 ## Known Limitations and Deferred Work
 

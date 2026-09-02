@@ -31,6 +31,8 @@ import type {
   HostOperationRequest,
   HostOperationSnapshot,
   HostOperationStartResult,
+  InspectInterventionOpeningRequest,
+  InterventionOpeningEvidence,
   InspectProjectRequest,
   InspectProjectResult,
   InspectProjectSelectionRequest,
@@ -68,6 +70,7 @@ import {
   inspectLocalAgentRun,
   resumeSucceededLocalAgentRun,
 } from './agent-run.ts'
+import { inspectLocalInterventionOpening } from './intervention-opening.ts'
 
 /** Local Git observation, baseline, and operation resource limits. */
 export interface Config {
@@ -228,6 +231,15 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       config: this.config,
       identityReader: readLocalAdministrativeDirectoryIdentity,
     }, binding, request, fused))
+  }
+
+  override async inspectInterventionOpening(
+    request: InspectInterventionOpeningRequest,
+    signal: AbortSignal,
+  ): Promise<InterventionOpeningEvidence> {
+    if (this.lifetime.signal.aborted) throw this.lifetime.signal.reason
+    const fused = AbortSignal.any([signal, this.lifetime.signal])
+    return await this.track(inspectLocalInterventionOpening(this.ctx.sessionPersistence, request, fused))
   }
 
   override async prepareOperation<K extends HostOperationKind>(
@@ -668,7 +680,7 @@ function createPreparedOperationRecord<K extends HostOperationKind>(
   const preparedAt = Date.now()
   const operation = { id, hostId: request.expected.binding.hostId, type: request.type }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     request,
     preparationRevision: 0,
     snapshot: {
@@ -728,7 +740,12 @@ export {
   sakiHostExecutionDomainMigrations,
   sakiHostExecutionDomainSpec,
   sakiHostExecutionV1DomainSpec,
+  sakiHostExecutionV2DomainSpec,
 } from './operation-state.ts'
-export type { LocalHostGitOperationRecordV1, LocalHostOperationRecord } from './operation-state.ts'
+export type {
+  LocalHostGitOperationRecordV1,
+  LocalHostOperationRecord,
+  LocalHostOperationRecordV2,
+} from './operation-state.ts'
 
 export default LocalSakiHostExecution

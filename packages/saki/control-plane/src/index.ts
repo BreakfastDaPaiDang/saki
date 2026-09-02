@@ -2,6 +2,8 @@
 
 export { SakiControlPlaneService } from './service.ts'
 export {
+  MAX_INTERVENTION_ANSWER_CHARS,
+  MAX_INTERVENTION_PROMPT_CHARS,
   SAKI_BOARD_WORK_ITEM_LIMIT,
   SAKI_GITHUB_CAPACITY_OBSERVED_LIMIT,
   SAKI_GITHUB_MAPPING_ISSUE_LIMIT,
@@ -10,9 +12,13 @@ export { SakiInstallationState } from './installation-state.ts'
 export {
   agentOperationIntentRecordSchema,
   agentRunRecordSchema,
+  agentRunV1RecordSchema,
+  answerInterventionIntentSchema,
   bindingWriteAdmissionRecordSchema,
   executionDispatchRecordSchema,
+  executionDispatchV1RecordSchema,
   giveWorkItemToAgentIntentSchema,
+  interventionRequestRecordSchema,
   gitOperationIntentRecordSchema,
   sakiControlPlaneDomainSpec,
   workAssignmentRecordSchema,
@@ -21,9 +27,12 @@ export {
 export type {
   AgentOperationIntentRecord,
   AgentRunRecord,
+  AgentRunV1Record,
   BindingWriteAdmissionRecord,
   ExecutionDispatchRecord,
+  ExecutionDispatchV1Record,
   GitOperationIntentRecord,
+  InterventionRequestRecord,
   WorkAssignmentRecord,
   WorkSessionRecord,
 } from './spec.ts'
@@ -32,6 +41,7 @@ export {
   sakiBuildIdSchema,
   sakiDispatchClaimIdSchema,
   sakiInstallationIdSchema,
+  sakiInterventionRequestIdSchema,
   sakiStorageGenerationIdSchema,
   sakiWorkAssignmentIdSchema,
 } from './ids.ts'
@@ -42,12 +52,14 @@ export {
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
+  sakiStorageGenerationV5DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationSealRecordSchema,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
   storageGenerationV3SealRecordSchema,
   storageGenerationV4SealRecordSchema,
+  storageGenerationV5SealRecordSchema,
 } from './state-version.ts'
 export type {
   StorageGenerationSealRecord,
@@ -55,6 +67,7 @@ export type {
   StorageGenerationV2SealRecord,
   StorageGenerationV3SealRecord,
   StorageGenerationV4SealRecord,
+  StorageGenerationV5SealRecord,
 } from './state-version.ts'
 export {
   validateCurrentSakiState,
@@ -64,18 +77,24 @@ export {
 } from './state-validation.ts'
 export type {
   Config,
+  SakiAgentInterventionRequest,
+  SakiAgentInterventionRequestResult,
+  SakiAgentInterventions,
   SakiAccess,
   SakiBootstrapLaunch,
   SakiControlPlaneModule,
 } from './service.ts'
 export type { SakiAuthenticationContext } from './authentication.ts'
 export type {
+  AnswerInterventionIntent,
   CreateWorkItemIntent,
   GiveWorkItemToAgentIntent,
   MoveWorkItemIntent,
   SakiBoardMutationOverlayProjection,
   SakiGiveWorkItemToAgentIntentReceipt,
   SakiGiveWorkItemToAgentReceipt,
+  SakiAnswerInterventionIntentReceipt,
+  SakiAnswerInterventionReceipt,
   SakiWorkItemIntentReceipt,
 } from './types.ts'
 export type {
@@ -133,6 +152,14 @@ export type {
   SakiIntentReceipt,
   SakiIntentReceiptMap,
   SakiIntentReceiptId,
+  SakiInterventionRequestId,
+  SakiInterventionRequestProjection,
+  SakiMyWorkItemProjection,
+  SakiMyWorkProjection,
+  SakiMyWorkQuery,
+  SakiAttentionItemProjection,
+  SakiAttentionProjection,
+  SakiAttentionQuery,
   SakiWorkAssignmentId,
   SakiWorkItemDetailProjection,
   SakiAgentRunId,
@@ -190,6 +217,7 @@ export {
   sakiControlPlaneV4DomainSpec,
   sakiControlPlaneV5DomainSpec,
   sakiControlPlaneV6DomainSpec,
+  sakiControlPlaneV7DomainSpec,
 } from './migration.ts'
 export { SakiBootstrapHandoff } from './secrets.ts'
 

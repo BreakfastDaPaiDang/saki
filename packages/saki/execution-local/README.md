@@ -27,11 +27,11 @@ The application bootstrap environment is the authority for the Git executable an
 
 ## Agent Run operations
 
-A `start-agent-run` Host Operation stores one v2 `agent-run` effect plan before touching DSH. Its exact replay mounts the frozen Agent Preset, applies the frozen Model Route, and creates or resumes the preallocated Session at the Binding's canonical worktree cwd. The physical Session header must prove that cwd and preset, and live Agent options must match the route. A mismatch, another live Agent under the same Session id, or conflicting message-source evidence becomes a conflict rather than another Run.
+A `start-agent-run` Host Operation stores a schema-version-three record with an `agent-run` effect plan before touching DSH. Its exact replay mounts the frozen Agent Preset, applies the frozen Model Route, and creates or resumes the preallocated Session at the Binding's canonical worktree cwd. Version two remains an exact cold-migration schema that accepts only the original `saki-agent-run` source. The physical Session header must prove that cwd and preset, and live Agent options must match the route. A mismatch, another live Agent under the same Session id, or conflicting message-source evidence becomes a conflict rather than another Run.
 
-The Provider reads detached physical Session persistence through complete snapshot and event-history reads for the exact input MessageId. Only complete absence permits one original `next-turn` insertion. After live Agent acquisition it freshly revalidates the writable Git world immediately before that insertion and before any later pending-input wake. It flushes and re-inspects after insertion, then uses a deterministic `next-step` wake only while that input remains pending; an Agent-scoped pre-step listener removes those wake messages before model assembly. A recorded original input proves Host success. Canceled, removed, replaced, claimed-without-record, missing-after-attempt, and conflicting evidence are canceled or reconciled without resending the original input.
+The Provider reads detached physical Session persistence through complete snapshot and event-history reads for the exact input MessageId. Only complete absence permits one `next-turn` insertion. The same path handles an initial input or an attributed Intervention answer; an answer uses a new Dispatch and Host Operation while preserving the Run, Work Session, Session, and its stable MessageId. After live Agent acquisition the Provider freshly revalidates the writable Git world immediately before insertion and before any later pending-input wake. It flushes and re-inspects after insertion, then uses a deterministic `next-step` wake only while that input remains pending; an Agent-scoped pre-step listener removes those wake messages before model assembly. A recorded input proves Host success. Canceled, removed, replaced, claimed-without-record, missing-after-attempt, and conflicting evidence are canceled or reconciled without resending the input.
 
-Inspection never creates, resumes, or wakes an Agent. Startup resume is a separate operation that requires an exact succeeded Host result, matching physical Session header and input, and a matching available live Agent; it restores that Agent model-idle before the Host serves requests. A durable `not-started` plan can prove cancellation without attributing an unrelated Session; a publishing or terminal replay rechecks the exact durable input and ids. Cancellation stops and drains any owned live Agent before terminal persistence. If disposal fails, the Host keeps the handle tracked and the operation retryable. Host success reports only durable Run and input existence, not model completion.
+Inspection never creates, resumes, or wakes an Agent. `inspectInterventionOpening` reads detached physical Session history and confirms only one exact `request_intervention` call whose non-error model-facing result is followed by the matching final step end and a completed turn end; it returns closed evidence without exposing the Session. Startup resume is a separate operation that requires an exact succeeded Host result, matching physical Session header and input, and a matching available live Agent; it restores that Agent model-idle before the Host serves requests. A durable `not-started` plan can prove cancellation without attributing an unrelated Session; a publishing or terminal replay rechecks the exact durable input and ids. Cancellation stops and drains any owned live Agent before terminal persistence. If disposal fails, the Host keeps the handle tracked and the operation retryable. Host success reports only durable Run and input existence, not model completion.
 
 ## Configuration
 
@@ -64,7 +64,7 @@ Every field resolves to a positive integer. These limits govern observation and 
 
 #### What the model sees
 
-Inspection and structured Git operations add nothing. `start-agent-run` delivers the exact frozen text-only user message after it is durable; recovery wake messages are filtered before the model sees them.
+Inspection and structured Git operations add nothing. `start-agent-run` delivers the exact frozen text-only initial input or Intervention answer after it is durable; recovery wake messages are filtered before the model sees them.
 
 #### Token effect
 
@@ -72,7 +72,7 @@ Zero direct tokens for inspection and structured Git operations. Agent start may
 
 #### KV Cache effect
 
-Inspection is independent of model requests. Agent start adds a user turn outside the reusable prefix, and the recovery wake has no KV Cache effect because it is removed before assembly.
+Inspection is independent of model requests. Each Agent input adds a user turn outside the reusable prefix, and the recovery wake has no KV Cache effect because it is removed before assembly.
 
 ## Known Limitations and Deferred Work
 

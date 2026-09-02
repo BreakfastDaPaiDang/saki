@@ -100,6 +100,8 @@ export type SakiBrowserSessionId = Branded<'SakiBrowserSessionId'>
 export type SakiDevelopmentProjectId = Branded<'SakiDevelopmentProjectId'>
 /** Stable receipt identity retained with one accepted Intent. */
 export type SakiIntentReceiptId = Branded<'SakiIntentReceiptId'>
+/** Stable identity of one durable request for Host Operator action. */
+export type SakiInterventionRequestId = Branded<'SakiInterventionRequestId'>
 /** Stable identity of one Work Assignment. */
 export type SakiWorkAssignmentId = Branded<'SakiWorkAssignmentId'>
 /** Stable identity of one short-lived Execution Dispatch claim. */
@@ -738,6 +740,158 @@ export interface SakiBoardProjection {
   readonly mutationOverlays: readonly SakiBoardMutationOverlayProjection[]
 }
 
+/** The sole answer shape accepted by the first durable Agent-question slice. */
+export interface SakiInterventionRequiredAnswer {
+  readonly kind: 'text'
+  readonly prompt: string
+  readonly maxLength: number
+}
+
+/** One inert text response to an Intervention Request. */
+export interface SakiInterventionTextAnswer {
+  readonly kind: 'text'
+  readonly text: string
+}
+
+/** Stable browser navigation back to the product object that owns work. */
+export type SakiReturnAddress =
+  | {
+    readonly kind: 'work-item'
+    readonly projectId: SakiDevelopmentProjectId
+    readonly workItemId: SakiBoardWorkItemId
+  }
+  | {
+    readonly kind: 'work-session'
+    readonly projectId: SakiDevelopmentProjectId
+    readonly workItemId: SakiBoardWorkItemId
+    readonly workSessionId: SakiWorkSessionId
+  }
+  | {
+    readonly kind: 'agent-run'
+    readonly projectId: SakiDevelopmentProjectId
+    readonly workItemId: SakiBoardWorkItemId
+    readonly workSessionId: SakiWorkSessionId
+    readonly agentRunId: SakiAgentRunId
+  }
+
+/** Browser-safe durable Intervention summary without answer drafts or authority material. */
+export interface SakiInterventionRequestProjection {
+  readonly id: SakiInterventionRequestId
+  readonly revision: number
+  readonly kind: 'text-input'
+  readonly state: 'open' | 'answered' | 'resolved' | 'reconciliation-required'
+  readonly targetPrincipalId: SakiPrincipalId
+  readonly requiredAnswer: SakiInterventionRequiredAnswer
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly returnAddress: Extract<SakiReturnAddress, { readonly kind: 'agent-run' }>
+}
+
+/** Presentation group for Principal-scoped work; it is not Work Item Status. */
+export type SakiMyWorkGroup =
+  | 'ready-to-start'
+  | 'active'
+  | 'waiting-for-operator'
+  | 'recently-finished'
+
+/** At most one currently eligible next action projected for a My Work item. */
+export type SakiActionOffer =
+  | {
+    readonly type: 'give-work-item-to-agent'
+    readonly projectId: SakiDevelopmentProjectId
+    readonly workItemId: SakiBoardWorkItemId
+    readonly expectedProjectRevision: number
+    readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint
+    readonly reason: string
+  }
+  | {
+    readonly type: 'answer-intervention'
+    readonly interventionId: SakiInterventionRequestId
+    readonly expectedInterventionRevision: number
+    readonly requiredAnswer: SakiInterventionRequiredAnswer
+    readonly reason: string
+  }
+
+/** Reasoned eligibility result; only the available arm carries authority-neutral input hints. */
+export type SakiActionRecommendation =
+  | { readonly available: true; readonly offer: SakiActionOffer }
+  | { readonly available: false; readonly reason: string }
+
+/** One Principal-scoped Work card derived from authoritative product records. */
+export interface SakiMyWorkItemProjection {
+  readonly project: {
+    readonly id: SakiDevelopmentProjectId
+    readonly title: string
+  }
+  readonly workItem: {
+    readonly id: SakiBoardWorkItemId
+    readonly title: string
+    readonly issueNumber: number
+    readonly status: SakiBoardStatus
+    readonly updatedAt: number
+  }
+  readonly group: SakiMyWorkGroup
+  readonly assignment?: {
+    readonly id: SakiWorkAssignmentId
+    readonly revision: number
+    readonly ownerPrincipalId: SakiPrincipalId
+    readonly state: 'assigned' | 'active' | 'canceled' | 'reconciliation-required'
+  } | undefined
+  readonly run?: {
+    readonly id: SakiAgentRunId
+    readonly revision: number
+    readonly state:
+      | 'allocated'
+      | 'starting'
+      | 'running'
+      | 'waiting'
+      | 'resume-pending'
+      | 'canceled'
+      | 'reconciliation-required'
+  } | undefined
+  readonly intervention?: SakiInterventionRequestProjection | undefined
+  readonly returnAddress: SakiReturnAddress
+  readonly recommendation: SakiActionRecommendation
+}
+
+/** Principal-derived cross-Project Work query. */
+export interface SakiMyWorkQuery {
+  readonly type: 'my-work'
+}
+
+/** Complete Principal-scoped My Work read model. */
+export interface SakiMyWorkProjection {
+  readonly type: 'my-work'
+  readonly principalId: SakiPrincipalId
+  readonly items: readonly SakiMyWorkItemProjection[]
+}
+
+/** One source record requiring the current Principal's attention. */
+export interface SakiAttentionItemProjection {
+  readonly source:
+    | { readonly kind: 'intervention'; readonly id: SakiInterventionRequestId; readonly revision: number }
+    | { readonly kind: 'work-assignment'; readonly id: SakiWorkAssignmentId; readonly revision: number }
+    | { readonly kind: 'execution-dispatch'; readonly id: SakiExecutionDispatchId; readonly revision: number }
+  readonly projectId: SakiDevelopmentProjectId
+  readonly targetPrincipalId: SakiPrincipalId
+  readonly severity: 'information' | 'warning' | 'action-required'
+  readonly openedAt: number
+  readonly requiredResponse?: SakiInterventionRequiredAnswer | undefined
+  readonly returnAddress: SakiReturnAddress
+}
+
+/** Principal-derived Attention query. */
+export interface SakiAttentionQuery {
+  readonly type: 'attention'
+}
+
+/** Rebuildable Attention Inbox read model; no durable inbox revision exists. */
+export interface SakiAttentionProjection {
+  readonly type: 'attention'
+  readonly principalId: SakiPrincipalId
+  readonly items: readonly SakiAttentionItemProjection[]
+}
+
 interface SakiAgentRunProjectionBase {
   readonly id: SakiAgentRunId
   readonly revision: number
@@ -848,6 +1002,18 @@ export interface SakiProjectSettingsProjection {
 
 /** Control-plane Projection query map. */
 export interface SakiQueryMap {
+  /** Principal-scoped cross-Project Work. */
+  readonly 'my-work': {
+    readonly request: SakiMyWorkQuery
+    readonly projection: SakiMyWorkProjection
+    readonly failure: 'denied' | 'unavailable'
+  }
+  /** Principal-scoped unresolved attention. */
+  readonly attention: {
+    readonly request: SakiAttentionQuery
+    readonly projection: SakiAttentionProjection
+    readonly failure: 'denied' | 'unavailable'
+  }
   /** Read-only Host project-selection inspection. */
   readonly 'inspect-project-selection': {
     readonly request: SakiInspectProjectSelectionQuery
@@ -1011,6 +1177,15 @@ export interface GiveWorkItemToAgentIntent {
   readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint
 }
 
+/** First authorized expected-revision answer to one open Intervention Request. */
+export interface AnswerInterventionIntent {
+  readonly type: 'answer-intervention'
+  readonly intentId: SakiControlIntentId
+  readonly interventionId: SakiInterventionRequestId
+  readonly expectedInterventionRevision: number
+  readonly answer: SakiInterventionTextAnswer
+}
+
 /** Browser-originated create or move Work Item Intent. */
 type SakiWorkItemIntent = CreateWorkItemIntent | MoveWorkItemIntent
 
@@ -1024,6 +1199,7 @@ export interface SakiIntentMap {
   readonly 'create-work-item': CreateWorkItemIntent
   readonly 'move-work-item': MoveWorkItemIntent
   readonly 'give-work-item-to-agent': GiveWorkItemToAgentIntent
+  readonly 'answer-intervention': AnswerInterventionIntent
 }
 
 /** Control Intent union derived from the request map. */
@@ -1379,6 +1555,57 @@ export type SakiGiveWorkItemToAgentIntentReceipt =
     readonly receipt: Extract<SakiGiveWorkItemToAgentReceipt, { readonly state: 'reconciliation-required' }>
   }
 
+interface SakiAnswerInterventionReceiptBase {
+  readonly id: SakiIntentReceiptId
+  readonly intentId: SakiControlIntentId
+  readonly type: 'answer-intervention'
+  readonly interventionId: SakiInterventionRequestId
+  readonly interventionRevision: number
+}
+
+/** Browser-safe durable result of one Intervention answer attempt. */
+export type SakiAnswerInterventionReceipt =
+  | (SakiAnswerInterventionReceiptBase & {
+    readonly state: 'answered'
+    readonly dispatchId: SakiExecutionDispatchId
+  })
+  | (SakiAnswerInterventionReceiptBase & {
+    readonly state: 'resolved'
+    readonly dispatchId: SakiExecutionDispatchId
+  })
+  | (SakiAnswerInterventionReceiptBase & {
+    readonly state: 'conflict'
+    readonly reason: 'expected-revision' | 'already-answered' | 'invalid-answer' | 'owner-unavailable'
+  })
+  | (SakiAnswerInterventionReceiptBase & {
+    readonly state: 'reconciliation-required'
+    readonly reason: 'effect-unknown' | 'evidence-conflict' | 'protocol'
+    readonly dispatchId?: SakiExecutionDispatchId | undefined
+  })
+
+/** Stable result of submitting an Intervention answer Control Intent. */
+export type SakiAnswerInterventionIntentReceipt =
+  | {
+    readonly ok: true
+    readonly receipt: Extract<SakiAnswerInterventionReceipt, { readonly state: 'answered' | 'resolved' }>
+  }
+  | { readonly ok: false; readonly reason: 'denied'; readonly receipt?: never }
+  | {
+    readonly ok: false
+    readonly reason: 'unavailable'
+    readonly receipt?: Extract<SakiAnswerInterventionReceipt, { readonly state: 'answered' }> | undefined
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'conflict'
+    readonly receipt?: Extract<SakiAnswerInterventionReceipt, { readonly state: 'conflict' }> | undefined
+  }
+  | {
+    readonly ok: false
+    readonly reason: 'reconciliation-required'
+    readonly receipt: Extract<SakiAnswerInterventionReceipt, { readonly state: 'reconciliation-required' }>
+  }
+
 /** Intent-correlated receipt result map. */
 export interface SakiIntentReceiptMap {
   readonly 'register-development-project':
@@ -1428,6 +1655,7 @@ export interface SakiIntentReceiptMap {
   readonly 'create-work-item': SakiWorkItemIntentReceipt<'create-work-item'>
   readonly 'move-work-item': SakiWorkItemIntentReceipt<'move-work-item'>
   readonly 'give-work-item-to-agent': SakiGiveWorkItemToAgentIntentReceipt
+  readonly 'answer-intervention': SakiAnswerInterventionIntentReceipt
 }
 
 /** Stable terminal or recoverable result of submitting a Control Intent. */
@@ -1435,7 +1663,15 @@ export type SakiIntentReceipt<K extends keyof SakiIntentReceiptMap = keyof SakiI
   SakiIntentReceiptMap[K]
 
 /** Projection key invalidated after a committed access or authority change. */
-export type SakiProjectionKey = 'access' | 'project-index' | 'development-workspace' | 'project-changes' | 'project-settings' | 'board'
+export type SakiProjectionKey =
+  | 'access'
+  | 'my-work'
+  | 'attention'
+  | 'project-index'
+  | 'development-workspace'
+  | 'project-changes'
+  | 'project-settings'
+  | 'board'
 
 /** Disposer for a contained post-commit Projection invalidation listener. */
 export type SakiChangedDisposer = () => void

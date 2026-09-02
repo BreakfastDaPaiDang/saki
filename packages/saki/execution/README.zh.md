@@ -32,9 +32,11 @@ Service Definition 没有配置。每个 Service Provider 拥有其执行环境�
 
 ## 持久 Agent 启动
 
-`StartAgentRun` 携带 `execution-dispatch` source、精确可写 Git precondition、预分配的 Agent Run、Work Session、DSH Session 与输入 MessageId、固定 Agent Profile 与 Model Route，以及一条完整的纯文本 `UserMessage`。其 payload digest 覆盖该 message 与它的 `saki-agent-run` source。Preparation 保持 inert；start 要求已接受的 Dispatch mapping 和当前 `agent-run` Binding Write Admission。稳定结果会重复 Run、Work Session、Session 与输入这四项 identity。
+`StartAgentRun` 携带 `execution-dispatch` source、精确可写 Git precondition、预分配的 Agent Run、Work Session、DSH Session 与输入 MessageId、固定 Agent Profile 与 Model Route，以及一条完整的纯文本 `UserMessage`。其 payload digest 覆盖该 message，以及初始 `saki-agent-run` source 或带归因的 `saki-intervention-answer` source。Preparation 保持 inert；start 要求已接受的 Dispatch mapping 和当前 `agent-run` Binding Write Admission。稳定结果会重复 Run、Work Session、Session 与输入这四项 identity。
 
-Host 成功证明目标 Session 与原始输入已经持久化，并不表示模型轮次已经完成。精确 replay 会复用一条 Host Operation。Provider 会在交付前检查完整 Session history：只有输入不存在时才允许发送原始输入；canceled、replaced、unknown 或 conflicting evidence 一律不得重新发送。参见[手动 dispatch 决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)。
+Host 成功证明目标 Session 与已 dispatch 输入已经持久化，并不表示模型轮次已经完成。精确 replay 会复用一条 Host Operation。Provider 会在交付前检查完整 Session history：只有输入不存在时才允许发送该输入；canceled、replaced、unknown 或 conflicting evidence 一律不得重新发送。参见[手动 dispatch 决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)。
+
+Intervention answer 使用新的 Dispatch 与稳定 MessageId，但保留所属 Agent Run、Work Session 与 Session。它的 source 记录 Intervention Request、answer Control Intent 与不可变 Actor 归因。交付复用普通 `StartAgentRun` operation 与 `user/message` event；系统不会增加 answer 专用 Host effect，也不会直接写入 Session。`inspectInterventionOpening` 会另行读取持久 `request_intervention` call、精确成功的模型可见 result，以及已完成的最终 step 和 turn，并且只返回 `absent`、`pending`、精确 `confirmed` turn/step evidence 或 `conflict`。它既不暴露也不修改 Session。
 
 `resumeAgentRun` 是仅供启动恢复使用的 operation，目标是已经过控制面校验的 running Run，以及与其精确匹配的 succeeded `StartAgentRun` operation 和 request。只有物理 Session header 与原始输入匹配该 request 时，Provider 才会恢复 live Agent handle。它不会增加输入、wake 或模型请求；Host、Session 或 Agent evidence 缺失、不可用或冲突时，启动流程会失败。
 
@@ -44,7 +46,7 @@ Host 成功证明目标 Session 与原始输入已经持久化，并不表示模
 
 #### 模型看到什么
 
-Inspection、Diff 与结构化 Git operation 不会增加模型可见内容。已启动的 `StartAgentRun` 通过选定 DSH Session 交付其精确纯文本 user message；message source 保留 Dispatch、Agent Run 与 Work Session id。
+Inspection、Diff 与结构化 Git operation 不会增加模型可见内容。已启动的 `StartAgentRun` 通过选定 DSH Session 交付其精确纯文本 user message；初始 source 保留 Dispatch、Agent Run 与 Work Session id，answer source 还会保留 Intervention、answer Intent 与 Actor 归因。
 
 #### Token 影响
 
@@ -52,7 +54,7 @@ Inspection、Diff、preparation 与结构化 Git operation 直接增加零个 to
 
 #### KV Cache 影响
 
-原始输入是新的 user turn，不属于可复用 prefix。仅用于恢复的 wake message 会在模型组装前排除。
+每条初始输入或 Intervention answer 都是新的 user turn，不属于可复用 prefix。仅用于恢复的 wake message 会在模型组装前排除。
 
 ## 已知限制与暂缓事项
 

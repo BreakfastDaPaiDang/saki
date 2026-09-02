@@ -200,7 +200,7 @@ describe.skipIf(!existsSync(bin))('built Saki executable', () => {
       const first = await runOneShot(directory, port)
       expect(first).toEqual({ stdout: readyRecord, stderr: '' })
       const firstManifest = await readFile(manifestPath, 'utf8')
-      expect(JSON.parse(firstManifest)).toMatchObject({ phase: 'ready', stateVersion: 7 })
+      expect(JSON.parse(firstManifest)).toMatchObject({ phase: 'ready', stateVersion: 8 })
 
       const second = await runOneShot(directory, port)
       expect(second).toEqual({ stdout: readyRecord, stderr: '' })

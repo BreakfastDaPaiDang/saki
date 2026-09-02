@@ -2,9 +2,9 @@
 
 [English](README.md) | 中文
 
-Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@7`、`saki_host_execution@2` 与 `saki_storage_generation@5`；此外还挂载 JSONL Session 持久化、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。
+Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载定时调度、默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@8`、`saki_host_execution@3` 与 `saki_storage_generation@6`；此外还挂载 JSONL Session 持久化、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。
 
-启动器把 preset 名册绑定到包内 `config/agent-presets` 的绝对路径，并禁用用户 preset 根目录。随包提供的 `development` preset 提供仓库指令、Windows 前台 PowerShell，以及基于 Agent 隔离沙箱文件系统的 `read`、`write` 与 `edit` 工具；Host 操作继续使用独立的本地文件系统提供方。生产组合不安装模型 adapter；创建或恢复 Agent 后会保持 idle，直至拥有该 Agent Run 的 operation 提交持久输入。
+启动器把 preset 名册绑定到包内 `config/agent-presets` 的绝对路径，并禁用用户 preset 根目录。随包提供的 `development` preset 提供仓库指令、持久 `request_intervention` 工具、Windows 前台 PowerShell，以及基于 Agent 隔离沙箱文件系统的 `read`、`write` 与 `edit` 工具；Host 操作继续使用独立的本地文件系统提供方。生产组合不安装模型 adapter；创建或恢复 Agent 后会保持 idle，直至拥有该 Agent Run 的 operation 提交持久输入。
 
 在 Windows 上，该组合还挂载当前用户 DPAPI 凭据 Provider 与 Saki Product GitHub App Provider；不支持的平台会禁用这两个配置项，而不会把更弱的凭据来源报告成 `local-user-trust`。启动流程会先根据精确的 succeeded Host Operation 与物理 Session evidence 恢复每个已经过控制面校验的 running Agent，随后启动器才会发布就绪记录或 bootstrap handoff。就绪配置项提供稳定的 `{"product":"saki","status":"ready"}` 记录。启动器只在 `boot()` 完成配置项激活审计后将其写入 stdout；报告失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。
 
@@ -16,7 +16,7 @@ pnpm run saki
 
 该命令通过仓库的 ESM 钩子与路径映射启动 TypeScript 源码。执行 `pnpm run build:lib:host` 后，对应的产物平面命令是 `node packages/saki/bundle/lib/bin.js`。两者解析同一个由包声明的补丁，并持续运行至收到 `SIGINT` 或 `SIGTERM`。`SAKI_ONESHOT=1` 保留供组装冒烟测试与快照使用的“就绪后退出”模式。
 
-启动组合前，启动器会取得 Installation 全局排他 lease、调和精确具名的恢复元数据，并且只通过 `installation.json` 选择状态；没有 manifest 时才使用精确配置的 B03 数据库。无状态 Installation 会直接配置为当前 state v7。任何精确保留的 v2、v3、v4、v5 或 v6 Installation 都会以 `upgrade-required` 闭合失败；启动当前 build 前需让其 Host 保持离线，并通过保留的维护迁移升级到 v7。启动器在准备、对外服务和完整 teardown（拆卸）期间始终持有 lease；畸形或不受支持的选中状态也会闭合失败。
+启动组合前，启动器会取得 Installation 全局排他 lease、调和精确具名的恢复元数据，并且只通过 `installation.json` 选择状态；没有 manifest 时才使用精确配置的 B03 数据库。无状态 Installation 会直接配置为当前 state v8。任何精确保留的 v2、v3、v4、v5、v6 或 v7 Installation 都会以 `upgrade-required` 闭合失败；启动当前 build 前需让其 Host 保持离线，并通过保留的维护迁移升级到 v8。启动器在准备、对外服务和完整 teardown（拆卸）期间始终持有 lease；畸形或不受支持的选中状态也会闭合失败。
 
 每次非一次性启动还会写出一行启动器交接 JSON，其中包含 `bootstrapPurpose`、`bootstrapSecret` 与回环基础 `url`。首次完成前用途为 `initial-bootstrap`，此后为 `local-reauthentication`。明文机密值只供立即执行本机登录使用；不得重定向、持久保存或公开这行内容。重启会保留先前尚未过期的挑战并签发新挑战；交换任一状态为 `issued` 的挑战时会消费该挑战，并撤销其余挑战。
 
@@ -28,11 +28,11 @@ pnpm run saki
 
 ## 模型体验
 
-无，因为 Host 不安装模型 adapter，Session 启动与启动恢复也不会发起模型请求、wake 或产生模型可见消息；当 Agent Run 随后通过显式配置的 route 提交输入时，`development` preset 会贡献其 persona、仓库指令上下文，以及 `read`、`write`、`edit` 和 Windows `pwsh` 工具 schema。
+无，因为本地 Host 组合会把所有模型可见输入与请求委托给它挂载的包。
 
 #### KV Cache 影响
 
-`development` preset 会加入稳定的 persona 与工具 schema 前缀。仓库指令和当前 sandbox／approval 事实属于请求上下文；提供方特定的缓存行为由所选模型 route 负责。
+基础 Host 不安装模型 adapter，因此启动 Session 或恢复已经 running 的 Run 不会发起模型请求、wake 或产生模型可见消息。配置模型 provider 后，恢复已接受但尚未交付的 Intervention 回答时可以只追加该条精确回答、唤醒其所属 Run，并发起对应请求。其他 Agent Run 输入仍通过显式配置的 route 进入。`development` preset 会加入稳定的 persona 与工具 schema 前缀，其中包括持久 `request_intervention` 以及 `read`、`write`、`edit` 和 Windows `pwsh`；仓库指令和当前 sandbox／approval 事实仍属于请求上下文，提供方特定的缓存行为由所选 route 负责，而 Intervention 回答是既有 Session prefix 之后仅追加的输入。
 
 ## 已知限制与延后工作
 

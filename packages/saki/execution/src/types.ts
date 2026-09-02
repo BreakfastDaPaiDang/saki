@@ -1,11 +1,11 @@
 /** Public value types for Saki Host Execution. @module @breakfastdapaidang/saki-execution/types */
 
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import type { MessageId, TextBlock, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { CallId, MessageId, TextBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 
-export type { MessageId } from '@deepseek-ai/dsh-llm'
+export type { CallId, MessageId } from '@deepseek-ai/dsh-llm'
 export type { SessionId } from '@deepseek-ai/dsh-session'
 export type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 
@@ -17,6 +17,21 @@ export type SakiResourceBindingId = Branded<'SakiResourceBindingId'>
 
 /** Stable idempotency identity of one Saki Control Intent. */
 export type SakiControlIntentId = Branded<'SakiControlIntentId'>
+
+/** Stable identity of one Saki Installation. */
+export type SakiInstallationId = Branded<'SakiInstallationId'>
+
+/** Stable identity sealed into one physical Saki storage generation. */
+export type SakiStorageGenerationId = Branded<'SakiStorageGenerationId'>
+
+/** Stable identity of one Saki security Principal. */
+export type SakiPrincipalId = Branded<'SakiPrincipalId'>
+
+/** Stable identity of one Saki authorization Grant. */
+export type SakiGrantId = Branded<'SakiGrantId'>
+
+/** Stable identity of one durable Saki Intervention Request. */
+export type SakiInterventionRequestId = Branded<'SakiInterventionRequestId'>
 
 /** Stable identity of one versioned Saki Development Agent Profile. */
 export type SakiAgentProfileId = Branded<'SakiAgentProfileId'>
@@ -576,10 +591,59 @@ export interface SakiAgentRunMessageSource {
   readonly workSessionId: SakiWorkSessionId
 }
 
+/** Browser-safe immutable authority attribution retained with one Control Intent. */
+export interface SakiControlIntentActorAttribution {
+  readonly installationId: SakiInstallationId
+  readonly storageGenerationId: SakiStorageGenerationId
+  readonly hostId: SakiHostId
+  readonly principalId: SakiPrincipalId
+  readonly principalRevision: number
+  readonly grantId: SakiGrantId
+  readonly grantRevision: number
+}
+
+/** Provenance of one attributed Intervention answer delivered to its owning Agent Run. */
+export interface SakiInterventionAnswerMessageSource {
+  readonly kind: 'saki-intervention-answer'
+  readonly interventionId: SakiInterventionRequestId
+  readonly answerIntentId: SakiControlIntentId
+  readonly dispatchId: SakiExecutionDispatchId
+  readonly agentRunId: SakiAgentRunId
+  readonly workSessionId: SakiWorkSessionId
+  readonly actor: SakiControlIntentActorAttribution
+}
+
+/** Exact model-visible success expected from one `request_intervention` call. */
+export interface InterventionOpeningExpectedToolResult {
+  readonly content: readonly [TextBlock]
+}
+
+/** Stable coordinates needed to inspect one Intervention opening without exposing a Session log. */
+export interface InspectInterventionOpeningRequest {
+  readonly hostId: SakiHostId
+  readonly sessionId: SessionId
+  readonly callId: CallId
+  readonly interventionId: SakiInterventionRequestId
+  readonly expectedQuestion: string
+  readonly expectedToolResult: InterventionOpeningExpectedToolResult
+}
+
+/** Closed durable evidence for one expected `request_intervention` opening. */
+export type InterventionOpeningEvidence =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'confirmed'; readonly turn: number; readonly step: number }
+  | { readonly kind: 'conflict' }
+
+/** Product provenance accepted by the existing StartAgentRun delivery operation. */
+export type StartAgentRunMessageSource = SakiAgentRunMessageSource | SakiInterventionAnswerMessageSource
+
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /** Initial product input frozen by a Saki Execution Dispatch. */
     readonly 'saki-agent-run': SakiAgentRunMessageSource
+    /** Attributed answer returned to the owning Saki Agent Run. */
+    readonly 'saki-intervention-answer': SakiInterventionAnswerMessageSource
   }
 }
 
@@ -588,6 +652,11 @@ export type StartAgentRunInputMessage = UserMessage & {
   readonly id: MessageId
   readonly role: 'user'
   readonly content: [TextBlock]
+  readonly source: StartAgentRunMessageSource
+}
+
+/** Exact initial-input message retained by `saki_host_execution@2`. */
+export type StartAgentRunInputMessageV2 = Omit<StartAgentRunInputMessage, 'source'> & {
   readonly source: SakiAgentRunMessageSource
 }
 
@@ -602,7 +671,7 @@ export interface StartAgentRunProfile {
   }
 }
 
-/** Prepare one exact Saki Agent Run and its initial durable input. */
+/** Prepare one exact durable input for a Saki Agent Run. */
 export interface StartAgentRunHostOperationRequest {
   readonly type: 'start-agent-run'
   readonly source: ExecutionDispatchHostOperationSource
@@ -613,6 +682,13 @@ export interface StartAgentRunHostOperationRequest {
     readonly sessionId: SessionId
     readonly profile: StartAgentRunProfile
     readonly input: StartAgentRunInputMessage
+  }
+}
+
+/** Exact StartAgentRun request retained by `saki_host_execution@2`. */
+export type StartAgentRunHostOperationRequestV2 = Omit<StartAgentRunHostOperationRequest, 'run'> & {
+  readonly run: Omit<StartAgentRunHostOperationRequest['run'], 'input'> & {
+    readonly input: StartAgentRunInputMessageV2
   }
 }
 
@@ -665,7 +741,7 @@ export interface CommitHostOperationResult {
   readonly committer: ProjectGitCommitSignature
 }
 
-/** Stable evidence that one intended Agent Run and its exact initial input exist. */
+/** Stable evidence that one intended Agent Run and its exact dispatched input exist. */
 export interface StartAgentRunHostOperationResult {
   readonly type: 'start-agent-run'
   readonly agentRunId: SakiAgentRunId
@@ -700,6 +776,11 @@ export type HostOperationKind = keyof HostOperationRequestMap
 /** Host Operation request correlated to one operation kind. */
 export type HostOperationRequest<K extends HostOperationKind = HostOperationKind> =
   K extends HostOperationKind ? HostOperationRequestMap[K]['request'] : never
+
+/** Exact Host Operation request union retained by `saki_host_execution@2`. */
+export type HostOperationRequestV2 =
+  | Exclude<HostOperationRequest, StartAgentRunHostOperationRequest>
+  | StartAgentRunHostOperationRequestV2
 
 /** Successful Host Operation result correlated to one operation kind. */
 export type HostOperationResult<K extends HostOperationKind = HostOperationKind> =

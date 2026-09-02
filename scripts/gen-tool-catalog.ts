@@ -9,6 +9,7 @@
 import { globSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import Timer from '@deepseek-ai/cordis-plugin-timer'
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -66,6 +67,8 @@ import * as ToolWeb from '@deepseek-ai/dsh-tool-web'
 import VmWorkflowEngine from '@deepseek-ai/dsh-workflow-worker-thread'
 import * as ToolRalph from '@deepseek-ai/dsh-tool-ralph'
 import * as ToolWorkflow from '@deepseek-ai/dsh-tool-workflow'
+import type { SakiControlPlaneModule } from '@breakfastdapaidang/saki-control-plane'
+import * as ToolIntervention from '@breakfastdapaidang/saki-tool-intervention'
 import { githubSlug } from './verify-md-links.ts'
 
 /** Attachment seam marker that makes the attachments-conditional `read_image` schema harvestable. */
@@ -186,6 +189,27 @@ export interface ToolPackage {
  * guard proves it is exhaustive against the on-disk glob.
  */
 const TOOL_PACKAGES: ToolPackage[] = [
+  {
+    pkg: '@breakfastdapaidang/saki-tool-intervention',
+    dir: 'tool-intervention',
+    source: 'packages/saki/tool-intervention/src/index.ts',
+    requires: ['ctx.tools', 'ctx.sessions', 'ctx.sakiControlPlane', 'ctx.timer'],
+    writes: ['tool/call', 'durable Saki Intervention Request', 'tool/result'],
+    async mount(ctx) {
+      await ctx.plugin(Timer)
+      await ctx.plugin(SessionStore)
+      const controlPlane = {
+        agentInterventions: {
+          request: () => Promise.reject(new Error('tool-catalog cannot create an Intervention Request')),
+          finalizeOpening: () => Promise.reject(new Error('tool-catalog cannot finalize an Intervention Request')),
+        },
+      }
+      ctx.provide('sakiControlPlane', controlPlane as unknown as SakiControlPlaneModule)
+      await ctx.plugin(ToolIntervention)
+    },
+    note:
+      'Private to the system-owned Saki Development Agent Preset. Durable success concludes the current turn; the operator answer arrives later in the same Agent Run.',
+  },
   {
     pkg: '@deepseek-ai/dsh-tool-ask-user',
     dir: 'tool-ask-user',

@@ -2,7 +2,7 @@
 
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Context } from '@deepseek-ai/cordis'
+import { Service, type Context } from '@deepseek-ai/cordis'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { boot, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
@@ -14,6 +14,7 @@ const rootConfig = fileURLToPath(new URL('../../cordis.yml', import.meta.url))
 const bundlePatch = fileURLToPath(new URL('../../cordis.patch.yml', import.meta.url))
 
 const AGENT_RUNTIME_ROWS = new Set([
+  'timer',
   'llm',
   'session',
   'session-persistence-jsonl',
@@ -32,6 +33,13 @@ const AGENT_RUNTIME_ROWS = new Set([
   'pwsh-sandbox',
   'saki-readiness',
 ])
+
+class ControlPlaneProbe extends Service {
+  /** @param ctx - isolated runtime-smoke context. */
+  constructor(ctx: Context) {
+    super(ctx, 'sakiControlPlane')
+  }
+}
 
 /** Select the exact production rows this real-composition smoke exercises. */
 function agentRuntimePatch(): PatchOptions {
@@ -59,7 +67,7 @@ async function run(): Promise<void> {
           insert: [{ id: 'controllable-fake-llm', name: './tests/fixtures/controllable-fake-llm.ts' }],
         },
       ],
-      undefined,
+      async (ctx) => { await ctx.plugin(ControlPlaneProbe) },
       import.meta.url,
     )
 

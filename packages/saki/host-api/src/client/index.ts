@@ -6,6 +6,8 @@ import {
   sakiAccessExchangeResultSchema,
   sakiAccessLogoutResultSchema,
   sakiAccessProjectionSchema,
+  sakiAnswerInterventionResultSchema,
+  sakiAttentionResultSchema,
   sakiBoardResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiCreateCommitResultSchema,
@@ -19,6 +21,7 @@ import {
   sakiProjectIndexResultSchema,
   sakiProjectSettingsResultSchema,
   sakiMoveWorkItemResultSchema,
+  sakiMyWorkResultSchema,
   sakiStageFilesResultSchema,
   sakiUnstageFilesResultSchema,
 } from '../wire.ts'
@@ -26,6 +29,9 @@ import type {
   SakiWireAccessExchangeResult,
   SakiWireAccessLogoutResult,
   SakiWireAccessProjection,
+  SakiWireAnswerInterventionIntent,
+  SakiWireAnswerInterventionResult,
+  SakiWireAttentionResult,
   SakiWireBoardRefresh,
   SakiWireBoardResult,
   SakiWireConfigureGitHubSynchronizationIntent,
@@ -47,6 +53,7 @@ import type {
   SakiWireProjectSettingsResult,
   SakiWireMoveWorkItemIntent,
   SakiWireMoveWorkItemResult,
+  SakiWireMyWorkResult,
   SakiWireRegisterDevelopmentProjectIntent,
   SakiWireRegisterDevelopmentProjectResult,
   SakiWireStageFilesIntent,
@@ -70,6 +77,10 @@ export interface SakiHostClient {
   exchangeBootstrap(secret: string, signal?: AbortSignal): Promise<SakiWireAccessExchangeResult>
   /** @param requestToken - current session-derived request token. @param signal - optional cancellation. @returns logout outcome. */
   logout(requestToken: string, signal?: AbortSignal): Promise<SakiWireAccessLogoutResult>
+  /** @param signal - optional cancellation. @returns current Principal-scoped My Work. */
+  queryMyWork(signal?: AbortSignal): Promise<SakiWireMyWorkResult>
+  /** @param signal - optional cancellation. @returns current Principal-scoped Attention. */
+  queryAttention(signal?: AbortSignal): Promise<SakiWireAttentionResult>
   /** @param signal - optional cancellation. @returns the revisioned Project index or `denied`/`unavailable`. */
   queryProjectIndex(signal?: AbortSignal): Promise<SakiWireProjectIndexResult>
   /**
@@ -242,6 +253,18 @@ export interface SakiHostClient {
     requestToken: string,
     signal?: AbortSignal,
   ): Promise<SakiWireGiveWorkItemToAgentResult>
+  /**
+   * Answer one open Intervention under its projected revision.
+   * @param intent - revision-fenced text answer without Actor or delivery authority.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns the accepted delivery receipt or one typed recoverable outcome.
+   */
+  answerIntervention(
+    intent: SakiWireAnswerInterventionIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireAnswerInterventionResult>
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -284,6 +307,16 @@ export class SakiHostClientService extends Service implements SakiHostClient {
       signal,
       { [REQUEST_TOKEN_HEADER]: requestToken },
     ))
+  }
+
+  /** @inheritdoc */
+  async queryMyWork(signal?: AbortSignal): Promise<SakiWireMyWorkResult> {
+    return sakiMyWorkResultSchema.parse(await this.call('control/query', { type: 'my-work' }, signal))
+  }
+
+  /** @inheritdoc */
+  async queryAttention(signal?: AbortSignal): Promise<SakiWireAttentionResult> {
+    return sakiAttentionResultSchema.parse(await this.call('control/query', { type: 'attention' }, signal))
   }
 
   /** @inheritdoc */
@@ -474,6 +507,20 @@ export class SakiHostClientService extends Service implements SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireGiveWorkItemToAgentResult> {
     return sakiGiveWorkItemToAgentResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  /** @inheritdoc */
+  async answerIntervention(
+    intent: SakiWireAnswerInterventionIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireAnswerInterventionResult> {
+    return sakiAnswerInterventionResultSchema.parse(await this.call(
       'control/submit',
       intent,
       signal,
