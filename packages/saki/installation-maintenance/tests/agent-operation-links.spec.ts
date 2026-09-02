@@ -27,6 +27,7 @@ import {
   type LocalHostOperationRecord,
 } from '@breakfastdapaidang/saki-execution-local'
 import * as stateValidation from '../src/state-validation.ts'
+import { validateGitOperationLinks } from '../src/state-validation.ts'
 
 const INTENT_ID = 'intent-11111111-1111-4111-8111-111111111111'
 const ASSIGNMENT_ID = 'assignment-22222222-2222-4222-8222-222222222222'
@@ -324,6 +325,7 @@ function domains(state: LinkedState): readonly [
   Domain<typeof sakiHostExecutionDomainSpec>,
 ] {
   const controlTables = new Map<string, ReturnType<typeof readonlyTable>>([
+    ['git_operation_intents', readonlyTable([])],
     ['agent_runs', readonlyTable((state.runs ?? []).map(record => [record.id, record]))],
     ['execution_dispatches', readonlyTable((state.dispatches ?? []).map(record => [record.id, record]))],
     ['binding_write_admissions', readonlyTable((state.admissions ?? []).map(record => [record.id, record]))],
@@ -368,6 +370,13 @@ function isValidator(candidate: unknown): candidate is AgentOperationLinkValidat
 }
 
 describe('current StartAgentRun cross-domain validation', () => {
+  it('is ignored by Git-operation validation', () => {
+    const current = fixture()
+    const [controlPlane, hostExecution] = domains({ hostOperations: [current.hostOperation] })
+
+    expect(() => { validateGitOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
   it('accepts the prepared Host record before the claimed Dispatch can retain it', () => {
     const validateAgentOperationLinks = validator()
     const current = fixture()
@@ -394,6 +403,61 @@ describe('current StartAgentRun cross-domain validation', () => {
     const [controlPlane, hostExecution] = domains({ hostOperations: [current.hostOperation] })
 
     expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) }).toThrow()
+  })
+
+  it('rejects an Agent Host Operation stored under a different table key', () => {
+    const validateAgentOperationLinks = validator()
+    const current = fixture()
+    const [controlPlane] = domains({
+      runs: [current.run],
+      dispatches: [current.dispatch],
+      admissions: [current.reservedAdmission],
+    })
+    const hostExecution = {
+      name: sakiHostExecutionDomainSpec.name,
+      table: () => readonlyTable([[ALT_OPERATION_ID, current.hostOperation]]),
+      close: () => Promise.resolve(),
+    } as unknown as Domain<typeof sakiHostExecutionDomainSpec>
+
+    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Saki Host Operation id disagrees with its table key')
+  })
+
+  it('rejects a Dispatch or running Agent Run whose referenced records disappeared', () => {
+    const validateAgentOperationLinks = validator()
+    const current = fixture()
+    const withoutRun = domains({
+      dispatches: [current.dispatch],
+      admissions: [current.reservedAdmission],
+      hostOperations: [current.hostOperation],
+    })
+    expect(() => { validateAgentOperationLinks(...withoutRun) })
+      .toThrow('StartAgentRun Host Operation has no Agent Run')
+
+    const running = runningState(current)
+    const accepted = acceptedHostState(current)
+    const unmatched = domains({ ...accepted, runs: running.runs, admissions: running.admissions })
+    expect(() => { validateAgentOperationLinks(...unmatched) })
+      .toThrow('running Saki Agent Run has no exact succeeded Host Operation')
+  })
+
+  it('rejects an Agent record whose id disagrees with its table key', () => {
+    const validateAgentOperationLinks = validator()
+    const current = fixture()
+    const controlTables = new Map<string, ReturnType<typeof readonlyTable>>([
+      ['agent_runs', readonlyTable([[`agent-run-${'f'.repeat(64)}`, current.run]])],
+      ['execution_dispatches', readonlyTable([[current.dispatch.id, current.dispatch]])],
+      ['binding_write_admissions', readonlyTable([[current.reservedAdmission.id, current.reservedAdmission]])],
+    ])
+    const controlPlane = {
+      name: sakiControlPlaneDomainSpec.name,
+      table: (name: string) => controlTables.get(name),
+      close: () => Promise.resolve(),
+    } as unknown as Domain<typeof sakiControlPlaneDomainSpec>
+    const [, hostExecution] = domains({ hostOperations: [current.hostOperation] })
+
+    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Saki Agent Run id disagrees with its table key')
   })
 
   it('rejects Dispatch preparation after its Host Operation disappears', () => {
@@ -490,7 +554,25 @@ describe('current StartAgentRun cross-domain validation', () => {
     }
   })
 
-  it('rejects multiple Host records sourced from one Dispatch', () => {
+  it('rejects Dispatch preparation that disagrees with its Host Operation', () => {
+    const validateAgentOperationLinks = validator()
+    const current = fixture()
+    const dispatch = executionDispatchRecordSchema.parse({
+      ...retainedPreparation(current),
+      preparation: { ...current.preparation, preparationRevision: 1 },
+    })
+    const [controlPlane, hostExecution] = domains({
+      runs: [current.run],
+      dispatches: [dispatch],
+      admissions: [current.reservedAdmission],
+      hostOperations: [current.hostOperation],
+    })
+
+    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Saki Execution Dispatch preparation disagrees with its Host Operation')
+  })
+
+  it('rejects a Host Operation id that disagrees with its Dispatch-derived source id', () => {
     const validateAgentOperationLinks = validator()
     const current = fixture()
     const duplicate = preparedOperation(current.request, ALT_OPERATION_ID).record
@@ -501,7 +583,8 @@ describe('current StartAgentRun cross-domain validation', () => {
       hostOperations: [current.hostOperation, duplicate],
     })
 
-    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) }).toThrow()
+    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) })
+      .toThrow('StartAgentRun Host Operation id disagrees with its Execution Dispatch source')
   })
 
   it('rejects a nonterminal accepted Host operation without its accepted Agent Run admission', () => {
@@ -509,5 +592,54 @@ describe('current StartAgentRun cross-domain validation', () => {
     const [controlPlane, hostExecution] = domains(acceptedHostState(fixture()))
 
     expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) }).toThrow()
+  })
+
+  it('rejects a nonterminal Agent Host Operation after its write admission disappears', () => {
+    const validateAgentOperationLinks = validator()
+    const state = acceptedHostState(fixture())
+    const [controlPlane, hostExecution] = domains({ ...state, admissions: [] })
+
+    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) })
+      .toThrow('StartAgentRun Host Operation lost its Agent Run write admission')
+  })
+
+  it('accepts released write admission after a canceled no-effect Host Operation', () => {
+    const validateAgentOperationLinks = validator()
+    const current = fixture()
+    const snapshot = hostOperationSnapshotSchema.parse({
+      ...current.preparedSnapshot,
+      revision: 1,
+      updatedAt: 3,
+      state: 'canceled',
+      completedAt: 3,
+      reason: 'authority-revoked',
+      effect: 'none',
+    })
+    const state: LinkedState = {
+      runs: [agentRunRecordSchema.parse({
+        ...current.run,
+        revision: 1,
+        state: 'canceled',
+        updatedAt: 3,
+      })],
+      dispatches: [executionDispatchRecordSchema.parse({
+        ...current.dispatch,
+        revision: 2,
+        state: 'canceled',
+        claim: undefined,
+        preparation: current.preparation,
+        operationSnapshot: snapshot,
+        terminalReason: 'authority-revoked',
+        updatedAt: 3,
+      })],
+      admissions: [],
+      hostOperations: [sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+        ...current.hostOperation,
+        snapshot,
+      })],
+    }
+    const [controlPlane, hostExecution] = domains(state)
+
+    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) }).not.toThrow()
   })
 })

@@ -29,7 +29,7 @@ import {
   sakiHostExecutionDomainSpec,
   type LocalHostOperationRecord,
 } from '@breakfastdapaidang/saki-execution-local'
-import { validateGitOperationLinks } from '../src/state-validation.ts'
+import { validateAgentOperationLinks, validateGitOperationLinks } from '../src/state-validation.ts'
 
 const INTENT_ID = 'intent-00000000-0000-4000-8000-000000000071' as SakiControlIntentId
 const RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000071' as SakiIntentReceiptId
@@ -395,6 +395,8 @@ function domainsFromEntries(
 ): readonly [Domain<typeof sakiControlPlaneDomainSpec>, Domain<typeof sakiHostExecutionDomainSpec>] {
   const controlTables = new Map<string, ReturnType<typeof readonlyTable>>([
     ['git_operation_intents', readonlyTable(intents)],
+    ['agent_runs', readonlyTable([])],
+    ['execution_dispatches', readonlyTable([])],
     ['binding_write_admissions', readonlyTable(admissions)],
   ])
   const operationTable = readonlyTable(operations)
@@ -422,6 +424,13 @@ function readonlyTable(entries: readonly (readonly [string, unknown])[]) {
 }
 
 describe('current Saki Git-operation cross-domain validation', () => {
+  it('is ignored by Agent-operation validation', () => {
+    const fixture = linkedFixture()
+    const [controlPlane, hostExecution] = domains([], [fixture.operation], [])
+
+    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
   it('accepts a reserved Intent with the prepared, not-accepted Host Operation from a safe crash gap', () => {
     const fixture = linkedFixture()
     const [controlPlane, hostExecution] = domains(

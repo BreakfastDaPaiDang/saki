@@ -646,10 +646,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           await llm.resolveModelInfo(route.provider, route.model, signal)
         },
         moveWorkItem: async (intent, actor, signal) => {
-          if (this.requireRegistrationIntentTable().get(intent.intentId) !== undefined
-            || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined
-            || this.requireGitOperationIntentTable().get(intent.intentId) !== undefined
-            || this.requireAgentOperationIntentTable().get(intent.intentId) !== undefined) {
+          if (this.hasControlIntentConflict(intent.intentId, 'work-item')) {
             return { ok: false, reason: 'conflict' }
           }
           return await this.githubWorkItemOperations.submit(intent, actor, signal)
@@ -923,10 +920,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
             if (!this.authorized(authentication, 'development-project:register')) {
               return { ok: false, reason: 'denied' }
             }
-            if (this.requireGitHubSynchronizationConfigurationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitOperationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitHubWorkItemIntentTable().get(parsed.intentId) !== undefined
-              || this.requireAgentOperationIntentTable().get(parsed.intentId) !== undefined) {
+            if (this.hasControlIntentConflict(parsed.intentId, 'registration')) {
               return { ok: false, reason: 'conflict' }
             }
             return await this.registerDevelopmentProject(authentication, parsed, operationSignal)
@@ -943,10 +937,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
             if (!this.authorized(authentication, 'github-synchronization:configure')) {
               return { ok: false, reason: 'denied' }
             }
-            if (this.requireRegistrationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitOperationIntentTable().get(parsed.intentId) !== undefined
-              || this.requireGitHubWorkItemIntentTable().get(parsed.intentId) !== undefined
-              || this.requireAgentOperationIntentTable().get(parsed.intentId) !== undefined) {
+            if (this.hasControlIntentConflict(parsed.intentId, 'github-synchronization')) {
               return { ok: false, reason: 'conflict' }
             }
             return await this.githubSynchronization.configure(
@@ -1024,10 +1015,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       ? 'project-changes:stage'
       : intent.type === 'unstage-files' ? 'project-changes:unstage' : 'project-commit:create'
     if (!this.authorized(authentication, action)) return { ok: false, reason: 'denied' }
-    if (this.requireRegistrationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitHubWorkItemIntentTable().get(intent.intentId) !== undefined
-      || this.requireAgentOperationIntentTable().get(intent.intentId) !== undefined) {
+    if (this.hasControlIntentConflict(intent.intentId, 'git-operation')) {
       return { ok: false, reason: 'conflict' }
     }
     return await this.gitOperations.submit(intent, this.currentControlIntentActor(), signal)
@@ -1041,10 +1029,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     signal.throwIfAborted()
     const action = intent.type === 'create-work-item' ? 'work-item:create' : 'work-item:move'
     if (!this.authorized(authentication, action)) return { ok: false, reason: 'denied' }
-    if (this.requireRegistrationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitOperationIntentTable().get(intent.intentId) !== undefined
-      || this.requireAgentOperationIntentTable().get(intent.intentId) !== undefined) {
+    if (this.hasControlIntentConflict(intent.intentId, 'work-item')) {
       return { ok: false, reason: 'conflict' }
     }
     return await this.githubWorkItemOperations.submit(intent, this.currentControlIntentActor(), signal)
@@ -1057,13 +1042,22 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   ): Promise<SakiGiveWorkItemToAgentIntentReceipt> {
     signal.throwIfAborted()
     if (!this.authorized(authentication, 'work-item:give-to-agent')) return { ok: false, reason: 'denied' }
-    if (this.requireRegistrationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitHubSynchronizationConfigurationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitOperationIntentTable().get(intent.intentId) !== undefined
-      || this.requireGitHubWorkItemIntentTable().get(intent.intentId) !== undefined) {
+    if (this.hasControlIntentConflict(intent.intentId, 'agent-operation')) {
       return { ok: false, reason: 'conflict' }
     }
     return await this.agentOperations.submit(intent, this.currentControlIntentActor(), signal)
+  }
+
+  private hasControlIntentConflict(
+    intentId: SakiControlIntentId,
+    owner: 'registration' | 'github-synchronization' | 'git-operation' | 'work-item' | 'agent-operation',
+  ): boolean {
+    return (owner !== 'registration' && this.requireRegistrationIntentTable().get(intentId) !== undefined)
+      || (owner !== 'github-synchronization'
+        && this.requireGitHubSynchronizationConfigurationIntentTable().get(intentId) !== undefined)
+      || (owner !== 'git-operation' && this.requireGitOperationIntentTable().get(intentId) !== undefined)
+      || (owner !== 'work-item' && this.requireGitHubWorkItemIntentTable().get(intentId) !== undefined)
+      || (owner !== 'agent-operation' && this.requireAgentOperationIntentTable().get(intentId) !== undefined)
   }
 
   private currentControlIntentActor(): ControlIntentActor {

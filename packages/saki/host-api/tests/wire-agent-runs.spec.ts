@@ -88,6 +88,77 @@ describe('Saki manual Agent Run wire contract', () => {
       ...detail,
       recentAgentRuns: Array.from({ length: 33 }, () => detail.recentAgentRuns[0]),
     }).success).toBe(false)
+    expect(sakiWorkItemDetailProjectionSchema.safeParse({
+      ...detail,
+      assignment: { ...detail.assignment, updatedAt: detail.assignment.createdAt - 1 },
+    }).success).toBe(false)
+    expect(sakiWorkItemDetailProjectionSchema.safeParse({
+      ...detail,
+      primaryWorkSession: {
+        ...detail.primaryWorkSession,
+        updatedAt: detail.primaryWorkSession.createdAt - 1,
+      },
+    }).success).toBe(false)
+    expect(sakiWorkItemDetailProjectionSchema.safeParse({
+      ...detail,
+      assignment: {
+        ...detail.assignment,
+        primaryWorkSessionId: 'work-session-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    }).success).toBe(false)
+    expect(sakiWorkItemDetailProjectionSchema.safeParse({
+      ...detail,
+      recentAgentRuns: [detail.recentAgentRuns[0], detail.recentAgentRuns[0]],
+    }).success).toBe(false)
+    const mismatchedRecent = sakiWorkItemDetailProjectionSchema.safeParse({
+      ...detail,
+      recentAgentRuns: [{
+        ...detail.recentAgentRuns[0],
+        source: {
+          ...detail.recentAgentRuns[0].source,
+          workItemId: `work-item-${'a'.repeat(64)}`,
+        },
+      }],
+    })
+    expect(mismatchedRecent.success).toBe(false)
+    if (!mismatchedRecent.success) {
+      expect(mismatchedRecent.error.issues).toContainEqual(expect.objectContaining({
+        path: ['recentAgentRuns', 0, 'source'],
+      }))
+    }
+    const mismatchedCurrent = sakiWorkItemDetailProjectionSchema.safeParse({
+      ...detail,
+      currentAgentRun: {
+        ...detail.currentAgentRun,
+        source: {
+          ...detail.currentAgentRun.source,
+          workItemId: `work-item-${'b'.repeat(64)}`,
+        },
+      },
+    })
+    expect(mismatchedCurrent.success).toBe(false)
+    if (!mismatchedCurrent.success) {
+      expect(mismatchedCurrent.error.issues).toContainEqual(expect.objectContaining({
+        path: ['currentAgentRun', 'source'],
+      }))
+    }
+    const mismatchedOnlyRecent = sakiWorkItemDetailProjectionSchema.safeParse({
+      ...detail,
+      currentAgentRun: undefined,
+      recentAgentRuns: [{
+        ...detail.recentAgentRuns[0],
+        source: {
+          ...detail.recentAgentRuns[0].source,
+          workItemId: `work-item-${'c'.repeat(64)}`,
+        },
+      }],
+    })
+    expect(mismatchedOnlyRecent.success).toBe(false)
+    if (!mismatchedOnlyRecent.success) {
+      expect(mismatchedOnlyRecent.error.issues).toContainEqual(expect.objectContaining({
+        path: ['recentAgentRuns', 0, 'source'],
+      }))
+    }
 
     const serialized = JSON.stringify({ runs: SAKI_AGENT_RUN_PROJECTION_FIXTURES, detail })
     expect(serialized).not.toMatch(

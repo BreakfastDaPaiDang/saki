@@ -286,43 +286,21 @@ async function loadValidatedSource(
       authority,
     }
   }
-  if (version?.version === 5) {
-    const historical = await readClosedSakiV5State(
-      source.selected.databasePath,
-      {
-        installationId: source.selected.installation.installationId,
-        storageGenerationId: source.selected.installation.storageGenerationId,
-        createdByBuildId: source.selected.generation.createdByBuildId,
-      },
-      signal,
-    )
-    return {
-      stateVersion: 5,
-      databasePath: source.selected.databasePath,
+  if (version?.version === 5 || version?.version === 6) {
+    const identity = {
       installationId: source.selected.installation.installationId,
       storageGenerationId: source.selected.installation.storageGenerationId,
-      sourceBuildId: source.selected.generation.createdByBuildId,
-      sourceArtifacts: historical.sourceArtifacts,
-      hostExecutionSnapshot: historical.hostExecutionSnapshot,
-      authority,
+      createdByBuildId: source.selected.generation.createdByBuildId,
     }
-  }
-  if (version?.version === 6) {
-    const historical = await readClosedSakiV6State(
-      source.selected.databasePath,
-      {
-        installationId: source.selected.installation.installationId,
-        storageGenerationId: source.selected.installation.storageGenerationId,
-        createdByBuildId: source.selected.generation.createdByBuildId,
-      },
-      signal,
-    )
+    const historical = version.version === 5
+      ? await readClosedSakiV5State(source.selected.databasePath, identity, signal)
+      : await readClosedSakiV6State(source.selected.databasePath, identity, signal)
     return {
-      stateVersion: 6,
+      stateVersion: version.version,
       databasePath: source.selected.databasePath,
-      installationId: source.selected.installation.installationId,
-      storageGenerationId: source.selected.installation.storageGenerationId,
-      sourceBuildId: source.selected.generation.createdByBuildId,
+      installationId: identity.installationId,
+      storageGenerationId: identity.storageGenerationId,
+      sourceBuildId: identity.createdByBuildId,
       sourceArtifacts: historical.sourceArtifacts,
       hostExecutionSnapshot: historical.hostExecutionSnapshot,
       authority,

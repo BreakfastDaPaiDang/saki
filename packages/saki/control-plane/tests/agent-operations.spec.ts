@@ -1,7 +1,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { describe, expect, it, vi } from 'vitest'
-import type { GitHubReadRequest } from '@breakfastdapaidang/saki-github'
+import { githubIssueId, githubRepositoryDatabaseId, githubRepositoryId } from '@breakfastdapaidang/saki-github'
+import type { GitHubBranchSafetyFact, GitHubIssueDetailFact, GitHubReadRequest } from '@breakfastdapaidang/saki-github'
 import {
   canonicalDigest,
   computeStartAgentRunPayloadDigest,
@@ -11,9 +12,11 @@ import {
   startAgentRunHostOperationRequestSchema,
 } from '@breakfastdapaidang/saki-execution'
 import type {
+  HostOperationAdmissionExpectation,
   HostOperationAdmissionSource,
   HostOperationCancellationReason,
   HostOperationChange,
+  HostOperationId,
   HostOperationKind,
   HostOperationPreparation,
   HostOperationReceipt,
@@ -25,7 +28,8 @@ import type {
   StartAgentRunHostOperationRequest,
 } from '@breakfastdapaidang/saki-execution'
 import { AgentOperations } from '../src/agent-operations.ts'
-import { SAKI_BOARD_PROJECTION_FIXTURES, SAKI_GIT_CHANGES_PROJECTION_FIXTURES, SAKI_PROJECT_PROJECTION_FIXTURES, SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES } from '../src/fixtures.ts'
+import { SAKI_BOARD_MUTATION_OVERLAY_FIXTURES, SAKI_BOARD_PROJECTION_FIXTURES, SAKI_GIT_CHANGES_PROJECTION_FIXTURES, SAKI_PROJECT_PROJECTION_FIXTURES, SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES } from '../src/fixtures.ts'
+import type { GitHubWorkItemMutationContextResult } from '../src/github-sync.ts'
 import { activeHostProjectBinding } from '../src/projects.ts'
 import {
   agentOperationIntentRecordSchema,
@@ -52,7 +56,9 @@ import type {
   GiveWorkItemToAgentIntent,
   MoveWorkItemIntent,
   SakiAgentRunId,
+  SakiBoardWorkItemProjection,
   SakiControlIntentId,
+  SakiDevelopmentProjectId,
   SakiExecutionDispatchId,
   SakiGrantId,
   SakiInstallationId,
@@ -114,6 +120,33 @@ describe('manual Give-to-Agent operations', () => {
     }).success).toBe(false)
   })
 
+  it('freezes repeated definition headings and a default outcome through submission', async () => {
+    const test = harness()
+    test.execution.prepareMode = 'unavailable'
+    test.issueBody = [
+      'Unsectioned issue preface.',
+      '# Acceptance',
+      '- First criterion',
+      '# Acceptance',
+      '- Second criterion',
+      '# Blocked by',
+      'N/A',
+    ].join('\n')
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } })
+    const retained = only(test.intents)
+    expect(retained.workItemDefinition).toMatchObject({
+      intendedOutcome: 'Complete the Work Item as specified.',
+      acceptanceCriteria: ['First criterion', 'Second criterion'],
+      blockage: [],
+    })
+    const content = retained.hostRequest.run.input.content[0]
+    if (content?.type !== 'text') throw new Error('frozen Agent Run input is not text')
+    expect(content.text).toContain('Intended outcome:\nComplete the Work Item as specified.')
+    expect(content.text).toContain('Acceptance criteria:\n- First criterion\n- Second criterion')
+  })
+
   it('validates inverse write-admission ownership across the Agent lifecycle', async () => {
     const replaceWithAvailable = (test: Harness): void => {
       const current = only(test.admissions)
@@ -145,6 +178,24 @@ describe('manual Give-to-Agent operations', () => {
       claim: undefined,
     }))
     expect(() => reserved.operations.validateDurableState(new Set(), reserved.registry)).not.toThrow()
+    reserved.intents.records.set(reservedIntent.id, agentOperationIntentRecordSchema.parse({
+      ...reservedIntent,
+      phase: 'dispatching',
+    }))
+    expect(() => reserved.operations.validateDurableState(new Set(), reserved.registry)).not.toThrow()
+    const pendingAdmission = only(reserved.admissions)
+    if (pendingAdmission.state !== 'agent-run') throw new Error('test admission is not owned by the Agent Run')
+    reserved.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
+      ...pendingAdmission,
+      phase: 'accepted',
+      acceptedAt: pendingAdmission.updatedAt,
+    }))
+    expect(() => reserved.operations.validateDurableState(new Set(), reserved.registry))
+      .toThrow('incompatible write admission')
+    reserved.intents.records.set(reservedIntent.id, agentOperationIntentRecordSchema.parse({
+      ...reservedIntent,
+      phase: 'admission-reserved',
+    }))
     replaceWithAvailable(reserved)
     expect(() => reserved.operations.validateDurableState(new Set(), reserved.registry))
       .toThrow('exact reserved write admission')
@@ -301,6 +352,471 @@ describe('manual Give-to-Agent operations', () => {
     ])
   })
 
+  it.each([
+    ['a missing Project', (test: Harness) => {
+      test.eligibility.registry = developmentProjectRegistryRecordSchema.parse({
+        ...test.registry,
+        projects: [],
+      })
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'expected-revision' },
+    }],
+    ['a stale Project revision', (test: Harness) => {
+      test.eligibility.registry = developmentProjectRegistryRecordSchema.parse({
+        ...test.registry,
+        projects: test.registry.projects.map(project => ({ ...project, revision: project.revision + 1 })),
+      })
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'expected-revision' },
+    }],
+    ['a missing Agent Profile', (test: Harness) => {
+      test.eligibility.registry = developmentProjectRegistryRecordSchema.parse({
+        ...test.registry,
+        agentProfiles: [],
+      })
+    }, {
+      ok: false,
+      reason: 'unavailable',
+      detail: 'agent-profile-unavailable',
+    }],
+    ['an Agent Profile without a Model Route', (test: Harness) => {
+      test.eligibility.registry = developmentProjectRegistryRecordSchema.parse({
+        ...test.registry,
+        agentProfiles: test.registry.agentProfiles.map(profile => ({ ...profile, modelRouteRequest: null })),
+      })
+    }, {
+      ok: false,
+      reason: 'unavailable',
+      detail: 'model-route-unavailable',
+    }],
+  ] as const)('rejects %s before persisting an Agent operation', async (_condition, mutate, expected) => {
+    const test = harness()
+    mutate(test)
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject(expected)
+    expect(test.intents.size).toBe(0)
+    expect(test.assignments.size).toBe(0)
+    expect(test.sessions.size).toBe(0)
+    expect(test.runs.size).toBe(0)
+    expect(test.dispatches.size).toBe(0)
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
+  it.each([
+    ['an unavailable Board mutation context', (test: Harness) => {
+      test.eligibility.mutationContext = { ok: false, reason: 'not-found' }
+    }, {
+      ok: false,
+      reason: 'unavailable',
+      detail: 'work-item-detail-unavailable',
+    }],
+    ['a missing Work Item', (test: Harness) => { replaceBoardItems(test, []) }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'stale-remote' },
+    }],
+    ['a changed remote fingerprint', (test: Harness) => {
+      patchBoardItem(test, {
+        remoteFingerprint: SAKI_BOARD_MUTATION_OVERLAY_FIXTURES.conflict.workItem.remoteFingerprint,
+      })
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'stale-remote' },
+    }],
+    ['a non-Ready Work Item', (test: Harness) => { patchBoardItem(test, { status: 'backlog' }) }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'work-item-not-ready' },
+    }],
+    ['a closed Issue', (test: Harness) => { patchBoardItem(test, { issueState: 'closed' }) }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'work-item-not-ready' },
+    }],
+    ['an archived Work Item', (test: Harness) => { patchBoardItem(test, { archived: true }) }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'work-item-not-ready' },
+    }],
+    ['a Work Item outside the Project', (test: Harness) => { patchBoardItem(test, { notInProject: true }) }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'work-item-not-ready' },
+    }],
+  ] as const)('rejects %s before durable acceptance', async (_condition, mutate, expected) => {
+    const test = harness()
+    mutate(test)
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject(expected)
+    expect(test.intents.size).toBe(0)
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
+  it.each([
+    ['an unavailable Binding', (test: Harness) => { test.bindingCurrent = false }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'binding-unavailable' },
+    }],
+    ['a stale Binding revision', (test: Harness) => { test.bindingProjectRevision += 1 }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'binding-unavailable' },
+    }],
+    ['a missing write-admission row', (test: Harness) => { test.admissions.records.delete(BINDING_ID) }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'binding-unavailable' },
+    }],
+    ['a direct Git operation holding write admission', (test: Harness) => {
+      test.admissions.records.set(BINDING_ID, manualWriteAdmission())
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'writable-run-active' },
+    }],
+    ['an unavailable Host inspection', (test: Harness) => {
+      test.eligibility.projectInspection = { ok: false, reason: 'unavailable' }
+    }, {
+      ok: false,
+      reason: 'unavailable',
+      detail: 'host-unavailable',
+    }],
+    ['a stale Host Binding inspection', (test: Harness) => {
+      test.eligibility.projectInspection = { ok: false, reason: 'binding-stale' }
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'binding-unavailable' },
+    }],
+    ['an incomplete inherited-change baseline', (test: Harness) => {
+      updateProjectInspection(test, current => ({
+        ...current,
+        preEffectBaseline: {
+          kind: 'unavailable',
+          reason: 'io-failure',
+          observed: current.preEffectBaseline.observed,
+        },
+      }))
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'inherited-changes-unsafe' },
+    }],
+    ['a blocked structured-mutation observation', (test: Harness) => {
+      updateProjectInspection(test, current => ({
+        ...current,
+        observation: {
+          ...current.observation,
+          structuredMutation: { available: false, blockers: ['unmerged'] },
+        },
+      }))
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'inherited-changes-unsafe' },
+    }],
+    ['an unmerged index', (test: Harness) => {
+      updateProjectInspection(test, current => ({
+        ...current,
+        observation: {
+          ...current.observation,
+          index: { kind: 'unmerged', stagesDigest: { version: 1, digest: '9'.repeat(64) } },
+        },
+      }))
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'inherited-changes-unsafe' },
+    }],
+    ['a detached HEAD', (test: Harness) => {
+      updateProjectInspection(test, current => ({
+        ...current,
+        observation: { ...current.observation, branch: { kind: 'detached' } },
+      }))
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'binding-unavailable' },
+    }],
+  ] as const)('rejects %s before Host preparation', async (_condition, mutate, expected) => {
+    const test = harness()
+    mutate(test)
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject(expected)
+    expect(test.intents.size).toBe(0)
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
+  it.each([
+    ['an unavailable current Issue detail', (test: Harness) => {
+      test.eligibility.githubReadFailure = 'issue-detail'
+    }, {
+      ok: false,
+      reason: 'unavailable',
+      detail: 'work-item-detail-unavailable',
+    }],
+    ['a mismatched Issue identity', (test: Harness) => {
+      patchIssueDetail(test, { id: githubIssueId('I_other') })
+    }, staleRemote()],
+    ['a mismatched Repository identity', (test: Harness) => {
+      patchIssueDetail(test, { repositoryId: githubRepositoryId('R_other') })
+    }, staleRemote()],
+    ['a mismatched Repository database identity', (test: Harness) => {
+      patchIssueDetail(test, { repositoryDatabaseId: githubRepositoryDatabaseId('999') })
+    }, staleRemote()],
+    ['a mismatched Issue number', (test: Harness) => {
+      patchIssueDetail(test, { number: test.eligibility.issueDetail.number + 1 })
+    }, staleRemote()],
+    ['a mismatched Issue title', (test: Harness) => {
+      patchIssueDetail(test, { title: `${test.eligibility.issueDetail.title} changed` })
+    }, staleRemote()],
+    ['a mismatched Issue URL', (test: Harness) => {
+      patchIssueDetail(test, { url: `${test.eligibility.issueDetail.url}?changed=1` })
+    }, staleRemote()],
+    ['a mismatched Issue state', (test: Harness) => {
+      patchIssueDetail(test, { state: 'closed' })
+    }, staleRemote()],
+    ['a newer Issue revision', (test: Harness) => {
+      patchIssueDetail(test, { updatedAt: test.eligibility.issueDetail.updatedAt + 1 })
+    }, staleRemote()],
+    ['an Issue without acceptance criteria', (test: Harness) => {
+      patchIssueDetail(test, { body: '# Intended outcome\nShip the vertical slice.' })
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'acceptance-criteria-missing' },
+    }],
+    ['an Issue with a nonempty blocker', (test: Harness) => {
+      patchIssueDetail(test, {
+        body: '# Intended outcome\nShip the vertical slice.\n# Acceptance criteria\n- It ships\n# Blocked by\n- Upstream API',
+      })
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'work-item-blocked' },
+    }],
+    ['an unavailable branch-safety observation', (test: Harness) => {
+      test.eligibility.githubReadFailure = 'branch-safety'
+    }, {
+      ok: false,
+      reason: 'unavailable',
+      detail: 'branch-safety-unavailable',
+    }],
+    ['a protected current branch', (test: Harness) => {
+      test.eligibility.branchSafety = { kind: 'protected', branchExists: true, observedAt: 2 }
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'branch-protected' },
+    }],
+    ['an unknown legacy branch protection', (test: Harness) => {
+      test.eligibility.branchSafety = { kind: 'legacy-protection-unknown', branchExists: false, observedAt: 2 }
+    }, {
+      ok: false,
+      reason: 'conflict',
+      receipt: { state: 'conflict', reason: 'legacy-protection-unknown' },
+    }],
+  ] as const)('rejects %s before durable acceptance', async (_condition, mutate, expected) => {
+    const test = harness()
+    mutate(test)
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject(expected)
+    expect(test.intents.size).toBe(0)
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
+  it.each([
+    ['before eligibility', (test: Harness) => { test.authorityCurrent = false }, 0],
+    ['after Model Route resolution', (test: Harness) => {
+      test.afterResolveModelRoute = () => { test.authorityCurrent = false }
+    }, 1],
+  ] as const)('denies revoked authority %s without persisting an Agent operation', async (
+    _checkpoint,
+    revoke,
+    expectedRouteCount,
+  ) => {
+    const test = harness()
+    revoke(test)
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toEqual({
+      ok: false,
+      reason: 'denied',
+    })
+    expect(test.resolvedModelRoutes).toHaveLength(expectedRouteCount)
+    expect(test.intents.size).toBe(0)
+    expect(test.assignments.size).toBe(0)
+    expect(test.sessions.size).toBe(0)
+    expect(test.runs.size).toBe(0)
+    expect(test.dispatches.size).toBe(0)
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
+  it('owns one disposable GitHub reader and fails closed while it is detached', async () => {
+    const test = harness()
+
+    expect(() => { test.attachDuplicateGitHub() }).toThrow('already have a GitHub reader')
+    test.detachGitHub()
+    test.detachGitHub()
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toEqual({
+      ok: false,
+      reason: 'unavailable',
+      detail: 'work-item-detail-unavailable',
+    })
+    expect(test.intents.size).toBe(0)
+  })
+
+  it('rejects a replayed Intent id carrying different browser input', async () => {
+    const test = harness()
+    const submitted = intent()
+    await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+    const conflicting = giveWorkItemToAgentIntentSchema.parse({
+      ...submitted,
+      expectedRemoteFingerprint: `remote-fingerprint-${'4'.repeat(64)}`,
+    })
+
+    expect(await test.operations.submit(conflicting, actor(), AbortSignal.timeout(5_000))).toEqual({
+      ok: false,
+      reason: 'conflict',
+    })
+    expect(test.runs.size).toBe(1)
+    expect(test.execution.startCount).toBe(1)
+  })
+
+  it.each([
+    ['Intent', 'before', (test: Harness) => test.intents, false],
+    ['Intent', 'after', (test: Harness) => test.intents, true],
+    ['initial Assignment', 'before', (test: Harness) => test.assignments, false],
+    ['initial Assignment', 'after', (test: Harness) => test.assignments, true],
+  ] as const)('handles a %s put failure %s commit', async (_record, failure, table, committed) => {
+    const test = harness()
+    table(test).failNextPut = failure
+    const submitted = test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+
+    if (committed) {
+      await expect(submitted).resolves.toMatchObject({ ok: true, receipt: { state: 'started' } })
+    } else {
+      await expect(submitted).rejects.toThrow('injected put failure')
+    }
+  })
+
+  it('rejects an incompatible pre-existing child while materializing a retained Intent', async () => {
+    const test = harness()
+    test.assignments.failNextPut = 'before'
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow('injected put failure')
+    const retained = only(test.intents)
+    test.assignments.records.set(retained.assignmentId, workAssignmentRecordSchema.parse({
+      id: retained.assignmentId,
+      schemaVersion: 1,
+      revision: 0,
+      intentId: retained.id,
+      projectId: 'project-60606060-6060-4060-8060-606060606060',
+      workItemId: retained.payload.intent.workItemId,
+      primaryWorkSessionId: retained.workSessionId,
+      agentRunId: retained.agentRunId,
+      state: 'assigned',
+      createdAt: retained.createdAt,
+      updatedAt: retained.createdAt,
+    }))
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(`Saki child '${retained.assignmentId}' conflicts`)
+  })
+
+  it('rejects a concurrent record revision change instead of overwriting it', async () => {
+    const test = harness()
+    test.afterResolveModelRoute = () => {
+      test.intents.beforeNextUpdate = () => {
+        const retained = only(test.intents)
+        test.intents.records.set(retained.id, agentOperationIntentRecordSchema.parse({
+          ...retained,
+          revision: retained.revision + 1,
+          updatedAt: retained.updatedAt + 1,
+        }))
+      }
+    }
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow()
+    expect(only(test.intents)).toMatchObject({ revision: 1, phase: 'prepared' })
+  })
+
+  it.each([
+    ['a deleted admission row', (test: Harness) => { test.admissions.records.delete(BINDING_ID) }],
+    ['a direct Git operation', (test: Harness) => {
+      test.admissions.records.set(BINDING_ID, manualWriteAdmission())
+    }],
+    ['another Agent Run', (test: Harness) => {
+      test.admissions.records.set(BINDING_ID, foreignAgentWriteAdmission())
+    }],
+  ] as const)('keeps a prepared operation retryable when %s wins after eligibility', async (_holder, occupy) => {
+    const test = harness()
+    test.afterResolveModelRoute = () => { occupy(test) }
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'unavailable',
+      receipt: { state: 'prepared' },
+    })
+    expect(only(test.intents)).toMatchObject({ phase: 'prepared' })
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
+  it('adopts an exact admission reservation whose storage acknowledgement was lost', async () => {
+    const test = harness()
+    test.afterResolveModelRoute = () => {
+      test.admissions.afterNextUpdate = () => { throw new Error('simulated admission acknowledgement loss') }
+    }
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({ ok: true, receipt: { state: 'started' } })
+    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+    expect(test.execution.startCount).toBe(1)
+  })
+
+  it('propagates an admission storage failure that did not commit its reservation', async () => {
+    const test = harness()
+    test.afterResolveModelRoute = () => {
+      test.admissions.beforeNextUpdate = () => { throw new Error('simulated admission storage failure') }
+    }
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow('simulated admission storage failure')
+    expect(only(test.admissions)).toMatchObject({ state: 'available' })
+    expect(only(test.intents)).toMatchObject({ phase: 'prepared' })
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
+  it('rejects a stale Binding revision in a replayed admission reservation', async () => {
+    const test = harness()
+    test.afterResolveModelRoute = () => {
+      test.admissions.afterNextUpdate = () => {
+        const reserved = only(test.admissions)
+        if (reserved.state !== 'agent-run') throw new Error('test admission was not reserved')
+        test.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
+          ...reserved,
+          revision: reserved.revision + 1,
+          bindingRevision: reserved.bindingRevision + 1,
+          updatedAt: reserved.updatedAt + 1,
+        }))
+        throw new Error('simulated stale reservation acknowledgement')
+      }
+    }
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow('simulated stale reservation acknowledgement')
+    expect(only(test.intents)).toMatchObject({ phase: 'prepared' })
+    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'reserved' })
+    expect(test.execution.prepareCount).toBe(0)
+  })
+
   it('advances the fencing token after an expired claim without allocating a second Run', async () => {
     const test = harness()
     const submitted = intent('intent-99999999-9999-4999-8999-999999999999' as SakiControlIntentId)
@@ -328,6 +844,38 @@ describe('manual Give-to-Agent operations', () => {
     expect(Object.hasOwn(only(test.dispatches), 'claim')).toBe(false)
     expect(test.runs.size).toBe(1)
     expect(test.execution.startCount).toBe(1)
+  })
+
+  it('returns the admission-reserved receipt while another executor owns the current claim', async () => {
+    const test = harness()
+    const submitted = intent('intent-62626262-6262-4262-8262-626262626262' as SakiControlIntentId)
+    test.intents.simulateCrashAfterUpdateWhen(record => record.phase === 'admission-reserved')
+    await expect(test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(SimulatedProcessCrash)
+    const pending = only(test.dispatches)
+    const now = Date.now()
+    test.dispatches.records.set(pending.id, executionDispatchRecordSchema.parse({
+      ...pending,
+      revision: pending.revision + 1,
+      state: 'claimed',
+      latestFencingToken: 1,
+      claim: {
+        id: 'dispatch-claim-63636363-6363-4363-8363-636363636363',
+        executorHostId: 'host-64646464-6464-4464-8464-646464646464',
+        fencingToken: 1,
+        issuedAt: now,
+        expiresAt: now + 30_000,
+      },
+      updatedAt: Math.max(pending.updatedAt, now),
+    }))
+    test.restart()
+
+    expect(await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'unavailable',
+      receipt: { state: 'admission-reserved' },
+    })
+    expect(test.execution.prepareCount).toBe(0)
   })
 
   it('renews the same executor claim with one CAS and no fencing-token change', async () => {
@@ -360,6 +908,67 @@ describe('manual Give-to-Agent operations', () => {
       })
       expect(test.execution.prepareCount).toBe(2)
       expect(test.execution.startCount).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reuses a current claim without a write when its requested expiry is unchanged', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    try {
+      const test = harness()
+      test.execution.prepareMode = 'unavailable'
+      await test.operations.submit(intent(), actor(), new AbortController().signal)
+      const first = only(test.dispatches)
+
+      await test.operations.submit(intent(), actor(), new AbortController().signal)
+
+      expect(only(test.dispatches)).toEqual(first)
+      expect(test.execution.prepareCount).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('adopts an exact claim renewal whose storage acknowledgement was lost', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    try {
+      const test = harness()
+      test.execution.prepareMode = 'unavailable'
+      await test.operations.submit(intent(), actor(), new AbortController().signal)
+      const first = only(test.dispatches)
+      test.dispatches.afterNextUpdate = () => { throw new Error('simulated claim acknowledgement loss') }
+      vi.setSystemTime(2_000)
+
+      expect(await test.operations.submit(intent(), actor(), new AbortController().signal))
+        .toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } })
+      expect(only(test.dispatches)).toMatchObject({
+        revision: first.revision + 1,
+        state: 'claimed',
+        latestFencingToken: 1,
+        claim: { id: first.claim?.id, fencingToken: 1, expiresAt: 32_000 },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('propagates a claim-renewal storage failure that committed no write', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    try {
+      const test = harness()
+      test.execution.prepareMode = 'unavailable'
+      await test.operations.submit(intent(), actor(), new AbortController().signal)
+      const first = only(test.dispatches)
+      test.dispatches.beforeNextUpdate = () => { throw new Error('simulated claim storage failure') }
+      vi.setSystemTime(2_000)
+
+      await expect(test.operations.submit(intent(), actor(), new AbortController().signal))
+        .rejects.toThrow('simulated claim storage failure')
+      expect(only(test.dispatches)).toEqual(first)
     } finally {
       vi.useRealTimers()
     }
@@ -411,6 +1020,191 @@ describe('manual Give-to-Agent operations', () => {
       }
     },
   )
+
+  it.each(['claim identity', 'executor identity', 'fencing token'] as const)(
+    'rejects a changed Dispatch %s after Host preparation',
+    async (changed) => {
+      const test = harness()
+      test.execution.afterPrepare = () => {
+        const current = only(test.dispatches)
+        if (current.state !== 'claimed' || current.claim === undefined) {
+          throw new Error('test Dispatch was not claimed')
+        }
+        const claim = {
+          ...current.claim,
+          ...(changed === 'claim identity'
+            ? { id: 'dispatch-claim-45454545-4545-4545-8545-454545454545' }
+            : changed === 'executor identity'
+              ? { executorHostId: 'host-46464646-4646-4646-8646-464646464646' }
+              : { fencingToken: current.claim.fencingToken + 1 }),
+        }
+        test.dispatches.records.set(current.id, executionDispatchRecordSchema.parse({
+          ...current,
+          latestFencingToken: claim.fencingToken,
+          claim,
+        }))
+      }
+
+      expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+        .toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } })
+      expect(only(test.dispatches)).toMatchObject({ state: 'claimed' })
+      expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'reserved' })
+      expect(test.execution.prepareCount).toBe(1)
+      expect(test.execution.startCount).toBe(0)
+    },
+  )
+
+  it.each(['source-conflict', 'terminal-failed'] as const)(
+    'retains write ownership when Host preparation reports %s',
+    async (prepareMode) => {
+      const test = harness()
+      test.execution.prepareMode = prepareMode
+
+      expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'protocol' },
+      })
+      expect(only(test.dispatches)).toMatchObject({ state: 'reconciliation-required', terminalReason: 'protocol' })
+      expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+      expect(only(test.runs)).toMatchObject({ state: 'reconciliation-required' })
+      expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+    },
+  )
+
+  it.each([
+    ['preparation fingerprint', (receipt: Extract<HostOperationReceipt<'start-agent-run'>, { readonly ok: true }>) => ({
+      ...receipt,
+      preparation: {
+        ...receipt.preparation,
+        requestFingerprint: { ...receipt.preparation.requestFingerprint, digest: 'e'.repeat(64) },
+      },
+    }), 'Host preparation disagrees'],
+    ['snapshot source', (receipt: Extract<HostOperationReceipt<'start-agent-run'>, { readonly ok: true }>) => ({
+      ...receipt,
+      snapshot: {
+        ...receipt.snapshot,
+        source: { ...receipt.snapshot.source, payloadDigest: 'e'.repeat(64) },
+      },
+    }), 'Host snapshot disagrees'],
+  ] as const)('rejects Host preparation with mismatched %s', async (_evidence, mutate, message) => {
+    const test = harness()
+    test.execution.prepareResult = mutate
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).rejects.toThrow(message)
+    expect(test.execution.startCount).toBe(0)
+  })
+
+  it.each([
+    ['before the post-prepare read', (test: Harness) => {
+      test.execution.afterPrepare = () => { test.dispatches.records.clear() }
+    }],
+    ['during the preparation write', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.beforeNextUpdate = () => {
+          test.dispatches.records.clear()
+          throw new Error('simulated concurrent Dispatch deletion')
+        }
+      }
+    }],
+    ['after the preparation write', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.afterNextUpdate = () => { test.dispatches.records.clear() }
+      }
+    }],
+  ] as const)('keeps the operation retryable when its Dispatch disappears %s', async (_checkpoint, inject) => {
+    const test = harness()
+    inject(test)
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } })
+    expect(test.dispatches.size).toBe(0)
+    expect(test.execution.startCount).toBe(0)
+  })
+
+  it('propagates a preparation storage failure while retaining the exact claim owner', async () => {
+    const test = harness()
+    test.execution.afterPrepare = () => {
+      test.dispatches.beforeNextUpdate = () => { throw new Error('simulated preparation storage failure') }
+    }
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow('simulated preparation storage failure')
+    const dispatch = only(test.dispatches)
+    expect(dispatch).toMatchObject({ state: 'claimed' })
+    expect(dispatch.operationSnapshot).toBeUndefined()
+    expect(test.execution.startCount).toBe(0)
+  })
+
+  it('adopts an exact preparation write whose storage acknowledgement was lost', async () => {
+    const test = harness()
+    test.execution.afterPrepare = () => {
+      test.dispatches.afterNextUpdate = () => { throw new Error('simulated preparation acknowledgement loss') }
+    }
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({ ok: true, receipt: { state: 'started' } })
+    expect(test.execution.startCount).toBe(1)
+  })
+
+  it('adopts an accepted Dispatch whose storage acknowledgement was lost', async () => {
+    const test = harness()
+    test.execution.afterPrepare = () => {
+      test.admissions.afterNextUpdate = () => {
+        test.dispatches.afterNextUpdate = () => { throw new Error('simulated acceptance acknowledgement loss') }
+      }
+    }
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({ ok: true, receipt: { state: 'started' } })
+    expect(only(test.dispatches)).toMatchObject({ state: 'accepted', acceptedFencingToken: 1 })
+    expect(test.execution.startCount).toBe(1)
+  })
+
+  it('propagates a final Dispatch acceptance write failure that committed no state', async () => {
+    const test = harness()
+    test.execution.afterPrepare = () => {
+      test.admissions.afterNextUpdate = () => {
+        test.dispatches.beforeNextUpdate = () => { throw new Error('simulated final acceptance storage failure') }
+      }
+    }
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow('simulated final acceptance storage failure')
+    expect(only(test.dispatches)).toMatchObject({ state: 'claimed', operationSnapshot: { state: 'prepared' } })
+    expect(test.execution.startCount).toBe(0)
+  })
+
+  it.each([
+    ['replacement', (current: Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }>) =>
+      bindingWriteAdmissionRecordSchema.parse({
+        id: BINDING_ID,
+        schemaVersion: 1,
+        revision: current.revision + 1,
+        state: 'available',
+        updatedAt: current.updatedAt + 1,
+      }), { state: 'available' }],
+    ['binding-revision tampering', (current: Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }>) =>
+      bindingWriteAdmissionRecordSchema.parse({
+        ...current,
+        revision: current.revision + 1,
+        bindingRevision: current.bindingRevision + 1,
+        updatedAt: current.updatedAt + 1,
+      }), { state: 'agent-run', phase: 'reserved' }],
+  ] as const)('rejects write-admission %s after Host preparation', async (_condition, mutate, expectedAdmission) => {
+    const test = harness()
+    test.execution.afterPrepare = () => {
+      const current = only(test.admissions)
+      if (current.state !== 'agent-run') throw new Error('test admission is not reserved for its Agent Run')
+      test.admissions.records.set(BINDING_ID, mutate(current))
+    }
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow()
+    expect(only(test.dispatches)).toMatchObject({ state: 'claimed', operationSnapshot: { state: 'prepared' } })
+    expect(only(test.admissions)).toMatchObject(expectedAdmission)
+    expect(test.execution.startCount).toBe(0)
+  })
 
   it('does not accept a claim that expires while Host preparation is in flight', async () => {
     const test = harness()
@@ -512,6 +1306,173 @@ describe('manual Give-to-Agent operations', () => {
     },
   )
 
+  it('cancels without effect when authority is revoked before Host admission', async () => {
+    const test = harness()
+    test.execution.beforeAdmission = () => { test.authorityCurrent = false }
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'canceled',
+      receipt: { state: 'canceled', reason: 'authority-revoked' },
+    })
+    expect(only(test.dispatches)).toMatchObject({
+      state: 'accepted',
+      operationSnapshot: { state: 'canceled', reason: 'authority-revoked', effect: 'none' },
+    })
+    expect(only(test.assignments)).toMatchObject({ state: 'canceled' })
+    expect(only(test.sessions)).toMatchObject({ state: 'canceled' })
+    expect(only(test.runs)).toMatchObject({ state: 'canceled' })
+    expect(only(test.admissions)).toMatchObject({ state: 'available' })
+    expect(test.execution.startCount).toBe(1)
+    expect(test.execution.cancelCount).toBe(1)
+    expect(test.moves).toHaveLength(0)
+  })
+
+  it('denies Host admission after its retained Binding revision changes', async () => {
+    const test = harness()
+    test.execution.beforeAdmission = () => {
+      const accepted = only(test.admissions)
+      if (accepted.state !== 'agent-run') throw new Error('test admission was not accepted')
+      test.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
+        ...accepted,
+        revision: accepted.revision + 1,
+        bindingRevision: accepted.bindingRevision + 1,
+        updatedAt: accepted.updatedAt + 1,
+      }))
+    }
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'reconciliation-required',
+      receipt: { state: 'reconciliation-required', reason: 'protocol' },
+    })
+    expect(test.moves).toHaveLength(0)
+    expect(only(test.dispatches)).toMatchObject({
+      state: 'reconciliation-required',
+      operationSnapshot: { state: 'canceled', reason: 'source-canceled', effect: 'none' },
+    })
+  })
+
+  it.each([
+    ['source kind', (value: HostOperationAdmissionExpectation) => ({
+      ...value,
+      source: {
+        kind: 'control-intent' as const,
+        intentId: 'intent-58585858-5858-4858-8858-585858585858' as SakiControlIntentId,
+        intentRevision: 0,
+        payloadDigest: value.source.payloadDigest,
+      },
+    })],
+    ['source evidence', (value: HostOperationAdmissionExpectation) => ({
+      ...value,
+      source: { ...value.source, payloadDigest: 'f'.repeat(64) },
+    })],
+    ['preparation', (value: HostOperationAdmissionExpectation) => ({
+      ...value,
+      preparation: {
+        ...value.preparation,
+        requestFingerprint: { ...value.preparation.requestFingerprint, digest: 'f'.repeat(64) },
+      },
+    })],
+    ['Binding id', (value: HostOperationAdmissionExpectation) => ({
+      ...value,
+      bindingId: 'binding-59595959-5959-4959-8959-595959595959' as SakiResourceBindingId,
+    })],
+    ['Binding revision', (value: HostOperationAdmissionExpectation) => ({
+      ...value,
+      bindingRevision: value.bindingRevision + 1,
+    })],
+  ] as const)('denies Host admission with stale %s', async (_evidence, mutate) => {
+    const test = harness()
+    test.execution.admissionExpectation = mutate
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'reconciliation-required',
+      receipt: { state: 'reconciliation-required', reason: 'protocol' },
+    })
+    expect(test.moves).toHaveLength(0)
+  })
+
+  it.each([
+    ['Dispatch', (test: Harness) => { test.dispatches.records.clear() }],
+    ['Intent', (test: Harness) => { test.intents.records.clear() }],
+  ] as const)('fails closed when the accepted %s disappears before Host admission', async (_owner, remove) => {
+    const test = harness()
+    test.execution.beforeAdmission = () => { remove(test) }
+
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).rejects.toThrow('missing-key')
+    expect(test.moves).toHaveLength(0)
+  })
+
+  it.each([
+    ['is missing', (test: Harness) => { test.admissions.records.clear() }],
+    ['is malformed', (test: Harness) => { test.admissions.records.set(BINDING_ID, { malformed: true } as never) }],
+  ] as const)('returns unavailable when the accepted admission %s at the Host boundary', async (_state, mutate) => {
+    const test = harness()
+    test.execution.beforeAdmission = () => { mutate(test) }
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'unavailable',
+      receipt: { state: 'dispatching' },
+    })
+    expect(test.moves).toHaveLength(0)
+  })
+
+  it.each([
+    ['becomes unavailable', (test: Harness) => { test.bindingCurrent = false }],
+    ['changes Project revision', (test: Harness) => { test.bindingProjectRevision += 1 }],
+  ] as const)('denies Host admission when the current Binding %s', async (_change, mutate) => {
+    const test = harness()
+    test.execution.beforeAdmission = () => { mutate(test) }
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'reconciliation-required',
+      receipt: { state: 'reconciliation-required', reason: 'protocol' },
+    })
+    expect(test.moves).toHaveLength(0)
+  })
+
+  it.each([
+    ['succeeded', {
+      result: { ok: true, receipt: { state: 'started' } },
+      intentState: 'started',
+      runState: 'running',
+      moves: 1,
+    }],
+    ['reconciliation', {
+      result: {
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'effect-unknown' },
+      },
+      intentState: 'reconciliation-required',
+      runState: 'reconciliation-required',
+      moves: 0,
+    }],
+    ['nonterminal', {
+      result: { ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } },
+      intentState: 'dispatching',
+      runState: 'starting',
+      moves: 0,
+    }],
+  ] as const)('adopts a %s Host cancellation result after effect-boundary authority denial', async (
+    cancelMode,
+    expected,
+  ) => {
+    const test = harness()
+    test.execution.beforeAdmission = () => { test.authorityCurrent = false }
+    test.execution.cancelMode = cancelMode
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject(expected.result)
+    expect(only(test.intents)).toMatchObject({ phase: expected.intentState })
+    expect(only(test.runs)).toMatchObject({ state: expected.runState })
+    expect(test.moves).toHaveLength(expected.moves)
+  })
+
   it('replays a lost final acceptance acknowledgement without a second Host start', async () => {
     const test = harness()
     const submitted = intent('intent-37373737-3737-4737-8737-373737373737' as SakiControlIntentId)
@@ -538,9 +1499,35 @@ describe('manual Give-to-Agent operations', () => {
       test.dispatches.simulateCrashAfterUpdateWhen(dispatch => dispatch.state === 'claimed'
         && dispatch.preparation === undefined)
     }],
+    ['after admission reservation', (test: Harness) => {
+      test.afterResolveModelRoute = () => {
+        test.admissions.simulateCrashAfterUpdateWhen(admission => admission.state === 'agent-run'
+          && admission.phase === 'reserved')
+      }
+    }],
     ['after Host preparation', (test: Harness) => {
       test.execution.afterPrepare = () => {
         throw new SimulatedProcessCrash('Host preparation committed before the process stopped')
+      }
+    }],
+    ['after recording Host preparation', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.afterNextUpdate = () => {
+          test.admissions.beforeNextUpdate = () => {
+            throw new SimulatedProcessCrash('process stopped before accepting the prepared operation')
+          }
+        }
+      }
+    }],
+    ['after admission acceptance', (test: Harness) => {
+      test.execution.afterPrepare = () => {
+        test.dispatches.afterNextUpdate = () => {
+          test.admissions.afterNextUpdate = () => {
+            test.dispatches.beforeNextUpdate = () => {
+              throw new SimulatedProcessCrash('process stopped before accepting the prepared Dispatch')
+            }
+          }
+        }
       }
     }],
     ['after acceptance', (test: Harness) => {
@@ -572,6 +1559,200 @@ describe('manual Give-to-Agent operations', () => {
       operationSnapshot: { state: 'succeeded' },
     })
     expect(test.operations.validateDurableState(new Set(), test.registry).runningAgentRuns).toHaveLength(1)
+  })
+
+  it('replays retained nonterminal Intents after restoring running Host operations', async () => {
+    const test = harness()
+    const submitted = intent('intent-47474747-4747-4747-8747-474747474747' as SakiControlIntentId)
+    test.execution.startMode = 'unavailable'
+    await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+    const state = test.operations.validateDurableState(new Set(), test.registry)
+    expect(state.intents).toHaveLength(1)
+    expect(state.runningAgentRuns).toHaveLength(0)
+    test.execution.startMode = 'success'
+
+    await expect(test.operations.initializeValidated(state)).resolves.toBeUndefined()
+
+    expect(only(test.intents)).toMatchObject({ phase: 'started' })
+    expect(only(test.runs)).toMatchObject({ state: 'running' })
+    expect(test.moves).toHaveLength(1)
+  })
+
+  it('reacts only to relevant nonterminal Host wake-ups and contains recovery failure', async () => {
+    const completed = harness()
+    await completed.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const completedOperation = only(completed.dispatches).preparation?.operation
+    if (completedOperation === undefined) throw new Error('test Dispatch lacks Host preparation')
+    completed.operations.hostChanged({
+      operation: {
+        ...completedOperation,
+        id: 'host-operation-48484848-4848-4848-8848-484848484848' as HostOperationId,
+      },
+      revision: 1,
+    })
+    completed.operations.hostChanged({ operation: completedOperation, revision: 2 })
+    await completed.operations.dispose()
+    expect(completed.execution.startCount).toBe(1)
+
+    const missing = harness()
+    missing.execution.startMode = 'unavailable'
+    await missing.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const missingDispatch = only(missing.dispatches)
+    const missingOperation = missingDispatch.preparation?.operation
+    if (missingOperation === undefined) throw new Error('test Dispatch lacks Host preparation')
+    missing.intents.records.delete(missingDispatch.intentId)
+    missing.operations.hostChanged({ operation: missingOperation, revision: 1 })
+    await missing.operations.dispose()
+    expect(missing.execution.startCount).toBe(1)
+
+    const recovered = harness()
+    recovered.execution.startMode = 'unavailable'
+    await recovered.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const recoveredOperation = only(recovered.dispatches).preparation?.operation
+    if (recoveredOperation === undefined) throw new Error('test Dispatch lacks Host preparation')
+    recovered.execution.startMode = 'success'
+    recovered.operations.hostChanged({ operation: recoveredOperation, revision: 1 })
+    await recovered.operations.dispose()
+    expect(only(recovered.intents)).toMatchObject({ phase: 'started' })
+    expect(recovered.moves).toHaveLength(1)
+
+    const failed = harness()
+    failed.execution.startMode = 'unavailable'
+    await failed.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const failedOperation = only(failed.dispatches).preparation?.operation
+    if (failedOperation === undefined) throw new Error('test Dispatch lacks Host preparation')
+    failed.execution.inspectError = new Error('simulated notification recovery failure')
+    failed.operations.hostChanged({ operation: failedOperation, revision: 1 })
+    await expect(failed.operations.dispose()).resolves.toBeUndefined()
+    expect(only(failed.intents)).toMatchObject({ phase: 'dispatching' })
+  })
+
+  it.each([
+    ['reconciliation-required', 'reconciliation', {
+      result: {
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'effect-unknown' },
+      },
+      dispatch: { state: 'reconciliation-required', terminalReason: 'effect-unknown' },
+      runState: 'reconciliation-required',
+      admissionState: 'agent-run',
+    }],
+    ['failed', 'failed', {
+      result: {
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'protocol' },
+      },
+      dispatch: {
+        state: 'reconciliation-required',
+        terminalReason: 'protocol',
+        operationSnapshot: { state: 'failed', effect: 'none' },
+      },
+      runState: 'reconciliation-required',
+      admissionState: 'agent-run',
+    }],
+    ['source-canceled', 'canceled-source', {
+      result: {
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'protocol' },
+      },
+      dispatch: {
+        state: 'reconciliation-required',
+        terminalReason: 'protocol',
+        operationSnapshot: { state: 'canceled', reason: 'source-canceled', effect: 'none' },
+      },
+      runState: 'reconciliation-required',
+      admissionState: 'agent-run',
+    }],
+    ['authority-canceled', 'canceled-authority', {
+      result: {
+        ok: false,
+        reason: 'canceled',
+        receipt: { state: 'canceled', reason: 'authority-revoked' },
+      },
+      dispatch: {
+        state: 'accepted',
+        operationSnapshot: { state: 'canceled', reason: 'authority-revoked', effect: 'none' },
+      },
+      runState: 'canceled',
+      admissionState: 'available',
+    }],
+  ] as const)('adopts %s Host evidence while recovering an accepted Dispatch', async (
+    _evidence,
+    inspectMode,
+    expected,
+  ) => {
+    const test = harness()
+    test.execution.startMode = 'unavailable'
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    test.execution.inspectMode = inspectMode
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject(expected.result)
+    expect(only(test.dispatches)).toMatchObject(expected.dispatch)
+    expect(only(test.runs)).toMatchObject({ state: expected.runState })
+    expect(only(test.admissions)).toMatchObject({ state: expected.admissionState })
+    expect(test.moves).toHaveLength(0)
+  })
+
+  it.each([
+    ['unavailable', {
+      result: { ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } },
+      dispatch: { state: 'accepted' },
+    }],
+    ['source-conflict', {
+      result: {
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'protocol' },
+      },
+      dispatch: { state: 'reconciliation-required', terminalReason: 'protocol' },
+    }],
+  ] as const)('handles an exact accepted-Dispatch preparation replay that becomes %s', async (prepareMode, expected) => {
+    const test = harness()
+    test.execution.startMode = 'unavailable'
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    test.execution.prepareMode = prepareMode
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject(expected.result)
+    expect(only(test.dispatches)).toMatchObject(expected.dispatch)
+    expect(test.execution.startCount).toBe(1)
+  })
+
+  it('reconciles an accepted Dispatch whose retained Run entered an incompatible terminal state', async () => {
+    const test = harness()
+    test.execution.startMode = 'unavailable'
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const run = only(test.runs)
+    test.runs.records.set(run.id, agentRunRecordSchema.parse({ ...run, state: 'canceled' }))
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'reconciliation-required',
+      receipt: { state: 'reconciliation-required', reason: 'protocol' },
+    })
+    expect(only(test.runs)).toMatchObject({ state: 'reconciliation-required' })
+    expect(test.execution.startCount).toBe(1)
+  })
+
+  it('finishes a retained succeeded Dispatch without rewriting already-finalized Run children', async () => {
+    const test = harness()
+    const submitted = intent('intent-42424242-4242-4242-8242-424242424242' as SakiControlIntentId)
+    await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+    const retained = only(test.intents)
+    test.intents.records.set(retained.id, agentOperationIntentRecordSchema.parse({
+      ...retained,
+      phase: 'dispatching',
+    }))
+
+    expect(await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({ ok: true, receipt: { state: 'started' } })
+    expect(only(test.runs)).toMatchObject({ state: 'running', revision: 2 })
+    expect(only(test.assignments)).toMatchObject({ state: 'active', revision: 1 })
+    expect(test.moves).toHaveLength(2)
   })
 
   it('stops startup before Intent replay when a proven running Run cannot resume', async () => {
@@ -665,6 +1846,55 @@ describe('manual Give-to-Agent operations', () => {
     expect(test.moves).toHaveLength(0)
   })
 
+  it.each([
+    ['failed', {
+      result: {
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'protocol' },
+      },
+      dispatchState: 'reconciliation-required',
+      runState: 'reconciliation-required',
+      admissionState: 'agent-run',
+    }],
+    ['canceled-source', {
+      result: {
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'protocol' },
+      },
+      dispatchState: 'reconciliation-required',
+      runState: 'reconciliation-required',
+      admissionState: 'agent-run',
+    }],
+    ['canceled-authority', {
+      result: {
+        ok: false,
+        reason: 'canceled',
+        receipt: { state: 'canceled', reason: 'authority-revoked' },
+      },
+      dispatchState: 'accepted',
+      runState: 'canceled',
+      admissionState: 'available',
+    }],
+  ] as const)('adopts a %s terminal Host start outcome', async (startMode, expected) => {
+    const test = harness()
+    test.execution.startMode = startMode
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject(expected.result)
+    expect(only(test.dispatches)).toMatchObject({
+      state: expected.dispatchState,
+      operationSnapshot: {
+        state: startMode === 'failed' ? 'failed' : 'canceled',
+        effect: 'none',
+      },
+    })
+    expect(only(test.runs)).toMatchObject({ state: expected.runState })
+    expect(only(test.admissions)).toMatchObject({ state: expected.admissionState })
+    expect(test.moves).toHaveLength(0)
+  })
+
   it('preserves an accepted Dispatch while revoked Host cancellation proves no effect', async () => {
     const test = harness()
     const submitted = intent('intent-dddddddd-dddd-4ddd-8ddd-dddddddddddd' as SakiControlIntentId)
@@ -693,6 +1923,190 @@ describe('manual Give-to-Agent operations', () => {
     expect(only(test.admissions)).toMatchObject({ state: 'available' })
     expect(test.execution.cancelCount).toBe(1)
     expect(test.runs.size).toBe(1)
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+  })
+
+  it('keeps a revoked claimed Dispatch retryable while exact Host preparation is unavailable', async () => {
+    const test = harness()
+    test.execution.prepareMode = 'unavailable'
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    test.authorityCurrent = false
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'unavailable',
+      receipt: { state: 'dispatching' },
+    })
+    expect(only(test.dispatches)).toMatchObject({ state: 'claimed' })
+    expect(test.execution.cancelCount).toBe(0)
+  })
+
+  it('recovers a committed canceled Dispatch prefix without canceling the Host twice', async () => {
+    const test = harness()
+    const submitted = intent('intent-61616161-6161-4161-8161-616161616161' as SakiControlIntentId)
+    test.execution.prepareMode = 'unavailable'
+    await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+    test.authorityCurrent = false
+    test.execution.prepareMode = 'success'
+    test.dispatches.simulateCrashAfterUpdateWhen(dispatch => dispatch.state === 'canceled')
+
+    await expect(test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(SimulatedProcessCrash)
+    expect(only(test.dispatches)).toMatchObject({ state: 'canceled', terminalReason: 'authority-revoked' })
+    test.restart()
+
+    expect(await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'canceled',
+      receipt: { state: 'canceled', reason: 'authority-revoked' },
+    })
+    expect(test.execution.cancelCount).toBe(1)
+  })
+
+  it.each([
+    ['disappears', (test: Harness) => { test.admissions.records.clear() }, false],
+    ['changes owner', (test: Harness) => { test.admissions.records.set(BINDING_ID, foreignAgentWriteAdmission()) }, true],
+  ] as const)('protects terminal admission release when its row %s before the read', async (
+    _change,
+    mutate,
+    completes,
+  ) => {
+    const test = harness()
+    test.execution.beforeAdmission = () => {
+      test.authorityCurrent = false
+      test.runs.afterNextUpdate = () => { mutate(test) }
+    }
+    const submitted = test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+
+    if (completes) {
+      await expect(submitted).resolves.toMatchObject({ ok: false, reason: 'canceled' })
+      expect(only(test.admissions)).toMatchObject({ state: 'agent-run' })
+    } else {
+      await expect(submitted).rejects.toThrow()
+    }
+  })
+
+  it.each([
+    ['becomes available', (test: Harness) => {
+      const current = only(test.admissions)
+      test.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
+        id: BINDING_ID,
+        schemaVersion: 1,
+        revision: current.revision + 1,
+        state: 'available',
+        updatedAt: current.updatedAt + 1,
+      }))
+    }, true],
+    ['changes owner', (test: Harness) => {
+      test.admissions.records.set(BINDING_ID, foreignAgentWriteAdmission())
+    }, false],
+  ] as const)('protects terminal admission release when its row %s during the write', async (
+    _change,
+    mutate,
+    completes,
+  ) => {
+    const test = harness()
+    test.execution.beforeAdmission = () => {
+      test.authorityCurrent = false
+      test.runs.afterNextUpdate = () => {
+        test.admissions.beforeNextUpdate = () => { mutate(test) }
+      }
+    }
+    const submitted = test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+
+    if (completes) {
+      await expect(submitted).resolves.toMatchObject({ ok: false, reason: 'canceled' })
+      expect(only(test.admissions)).toMatchObject({ state: 'available' })
+    } else {
+      await expect(submitted).rejects.toThrow()
+      expect(only(test.admissions)).toMatchObject({ state: 'agent-run' })
+    }
+  })
+
+  it.each([
+    ['succeeded', {
+      result: { ok: true, receipt: { state: 'started' } },
+      dispatch: { state: 'accepted', operationSnapshot: { state: 'succeeded' } },
+      intentState: 'started',
+      runState: 'running',
+      admissionState: 'agent-run',
+      moves: 1,
+    }],
+    ['reconciliation', {
+      result: {
+        ok: false,
+        reason: 'reconciliation-required',
+        receipt: { state: 'reconciliation-required', reason: 'effect-unknown' },
+      },
+      dispatch: { state: 'reconciliation-required', terminalReason: 'effect-unknown' },
+      intentState: 'reconciliation-required',
+      runState: 'reconciliation-required',
+      admissionState: 'agent-run',
+      moves: 0,
+    }],
+    ['failed', {
+      result: { ok: false, reason: 'canceled', receipt: { state: 'canceled' } },
+      dispatch: { state: 'accepted', operationSnapshot: { state: 'failed', effect: 'none' } },
+      intentState: 'canceled',
+      runState: 'canceled',
+      admissionState: 'available',
+      moves: 0,
+    }],
+    ['nonterminal', {
+      result: { ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } },
+      dispatch: { state: 'accepted', operationSnapshot: { state: 'prepared' } },
+      intentState: 'dispatching',
+      runState: 'starting',
+      admissionState: 'agent-run',
+      moves: 0,
+    }],
+  ] as const)('adopts a %s Host cancellation outcome after authority revocation', async (cancelMode, expected) => {
+    const test = harness()
+    test.execution.startMode = 'unavailable'
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    test.authorityCurrent = false
+    test.execution.cancelMode = cancelMode
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject(expected.result)
+    expect(only(test.dispatches)).toMatchObject(expected.dispatch)
+    expect(only(test.intents)).toMatchObject({ phase: expected.intentState })
+    expect(only(test.runs)).toMatchObject({ state: expected.runState })
+    expect(only(test.admissions)).toMatchObject({ state: expected.admissionState })
+    expect(test.moves).toHaveLength(expected.moves)
+  })
+
+  it('recovers accepted admission ownership after stopping before recording a Host source conflict', async () => {
+    const test = harness()
+    test.execution.prepareMode = 'unavailable'
+    const submitted = intent('intent-41414141-4141-4141-8141-414141414141' as SakiControlIntentId)
+    await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+    const claimed = only(test.dispatches)
+    expect(claimed).toMatchObject({ state: 'claimed' })
+    expect(claimed.preparation).toBeUndefined()
+
+    test.authorityCurrent = false
+    test.execution.prepareMode = 'source-conflict'
+    test.admissions.afterNextUpdate = () => {
+      test.dispatches.beforeNextUpdate = () => {
+        throw new SimulatedProcessCrash('process stopped before recording Host source conflict')
+      }
+    }
+
+    await expect(test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(SimulatedProcessCrash)
+    expect(only(test.dispatches)).toMatchObject({ state: 'claimed' })
+    expect(only(test.dispatches).preparation).toBeUndefined()
+    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+
+    test.restart()
+    expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+    expect(await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'reconciliation-required',
+      receipt: { state: 'reconciliation-required', reason: 'protocol' },
+    })
+    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
     expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
   })
 
@@ -742,6 +2156,45 @@ describe('manual Give-to-Agent operations', () => {
     expect(test.runs.size).toBe(1)
   })
 
+  it('reconciles Host success whose result identifies another Agent Run', async () => {
+    const test = harness()
+    test.execution.startMode = 'mismatched-result'
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
+      ok: false,
+      reason: 'reconciliation-required',
+      receipt: { state: 'reconciliation-required', reason: 'evidence-conflict' },
+    })
+    expect(only(test.dispatches)).toMatchObject({
+      state: 'reconciliation-required',
+      terminalReason: 'evidence-conflict',
+      operationSnapshot: { state: 'succeeded' },
+    })
+    expect(only(test.runs)).toMatchObject({ state: 'reconciliation-required' })
+    expect(test.moves).toHaveLength(0)
+  })
+
+  it.each([
+    ['unavailable', { ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } }],
+    ['conflict', {
+      ok: false,
+      reason: 'reconciliation-required',
+      receipt: { state: 'reconciliation-required', reason: 'protocol' },
+    }],
+    ['evidence-conflict', {
+      ok: false,
+      reason: 'reconciliation-required',
+      receipt: { state: 'reconciliation-required', reason: 'evidence-conflict' },
+    }],
+  ] as const)('projects an in-progress move %s outcome onto the Agent operation', async (moveMode, expected) => {
+    const test = harness()
+    test.moveMode = moveMode
+
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject(expected)
+    expect(only(test.runs)).toMatchObject({ state: 'running' })
+    expect(test.moves).toHaveLength(1)
+  })
+
   it('rejects tampering with the frozen Work Item and Profile context', async () => {
     const test = harness()
     const result = await test.operations.submit(
@@ -760,6 +2213,215 @@ describe('manual Give-to-Agent operations', () => {
       ...retained,
       profile: { ...retained.profile, agentPresetId: 'another-preset' },
     }).success).toBe(false)
+  })
+
+  it('accepts an empty pre-provisioning state and rejects retained Agent state without a Registry', async () => {
+    const empty = harness()
+    expect(empty.operations.validateDurableState(new Set(), undefined)).toEqual({
+      intents: [],
+      runningAgentRuns: [],
+    })
+
+    const retained = harness()
+    retained.execution.prepareMode = 'unavailable'
+    await retained.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    expect(() => retained.operations.validateDurableState(new Set(), undefined))
+      .toThrow('state exists without the Project Registry')
+  })
+
+  it.each([
+    ['an Intent stored under another key', (test: Harness) => {
+      const retained = only(test.intents)
+      test.intents.records.delete(retained.id)
+      test.intents.records.set(
+        'intent-51515151-5151-4151-8151-515151515151' as SakiControlIntentId,
+        retained,
+      )
+    }, 'Intent id disagrees with its table key'],
+    ['a missing Project', (_test: Harness, registry: DevelopmentProjectRegistryRecord) => ({
+      ...registry,
+      projects: [],
+    }), 'inconsistent Project or Agent Profile'],
+    ['a missing Agent Profile', (_test: Harness, registry: DevelopmentProjectRegistryRecord) => ({
+      ...registry,
+      agentProfiles: [],
+    }), 'inconsistent Project or Agent Profile'],
+    ['an Agent Profile owned by another Project', (_test: Harness, registry: DevelopmentProjectRegistryRecord) => ({
+      ...registry,
+      agentProfiles: registry.agentProfiles.map(profile => ({
+        ...profile,
+        projectId: 'project-52525252-5252-4252-8252-525252525252' as SakiDevelopmentProjectId,
+      })),
+    }), 'inconsistent Project or Agent Profile'],
+    ['a missing preallocated child', (test: Harness) => {
+      test.assignments.records.clear()
+    }, 'lacks a preallocated child'],
+    ['a child stored under another key', (test: Harness) => {
+      const retained = only(test.assignments)
+      test.assignments.records.delete(retained.id)
+      test.assignments.records.set(
+        'assignment-53535353-5353-4353-8353-535353535353' as SakiWorkAssignmentId,
+        retained,
+      )
+    }, 'Work Assignment id disagrees with its table key'],
+  ] as const)('rejects durable state with %s', async (_corruption, corrupt, expected) => {
+    const test = harness()
+    test.execution.prepareMode = 'unavailable'
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const candidate = corrupt(test, test.registry)
+    const registry = candidate === undefined ? test.registry : candidate
+
+    expect(() => test.operations.validateDurableState(new Set(), registry)).toThrow(expected)
+  })
+
+  it.each(['reconciliation', 'cancellation'] as const)(
+    'rejects a %s terminal write prefix that skips the Assignment',
+    async (terminal) => {
+      const test = harness()
+      const submitted = intent()
+      if (terminal === 'reconciliation') {
+        test.execution.startMode = 'reconciliation'
+        await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+      } else {
+        test.execution.startMode = 'unavailable'
+        await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+        test.authorityCurrent = false
+        await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+      }
+      const retainedIntent = only(test.intents)
+      test.intents.records.set(retainedIntent.id, agentOperationIntentRecordSchema.parse({
+        ...retainedIntent,
+        phase: 'dispatching',
+        terminalReason: undefined,
+      }))
+      const assignment = only(test.assignments)
+      test.assignments.records.set(assignment.id, workAssignmentRecordSchema.parse({
+        ...assignment,
+        state: 'assigned',
+      }))
+
+      expect(() => test.operations.validateDurableState(new Set(), test.registry))
+        .toThrow('inconsistent terminal write prefix')
+    },
+  )
+
+  it.each([
+    ['reconciliation', 'forbidden Assignment state'],
+    ['reconciliation', 'running Run without exact Host success'],
+    ['cancellation', 'forbidden Assignment state'],
+  ] as const)('rejects a %s prefix with a %s', async (terminal, corruption) => {
+    const test = harness()
+    const submitted = intent()
+    if (terminal === 'reconciliation') {
+      test.execution.startMode = 'reconciliation'
+      await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+    } else {
+      test.execution.startMode = 'unavailable'
+      await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+      test.authorityCurrent = false
+      await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
+    }
+    const retainedIntent = only(test.intents)
+    test.intents.records.set(retainedIntent.id, agentOperationIntentRecordSchema.parse({
+      ...retainedIntent,
+      phase: 'dispatching',
+      terminalReason: undefined,
+    }))
+    if (corruption === 'running Run without exact Host success') {
+      const run = only(test.runs)
+      test.runs.records.set(run.id, agentRunRecordSchema.parse({
+        ...run,
+        state: 'running',
+        hostResult: {
+          type: 'start-agent-run',
+          agentRunId: retainedIntent.hostRequest.run.agentRunId,
+          workSessionId: retainedIntent.hostRequest.run.workSessionId,
+          sessionId: retainedIntent.hostRequest.run.sessionId,
+          inputMessageId: retainedIntent.hostRequest.run.input.id,
+        },
+      }))
+    } else {
+      const assignment = only(test.assignments)
+      test.assignments.records.set(assignment.id, workAssignmentRecordSchema.parse({
+        ...assignment,
+        state: terminal === 'reconciliation' ? 'canceled' : 'reconciliation-required',
+      }))
+    }
+
+    expect(() => test.operations.validateDurableState(new Set(), test.registry))
+      .toThrow('inconsistent terminal write prefix')
+  })
+
+  it('rejects a canceled Intent with a nonterminal child', async () => {
+    const test = harness()
+    test.execution.startMode = 'unavailable'
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    test.authorityCurrent = false
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const run = only(test.runs)
+    test.runs.records.set(run.id, agentRunRecordSchema.parse({
+      ...run,
+      state: 'starting',
+    }))
+
+    expect(() => test.operations.validateDurableState(new Set(), test.registry))
+      .toThrow('canceled Saki Agent operation retains a nonterminal child')
+  })
+
+  it('rejects a running Run whose Dispatch does not prove its exact Host result', async () => {
+    const test = harness()
+    await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    const retainedIntent = only(test.intents)
+    test.intents.records.set(retainedIntent.id, agentOperationIntentRecordSchema.parse({
+      ...retainedIntent,
+      phase: 'dispatching',
+    }))
+    const dispatch = only(test.dispatches)
+    const snapshot = dispatch.operationSnapshot
+    if (snapshot?.state !== 'succeeded') throw new Error('test Dispatch lacks succeeded Host evidence')
+    test.dispatches.records.set(dispatch.id, executionDispatchRecordSchema.parse({
+      ...dispatch,
+      operationSnapshot: {
+        ...snapshot,
+        result: {
+          ...snapshot.result,
+          agentRunId: 'agent-run-54545454-5454-4454-8454-545454545454',
+        },
+      },
+    }))
+
+    expect(() => test.operations.validateDurableState(new Set(), test.registry))
+      .toThrow('running Saki Agent Run lacks its exact succeeded Dispatch evidence')
+  })
+
+  it('rejects an Agent admission whose retained owner does not exist', () => {
+    const test = harness()
+    test.admissions.records.set(BINDING_ID, foreignAgentWriteAdmission())
+
+    expect(() => test.operations.validateDurableState(new Set(), test.registry))
+      .toThrow('write admission has inconsistent ownership')
+  })
+
+  it('orders same-time retained Intents deterministically for recovery', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    try {
+      const test = harness()
+      const submitted = [
+        intent('intent-56565656-5656-4656-8656-565656565652' as SakiControlIntentId),
+        intent('intent-56565656-5656-4656-8656-565656565651' as SakiControlIntentId),
+      ]
+      for (const candidate of submitted) {
+        test.intents.simulateCrashAfterPutWhen(() => true)
+        await expect(test.operations.submit(candidate, actor(), new AbortController().signal))
+          .rejects.toThrow(SimulatedProcessCrash)
+      }
+
+      expect(test.operations.validateDurableState(new Set(), test.registry).intents.map(record => record.id))
+        .toEqual(submitted.map(candidate => candidate.intentId).toSorted())
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects extra schema-valid children that reuse an existing Intent id', async () => {
@@ -1252,6 +2914,7 @@ class SimulatedProcessCrash extends Error {}
 
 class MemoryTable<K extends string, V> implements KvTable<K, V> {
   readonly records = new Map<K, V>()
+  failNextPut: 'before' | 'after' | undefined
   beforeNextUpdate: (() => void) | undefined
   afterNextUpdate: (() => void | Promise<void>) | undefined
   private crashAfterPut: ((value: V) => boolean) | undefined
@@ -1273,7 +2936,15 @@ class MemoryTable<K extends string, V> implements KvTable<K, V> {
   entries(): IterableIterator<[K, V]> { return new Map(this.records).entries() }
   keys(): IterableIterator<K> { return new Map(this.records).keys() }
   async put(key: K, value: V): Promise<void> {
+    if (this.failNextPut === 'before') {
+      this.failNextPut = undefined
+      throw new Error('injected put failure')
+    }
     this.records.set(key, value)
+    if (this.failNextPut === 'after') {
+      this.failNextPut = undefined
+      throw new Error('injected put acknowledgement loss')
+    }
     if (this.crashAfterPut?.(value) === true) {
       this.crashAfterPut = undefined
       this.crashReads = 1
@@ -1315,29 +2986,37 @@ class TestAcceptance extends HostOperationAcceptance {
 }
 
 class FakeAgentExecution extends SakiHostExecution {
-  prepareMode: 'success' | 'unavailable' = 'success'
-  startMode: 'success' | 'reconciliation' | 'unavailable' = 'success'
+  prepareMode: 'success' | 'unavailable' | 'source-conflict' | 'terminal-failed' = 'success'
+  startMode: 'success' | 'mismatched-result' | 'reconciliation' | 'failed' | 'canceled-authority'
+    | 'canceled-source' | 'unavailable' = 'success'
+  inspectMode: 'current' | 'reconciliation' | 'failed' | 'canceled-authority' | 'canceled-source' = 'current'
+  cancelMode: 'canceled' | 'succeeded' | 'reconciliation' | 'failed' | 'nonterminal' = 'canceled'
   prepareCount = 0
   startCount = 0
   cancelCount = 0
   resumeCount = 0
   cancelError: Error | undefined
   resumeError: Error | undefined
+  inspectError: Error | undefined
   afterPrepare: (() => void) | undefined
+  beforeAdmission: (() => void) | undefined
+  admissionExpectation: ((value: HostOperationAdmissionExpectation) => HostOperationAdmissionExpectation) | undefined
   afterStart: (() => void) | undefined
+  prepareResult: ((value: Extract<HostOperationReceipt<'start-agent-run'>, { readonly ok: true }>) =>
+  Extract<HostOperationReceipt<'start-agent-run'>, { readonly ok: true }>) | undefined
   request: StartAgentRunHostOperationRequest | undefined
   private admission: HostOperationAdmissionSource | undefined
   private preparation: HostOperationPreparation<'start-agent-run'> | undefined
   private snapshot: HostOperationSnapshot<'start-agent-run'> | undefined
   private readonly acceptance = new TestAcceptance('agent-operation-test')
 
-  constructor(private readonly project: InspectProjectResult) { super(new Context()) }
+  constructor(private readonly project: () => InspectProjectResult) { super(new Context()) }
 
   async inspectProjectSelection(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
     return { ok: false, reason: 'unavailable' }
   }
 
-  async inspectProject(): Promise<InspectProjectResult> { return this.project }
+  async inspectProject(): Promise<InspectProjectResult> { return this.project() }
   async readDiff(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
     return { ok: false, reason: 'unavailable' }
   }
@@ -1355,6 +3034,7 @@ class FakeAgentExecution extends SakiHostExecution {
     this.prepareCount += 1
     signal.throwIfAborted()
     if (this.prepareMode === 'unavailable') return { ok: false, reason: 'unavailable' }
+    if (this.prepareMode === 'source-conflict') return { ok: false, reason: 'source-conflict' }
     if (request.type !== 'start-agent-run') return { ok: false, reason: 'unavailable' }
     const parsed = startAgentRunHostOperationRequestSchema.parse(request)
     if (this.request !== undefined && !sameRequest(this.request, parsed)) {
@@ -1386,15 +3066,27 @@ class FakeAgentExecution extends SakiHostExecution {
         admission: { kind: 'not-accepted' },
       }
     }
+    if (this.prepareMode === 'terminal-failed' && this.snapshot.state === 'prepared') {
+      this.snapshot = {
+        ...this.snapshot,
+        revision: this.snapshot.revision + 1,
+        state: 'failed',
+        updatedAt: 2,
+        completedAt: 2,
+        failure: { reason: 'unsupported-state' },
+        effect: 'none',
+      }
+    }
     const afterPrepare = this.afterPrepare
     this.afterPrepare = undefined
     afterPrepare?.()
-    return {
+    const result = {
       ok: true,
       preparation: this.preparation,
       snapshot: this.snapshot,
       acceptance: this.acceptance,
-    }
+    } as const
+    return this.prepareResult?.(result) ?? result
   }
 
   async startOperation<K extends HostOperationKind>(
@@ -1411,12 +3103,16 @@ class FakeAgentExecution extends SakiHostExecution {
     const preparation = this.requirePreparation()
     const admission = this.admission
     if (admission === undefined) throw new Error('test Host admission callback is absent')
-    const decision = await admission({
+    const beforeAdmission = this.beforeAdmission
+    this.beforeAdmission = undefined
+    beforeAdmission?.()
+    const expectation = {
       bindingId: request.expected.binding.id,
       bindingRevision: request.expected.binding.revision,
       preparation,
       source: request.source,
-    }, signal)
+    }
+    const decision = await admission(this.admissionExpectation?.(expectation) ?? expectation, signal)
     if (decision.kind !== 'accepted') {
       return {
         ok: false,
@@ -1442,18 +3138,36 @@ class FakeAgentExecution extends SakiHostExecution {
         observedAt: 3,
         reason: 'effect-unknown',
       }
-      : {
-        ...common,
-        state: 'succeeded',
-        completedAt: 3,
-        result: {
-          type: 'start-agent-run',
-          agentRunId: request.run.agentRunId,
-          workSessionId: request.run.workSessionId,
-          sessionId: request.run.sessionId,
-          inputMessageId: request.run.input.id,
-        },
-      }
+      : this.startMode === 'failed'
+        ? {
+          ...common,
+          state: 'failed',
+          completedAt: 3,
+          failure: { reason: 'unsupported-state' },
+          effect: 'none',
+        }
+        : this.startMode === 'canceled-authority' || this.startMode === 'canceled-source'
+          ? {
+            ...common,
+            state: 'canceled',
+            completedAt: 3,
+            reason: this.startMode === 'canceled-authority' ? 'authority-revoked' : 'source-canceled',
+            effect: 'none',
+          }
+          : {
+            ...common,
+            state: 'succeeded',
+            completedAt: 3,
+            result: {
+              type: 'start-agent-run',
+              agentRunId: this.startMode === 'mismatched-result'
+                ? 'agent-run-57575757-5757-4757-8757-575757575757' as SakiAgentRunId
+                : request.run.agentRunId,
+              workSessionId: request.run.workSessionId,
+              sessionId: request.run.sessionId,
+              inputMessageId: request.run.input.id,
+            },
+          }
     const afterStart = this.afterStart
     this.afterStart = undefined
     afterStart?.()
@@ -1461,7 +3175,45 @@ class FakeAgentExecution extends SakiHostExecution {
   }
 
   async inspectOperation<K extends HostOperationKind>(): Promise<HostOperationSnapshot<K>> {
-    return this.requireSnapshot() as HostOperationSnapshot<K>
+    if (this.inspectError !== undefined) throw this.inspectError
+    const current = this.requireSnapshot()
+    if (this.inspectMode === 'current') return current as HostOperationSnapshot<K>
+    const common = {
+      operation: current.operation,
+      revision: current.revision + 1,
+      source: current.source,
+      requestFingerprint: current.requestFingerprint,
+      bindingId: current.bindingId,
+      bindingRevision: current.bindingRevision,
+      preparedAt: current.preparedAt,
+      updatedAt: 3,
+    }
+    this.snapshot = this.inspectMode === 'reconciliation'
+      ? {
+        ...common,
+        state: 'reconciliation-required',
+        admission: { kind: 'accepted', revision: 2, acceptedAt: 2 },
+        observedAt: 3,
+        reason: 'effect-unknown',
+      }
+      : this.inspectMode === 'failed'
+        ? {
+          ...common,
+          state: 'failed',
+          admission: current.admission,
+          completedAt: 3,
+          failure: { reason: 'unsupported-state' },
+          effect: 'none',
+        }
+        : {
+          ...common,
+          state: 'canceled',
+          admission: current.admission,
+          completedAt: 3,
+          reason: this.inspectMode === 'canceled-authority' ? 'authority-revoked' : 'source-canceled',
+          effect: 'none',
+        }
+    return this.snapshot as HostOperationSnapshot<K>
   }
 
   async resumeAgentRun(
@@ -1481,12 +3233,56 @@ class FakeAgentExecution extends SakiHostExecution {
     this.cancelCount += 1
     if (this.cancelError !== undefined) throw this.cancelError
     const current = this.requireSnapshot()
-    this.snapshot = {
-      ...current,
+    if (this.cancelMode === 'nonterminal') return current as HostOperationSnapshot<K>
+    const common = {
+      operation: current.operation,
       revision: current.revision + 1,
+      source: current.source,
+      requestFingerprint: current.requestFingerprint,
+      bindingId: current.bindingId,
+      bindingRevision: current.bindingRevision,
+      preparedAt: current.preparedAt,
+      updatedAt: 4,
+    }
+    if (this.cancelMode === 'succeeded') {
+      const request = this.requireRequest()
+      this.snapshot = {
+        ...common,
+        state: 'succeeded',
+        admission: { kind: 'accepted', revision: 2, acceptedAt: 2 },
+        completedAt: 4,
+        result: {
+          type: 'start-agent-run',
+          agentRunId: request.run.agentRunId,
+          workSessionId: request.run.workSessionId,
+          sessionId: request.run.sessionId,
+          inputMessageId: request.run.input.id,
+        },
+      }
+      return this.snapshot as HostOperationSnapshot<K>
+    }
+    if (this.cancelMode === 'reconciliation') {
+      this.snapshot = {
+        ...common,
+        state: 'reconciliation-required',
+        admission: { kind: 'accepted', revision: 2, acceptedAt: 2 },
+        observedAt: 4,
+        reason: 'effect-unknown',
+      }
+      return this.snapshot as HostOperationSnapshot<K>
+    }
+    this.snapshot = this.cancelMode === 'failed' ? {
+      ...common,
+      state: 'failed',
+      admission: current.admission,
+      completedAt: 4,
+      failure: { reason: 'unsupported-state' },
+      effect: 'none',
+    } : {
+      ...current,
+      ...common,
       state: 'canceled',
       admission: current.admission,
-      updatedAt: 4,
       completedAt: 4,
       reason,
       effect: 'none',
@@ -1541,14 +3337,28 @@ interface Harness {
   readonly admissions: MemoryTable<SakiResourceBindingId, BindingWriteAdmissionRecord>
   readonly execution: FakeAgentExecution
   readonly registry: DevelopmentProjectRegistryRecord
+  readonly eligibility: EligibilityState
   readonly moves: MoveWorkItemIntent[]
   readonly resolvedModelRoutes: { readonly provider: string; readonly model: string }[]
   restart(): void
-  moveMode: 'success' | 'reconciliation'
+  attachDuplicateGitHub(): void
+  detachGitHub(): void
+  moveMode: 'success' | 'unavailable' | 'conflict' | 'reconciliation' | 'evidence-conflict'
   authorityCurrent: boolean
   bindingCurrent: boolean
+  bindingProjectRevision: number
   modelRouteAvailable: boolean
+  afterResolveModelRoute: (() => void) | undefined
   issueBody: string
+}
+
+interface EligibilityState {
+  registry: DevelopmentProjectRegistryRecord
+  mutationContext: GitHubWorkItemMutationContextResult
+  projectInspection: InspectProjectResult
+  issueDetail: GitHubIssueDetailFact
+  branchSafety: GitHubBranchSafetyFact
+  githubReadFailure: 'issue-detail' | 'branch-safety' | undefined
 }
 
 function harness(): Harness {
@@ -1611,13 +3421,51 @@ function harness(): Harness {
     }],
     intentMappings: [],
   })
+  const mutationContext: GitHubWorkItemMutationContextResult = {
+    ok: true,
+    context: {
+      synchronizationRevision: 1,
+      mappingRevision: 1,
+      checkpointObservedAt: item.updatedAt,
+      configuration: active.configuration,
+      confirmedBoard: board,
+    },
+  }
   const observationResult = SAKI_GIT_CHANGES_PROJECTION_FIXTURES.clean.result
   if (!observationResult.ok) throw new Error('clean Git fixture is unavailable')
-  const execution = new FakeAgentExecution({
+  const projectInspection: InspectProjectResult = {
     ok: true,
     observation: observationResult.observation,
     preEffectBaseline: baseline,
-  })
+  }
+  const issueBody = [
+    '# Intended outcome',
+    'Ship the vertical slice.',
+    '# Acceptance criteria',
+    '- Delivers the exact input once',
+    '- Moves to in-progress after the Run exists',
+    '# Blocked by',
+    'None',
+  ].join('\n')
+  const eligibility: EligibilityState = {
+    registry,
+    mutationContext,
+    projectInspection,
+    issueDetail: {
+      id: item.source.issueId,
+      repositoryId: item.source.repositoryId,
+      repositoryDatabaseId: active.configuration.repositoryDatabaseId,
+      number: item.issueNumber,
+      state: item.issueState,
+      title: item.title,
+      url: item.url,
+      updatedAt: item.updatedAt,
+      body: issueBody,
+    },
+    branchSafety: { kind: 'safe', branchExists: true, observedAt: item.updatedAt },
+    githubReadFailure: undefined,
+  }
+  const execution = new FakeAgentExecution(() => eligibility.projectInspection)
   const intents = new MemoryTable<SakiControlIntentId, AgentOperationIntentRecord>()
   const assignments = new MemoryTable<SakiWorkAssignmentId, WorkAssignmentRecord>()
   const sessions = new MemoryTable<SakiWorkSessionId, WorkSessionRecord>()
@@ -1635,21 +3483,22 @@ function harness(): Harness {
   ]])
   const moves: MoveWorkItemIntent[] = []
   const resolvedModelRoutes: { provider: string; model: string }[] = []
-  const state: Pick<Harness, 'moveMode' | 'authorityCurrent' | 'bindingCurrent' | 'modelRouteAvailable' | 'issueBody'> = {
+  const state: Pick<Harness, 'moveMode' | 'authorityCurrent' | 'bindingCurrent' | 'bindingProjectRevision'
+  | 'modelRouteAvailable' | 'afterResolveModelRoute'> = {
     moveMode: 'success',
     authorityCurrent: true,
     bindingCurrent: true,
+    bindingProjectRevision: PROJECT.revision,
     modelRouteAvailable: true,
-    issueBody: [
-      '# Intended outcome',
-      'Ship the vertical slice.',
-      '# Acceptance criteria',
-      '- Delivers the exact input once',
-      '- Moves to in-progress after the Run exists',
-      '# Blocked by',
-      'None',
-    ].join('\n'),
+    afterResolveModelRoute: undefined,
   }
+  const githubReader = {
+    read: async (request: GitHubReadRequest) => {
+      if (eligibility.githubReadFailure === request.kind) throw new Error('test GitHub read is unavailable')
+      return request.kind === 'issue-detail' ? eligibility.issueDetail : eligibility.branchSafety
+    },
+  } as never
+  let detachGitHubReader = () => {}
   const createOperations = (): AgentOperations => {
     const candidate = new AgentOperations({
       intentTable: intents,
@@ -1660,33 +3509,29 @@ function harness(): Harness {
       admissionTable: admissions,
       execution,
       projects: {
-        registry: () => registry,
+        registry: () => eligibility.registry,
         currentActiveBinding: () => state.bindingCurrent ? ({
-          registryRevision: registry.revision,
+          registryRevision: eligibility.registry.revision,
           projectId: PROJECT_ID,
-          projectRevision: PROJECT.revision,
+          projectRevision: state.bindingProjectRevision,
           binding: activeHostProjectBinding(resource),
         }) : 'binding-unavailable',
       } as never,
-      mutationContext: () => ({
-        ok: true,
-        context: {
-          synchronizationRevision: 1,
-          mappingRevision: 1,
-          checkpointObservedAt: item.updatedAt,
-          configuration: active.configuration,
-          confirmedBoard: board,
-        },
-      }),
+      mutationContext: () => eligibility.mutationContext,
       authorityCurrent: () => state.authorityCurrent,
       validateActorReference: () => {},
       resolveModelRoute: async (route) => {
         resolvedModelRoutes.push(route)
         if (!state.modelRouteAvailable) throw new Error('test Model Route is unavailable')
+        const afterResolveModelRoute = state.afterResolveModelRoute
+        state.afterResolveModelRoute = undefined
+        afterResolveModelRoute?.()
       },
       moveWorkItem: async (move): Promise<SakiWorkItemIntentReceipt<'move-work-item'>> => {
         moves.push(move)
-        if (state.moveMode === 'reconciliation') {
+        if (state.moveMode === 'unavailable') return { ok: false, reason: 'unavailable' }
+        if (state.moveMode === 'conflict') return { ok: false, reason: 'conflict' }
+        if (state.moveMode === 'reconciliation' || state.moveMode === 'evidence-conflict') {
           return {
             ok: false,
             reason: 'reconciliation-required',
@@ -1696,7 +3541,7 @@ function harness(): Harness {
               type: 'move-work-item',
               projectId: move.projectId,
               state: 'reconciliation-required',
-              reason: 'effect-unknown',
+              reason: state.moveMode === 'evidence-conflict' ? 'evidence-conflict' : 'effect-unknown',
               workItemId: move.workItemId,
               stage: 'project-item-status-set',
             },
@@ -1721,21 +3566,7 @@ function harness(): Harness {
       notifyChanged: () => {},
       lifetime: new AbortController().signal,
     })
-    candidate.attachGitHub({
-      read: async (request: GitHubReadRequest) => request.kind === 'issue-detail'
-        ? {
-          id: item.source.issueId,
-          repositoryId: item.source.repositoryId,
-          repositoryDatabaseId: active.configuration.repositoryDatabaseId,
-          number: item.issueNumber,
-          state: item.issueState,
-          title: item.title,
-          url: item.url,
-          updatedAt: item.updatedAt,
-          body: state.issueBody,
-        }
-        : { kind: 'safe', branchExists: true, observedAt: item.updatedAt },
-    } as never)
+    detachGitHubReader = candidate.attachGitHub(githubReader)
     return candidate
   }
   let operations = createOperations()
@@ -1748,20 +3579,27 @@ function harness(): Harness {
     dispatches,
     admissions,
     execution,
-    registry,
+    get registry() { return eligibility.registry },
+    eligibility,
     moves,
     resolvedModelRoutes,
     restart() { operations = createOperations() },
+    attachDuplicateGitHub() { operations.attachGitHub(githubReader) },
+    detachGitHub() { detachGitHubReader() },
     get moveMode() { return state.moveMode },
     set moveMode(value) { state.moveMode = value },
     get authorityCurrent() { return state.authorityCurrent },
     set authorityCurrent(value) { state.authorityCurrent = value },
     get bindingCurrent() { return state.bindingCurrent },
     set bindingCurrent(value) { state.bindingCurrent = value },
+    get bindingProjectRevision() { return state.bindingProjectRevision },
+    set bindingProjectRevision(value) { state.bindingProjectRevision = value },
     get modelRouteAvailable() { return state.modelRouteAvailable },
     set modelRouteAvailable(value) { state.modelRouteAvailable = value },
-    get issueBody() { return state.issueBody },
-    set issueBody(value) { state.issueBody = value },
+    get afterResolveModelRoute() { return state.afterResolveModelRoute },
+    set afterResolveModelRoute(value) { state.afterResolveModelRoute = value },
+    get issueBody() { return eligibility.issueDetail.body },
+    set issueBody(value) { eligibility.issueDetail = { ...eligibility.issueDetail, body: value } },
   }
 }
 
@@ -1776,6 +3614,91 @@ function intent(intentId = 'intent-88888888-8888-4888-8888-888888888888' as Saki
     expectedProjectRevision: PROJECT.revision,
     expectedRemoteFingerprint: item.remoteFingerprint,
   }
+}
+
+function replaceBoardItems(test: Harness, items: readonly SakiBoardWorkItemProjection[]): void {
+  const mutation = test.eligibility.mutationContext
+  if (!mutation.ok) throw new Error('test Board mutation context is unavailable')
+  test.eligibility.mutationContext = {
+    ...mutation,
+    context: {
+      ...mutation.context,
+      confirmedBoard: { ...mutation.context.confirmedBoard, items },
+    },
+  }
+}
+
+function patchBoardItem(test: Harness, patch: Partial<SakiBoardWorkItemProjection>): void {
+  const mutation = test.eligibility.mutationContext
+  if (!mutation.ok) throw new Error('test Board mutation context is unavailable')
+  const item = mutation.context.confirmedBoard.items[0]
+  if (item === undefined) throw new Error('test Board Work Item is unavailable')
+  replaceBoardItems(test, [{ ...item, ...patch }])
+}
+
+function patchIssueDetail(test: Harness, patch: Partial<GitHubIssueDetailFact>): void {
+  test.eligibility.issueDetail = { ...test.eligibility.issueDetail, ...patch }
+}
+
+function staleRemote() {
+  return {
+    ok: false,
+    reason: 'conflict',
+    receipt: { state: 'conflict', reason: 'stale-remote' },
+  } as const
+}
+
+function updateProjectInspection(
+  test: Harness,
+  update: (current: Extract<InspectProjectResult, { readonly ok: true }>) => InspectProjectResult,
+): void {
+  const current = test.eligibility.projectInspection
+  if (!current.ok) throw new Error('test Project inspection is unavailable')
+  test.eligibility.projectInspection = update(current)
+}
+
+function manualWriteAdmission(): Extract<
+  BindingWriteAdmissionRecord,
+  { readonly state: 'manual-host-operation'; readonly phase: 'reserved' }
+> {
+  return bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision: 1,
+    state: 'manual-host-operation',
+    phase: 'reserved',
+    bindingRevision: 0,
+    source: {
+      kind: 'control-intent',
+      intentId: 'intent-41414141-4141-4141-8141-414141414141',
+      intentRevision: 0,
+      payloadDigest: '1'.repeat(64),
+    },
+    action: 'project-changes:stage',
+    reservedAt: 1,
+    updatedAt: 1,
+  }) as Extract<
+    BindingWriteAdmissionRecord,
+    { readonly state: 'manual-host-operation'; readonly phase: 'reserved' }
+  >
+}
+
+function foreignAgentWriteAdmission(): Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> {
+  const candidate = bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision: 1,
+    state: 'agent-run',
+    phase: 'reserved',
+    bindingRevision: 0,
+    originIntentId: 'intent-49494949-4949-4949-8949-494949494949',
+    agentRunId: 'agent-run-50505050-5050-4050-8050-505050505050',
+    payloadDigest: '5'.repeat(64),
+    reservedAt: 1,
+    updatedAt: 1,
+  })
+  if (candidate.state !== 'agent-run') throw new Error('test admission is not owned by an Agent Run')
+  return candidate
 }
 
 function actor(): ControlIntentActor {

@@ -280,7 +280,7 @@ export async function startSaki(
   }
   const stopChild = async (failOnForcedTermination = true): Promise<void> => {
     if (!childDidClose && child.exitCode === null && child.signalCode === null) {
-      if (options.agentRunSnapshot === true && child.stdin !== null) child.stdin.end()
+      if (options.agentRunSnapshot === true) child.stdin.end()
       else child.kill('SIGTERM')
     }
     if (!await closesWithin(5_000)) {

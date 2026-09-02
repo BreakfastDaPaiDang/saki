@@ -113,6 +113,7 @@ describe('Agent Run targeted GitHub reads', () => {
       }
       if (branch === 'existing-safe') return json({ name: branch, protected: false })
       if (branch === 'existing-protected') return json({ name: branch, protected: true })
+      if (branch === 'upstream-failure') return json({ message: 'Service unavailable' }, { status: 503 })
       if (branch?.startsWith('missing-') === true) return json({ message: 'Not Found' }, { status: 404 })
       throw new Error(`unexpected GitHub request: ${request.method} ${pathname}`)
     }))
@@ -133,6 +134,9 @@ describe('Agent Run targeted GitHub reads', () => {
       kind: 'legacy-protection-unknown',
       branchExists: false,
     })
+    await expect(read('upstream-failure')).rejects.toMatchObject({
+      failure: { code: 'transient-transport' },
+    })
 
     expect(restPaths).toEqual([
       '/repos/BreakfastDaPaiDang/saki/branches/existing-safe',
@@ -141,8 +145,9 @@ describe('Agent Run targeted GitHub reads', () => {
       '/repos/BreakfastDaPaiDang/saki/rules/branches/missing-with-rules',
       '/repos/BreakfastDaPaiDang/saki/branches/missing-without-rules',
       '/repos/BreakfastDaPaiDang/saki/rules/branches/missing-without-rules',
+      '/repos/BreakfastDaPaiDang/saki/branches/upstream-failure',
     ])
-    expect(tokenBodies).toHaveLength(4)
+    expect(tokenBodies).toHaveLength(5)
     expect(JSON.stringify(tokenBodies)).not.toContain('administration')
   })
 

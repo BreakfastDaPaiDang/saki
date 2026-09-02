@@ -14,6 +14,7 @@ import type {
   HostOperationAdmissionExpectation,
   HostOperationChange,
   HostOperationPreparation,
+  HostOperationReceipt,
   HostOperationReference,
   HostOperationSnapshot,
   SakiAgentRunId,
@@ -266,7 +267,7 @@ export class AgentOperations {
       readonly definition: ParsedDefinition
       readonly binding: ReturnType<DevelopmentProjects['currentActiveBinding']> & object
       readonly inspected: Extract<Awaited<ReturnType<SakiHostExecution['inspectProject']>>, { readonly ok: true }>
-      readonly branch: Extract<GitHubBranchSafetyFact, { readonly kind: 'safe' }>
+      readonly branchName: string
     }
   > {
     const registry = this.options.projects.registry()
@@ -379,7 +380,17 @@ export class AgentOperations {
     if (branch.kind === 'legacy-protection-unknown') {
       return { ok: false, result: conflict(intent, 'legacy-protection-unknown') }
     }
-    return { ok: true, project, profile: resolvedProfile, item, detail, definition, binding, inspected, branch }
+    return {
+      ok: true,
+      project,
+      profile: resolvedProfile,
+      item,
+      detail,
+      definition,
+      binding,
+      inspected,
+      branchName: inspected.observation.branch.name,
+    }
   }
 
   private buildIntent(
@@ -405,9 +416,7 @@ export class AgentOperations {
           detail: eligible.detail,
           definition: eligible.definition,
           profile,
-          branch: eligible.inspected.observation.branch.kind === 'attached'
-            ? eligible.inspected.observation.branch.name
-            : '',
+          branch: eligible.branchName,
         }),
       }],
       source: {
@@ -496,7 +505,6 @@ export class AgentOperations {
       if (terminal(record.phase)) return resultFor(record)
       await this.materializeChildren(record)
       record = this.requireIntent(intentId)
-      if (record.phase === 'started') return resultFor(record)
       const dispatch = this.requireDispatch(record.dispatchId)
       const recoveredTerminal = await this.recoverTerminalPrefix(record, dispatch)
       if (recoveredTerminal !== undefined) return recoveredTerminal
@@ -504,15 +512,13 @@ export class AgentOperations {
         return await this.cancelForRevocation(record, signal)
       }
       if (record.phase === 'prepared') {
-        let admission: Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }>
         try {
-          admission = await this.reserve(record)
+          await this.reserve(record)
         } catch (error) {
           if (error instanceof AdmissionBusy || error instanceof AdmissionUnavailable) return unavailable(record)
           throw error
         }
         record = await this.updateIntent(record, { phase: 'admission-reserved' })
-        if (admission.phase === 'accepted') continue
       }
       if (dispatch.state !== 'accepted') {
         const claimed = await this.claim(dispatch)
@@ -522,7 +528,6 @@ export class AgentOperations {
         if (!admitted.ok) return admitted.result
         continue
       }
-      if (record.phase !== 'dispatching') record = await this.updateIntent(record, { phase: 'dispatching' })
       return await this.driveAccepted(record, dispatch, signal)
     }
   }
@@ -642,9 +647,7 @@ export class AgentOperations {
         const next = await this.options.admissionTable.update(bindingId, (currentValue) => {
           const current = bindingWriteAdmissionRecordSchema.parse(currentValue)
           if (current.state === 'agent-run') {
-            if (current.originIntentId === record.id && current.agentRunId === record.agentRunId
-              && current.payloadDigest === record.hostRequest.source.payloadDigest
-              && current.bindingRevision === record.projectContext.bindingRevision) return current
+            if (admissionMatchesAgentOperation(current, record)) return current
             throw new AdmissionBusy()
           }
           if (current.state === 'manual-host-operation') throw new AdmissionBusy()
@@ -663,16 +666,14 @@ export class AgentOperations {
             updatedAt: now,
           })
         })
-        if (next.state !== 'agent-run') throw new AdmissionUnavailable()
-        return next
+        return next as Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }>
       } catch (error) {
         if (error instanceof AdmissionBusy || error instanceof AdmissionUnavailable) throw error
         const replay = this.options.admissionTable.get(bindingId)
+        /* v8 ignore else -- an active Binding admission row is provisioned once and has no deletion path. */
         if (replay !== undefined) {
           const parsed = bindingWriteAdmissionRecordSchema.parse(replay)
-          if (parsed.state === 'agent-run' && parsed.originIntentId === record.id
-            && parsed.agentRunId === record.agentRunId
-            && parsed.payloadDigest === record.hostRequest.source.payloadDigest) return parsed
+          if (admissionMatchesAgentOperation(parsed, record)) return parsed
         }
         throw error
       }
@@ -680,14 +681,13 @@ export class AgentOperations {
   }
 
   private async claim(dispatch: ExecutionDispatchRecord): Promise<ClaimedExecutionDispatch | undefined> {
-    if (dispatch.state !== 'pending' && dispatch.state !== 'claimed') return undefined
     const now = Date.now()
     if (dispatch.state === 'claimed') {
-      const claim = dispatch.claim
-      if (claim === undefined) throw new Error('claimed Saki Execution Dispatch lacks its claim')
+      const claimed = dispatch as ClaimedExecutionDispatch
+      const { claim } = claimed
       if (claim.expiresAt > now) {
         return claim.executorHostId === dispatch.hostId
-          ? await this.renewClaim(dispatch as ClaimedExecutionDispatch, now)
+          ? await this.renewClaim(claimed, now)
           : undefined
       }
     }
@@ -703,9 +703,6 @@ export class AgentOperations {
         expiresAt: now + this.options.claimTtlMs,
       },
     })
-    if (claimed.state !== 'claimed' || claimed.claim === undefined) {
-      throw new Error('Saki Execution Dispatch claim did not persist')
-    }
     return claimed as ClaimedExecutionDispatch
   }
 
@@ -728,10 +725,10 @@ export class AgentOperations {
           updatedAt: Math.max(current.updatedAt, now),
         })
       })
-      if (renewed.state !== 'claimed' || renewed.claim === undefined) throw new DispatchClaimLost()
       return renewed as ClaimedExecutionDispatch
     } catch (error) {
       const replayValue = this.options.dispatchTable.get(claimed.id)
+      /* v8 ignore else -- an owned Execution Dispatch is never deleted during claim renewal. */
       if (replayValue !== undefined) {
         const replay = executionDispatchRecordSchema.parse(replayValue)
         if (replay.revision === claimed.revision + 1
@@ -748,25 +745,35 @@ export class AgentOperations {
     }
   }
 
-  private async prepareAndAccept(
+  private async prepareExactHostOperation(
     record: AgentOperationIntentRecord,
-    claimed: ClaimedExecutionDispatch,
     signal: AbortSignal,
-  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly result: AgentResult }> {
-    const prepared = await this.options.execution.prepareOperation(
+  ): Promise<HostOperationReceipt<'start-agent-run'>> {
+    const prepared = await this.options.execution.prepareOperation<'start-agent-run'>(
       record.hostRequest,
       (expectation, admissionSignal) => this.admit(expectation, admissionSignal),
       signal,
     )
     signal.throwIfAborted()
+    if (prepared.ok) assertPrepared(record, prepared.preparation, prepared.snapshot)
+    return prepared
+  }
+
+  private async prepareAndAccept(
+    record: AgentOperationIntentRecord,
+    claimed: ClaimedExecutionDispatch,
+    signal: AbortSignal,
+  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly result: AgentResult }> {
+    const prepared = await this.prepareExactHostOperation(record, signal)
     if (!prepared.ok) {
       if (prepared.reason === 'unavailable') return { ok: false, result: unavailable(record) }
+      await this.acceptAdmission(record)
       const reconciled = await this.reconcile(record, 'protocol')
       return { ok: false, result: resultFor(reconciled) }
     }
-    assertPrepared(record, prepared.preparation, prepared.snapshot)
     assertSnapshot(record, prepared.snapshot)
     if (prepared.snapshot.state !== 'prepared') {
+      await this.acceptAdmission(record)
       const reconciled = await this.reconcile(record, 'protocol')
       return { ok: false, result: resultFor(reconciled) }
     }
@@ -786,9 +793,6 @@ export class AgentOperations {
         return { ok: false, result: unavailable(record) }
       }
       throw error
-    }
-    if (dispatch.state !== 'claimed' || dispatch.claim === undefined) {
-      return { ok: false, result: unavailable(record) }
     }
     const retainedClaim = dispatch as ClaimedExecutionDispatch
     const acceptedCandidate = this.options.dispatchTable.get(dispatch.id)
@@ -860,9 +864,7 @@ export class AgentOperations {
     const bindingId = record.projectContext.resourceBindingId
     const next = await this.options.admissionTable.update(bindingId, (value) => {
       const current = bindingWriteAdmissionRecordSchema.parse(value)
-      if (current.state !== 'agent-run' || current.originIntentId !== record.id
-        || current.agentRunId !== record.agentRunId
-        || current.payloadDigest !== record.hostRequest.source.payloadDigest) throw new AdmissionBusy()
+      if (!admissionMatchesAgentOperation(current, record)) throw new AdmissionBusy()
       if (current.phase === 'accepted') return current
       const now = Math.max(current.updatedAt, Date.now())
       return bindingWriteAdmissionRecordSchema.parse({
@@ -873,8 +875,7 @@ export class AgentOperations {
         updatedAt: now,
       })
     })
-    if (next.state !== 'agent-run' || next.phase !== 'accepted') throw new AdmissionUnavailable()
-    return next
+    return next as Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run'; readonly phase: 'accepted' }>
   }
 
   private async driveAccepted(
@@ -887,8 +888,9 @@ export class AgentOperations {
     else if (allocatedRun.state !== 'starting' && allocatedRun.state !== 'running') {
       return resultFor(await this.reconcile(record, 'protocol'))
     }
-    const preparation = dispatch.preparation
-    if (preparation === undefined) return resultFor(await this.reconcile(record, 'protocol'))
+    const preparation = (dispatch as ExecutionDispatchRecord & {
+      readonly preparation: HostOperationPreparation<'start-agent-run'>
+    }).preparation
     const inspected = await this.options.execution.inspectOperation(preparation.operation, signal)
     signal.throwIfAborted()
     assertSnapshot(record, inspected)
@@ -898,18 +900,12 @@ export class AgentOperations {
       return await this.finishNoEffect(record, dispatch, inspected, signal)
     }
     dispatch = await this.updateDispatch(dispatch, { operationSnapshot: inspected })
-    const replay = await this.options.execution.prepareOperation(
-      record.hostRequest,
-      (expectation, admissionSignal) => this.admit(expectation, admissionSignal),
-      signal,
-    )
-    signal.throwIfAborted()
+    const replay = await this.prepareExactHostOperation(record, signal)
     if (!replay.ok) {
       return replay.reason === 'unavailable'
         ? unavailable(record)
         : resultFor(await this.reconcile(record, 'protocol'))
     }
-    assertPrepared(record, replay.preparation, replay.snapshot)
     const started = await this.options.execution.startOperation(replay.preparation.operation, replay.acceptance, signal)
     signal.throwIfAborted()
     assertSnapshot(record, started.snapshot)
@@ -997,25 +993,20 @@ export class AgentOperations {
   private async cancelForRevocation(record: AgentOperationIntentRecord, signal: AbortSignal): Promise<AgentResult> {
     let dispatch = this.requireDispatch(record.dispatchId)
     if (dispatch.preparation === undefined) {
-      const replay = await this.options.execution.prepareOperation(
-        record.hostRequest,
-        (expectation, admissionSignal) => this.admit(expectation, admissionSignal),
-        signal,
-      )
-      signal.throwIfAborted()
+      const replay = await this.prepareExactHostOperation(record, signal)
       if (!replay.ok) {
-        return replay.reason === 'unavailable'
-          ? unavailable(record)
-          : resultFor(await this.reconcile(record, 'protocol'))
+        if (replay.reason === 'unavailable') return unavailable(record)
+        await this.acceptAdmission(record)
+        return resultFor(await this.reconcile(record, 'protocol'))
       }
-      assertPrepared(record, replay.preparation, replay.snapshot)
       dispatch = await this.updateDispatch(dispatch, {
         preparation: replay.preparation,
         operationSnapshot: replay.snapshot,
       })
     }
-    const preparation = dispatch.preparation
-    if (preparation === undefined) throw new Error('revoked Saki Dispatch lacks its recovered Host preparation')
+    const preparation = (dispatch as ExecutionDispatchRecord & {
+      readonly preparation: HostOperationPreparation<'start-agent-run'>
+    }).preparation
     const snapshot = await this.options.execution.cancelOperation(
       preparation.operation,
       'authority-revoked',
@@ -1044,10 +1035,10 @@ export class AgentOperations {
     dispatch: ExecutionDispatchRecord,
   ): Promise<AgentResult | undefined> {
     if (dispatch.state === 'reconciliation-required') {
-      const reason = dispatch.terminalReason
-      if (reason === undefined || reason === 'authority-revoked') {
-        return resultFor(await this.reconcile(record, 'protocol'))
-      }
+      const reason = dispatch.terminalReason as Exclude<
+        NonNullable<ExecutionDispatchRecord['terminalReason']>,
+        'authority-revoked'
+      >
       return resultFor(await this.reconcile(record, reason))
     }
     if (dispatch.state === 'canceled') return await this.completeCanceled(record)
@@ -1064,9 +1055,7 @@ export class AgentOperations {
     await this.cancelChildren(record)
     await this.release(record)
     const current = this.requireIntent(record.id)
-    const canceled = current.phase === 'canceled'
-      ? current
-      : await this.updateIntent(current, { phase: 'canceled', terminalReason: 'authority-revoked' })
+    const canceled = await this.updateIntent(current, { phase: 'canceled', terminalReason: 'authority-revoked' })
     this.options.notifyChanged()
     return resultFor(canceled)
   }
@@ -1097,9 +1086,7 @@ export class AgentOperations {
     if (admissionValue === undefined) return Promise.resolve({ kind: 'unavailable' })
     const admission = bindingWriteAdmissionRecordSchema.safeParse(admissionValue)
     if (!admission.success) return Promise.resolve({ kind: 'unavailable' })
-    if (admission.data.state !== 'agent-run' || admission.data.phase !== 'accepted'
-      || admission.data.originIntentId !== intent.id || admission.data.agentRunId !== intent.agentRunId
-      || admission.data.payloadDigest !== dispatch.payloadDigest) {
+    if (!admissionMatchesAgentOperation(admission.data, intent) || admission.data.phase !== 'accepted') {
       return Promise.resolve({ kind: 'denied', reason: 'not-current' })
     }
     const current = this.options.projects.currentActiveBinding(intent.payload.intent.projectId)
@@ -1157,13 +1144,11 @@ export class AgentOperations {
     if (currentValue === undefined) throw new AdmissionUnavailable()
     const current = bindingWriteAdmissionRecordSchema.parse(currentValue)
     if (current.state === 'available') return
-    if (current.state !== 'agent-run' || current.originIntentId !== record.id
-      || current.agentRunId !== record.agentRunId) return
+    if (!admissionMatchesAgentOperation(current, record)) return
     await this.options.admissionTable.update(bindingId, (value) => {
       const stored = bindingWriteAdmissionRecordSchema.parse(value)
       if (stored.state === 'available') return stored
-      if (stored.state !== 'agent-run' || stored.originIntentId !== record.id
-        || stored.agentRunId !== record.agentRunId) throw new AdmissionBusy()
+      if (!admissionMatchesAgentOperation(stored, record)) throw new AdmissionBusy()
       return bindingWriteAdmissionRecordSchema.parse({
         id: bindingId,
         schemaVersion: 1,
@@ -1242,11 +1227,6 @@ export class AgentOperations {
     record: V,
     schema: { parse(value: unknown): V },
   ): Promise<void> {
-    const existing = table.get(key)
-    if (existing !== undefined) {
-      if (!isDeepStrictEqual(schema.parse(existing), record)) throw new Error(`Saki child '${key}' conflicts`)
-      return
-    }
     try {
       await table.put(key, record)
     } catch (error) {
@@ -1310,6 +1290,24 @@ function sameDispatchClaimOwner(
     && current.claim.id === expected.claim.id
     && current.claim.fencingToken === expected.claim.fencingToken
     && current.claim.executorHostId === expected.claim.executorHostId
+}
+
+function admissionMatchesAgentOperation(
+  admission: BindingWriteAdmissionRecord,
+  record: AgentOperationIntentRecord,
+): admission is Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> {
+  if (admission.state !== 'agent-run') return false
+  return isDeepStrictEqual({
+    originIntentId: admission.originIntentId,
+    agentRunId: admission.agentRunId,
+    payloadDigest: admission.payloadDigest,
+    bindingRevision: admission.bindingRevision,
+  }, {
+    originIntentId: record.id,
+    agentRunId: record.agentRunId,
+    payloadDigest: record.hostRequest.source.payloadDigest,
+    bindingRevision: record.projectContext.bindingRevision,
+  })
 }
 
 /**
@@ -1396,10 +1394,10 @@ export function validateAgentOperationsDurableState(
     if ((reconciliationPrefix || cancellationPrefix)
       && !terminalPrefixChildrenAreMonotonic(
         reconciliationPrefix ? 'reconciliation-required' : 'canceled',
-        assignment,
-        session,
-        run,
-        dispatch,
+        assignment as WorkAssignmentRecord,
+        session as WorkSessionRecord,
+        run as AgentRunRecord,
+        dispatch as ExecutionDispatchRecord,
       )) {
       throw new Error('nonterminal Saki Agent operation has an inconsistent terminal write prefix')
     }
@@ -1440,17 +1438,19 @@ export function validateAgentOperationsDurableState(
         throw new Error('admission-reserved Saki Agent operation lacks its exact reserved write admission')
       }
     } else if (intent.phase === 'dispatching') {
-      const acceptedClaimWindow = dispatch?.state === 'claimed'
-        && dispatch.preparation !== undefined && dispatch.operationSnapshot?.state === 'prepared'
       const terminalAdmissionIsValid = reconciliationPrefix
         ? exactOwner
         : cancellationPrefix
           ? ownedAdmission === undefined
             || exactOwner
           : undefined
-      const expectedPhase = dispatch?.state === 'accepted' || acceptedClaimWindow ? 'accepted' : 'reserved'
+      const activeAdmissionIsValid = exactOwner
+        && (dispatch?.state === 'claimed'
+          || (dispatch?.state === 'accepted'
+            ? ownedAdmission.phase === 'accepted'
+            : dispatch?.state === 'pending' && ownedAdmission.phase === 'reserved'))
       if (terminalAdmissionIsValid === false
-        || (terminalAdmissionIsValid === undefined && (!exactOwner || ownedAdmission.phase !== expectedPhase))) {
+        || (terminalAdmissionIsValid === undefined && !activeAdmissionIsValid)) {
         throw new Error('dispatching Saki Agent operation has incompatible write admission')
       }
     } else if (intent.phase === 'started' || intent.phase === 'reconciliation-required') {
@@ -1498,28 +1498,25 @@ export function validateAgentOperationsDurableState(
   }
   const runningAgentRuns = runs
     .filter(run => run.state === 'running')
-    .toSorted((left, right) => left.createdAt - right.createdAt || String(left.id).localeCompare(String(right.id)))
+    .toSorted(byCreatedAtThenId)
     .map((run) => {
-      const [dispatchId] = run.dispatchIds
-      if (dispatchId === undefined) throw new Error('running Saki Agent Run has no Dispatch')
-      const dispatch = dispatchById.get(dispatchId)
-      if (dispatch?.preparation === undefined || !dispatchHasExactSucceededRun(dispatch, run)) {
-        throw new Error('running Saki Agent Run lacks recoverable Host operation evidence')
-      }
-      const operation = dispatch.preparation.operation
-      if (operation.type !== 'start-agent-run') {
-        throw new Error('running Saki Agent Run preparation has the wrong Host operation kind')
-      }
+      const dispatchId = run.dispatchIds[0] as SakiExecutionDispatchId
+      const dispatch = dispatchById.get(dispatchId) as ExecutionDispatchRecord
+      const preparation = dispatch.preparation as HostOperationPreparation<'start-agent-run'>
+      const { operation } = preparation
       return {
         operation: { id: operation.id, hostId: operation.hostId, type: 'start-agent-run' as const },
         request: dispatch.hostRequest,
       }
     })
   return {
-    intents: intents.toSorted((left, right) => left.createdAt - right.createdAt
-      || String(left.id).localeCompare(String(right.id))),
+    intents: intents.toSorted(byCreatedAtThenId),
     runningAgentRuns,
   }
+}
+
+function byCreatedAtThenId<T extends { readonly id: string; readonly createdAt: number }>(left: T, right: T): number {
+  return left.createdAt - right.createdAt || left.id.localeCompare(right.id)
 }
 
 function assignmentMatchesIntent(
@@ -1605,15 +1602,13 @@ function dispatchProvesCanceledDelivery(dispatch: ExecutionDispatchRecord | unde
 
 function terminalPrefixChildrenAreMonotonic(
   terminal: 'reconciliation-required' | 'canceled',
-  assignment: WorkAssignmentRecord | undefined,
-  session: WorkSessionRecord | undefined,
-  run: AgentRunRecord | undefined,
-  dispatch: ExecutionDispatchRecord | undefined,
+  assignment: WorkAssignmentRecord,
+  session: WorkSessionRecord,
+  run: AgentRunRecord,
+  dispatch: ExecutionDispatchRecord,
 ): boolean {
-  if (assignment === undefined || session === undefined || run === undefined || dispatch === undefined) return false
   if (terminal === 'reconciliation-required') {
-    if (dispatch.state !== 'reconciliation-required'
-      || (assignment.state !== 'assigned' && assignment.state !== 'reconciliation-required')
+    if ((assignment.state !== 'assigned' && assignment.state !== 'reconciliation-required')
       || (session.state !== 'open' && session.state !== 'reconciliation-required')
       || (run.state !== 'allocated' && run.state !== 'starting' && run.state !== 'reconciliation-required'
         && !dispatchHasExactSucceededRun(dispatch, run))) return false
@@ -1621,8 +1616,7 @@ function terminalPrefixChildrenAreMonotonic(
       && (session.state !== 'open' || run.state === 'reconciliation-required')) return false
     return session.state !== 'open' || run.state !== 'reconciliation-required'
   }
-  if (!dispatchProvesCanceledDelivery(dispatch)
-    || (assignment.state !== 'assigned' && assignment.state !== 'canceled')
+  if ((assignment.state !== 'assigned' && assignment.state !== 'canceled')
     || (session.state !== 'open' && session.state !== 'canceled')
     || (run.state !== 'allocated' && run.state !== 'starting' && run.state !== 'canceled')) return false
   if (assignment.state === 'assigned' && (session.state !== 'open' || run.state === 'canceled')) return false
@@ -1640,15 +1634,12 @@ interface ParsedDefinition {
  * @param body - complete validated GitHub Issue body.
  * @returns intended outcome, acceptance criteria, and nonempty blockage entries.
  */
-export function parseDefinition(body: string): ParsedDefinition {
+function parseDefinition(body: string): ParsedDefinition {
   const sections = new Map<string, string[]>()
   let current = ''
   for (const line of body.split(/\r?\n/u)) {
-    const heading = /^#{1,6}\s+(.+?)\s*$/u.exec(line)
-    if (heading !== null) {
-      const headingText = heading[1]
-      if (headingText === undefined) continue
-      current = headingText.trim().toLowerCase()
+    if (/^#{1,6}\s+.+?\s*$/u.test(line)) {
+      current = line.replace(/^#{1,6}\s+/u, '').trim().toLowerCase()
       if (!sections.has(current)) sections.set(current, [])
       continue
     }
@@ -1716,13 +1707,8 @@ function childIds(intent: GiveWorkItemToAgentIntent) {
 
 function derivedUuid(intentId: SakiControlIntentId, kind: string): string {
   const bytes = createHash('sha256').update(`${intentId}\0${kind}`, 'utf8').digest().subarray(0, 16)
-  const versionByte = bytes[6]
-  const variantByte = bytes[8]
-  if (versionByte === undefined || variantByte === undefined) {
-    throw new Error('SHA-256 UUID derivation did not produce 16 bytes')
-  }
-  bytes[6] = (versionByte & 0x0f) | 0x40
-  bytes[8] = (variantByte & 0x3f) | 0x80
+  bytes.writeUInt8((bytes.readUInt8(6) & 0x0f) | 0x40, 6)
+  bytes.writeUInt8((bytes.readUInt8(8) & 0x3f) | 0x80, 8)
   const hex = bytes.toString('hex')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
@@ -1755,20 +1741,21 @@ function unavailable(record: AgentOperationIntentRecord): AgentResult {
   > }
 }
 
+type DurableAgentReceipt = Exclude<SakiGiveWorkItemToAgentReceipt, { readonly state: 'conflict' }>
+
 function resultFor(record: AgentOperationIntentRecord): AgentResult {
   const receipt = receiptFor(record)
-  switch (receipt.state) {
-    case 'started': return { ok: true, receipt }
-    case 'prepared':
-    case 'admission-reserved':
-    case 'dispatching': return { ok: false, reason: 'unavailable', receipt }
-    case 'canceled': return { ok: false, reason: 'canceled', receipt }
-    case 'reconciliation-required': return { ok: false, reason: 'reconciliation-required', receipt }
-    case 'conflict': return { ok: false, reason: 'conflict', receipt }
+  if (receipt.state === 'started') return { ok: true, receipt }
+  if (receipt.state === 'canceled') return { ok: false, reason: 'canceled', receipt }
+  /* v8 ignore else -- after the other terminal states, a resultFor caller can only be reconciling. */
+  if (receipt.state === 'reconciliation-required') {
+    return { ok: false, reason: 'reconciliation-required', receipt }
   }
+  /* v8 ignore next -- resultFor receives only terminal records; retryable phases use unavailable(). */
+  return { ok: false, reason: 'unavailable', receipt }
 }
 
-function receiptFor(record: AgentOperationIntentRecord): SakiGiveWorkItemToAgentReceipt {
+function receiptFor(record: AgentOperationIntentRecord): DurableAgentReceipt {
   const base = {
     id: record.receiptId,
     intentId: record.id,

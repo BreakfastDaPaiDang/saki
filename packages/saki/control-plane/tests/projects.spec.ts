@@ -254,6 +254,9 @@ async function context(
     load: () => Promise.reject(new Error('no sessions')),
     inspect: () => Promise.reject(new Error('no sessions')),
   } as never)
+  ctx.provide('agentPresets', {} as never)
+  ctx.provide('agents', {} as never)
+  ctx.provide('sessions', { list: () => [] } as never)
   await ctx.plugin(WorkspaceRegistry)
   await ctx.plugin(LocalFileSystem, { cwd: durable.root })
   await ctx.plugin(LocalSubprocessRuntime)
@@ -862,7 +865,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     try {
       expect(database.prepare('SELECT name, version FROM units ORDER BY name').all()).toEqual([
         { name: 'saki_control_plane', version: 7 },
-        { name: 'saki_host_execution', version: 1 },
+        { name: 'saki_host_execution', version: 2 },
         { name: 'saki_storage_generation', version: 5 },
       ])
       const tables = database.prepare(
@@ -873,13 +876,16 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         'unit_tables',
         'units',
       ])
-      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(16)
+      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(21)
       expect(database.prepare(
         'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
       ).all('saki_control_plane')).toEqual([
+        { table_name: 'agent_operation_intents' },
+        { table_name: 'agent_runs' },
         { table_name: 'binding_write_admissions' },
         { table_name: 'control_state' },
         { table_name: 'development_project_registry' },
+        { table_name: 'execution_dispatches' },
         { table_name: 'git_operation_intents' },
         { table_name: 'github_project_sync' },
         { table_name: 'github_sync_configuration_intents' },
@@ -891,6 +897,8 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         { table_name: 'installations' },
         { table_name: 'principals' },
         { table_name: 'registration_intents' },
+        { table_name: 'work_assignments' },
+        { table_name: 'work_sessions' },
       ])
       expect(database.prepare(
         'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
@@ -1344,6 +1352,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         ...registry,
         revision: registry.revision + 1,
         projects: [],
+        agentProfiles: [],
         resourceBindings: [],
         canonicalWorktreeIndex: [],
         gitDirectoryIndex: [],
@@ -3724,6 +3733,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       ...structuredClone(confirmedRegistry),
       revision: 0,
       projects: [],
+      agentProfiles: [],
       resourceBindings: [],
       canonicalWorktreeIndex: [],
       gitDirectoryIndex: [],

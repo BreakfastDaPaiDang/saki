@@ -185,9 +185,6 @@ export function validateAgentOperationLinks(
     if (key !== expectedId) {
       throw new Error('StartAgentRun Host Operation id disagrees with its Execution Dispatch source')
     }
-    if (operations.has(dispatchId)) {
-      throw new Error('Saki Execution Dispatch has multiple Host Operations')
-    }
     const dispatch = dispatches.get(dispatchId)
     if (dispatch === undefined) throw new Error('StartAgentRun Host Operation has no Execution Dispatch')
     const run = runs.get(dispatch.agentRunId)

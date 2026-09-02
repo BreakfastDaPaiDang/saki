@@ -43,6 +43,7 @@ import LocalSakiHostExecution, {
   sakiHostExecutionDomainSpec,
 } from '../src/index.ts'
 import { disposeLocalAgentRuns, waitForInputRecord } from '../src/agent-run.ts'
+import { GitCommandError, type GitRunner } from '../src/git-runner.ts'
 
 const run = promisify(execFile)
 const roots: string[] = []
@@ -151,6 +152,28 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
     await expect(harness.context.sessionPersistence.listSnapshots(signal)).resolves.toEqual([])
+  }, 30_000)
+
+  it('keeps the Agent Run retryable when the frozen world is temporarily unavailable', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(29), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) return
+    const git = replaceGitRunner(harness.execution, new GitCommandError('spawn-failure'))
+
+    const started = await harness.execution.startOperation(
+      prepared.preparation.operation,
+      prepared.acceptance,
+      signal,
+    )
+
+    expect(started).toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    expect(harness.adapter.requests).toHaveLength(0)
+    git.restore()
   }, 30_000)
 
   it('rechecks the frozen repository after Agent creation before sending exact input', async () => {
@@ -350,6 +373,62 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(wakeCount).toBe(0)
   })
 
+  it('does not wake an Agent whose exact input is already model-visible', async () => {
+    const expected = agentRunInput('Already recorded input.')
+    const agent = {
+      session: { events: [{ type: 'user/message', data: expected }] },
+      ctx: { on: () => () => {} },
+    } as unknown as Agent
+    let wakeCount = 0
+
+    await waitForInputRecord(agent, expected, new AbortController().signal, () => { wakeCount += 1 })
+
+    expect(wakeCount).toBe(0)
+  })
+
+  it('rejects a conflicting same-id input recorded after wake', async () => {
+    const expected = agentRunInput('Expected input.')
+    const conflicting = freezeMessage({
+      ...expected,
+      content: [{ type: 'text', text: 'Conflicting input.' }],
+    }) as StartAgentRunInputMessage
+    let sessionListener: ((session: unknown, event: { readonly type: 'user/message'; readonly data: StartAgentRunInputMessage }) => void)
+      | undefined
+    const agent = {
+      session: { events: [] },
+      ctx: {
+        on: (event: string, listener: unknown) => {
+          if (event === 'session/event') {
+            sessionListener = listener as typeof sessionListener
+          }
+          return () => {}
+        },
+      },
+    } as unknown as Agent
+
+    await expect(waitForInputRecord(agent, expected, new AbortController().signal, () => {
+      sessionListener?.(agent.session, { type: 'user/message', data: conflicting })
+    })).rejects.toThrow('input identity has conflicting recorded evidence')
+  })
+
+  it('rejects a wake that becomes idle before recording its exact input', async () => {
+    const expected = agentRunInput('Input that must be recorded.')
+    let statusListener: ((event: { readonly agent: Agent; readonly status: 'idle' }) => void) | undefined
+    const agent = {
+      session: { events: [] },
+      ctx: {
+        on: (event: string, listener: unknown) => {
+          if (event === 'agent/status') statusListener = listener as typeof statusListener
+          return () => {}
+        },
+      },
+    } as unknown as Agent
+
+    await expect(waitForInputRecord(agent, expected, new AbortController().signal, () => {
+      statusListener?.({ agent, status: 'idle' })
+    })).rejects.toThrow('became idle before recording its exact input')
+  })
+
   it('attempts every Agent Handle disposal before aggregating teardown failures', async () => {
     const firstFailure = new Error('first Agent Handle disposal failed')
     const secondFailure = new Error('second Agent Handle disposal failed')
@@ -531,6 +610,218 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     await expect(harness.context.sessionPersistence.listSnapshots(signal)).resolves.toEqual([])
   }, 30_000)
 
+  it('drops stale Agent Run ownership without disposing an unregistered Agent', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await persistPlannedAgentRun(harness.execution, request, signal, 36)
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const handles = liveAgentRunHandles(harness.execution)
+    handles.set(SESSION_ID, { agent: {} as Agent, dispose })
+
+    const canceled = await harness.execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )
+
+    expect(canceled).toMatchObject({ state: 'canceled', effect: 'none' })
+    expect(dispose).not.toHaveBeenCalled()
+    expect(handles.has(SESSION_ID)).toBe(false)
+  }, 30_000)
+
+  it('refuses to cancel while a retained handle disagrees with the live Agent registry', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await persistPlannedAgentRun(harness.execution, request, signal, 37)
+    const foreign = await createAgentHandle(harness, binding, request, signal)
+    const retained = { agent: {} as Agent, dispose: vi.fn<() => Promise<void>>().mockResolvedValue(undefined) }
+    const handles = liveAgentRunHandles(harness.execution)
+    handles.set(SESSION_ID, retained)
+
+    await expect(harness.execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )).rejects.toThrow('owned by a conflicting live Agent')
+
+    expect(handles.get(SESSION_ID)).toBe(retained)
+    expect(harness.context.agents.get(SESSION_ID)).toBe(foreign.agent)
+    expect(retained.dispose).not.toHaveBeenCalled()
+    handles.delete(SESSION_ID)
+    await foreign.dispose()
+  }, 30_000)
+
+  it('refuses to cancel when Agent disposal returns before registry quiescence', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await persistPlannedAgentRun(harness.execution, request, signal, 38)
+    const handle = await createAgentHandle(harness, binding, request, signal)
+    const handles = liveAgentRunHandles(harness.execution)
+    handles.set(SESSION_ID, handle)
+    const dispose = vi.spyOn(handle, 'dispose').mockResolvedValueOnce(undefined)
+
+    await expect(harness.execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )).rejects.toThrow('remained live after disposal')
+
+    expect(handles.get(SESSION_ID)).toBe(handle)
+    expect(harness.context.agents.get(SESSION_ID)).toBe(handle.agent)
+    dispose.mockRestore()
+    await handle.dispose()
+    handles.delete(SESSION_ID)
+  }, 30_000)
+
+  it('cancels an attempting Agent Run when no physical Session exists', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 31)
+
+    const canceled = await harness.execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )
+
+    expect(canceled).toMatchObject({ state: 'canceled', reason: 'source-canceled', effect: 'none' })
+    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    await expect(harness.context.sessionPersistence.listSnapshots(signal)).resolves.toEqual([])
+  }, 30_000)
+
+  it('reports success when cancellation finds the exact input already recorded', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    await persistInputHistory(harness, binding, request, (persisted) => {
+      persisted.append('user/message', request.run.input, { surfaceOp: 'append' })
+    })
+    const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 32)
+
+    const canceled = await harness.execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )
+
+    expect(canceled).toMatchObject({ state: 'succeeded', result: { inputMessageId: MESSAGE_ID } })
+    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    expect(harness.adapter.requests).toHaveLength(0)
+  }, 30_000)
+
+  it.each([
+    ['conflicting input', 'evidence-conflict'],
+    ['claimed input with no record', 'effect-unknown'],
+  ] as const)(
+    'requires reconciliation when cancellation finds %s evidence',
+    async (history, expectedReason) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      await persistInputHistory(harness, binding, request, (persisted) => {
+        if (history === 'conflicting input') {
+          persisted.append('user/message', freezeMessage({
+            ...request.run.input,
+            content: [{ type: 'text', text: 'Conflicting recorded input.' }],
+          }), { surfaceOp: 'append' })
+          return
+        }
+        persisted.append('agent/inbox/spliced', {
+          target: 'next-turn',
+          start: 0,
+          inserted: [request.run.input],
+        })
+        persisted.append('agent/inbox/spliced', {
+          target: 'next-turn',
+          start: 0,
+          removedCount: 1,
+          inserted: [],
+        })
+      })
+      const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 33)
+
+      const canceled = await harness.execution.cancelOperation(
+        prepared.preparation.operation,
+        'source-canceled',
+        signal,
+      )
+
+      expect(canceled).toMatchObject({ state: 'reconciliation-required', reason: expectedReason })
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+      expect(harness.adapter.requests).toHaveLength(0)
+    },
+    30_000,
+  )
+
+  it('keeps cancellation retryable while its pending physical Session is unavailable', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    await persistPendingInput(harness, binding, request, request.run.input)
+    const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 34)
+    vi.spyOn(harness.context.agents, 'resume').mockRejectedValueOnce(new Error('provider unavailable'))
+    vi.spyOn(harness.context.logger, 'warn').mockImplementation(() => {})
+
+    const canceled = await harness.execution.cancelOperation(
+      prepared.preparation.operation,
+      'authority-revoked',
+      signal,
+    )
+
+    expect(canceled).toMatchObject({ state: 'publishing' })
+    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    expect(harness.adapter.requests).toHaveLength(0)
+  }, 30_000)
+
+  it('reports success when pending input becomes recorded during cancellation drain', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    await persistPendingInput(harness, binding, request, request.run.input)
+    const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 35)
+    const resume = harness.context.agents.resume.bind(harness.context.agents)
+    vi.spyOn(harness.context.agents, 'resume').mockImplementation(async (options) => {
+      const handle = await resume(options)
+      const dispose = handle.dispose.bind(handle)
+      vi.spyOn(handle, 'dispose').mockImplementation(async () => {
+        handle.agent.session.append('agent/inbox/spliced', {
+          target: 'next-turn',
+          start: 0,
+          removedCount: 1,
+          inserted: [],
+        })
+        handle.agent.session.append('user/message', request.run.input, { surfaceOp: 'append' })
+        await harness.context.sessions.flush(handle.agent.session)
+        await dispose()
+      })
+      return handle
+    })
+
+    const canceled = await harness.execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )
+
+    expect(canceled).toMatchObject({ state: 'succeeded', result: { inputMessageId: MESSAGE_ID } })
+    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    const durable = await harness.context.sessionPersistence.readFrom(SESSION_ID, 0, signal)
+    expect(durable.events.filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
+      .toHaveLength(1)
+  }, 30_000)
+
   it('retains a stale Agent Handle until replacement disposal succeeds', async () => {
     const harness = await agentRunHarness([stopResponse('done')])
     const signal = new AbortController().signal
@@ -570,7 +861,37 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(started).toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
     expect(disposals).toBe(2)
     expect(harness.context.agents.get(SESSION_ID)).toBeDefined()
-  }, 30_000)
+  }, 60_000)
+
+  it('keeps provider creation failures retryable without trusting thrown values', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(27), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) return
+    const named = Object.assign(new Error('named failure'), { name: 'AdapterFailure' })
+    const nameless = Object.assign(new Error('nameless failure'), { name: '' })
+    const create = vi.spyOn(harness.context.agents, 'create')
+      .mockRejectedValueOnce(named)
+      .mockRejectedValueOnce(nameless)
+      .mockRejectedValueOnce('primitive failure')
+    const warning = vi.spyOn(harness.context.logger, 'warn').mockImplementation(() => {})
+
+    for (const expectedName of ['AdapterFailure', 'unknown error', 'unknown error']) {
+      const result = await harness.execution.startOperation(
+        prepared.preparation.operation,
+        prepared.acceptance,
+        signal,
+      )
+      expect(result).toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+      expect(warning).toHaveBeenLastCalledWith(expect.stringContaining(`is unavailable: ${expectedName}`))
+    }
+
+    expect(create).toHaveBeenCalledTimes(3)
+    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+  }, 60_000)
 
   it('reconciles a persisted same-id input whose Saki source does not match', async () => {
     const harness = await agentRunHarness([])
@@ -607,6 +928,39 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       .flatMap(event => event.data.inserted)).toContainEqual(conflictingInput)
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
   }, 30_000)
+
+  it.each([
+    ['working directory', { cwd: 'D:/conflicting-worktree' }],
+    ['Agent preset', { agentPreset: 'conflicting-preset' }],
+  ] as const)(
+    'reconciles a physical Session whose %s disagrees with the Host request',
+    async (_label, meta) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      await persistInputHistory(harness, binding, request, (persisted) => {
+        persisted.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [] })
+      }, meta)
+      const prepared = await harness.execution.prepareOperation(request, accepted(28), signal)
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
+
+      const started = await harness.execution.startOperation(
+        prepared.preparation.operation,
+        prepared.acceptance,
+        signal,
+      )
+
+      expect(started).toMatchObject({
+        ok: true,
+        snapshot: { state: 'reconciliation-required', reason: 'evidence-conflict' },
+      })
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+      expect(harness.adapter.requests).toHaveLength(0)
+    },
+    30_000,
+  )
 
   it('drains an acquired Agent before publishing conflicting input evidence', async () => {
     const harness = await agentRunHarness([])
@@ -947,6 +1301,611 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     30_000,
   )
 
+  it('returns a prepared Agent Run unchanged during inspection', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(39), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) return
+
+    await expect(harness.execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toEqual(prepared.snapshot)
+  }, 30_000)
+
+  it.each([
+    ['mismatched Session identity', 'mismatch', 'evidence-conflict'],
+    ['exact recorded input', 'recorded', 'succeeded'],
+    ['conflicting recorded input', 'conflict', 'evidence-conflict'],
+    ['claimed input without a record', 'unknown', 'effect-unknown'],
+  ] as const)(
+    'reconciles an attempting Agent Run with %s during inspection',
+    async (_label, history, expected) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 40)
+      await persistInputHistory(harness, binding, request, (persisted) => {
+        if (history === 'recorded') {
+          persisted.append('user/message', request.run.input, { surfaceOp: 'append' })
+        } else if (history === 'conflict') {
+          persisted.append('user/message', freezeMessage({
+            ...request.run.input,
+            content: [{ type: 'text', text: 'Conflicting recorded input.' }],
+          }), { surfaceOp: 'append' })
+        } else if (history === 'unknown') {
+          persisted.append('agent/inbox/spliced', {
+            target: 'next-turn',
+            start: 0,
+            inserted: [request.run.input],
+          })
+          persisted.append('agent/inbox/spliced', {
+            target: 'next-turn',
+            start: 0,
+            removedCount: 1,
+            inserted: [],
+          })
+        } else {
+          persisted.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [] })
+        }
+      }, history === 'mismatch' ? { cwd: 'D:/conflicting-worktree' } : {})
+
+      const inspected = await harness.execution.inspectOperation(prepared.preparation.operation, signal)
+
+      if (expected === 'succeeded') {
+        expect(inspected).toMatchObject({ state: 'succeeded' })
+      } else {
+        expect(inspected).toMatchObject({ state: 'reconciliation-required', reason: expected })
+      }
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    },
+    30_000,
+  )
+
+  it.each(['before', 'after'] as const)(
+    'recovers inspection when the applied-recorded acknowledgement is lost %s persistence',
+    async (failurePoint) => {
+      const harness = await agentRunHarness([stopResponse('done')])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      const prepared = await harness.execution.prepareOperation(request, accepted(41), signal)
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
+      const persistence = operationPersistence(harness.execution)
+      persistence.replace(async (record) => {
+        if (record.snapshot.state === 'publishing' && record.effectPlan?.kind === 'agent-run'
+          && record.effectPlan.publication === 'applied-recorded') {
+          if (failurePoint === 'after') await persistence.original(record)
+          throw new Error(`lost applied-recorded acknowledgement ${failurePoint} persistence`)
+        }
+        await persistence.original(record)
+      })
+
+      await expect(harness.execution.startOperation(
+        prepared.preparation.operation,
+        prepared.acceptance,
+        signal,
+      )).rejects.toThrow(`lost applied-recorded acknowledgement ${failurePoint} persistence`)
+      persistence.restore()
+
+      await expect(harness.execution.inspectOperation(prepared.preparation.operation, signal))
+        .resolves.toMatchObject({ state: 'succeeded' })
+      expect(harness.context.agents.get(SESSION_ID)).toBeDefined()
+    },
+    60_000,
+  )
+
+  it('reconciles succeeded Host evidence when its physical Session disappears', async () => {
+    const harness = await agentRunHarness([stopResponse('done')])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(42), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) return
+    await expect(harness.execution.startOperation(
+      prepared.preparation.operation,
+      prepared.acceptance,
+      signal,
+    )).resolves.toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+    vi.spyOn(harness.context.sessionPersistence, 'listSnapshots').mockResolvedValueOnce([])
+
+    await expect(harness.execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'reconciliation-required', reason: 'effect-unknown' })
+    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+  }, 30_000)
+
+  it.each([
+    ['a mismatched physical Session', 'mismatch', 'evidence-conflict'],
+    ['no exact input', 'absent', 'effect-unknown'],
+  ] as const)(
+    'cancels an attempting Agent Run with %s without creating an Agent',
+    async (_label, history, expected) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 43)
+      await persistInputHistory(harness, binding, request, (persisted) => {
+        persisted.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [] })
+      }, history === 'mismatch' ? { agentPreset: 'conflicting-preset' } : {})
+
+      const canceled = await harness.execution.cancelOperation(
+        prepared.preparation.operation,
+        'source-canceled',
+        signal,
+      )
+
+      if (history === 'absent') {
+        expect(canceled).toMatchObject({ state: 'canceled', effect: 'none' })
+      } else {
+        expect(canceled).toMatchObject({ state: 'reconciliation-required', reason: expected })
+      }
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    },
+    30_000,
+  )
+
+  it.each(['removed-conflict', 'malformed-wake'] as const)(
+    'rejects %s in durable Agent Run inbox history',
+    async (history) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      await persistInputHistory(harness, binding, request, (persisted) => {
+        if (history === 'removed-conflict') {
+          const conflicting = freezeMessage({
+            ...request.run.input,
+            content: [{ type: 'text', text: 'Conflicting removed input.' }],
+          })
+          persisted.append('agent/inbox/spliced', {
+            target: 'next-turn',
+            start: 0,
+            inserted: [conflicting],
+          })
+          persisted.append('agent/inbox/spliced', {
+            target: 'next-turn',
+            start: 0,
+            removedCount: 1,
+            inserted: [],
+          })
+        } else {
+          persisted.append('agent/inbox/spliced', {
+            target: 'next-step',
+            start: 0,
+            inserted: [freezeMessage({
+              id: 'malformed-agent-run-wake' as StartAgentRunInputMessage['id'],
+              role: 'user',
+              content: [{ type: 'text', text: 'Malformed wake.' }],
+              source: { kind: 'saki-agent-run-wake', agentRunId: AGENT_RUN_ID, ordinal: -1 },
+            })],
+          })
+        }
+      })
+      const prepared = await harness.execution.prepareOperation(request, accepted(44), signal)
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
+
+      await expect(harness.execution.startOperation(
+        prepared.preparation.operation,
+        prepared.acceptance,
+        signal,
+      )).resolves.toMatchObject({
+        ok: true,
+        snapshot: { state: 'reconciliation-required', reason: 'evidence-conflict' },
+      })
+      expect(harness.adapter.requests).toHaveLength(0)
+    },
+    30_000,
+  )
+
+  it.each(['advance', 'inspect', 'cancel'] as const)(
+    'reconciles a transient live Agent ownership conflict during %s',
+    async (action) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      const prepared = action === 'advance'
+        ? await harness.execution.prepareOperation(request, accepted(45), signal)
+        : await persistAttemptingAgentRun(harness.execution, request, signal, 45)
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
+      scriptAgentRegistryReads(harness, [{} as Agent, undefined])
+
+      const snapshot = action === 'advance'
+        ? (await harness.execution.startOperation(
+          prepared.preparation.operation,
+          prepared.acceptance,
+          signal,
+        )).snapshot
+        : action === 'inspect'
+          ? await harness.execution.inspectOperation(prepared.preparation.operation, signal)
+          : await harness.execution.cancelOperation(
+            prepared.preparation.operation,
+            'source-canceled',
+            signal,
+          )
+
+      expect(snapshot).toMatchObject({ state: 'reconciliation-required', reason: 'evidence-conflict' })
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    },
+    30_000,
+  )
+
+  it.each(['before-check', 'during-inspection', 'provider-failure'] as const)(
+    'reconciles live Agent ownership that appears at %s during acquisition',
+    async (point) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      const prepared = await harness.execution.prepareOperation(request, accepted(46), signal)
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
+      const foreign = {} as Agent
+      const reads = point === 'before-check'
+        ? [undefined, foreign, undefined]
+        : point === 'during-inspection'
+          ? [undefined, undefined, foreign, undefined]
+          : [undefined, undefined, undefined, foreign, undefined]
+      scriptAgentRegistryReads(harness, reads)
+      if (point === 'provider-failure') {
+        vi.spyOn(harness.context.agents, 'create').mockRejectedValueOnce(new Error('provider raced with ownership'))
+      }
+
+      await expect(harness.execution.startOperation(
+        prepared.preparation.operation,
+        prepared.acceptance,
+        signal,
+      )).resolves.toMatchObject({
+        ok: true,
+        snapshot: { state: 'reconciliation-required', reason: 'evidence-conflict' },
+      })
+    },
+    30_000,
+  )
+
+  it.each(['start', 'cancel'] as const)(
+    'reconciles when physical Session identity changes during %s acquisition',
+    async (action) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      const prepared = action === 'start'
+        ? await harness.execution.prepareOperation(request, accepted(47), signal)
+        : await persistAttemptingAgentRun(harness.execution, request, signal, 47)
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
+      await persistPendingInput(harness, binding, request, request.run.input)
+      changeSessionIdentityOnRead(harness, 2)
+
+      const snapshot = action === 'start'
+        ? (await harness.execution.startOperation(
+          prepared.preparation.operation,
+          prepared.acceptance,
+          signal,
+        )).snapshot
+        : await harness.execution.cancelOperation(
+          prepared.preparation.operation,
+          'authority-revoked',
+          signal,
+        )
+
+      expect(snapshot).toMatchObject({ state: 'reconciliation-required', reason: 'evidence-conflict' })
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    },
+    30_000,
+  )
+
+  it.each(['absent', 'mismatch', 'ownership-conflict'] as const)(
+    'reconciles %s durable evidence after sending exact input',
+    async (failure) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      const prepared = await harness.execution.prepareOperation(request, accepted(48), signal)
+      expect(prepared.ok).toBe(true)
+      if (!prepared.ok) return
+      let inputFlushed = false
+      const sessions = harness.context.sessions as unknown as {
+        flush: (session: { readonly id: typeof SESSION_ID; readonly events: readonly { readonly type: string }[] }) => Promise<boolean>
+      }
+      const flush = sessions.flush.bind(sessions)
+      sessions.flush = async (session) => {
+        const result = await flush(session)
+        if (session.id === SESSION_ID && session.events.some(event => event.type === 'agent/inbox/spliced')) {
+          inputFlushed = true
+        }
+        return result
+      }
+      const listSnapshots = harness.context.sessionPersistence.listSnapshots.bind(harness.context.sessionPersistence)
+      vi.spyOn(harness.context.sessionPersistence, 'listSnapshots').mockImplementation(async inspectionSignal =>
+        failure === 'absent' && inputFlushed ? [] : await listSnapshots(inspectionSignal))
+      const readFrom = harness.context.sessionPersistence.readFrom.bind(harness.context.sessionPersistence)
+      vi.spyOn(harness.context.sessionPersistence, 'readFrom').mockImplementation(async (...args) => {
+        const persisted = await readFrom(...args)
+        return failure === 'mismatch' && inputFlushed
+          ? { ...persisted, meta: { ...persisted.meta, cwd: 'D:/changed-after-flush' } }
+          : persisted
+      })
+      const getAgent = harness.context.agents.get.bind(harness.context.agents)
+      let reportedConflict = false
+      vi.spyOn(harness.context.agents, 'get').mockImplementation((sessionId) => {
+        if (failure === 'ownership-conflict' && inputFlushed && !reportedConflict) {
+          reportedConflict = true
+          return {} as Agent
+        }
+        return getAgent(sessionId)
+      })
+
+      const started = await harness.execution.startOperation(
+        prepared.preparation.operation,
+        prepared.acceptance,
+        signal,
+      )
+
+      expect(started).toMatchObject({
+        ok: true,
+        snapshot: {
+          state: 'reconciliation-required',
+          reason: failure === 'absent' ? 'effect-unknown' : 'evidence-conflict',
+        },
+      })
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    },
+    30_000,
+  )
+
+  it('keeps replacement ownership installed while disposing a canceled Agent Run', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await persistPlannedAgentRun(harness.execution, request, signal, 49)
+    const handle = await createAgentHandle(harness, binding, request, signal)
+    const handles = liveAgentRunHandles(harness.execution)
+    handles.set(SESSION_ID, handle)
+    const replacement = { agent: handle.agent, dispose: vi.fn(async () => {}) }
+    const dispose = handle.dispose.bind(handle)
+    vi.spyOn(handle, 'dispose').mockImplementation(async () => {
+      await dispose()
+      handles.set(SESSION_ID, replacement)
+    })
+
+    await expect(harness.execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )).resolves.toMatchObject({ state: 'canceled', effect: 'none' })
+
+    expect(handles.get(SESSION_ID)).toBe(replacement)
+    expect(replacement.dispose).not.toHaveBeenCalled()
+    handles.delete(SESSION_ID)
+  }, 30_000)
+
+  it('rechecks replacement ownership after a stale retained handle is disposed', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(50), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) return
+    const handles = liveAgentRunHandles(harness.execution)
+    const replacementAgent = {} as Agent
+    const replacement = { agent: replacementAgent, dispose: vi.fn(async () => {}) }
+    const stale = {
+      agent: {} as Agent,
+      dispose: vi.fn(async () => { handles.set(SESSION_ID, replacement) }),
+    }
+    handles.set(SESSION_ID, stale)
+    scriptAgentRegistryReads(harness, [undefined, undefined, replacementAgent, replacementAgent, undefined])
+
+    await expect(harness.execution.startOperation(
+      prepared.preparation.operation,
+      prepared.acceptance,
+      signal,
+    )).resolves.toMatchObject({
+      ok: true,
+      snapshot: { state: 'reconciliation-required', reason: 'evidence-conflict' },
+    })
+
+    expect(stale.dispose).toHaveBeenCalledOnce()
+    expect(replacement.dispose).toHaveBeenCalledOnce()
+    expect(handles.has(SESSION_ID)).toBe(false)
+  }, 30_000)
+
+  it('rejects succeeded recovery when physical evidence disappears after inspection', async () => {
+    const { operation, request, restarted, signal } = await restartedSucceededAgentRun()
+    const listSnapshots = restarted.context.sessionPersistence.listSnapshots.bind(restarted.context.sessionPersistence)
+    let inspections = 0
+    vi.spyOn(restarted.context.sessionPersistence, 'listSnapshots').mockImplementation(async (inspectionSignal) => {
+      inspections += 1
+      return inspections === 2 ? [] : await listSnapshots(inspectionSignal)
+    })
+
+    await expect(restarted.execution.resumeAgentRun(operation, request, signal))
+      .rejects.toThrow('lacks its exact physical Session input')
+    expect(restarted.context.agents.get(SESSION_ID)).toBeUndefined()
+  }, 60_000)
+
+  it('rejects succeeded recovery when its Session provider is unavailable', async () => {
+    const { operation, request, restarted, signal } = await restartedSucceededAgentRun()
+    vi.spyOn(restarted.context.agents, 'resume').mockRejectedValueOnce(new Error('resume provider unavailable'))
+
+    await expect(restarted.execution.resumeAgentRun(operation, request, signal))
+      .rejects.toThrow('Session recovery is unavailable')
+    expect(restarted.context.agents.get(SESSION_ID)).toBeUndefined()
+  }, 60_000)
+
+  it('rejects a retained recovered Agent whose model route conflicts with the Host request', async () => {
+    const { operation, request, restarted, signal } = await restartedSucceededAgentRun()
+    const retained = await restarted.context.agents.resume({
+      resumeSessionId: SESSION_ID,
+      agentOptions: { provider: request.run.profile.modelRoute.provider, model: 'conflicting-model' },
+      setup: async () => {},
+      signal,
+    })
+    const handles = liveAgentRunHandles(restarted.execution)
+    handles.set(SESSION_ID, retained)
+
+    await expect(restarted.execution.resumeAgentRun(operation, request, signal))
+      .rejects.toThrow('restored a conflicting Session configuration')
+    expect(restarted.context.agents.get(SESSION_ID)).toBeUndefined()
+    expect(handles.has(SESSION_ID)).toBe(false)
+  }, 60_000)
+
+  it('rejects succeeded recovery when physical evidence disappears after Agent resume', async () => {
+    const { operation, request, restarted, signal } = await restartedSucceededAgentRun()
+    const resume = restarted.context.agents.resume.bind(restarted.context.agents)
+    let resumed = false
+    vi.spyOn(restarted.context.agents, 'resume').mockImplementation(async (options) => {
+      const handle = await resume(options)
+      resumed = true
+      return handle
+    })
+    const listSnapshots = restarted.context.sessionPersistence.listSnapshots.bind(restarted.context.sessionPersistence)
+    vi.spyOn(restarted.context.sessionPersistence, 'listSnapshots').mockImplementation(async inspectionSignal =>
+      resumed ? [] : await listSnapshots(inspectionSignal))
+
+    await expect(restarted.execution.resumeAgentRun(operation, request, signal))
+      .rejects.toThrow('lost exact physical Session evidence during recovery')
+    expect(restarted.context.agents.get(SESSION_ID)).toBeUndefined()
+    expect(liveAgentRunHandles(restarted.execution).has(SESSION_ID)).toBe(false)
+  }, 60_000)
+
+  it('reports success when cancellation observes exact input recorded during Agent resume', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 51)
+    await persistPendingInput(harness, binding, request, request.run.input)
+    const resume = harness.context.agents.resume.bind(harness.context.agents)
+    vi.spyOn(harness.context.agents, 'resume').mockImplementation(async (options) => {
+      const handle = await resume(options)
+      handle.agent.session.append('agent/inbox/spliced', {
+        target: 'next-turn',
+        start: 0,
+        removedCount: 1,
+        inserted: [],
+      })
+      handle.agent.session.append('user/message', request.run.input, { surfaceOp: 'append' })
+      await harness.context.sessions.flush(handle.agent.session)
+      return handle
+    })
+
+    await expect(harness.execution.cancelOperation(
+      prepared.preparation.operation,
+      'source-canceled',
+      signal,
+    )).resolves.toMatchObject({ state: 'succeeded' })
+    expect(harness.context.agents.get(SESSION_ID)).toBeDefined()
+  }, 60_000)
+
+  it.each(['evidence-conflict', 'effect-unknown'] as const)(
+    'reconciles %s when cancellation drain changes pending input evidence',
+    async (expectedReason) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      const request = await startAgentRunRequest(harness.execution, binding, signal)
+      const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 52)
+      await persistPendingInput(harness, binding, request, request.run.input)
+      const resume = harness.context.agents.resume.bind(harness.context.agents)
+      vi.spyOn(harness.context.agents, 'resume').mockImplementation(async (options) => {
+        const handle = await resume(options)
+        const dispose = handle.dispose.bind(handle)
+        vi.spyOn(handle, 'dispose').mockImplementation(async () => {
+          handle.agent.session.append('agent/inbox/spliced', {
+            target: 'next-turn',
+            start: 0,
+            removedCount: 1,
+            inserted: [],
+          })
+          if (expectedReason === 'evidence-conflict') {
+            handle.agent.session.append('user/message', freezeMessage({
+              ...request.run.input,
+              content: [{ type: 'text', text: 'Conflicting input recorded during cancellation.' }],
+            }), { surfaceOp: 'append' })
+          }
+          await harness.context.sessions.flush(handle.agent.session)
+          await dispose()
+        })
+        return handle
+      })
+
+      await expect(harness.execution.cancelOperation(
+        prepared.preparation.operation,
+        'authority-revoked',
+        signal,
+      )).resolves.toMatchObject({ state: 'reconciliation-required', reason: expectedReason })
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    },
+    60_000,
+  )
+
+  it('preserves a downstream pre-step rejection while keeping the exact input recoverable', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(53), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) return
+    const create = harness.context.agents.create.bind(harness.context.agents)
+    vi.spyOn(harness.context.agents, 'create').mockImplementation(async (options) => {
+      const handle = await create(options)
+      handle.agent.ctx.on('agent/pre-step', async () => ({ kind: 'reject' }))
+      return handle
+    })
+
+    await expect(harness.execution.startOperation(
+      prepared.preparation.operation,
+      prepared.acceptance,
+      signal,
+    )).rejects.toThrow('became idle before recording its exact input')
+    await expect(harness.execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'reconciliation-required', reason: 'effect-unknown' })
+  }, 60_000)
+
+  it('replays an applied-recorded publication acknowledgement lost before success', async () => {
+    const harness = await agentRunHarness([stopResponse('done')])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(54), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) return
+    const persistence = operationPersistence(harness.execution)
+    persistence.replace(async (record) => {
+      await persistence.original(record)
+      if (record.snapshot.state === 'publishing' && record.effectPlan?.kind === 'agent-run'
+        && record.effectPlan.publication === 'applied-recorded') {
+        throw new Error('lost success acknowledgement after applied-recorded persistence')
+      }
+    })
+    await expect(harness.execution.startOperation(
+      prepared.preparation.operation,
+      prepared.acceptance,
+      signal,
+    )).rejects.toThrow('lost success acknowledgement after applied-recorded persistence')
+    persistence.restore()
+
+    await expect(harness.execution.startOperation(
+      prepared.preparation.operation,
+      prepared.acceptance,
+      signal,
+    )).resolves.toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+  }, 60_000)
+
   it('replays a successful operation after provider restart without resending its input', async () => {
     const world = await createAgentRunWorld()
     const first = await mountAgentRunHarness(world, [stopResponse('done')])
@@ -1075,6 +2034,40 @@ function stopResponse(text: string): StreamChunk[] {
   ]
 }
 
+function agentRunInput(text: string): StartAgentRunInputMessage {
+  return freezeMessage({
+    id: MESSAGE_ID,
+    role: 'user',
+    content: [{ type: 'text', text }],
+    source: {
+      kind: 'saki-agent-run',
+      dispatchId: DISPATCH_ID,
+      agentRunId: AGENT_RUN_ID,
+      workSessionId: WORK_SESSION_ID,
+    },
+  }) as StartAgentRunInputMessage
+}
+
+async function createAgentHandle(
+  harness: AgentRunHarness,
+  binding: ActiveHostProjectBinding,
+  request: StartAgentRunHostOperationRequest,
+  signal: AbortSignal,
+) {
+  return await harness.context.agents.create({
+    sessionId: SESSION_ID,
+    meta: {
+      cwd: binding.expectedInspection.trusted.canonicalWorktreePath,
+      agentPreset: request.run.profile.agentPresetId,
+    },
+    agentOptions: {
+      provider: request.run.profile.modelRoute.provider,
+      model: request.run.profile.modelRoute.model,
+    },
+    signal,
+  })
+}
+
 interface AgentRunWorld {
   readonly repository: string
   readonly storageRoot: string
@@ -1091,6 +2084,35 @@ interface AgentRunHarness {
 
 async function agentRunHarness(responses: StreamChunk[][]): Promise<AgentRunHarness> {
   return await mountAgentRunHarness(await createAgentRunWorld(), responses)
+}
+
+async function restartedSucceededAgentRun() {
+  const world = await createAgentRunWorld()
+  const first = await mountAgentRunHarness(world, [stopResponse('done')])
+  const signal = new AbortController().signal
+  const binding = await activeBinding(first.execution, world.repository, signal)
+  const request = await startAgentRunRequest(first.execution, binding, signal)
+  const prepared = await first.execution.prepareOperation<'start-agent-run'>(request, accepted(55), signal)
+  if (!prepared.ok) throw new Error(`test Agent Run was not prepared: ${prepared.reason}`)
+  const started = await first.execution.startOperation(
+    prepared.preparation.operation,
+    prepared.acceptance,
+    signal,
+  )
+  if (!started.ok || started.snapshot.state !== 'succeeded') {
+    throw new Error('test Agent Run did not succeed before restart')
+  }
+  const agent = first.context.agents.get(SESSION_ID)
+  if (agent === undefined) throw new Error('test Agent Run has no live Agent before restart')
+  await agent.whenIdle()
+  await first.context.sessions.flush(agent.session)
+  await disposeContext(first.context)
+  return {
+    operation: prepared.preparation.operation,
+    request,
+    restarted: await mountAgentRunHarness(world, []),
+    signal,
+  }
 }
 
 async function createAgentRunWorld(): Promise<AgentRunWorld> {
@@ -1170,13 +2192,14 @@ async function persistInputHistory(
   binding: ActiveHostProjectBinding,
   request: StartAgentRunHostOperationRequest,
   append: (session: Session) => void,
+  meta: { readonly cwd?: string; readonly agentPreset?: string } = {},
 ): Promise<void> {
   const persisted = Session.create(SESSION_ID, undefined, {
     version: SESSION_FORMAT_VERSION,
     id: SESSION_ID,
     createdAt: Date.now(),
-    cwd: binding.expectedInspection.trusted.canonicalWorktreePath,
-    agentPreset: request.run.profile.agentPresetId,
+    cwd: meta.cwd ?? binding.expectedInspection.trusted.canonicalWorktreePath,
+    agentPreset: meta.agentPreset ?? request.run.profile.agentPresetId,
   })
   append(persisted)
   await harness.context.sessionPersistence.create(persisted.header)
@@ -1321,6 +2344,90 @@ function operationPersistence(execution: LocalSakiHostExecution): {
     replace: (replacement) => { target.persistOperation = replacement },
     restore: () => { target.persistOperation = original },
   }
+}
+
+async function persistAttemptingAgentRun(
+  execution: LocalSakiHostExecution,
+  request: StartAgentRunHostOperationRequest,
+  signal: AbortSignal,
+  admissionRevision: number,
+) {
+  const prepared = await execution.prepareOperation(request, accepted(admissionRevision), signal)
+  if (!prepared.ok) throw new Error(`test Agent Run was not prepared: ${prepared.reason}`)
+  const persistence = operationPersistence(execution)
+  persistence.replace(async (record) => {
+    await persistence.original(record)
+    if (record.snapshot.state === 'publishing' && record.effectPlan?.kind === 'agent-run'
+      && record.effectPlan.publication === 'attempting') {
+      throw new Error('captured attempting Agent Run')
+    }
+  })
+  await expect(execution.startOperation(
+    prepared.preparation.operation,
+    prepared.acceptance,
+    signal,
+  )).rejects.toThrow('captured attempting Agent Run')
+  persistence.restore()
+  return prepared
+}
+
+async function persistPlannedAgentRun(
+  execution: LocalSakiHostExecution,
+  request: StartAgentRunHostOperationRequest,
+  signal: AbortSignal,
+  admissionRevision: number,
+) {
+  const prepared = await execution.prepareOperation(request, accepted(admissionRevision), signal)
+  if (!prepared.ok) throw new Error(`test Agent Run was not prepared: ${prepared.reason}`)
+  const persistence = operationPersistence(execution)
+  persistence.replace(async (record) => {
+    await persistence.original(record)
+    if (record.snapshot.state === 'publishing' && record.effectPlan?.kind === 'agent-run'
+      && record.effectPlan.publication === 'not-started') {
+      throw new Error('captured planned Agent Run')
+    }
+  })
+  await expect(execution.startOperation(
+    prepared.preparation.operation,
+    prepared.acceptance,
+    signal,
+  )).rejects.toThrow('captured planned Agent Run')
+  persistence.restore()
+  return prepared
+}
+
+function liveAgentRunHandles(execution: LocalSakiHostExecution) {
+  return (execution as unknown as {
+    liveAgentRuns: Map<typeof SESSION_ID, { readonly agent: Agent; dispose: () => Promise<void> }>
+  }).liveAgentRuns
+}
+
+function scriptAgentRegistryReads(harness: AgentRunHarness, reads: readonly (Agent | undefined)[]) {
+  const get = harness.context.agents.get.bind(harness.context.agents)
+  let index = 0
+  return vi.spyOn(harness.context.agents, 'get').mockImplementation(sessionId =>
+    index < reads.length ? reads[index++] : get(sessionId))
+}
+
+function changeSessionIdentityOnRead(harness: AgentRunHarness, targetRead: number): void {
+  const readFrom = harness.context.sessionPersistence.readFrom.bind(harness.context.sessionPersistence)
+  let reads = 0
+  vi.spyOn(harness.context.sessionPersistence, 'readFrom').mockImplementation(async (...args) => {
+    const persisted = await readFrom(...args)
+    reads += 1
+    return reads === targetRead
+      ? { ...persisted, meta: { ...persisted.meta, cwd: 'D:/changed-between-inspections' } }
+      : persisted
+  })
+}
+
+function replaceGitRunner(execution: LocalSakiHostExecution, failure: unknown): { readonly restore: () => void } {
+  const target = execution as unknown as { git: GitRunner }
+  const original = target.git
+  target.git = {
+    run: async () => { throw failure },
+  } as unknown as GitRunner
+  return { restore: () => { target.git = original } }
 }
 
 async function createRepository(): Promise<string> {

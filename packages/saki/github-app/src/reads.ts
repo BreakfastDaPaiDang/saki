@@ -248,11 +248,8 @@ export async function readIssue(
     signal,
     request.kind,
   ))
-  if (data.node === null) notFound(request.kind)
-  if (data.node.id !== request.issueId
-    || data.node.repository.id !== request.repositoryId
-    || data.node.repository.databaseId !== request.repositoryDatabaseId) invalid(request.kind)
-  return githubIssueFactSchema.parse(issueFact(data.node))
+  const node = requireMatchingIssueNode(request, data.node)
+  return githubIssueFactSchema.parse(issueFact(node))
 }
 
 /**
@@ -279,13 +276,10 @@ export async function readIssueDetail(
     signal,
     request.kind,
   ))
-  if (data.node === null) notFound(request.kind)
-  if (data.node.id !== request.issueId
-    || data.node.repository.id !== request.repositoryId
-    || data.node.repository.databaseId !== request.repositoryDatabaseId) invalid(request.kind)
+  const node = requireMatchingIssueNode(request, data.node)
   return githubIssueDetailFactSchema.parse({
-    ...graphqlIssueFact(data.node, request.kind),
-    body: data.node.body,
+    ...graphqlIssueFact(node, request.kind),
+    body: node.body,
   })
 }
 
@@ -675,6 +669,17 @@ async function repositoryFromSession(
 
 function issueFact(node: NonNullable<z.infer<typeof issueDataSchema>['node']>): GitHubIssueFact {
   return graphqlIssueFact(node, 'issue')
+}
+
+function requireMatchingIssueNode<Node extends NonNullable<z.infer<typeof issueDataSchema>['node']>>(
+  request: GitHubIssueReadRequest | GitHubIssueDetailReadRequest,
+  node: Node | null,
+): Node {
+  if (node === null) notFound(request.kind)
+  if (node.id !== request.issueId
+    || node.repository.id !== request.repositoryId
+    || node.repository.databaseId !== request.repositoryDatabaseId) invalid(request.kind)
+  return node
 }
 
 function tagTarget(type: 'tag' | 'commit', id: string): GitHubTagTarget {

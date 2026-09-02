@@ -618,6 +618,7 @@ export const sakiControlPlaneV4DomainSpec = defineDomain({
   },
 })
 
+/* jscpd:ignore-start -- Explicit v5/v6 table inventories freeze each adjacent migration source independently. */
 /** Exact v5 control-plane schema retained as the adjacent v6 migration source. */
 export const sakiControlPlaneV5DomainSpec = defineDomain({
   name: 'saki_control_plane',
@@ -693,6 +694,7 @@ export const sakiControlPlaneV6DomainSpec = defineDomain({
     ),
   },
 })
+/* jscpd:ignore-end */
 
 function sourceTable<T>(snapshot: DomainMigrationSnapshot, name: string): Readonly<Record<string, T>> {
   return snapshot.tables[name] as Readonly<Record<string, T>>

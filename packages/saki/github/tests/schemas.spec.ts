@@ -193,6 +193,9 @@ describe('GitHub id and request admission', () => {
     expect(githubBranchSafetyReadRequestSchema.safeParse({
       kind: 'branch-safety', ...repository, branch: 'bad\0branch',
     }).success).toBe(false)
+    expect(githubBranchSafetyReadRequestSchema.safeParse({
+      kind: 'branch-safety', ...repository, branch: '\ud800',
+    }).success).toBe(false)
   })
 })
 
@@ -502,6 +505,10 @@ describe('complete Project-board candidate', () => {
       fences: withCounts(items.length, 2),
     }
     expect(computeGitHubProjectBoardFingerprint(source).digest).toMatch(/^[0-9a-f]{64}$/)
+    expectCandidateSuccess({
+      ...SCAN_WITHOUT_FINGERPRINT,
+      items: [item('PVTI_draft', 0, { kind: 'draft-issue', title: 'Draft' })],
+    })
     expect(computeGitHubProjectBoardFingerprint({
       ...source,
       fields: [...source.fields].reverse(),
@@ -623,6 +630,10 @@ describe('closed failures, mutation vocabulary, and invariant companion', () => 
       observedAt: OBSERVED_AT,
     }
     expect(githubProjectItemPositionSetInspectionSchema.parse(inspection)).toEqual(inspection)
+    expect(githubProjectItemPositionSetInspectionSchema.parse({
+      ...inspection,
+      snapshot: { ...snapshot, membership: { state: 'absent' } },
+    }).snapshot.membership).toEqual({ state: 'absent' })
     expect(githubProjectItemPositionSetInspectionSchema.safeParse({
       ...inspection,
       snapshot: {

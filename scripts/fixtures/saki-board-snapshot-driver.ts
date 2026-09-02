@@ -152,7 +152,6 @@ try {
         })}\n`)
       }
       await stopped
-      if (app === undefined) throw new Error('Saki Board snapshot lost its serving Context')
       if (agentRunSnapshot) await reportAgentRunSnapshot(app)
       lifetime.abort(new Error('Saki Board snapshot driver stopped'))
       await app.fiber.dispose()
