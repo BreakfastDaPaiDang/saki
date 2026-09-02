@@ -261,6 +261,7 @@ flowchart TD
     pkg_saki_github_app["saki/github-app"]
     pkg_saki_host_api["saki/host-api"]
     pkg_saki_installation_maintenance["saki/installation-maintenance"]
+    pkg_saki_tool_intervention["saki/tool-intervention"]
   end
   subgraph group_sandbox["packages/sandbox"]
     pkg_sandbox["sandbox"]
@@ -1264,6 +1265,11 @@ flowchart TD
   pkg_saki_installation_maintenance --> pkg_storage
   pkg_saki_installation_maintenance --> pkg_storage_domain
   pkg_saki_installation_maintenance --> pkg_storage_sqlite
+  pkg_saki_tool_intervention --> pkg_invariants
+  pkg_saki_tool_intervention --> pkg_saki_control_plane
+  pkg_saki_tool_intervention --> pkg_session
+  pkg_saki_tool_intervention --> pkg_timeout
+  pkg_saki_tool_intervention --> pkg_tools
   pkg_client_runtime --> pkg_agent
   pkg_client_runtime --> pkg_api_remotes
   pkg_client_runtime --> pkg_attachment
@@ -1723,6 +1729,7 @@ flowchart TD
 | [`api-remotes`](../packages/api/remotes) | `api` | [`agent`](../packages/core/agent), [`agent-presets`](../packages/preset/agent-presets), [`api-gateway`](../packages/api/gateway), [`commands`](../packages/interaction/commands), [`cordis-host-runner`](../packages/extensions/cordis-host-runner), [`credentials`](../packages/credentials/credentials), [`file-reference`](../packages/context/file-reference), [`goal`](../packages/goal/goal), [`host-plugin-inventory`](../packages/host/plugin-inventory), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`message-feedback`](../packages/feedback/message-feedback), [`session`](../packages/core/session), [`session-persistence`](../packages/session/session-persistence), [`session-reference`](../packages/context/session-reference), [`settings`](../packages/settings/settings), [`typert-registry`](../packages/typert/registry) |
 | [`saki/host-api`](../packages/saki/host-api) | `saki` | [`client-connection`](../packages/client/connection), [`invariants`](../packages/runtime-diagnostics/invariants), [`saki/control-plane`](../packages/saki/control-plane), [`saki/execution`](../packages/saki/execution) |
 | [`saki/installation-maintenance`](../packages/saki/installation-maintenance) | `saki` | [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants), [`saki/control-plane`](../packages/saki/control-plane), [`saki/execution-local`](../packages/saki/execution-local), [`storage`](../packages/storage/storage), [`storage-domain`](../packages/storage/storage-domain), [`storage-sqlite`](../packages/storage/storage-sqlite) |
+| [`saki/tool-intervention`](../packages/saki/tool-intervention) | `saki` | [`invariants`](../packages/runtime-diagnostics/invariants), [`saki/control-plane`](../packages/saki/control-plane), [`session`](../packages/core/session), [`timeout`](../packages/util/timeout), [`tools`](../packages/core/tools) |
 | [`client-runtime`](../packages/client/runtime) | `client` | [`agent`](../packages/core/agent), [`api-remotes`](../packages/api/remotes), [`attachment`](../packages/attachment/attachment), [`client-connection`](../packages/client/connection), [`commands`](../packages/interaction/commands), [`host-apiproxy`](../packages/host/apiproxy), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`llm-retry`](../packages/llm/llm-retry), [`session`](../packages/core/session), [`session-projection`](../packages/session/session-projection), [`session-title`](../packages/session/session-title), [`tools`](../packages/core/tools), [`typert-protocol`](../packages/typert/protocol), [`typert-registry`](../packages/typert/registry) |
 | [`client-ui-renderer`](../packages/client/ui-renderer) | `client` | [`client-runtime`](../packages/client/runtime), [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`client-ui-settings`](../packages/client/ui-settings) | `client` | [`api-remotes`](../packages/api/remotes), [`client-connection`](../packages/client/connection), [`client-runtime`](../packages/client/runtime), [`invariants`](../packages/runtime-diagnostics/invariants), [`settings`](../packages/settings/settings) |
