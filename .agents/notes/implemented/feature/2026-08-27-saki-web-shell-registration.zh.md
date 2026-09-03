@@ -16,7 +16,7 @@ Saki bundle 在 `cordis.patch.yml` 中组合浏览器栈：DSH 客户端服务�
 
 `@breakfastdapaidang/saki-web-ui` 按提案要求保持单一客户端插件。它拥有持久化在 `saki.navigation` localStorage 键下的导航 store（surface、选中与最近 Project id）；选中 conversation 会话会清除 Saki surface，导航到 surface 的 effect 通过 `requestSurface` 发布 token。Access 门在被选中的 Saki surface 内渲染，交换启动器打印的 bootstrap secret；登记使用键入的目录路径而非浏览对话框，因为登记要求规范路径加服务端证据确认，选择器集成属于后续打磨切片。workspace 视图渲染已确认 projection，并区分 loading、refreshing、stale、not-found、denied、unavailable 与 offline 状态。控制面的持久 Browser Session 能跨越 Host 重启：持有 cookie 的浏览器不经新交换直接回到持久化地址；无 cookie 的浏览器则必须用重启后新签发的 secret 完成 session-required 交换。
 
-按决策明确排除：binding 检测、rebind、退役与历史迁移（[#26](https://github.com/BreakfastDaPaiDang/saki/issues/26)）；Project Settings、自动化策略与 budget（K7）；Conversation 回退 `/api` 背后的 agent 栈（后续切片——回退照常渲染，但会话创建不可用，控制台会出现 `/api` 重连噪音）。
+按决策明确排除：binding 检测、rebind、退役与历史迁移（[#26](https://github.com/BreakfastDaPaiDang/saki/issues/26)）；Project Settings、自动化策略与 budget（K7）；生产模型 adapter（组合的 bundle 已携带 agent 栈，但没有 adapter 时 Conversation 回退的回合保持 idle）。
 
 ## Alternatives considered
 
@@ -34,4 +34,4 @@ Saki bundle 在 `cordis.patch.yml` 中组合浏览器栈：DSH 客户端服务�
 
 bundle 通过 `node packages/saki/bundle/lib/bin.js` 启动为可用的浏览器产品；`pnpm run saki` 从源码提供同一界面。产品级证据是 `packages/saki/bundle/tests/web-registration.e2e.ts`：它在随机端口、全新 Installation 上启动构建产物，驱动 Chromium 完成 bootstrap、两次登记、一次必须完成的重复登记、reload 地址还原、持久会话存活的重启，以及无 cookie 的重新认证；每个交互都有上界，服务端停滞会让对应步骤失败而不是挂住。该 e2e 的存在也源于一次教训：早先的手工验证曾把占用固定调试端口的残留进程误判为服务端挂起；harness 规则（随机端口、全新 home、有界等待、强制拆除）把这类伪证据挡在门外。
 
-壳层增量是可累加且通用的，后续 DSH 特性无需了解 Saki 即可复用这两个 slot。在后续切片组合 `/api` 之前，Conversation 回退在无 agent 栈的情况下渲染；重连噪音只出现在控制台，并记录在 bundle README。「工作」页在其 projection seam 落地前，以诚实的不可用占位形式发布。
+壳层增量是可累加且通用的，后续 DSH 特性无需了解 Saki 即可复用这两个 slot。组合的 bundle 已携带 Conversation 回退背后的 agent 栈；在没有生产模型 adapter 时其回合保持 idle，如 bundle README 所记。「工作」页在其 projection seam 落地前，以诚实的不可用占位形式发布。

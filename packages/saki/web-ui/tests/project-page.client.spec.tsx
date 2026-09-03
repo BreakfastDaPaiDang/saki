@@ -47,9 +47,11 @@ function summary(overrides: SummaryOverrides = {}) {
   const detached = overrides.detached ?? false
   const branch = detached ? undefined : (overrides.branch === undefined ? 'main' : overrides.branch)
   const objectId = overrides.head ?? 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e'
-  const head: ProjectGitHead = branch === undefined
+  // Assert the union so control-flow narrowing of the const does not pin the
+  // commit variant (fixtures override head wholesale, e.g. an unborn branch).
+  const head = (branch === undefined
     ? { kind: 'commit', objectId }
-    : { kind: 'commit', objectId, symbolicRef: `refs/heads/${branch}` }
+    : { kind: 'commit', objectId, symbolicRef: `refs/heads/${branch}` }) as ProjectGitHead
   return {
     id: overrides.id ?? PROJECT_A,
     revision: 1,
