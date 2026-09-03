@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ProjectGitHead } from '@breakfastdapaidang/saki-execution'
 import type { SakiWireHostId, SakiWireProjectId } from '@breakfastdapaidang/saki-host-api/wire'
 import { ProjectPage } from '../src/client/components/ProjectPage.tsx'
 import type { ProjectPageProps } from '../src/client/components/ProjectPage.tsx'
@@ -45,6 +46,10 @@ interface SummaryOverrides {
 function summary(overrides: SummaryOverrides = {}) {
   const detached = overrides.detached ?? false
   const branch = detached ? undefined : (overrides.branch === undefined ? 'main' : overrides.branch)
+  const objectId = overrides.head ?? 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e'
+  const head: ProjectGitHead = branch === undefined
+    ? { kind: 'commit', objectId }
+    : { kind: 'commit', objectId, symbolicRef: `refs/heads/${branch}` }
   return {
     id: overrides.id ?? PROJECT_A,
     revision: 1,
@@ -55,9 +60,7 @@ function summary(overrides: SummaryOverrides = {}) {
       health: overrides.health ?? 'active',
       hostId: HOST.id,
       displayLocation: 'D:\\projects\\demo',
-      head: overrides.head ?? 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e',
-      ...(branch === undefined ? {} : { branch }),
-      detached,
+      head,
       inheritedChangeEntryCount: overrides.inheritedChangeEntryCount ?? 0,
       baseline: overrides.baseline ?? 'complete',
       automaticMutationEligible: (overrides.health ?? 'active') === 'active'
@@ -185,20 +188,18 @@ describe('ProjectPage — Project selector', () => {
         result: {
           ok: true,
           selection: {
-            observationVersion: 1,
+            observationVersion: 2,
             hostId: HOST.id,
             displayLocation: 'D:\\projects\\fresh',
             objectFormat: 'sha1',
-            head: 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e',
-            branch: 'main',
-            detached: false,
+            head: { kind: 'commit', objectId: 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e', symbolicRef: 'refs/heads/main' },
             locked: false,
             inheritedChangeEntryCount: 0,
             conversionAmbiguous: false,
             remotes: [{ transport: 'https' as const, coordinate: 'github.com/example/origin' }],
             automaticMutationEligible: true,
             blockingReasons: [],
-            fingerprint: { version: 1, digest: 'abc123' },
+            fingerprint: { version: 2, digest: 'abc123' },
             baseline: { kind: 'complete' },
           },
         },
@@ -289,15 +290,15 @@ describe('ProjectPage — Development Workspace', () => {
     expect(screen.getAllByText(/修复与 rebind 属于后续切片/)).toHaveLength(2)
   })
 
-  it('renders the branch placeholder when an attached binding carries no branch name', async () => {
+  it('renders the HEAD placeholder for an unborn branch', async () => {
     const { face, props } = bench(PROJECT_A)
     face.queryProjectIndex.mockResolvedValue(indexResult([summary()]))
     const attached = summary()
-    const binding = { ...attached.binding }
-    delete (binding as { branch?: string }).branch
+    const binding = { ...attached.binding, head: { kind: 'unborn' as const, symbolicRef: 'refs/heads/main' } }
     face.queryDevelopmentWorkspace.mockResolvedValue(workspaceResult({ ...attached, binding }))
     render(<ProjectPage {...props} />)
     await waitFor(() => { expect(screen.getByText('—')).toBeTruthy() })
+    expect(screen.getByText('main')).toBeTruthy()
   })
 
   it('keeps confirmed values during a refresh and survives a failed refresh', async () => {

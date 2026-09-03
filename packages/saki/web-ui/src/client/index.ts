@@ -11,6 +11,7 @@
  * services only.
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ISessions } from '@deepseek-ai/dsh-client-runtime/src/client/contract/sessions.ts'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
@@ -96,10 +97,13 @@ export function apply(ctx: ClientContext): void {
 
   // Selecting a session (the inherited Conversation navigation) hands the
   // surface back: the Saki surface clears and the fallback reappears.
+  // core/session's Context merge shadows the client runtime's sessions face
+  // in this package's type universe; the client runtime provides ISessions.
+  const sessionsList = (ctx.sessions as unknown as ISessions).list
   ctx.effect(() => {
-    let wasCurrent = ctx.sessions.list.getSnapshot().current !== undefined
-    const unsubscribe = ctx.sessions.list.subscribe(() => {
-      const isCurrent = ctx.sessions.list.getSnapshot().current !== undefined
+    let wasCurrent = sessionsList.getSnapshot().current !== undefined
+    const unsubscribe = sessionsList.subscribe(() => {
+      const isCurrent = sessionsList.getSnapshot().current !== undefined
       if (isCurrent && !wasCurrent) navigation.actions.clearSurface()
       wasCurrent = isCurrent
     })

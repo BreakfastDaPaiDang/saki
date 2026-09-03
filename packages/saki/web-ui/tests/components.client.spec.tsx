@@ -20,20 +20,18 @@ const t = ((key: string) => (zh as Record<string, string>)[key] ?? key) as Trans
 
 function selection(overrides: Record<string, unknown> = {}) {
   return {
-    observationVersion: 1 as const,
+    observationVersion: 2 as const,
     hostId: 'host-0a1b2c3d-0000-4000-8000-000000000001',
     displayLocation: 'D:\\projects\\demo',
-    objectFormat: 'directory',
-    head: 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e',
-    branch: 'main',
-    detached: false,
+    objectFormat: 'sha1',
+    head: { kind: 'commit' as const, objectId: 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e', symbolicRef: 'refs/heads/main' },
     locked: false,
     inheritedChangeEntryCount: 0,
     conversionAmbiguous: false,
     remotes: [{ transport: 'https' as const, coordinate: 'github.com/example/origin' }],
     automaticMutationEligible: true,
     blockingReasons: [],
-    fingerprint: { version: 1 as const, digest: 'abc123' },
+    fingerprint: { version: 2 as const, digest: 'abc123' },
     baseline: { kind: 'complete' as const },
     ...overrides,
   }
@@ -197,7 +195,7 @@ describe('RegisterProjectDialog', () => {
     await waitFor(() => { expect(onRegistered).toHaveBeenCalledWith('project-0a1b2c3d-0000-4000-8000-0000000000aa') })
     const intent = registerDevelopmentProject.mock.calls[0]![0] as SakiWireRegisterDevelopmentProjectIntent
     expect(intent.expectedRegistryRevision).toBe(3)
-    expect(intent.confirmedFingerprint).toEqual({ version: 1, digest: 'abc123' })
+    expect(intent.confirmedFingerprint).toEqual({ version: 2, digest: 'abc123' })
     expect(intent.confirmedBaseline).toEqual({ kind: 'complete' })
     expect(intent.intentId).toMatch(/^intent-[0-9a-f-]{36}$/)
     expect(registerDevelopmentProject.mock.calls[0]![1]).toBe('token-1')
@@ -328,8 +326,7 @@ describe('RegisterProjectDialog', () => {
         result: {
           ok: true,
           selection: selection({
-            detached: true,
-            branch: undefined,
+            head: { kind: 'commit', objectId: 'a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e' },
             remotes: [],
             githubRepositoryCandidates: ['github.com/acme/demo'],
             inheritedChangeEntryCount: 1,
@@ -372,18 +369,19 @@ describe('RegisterProjectDialog', () => {
     expect(intent.confirmedBaseline).toEqual({ kind: 'unavailable' })
   })
 
-  it('renders the branch placeholder for an attached selection without a branch name', async () => {
+  it('renders the HEAD placeholder for an unborn branch', async () => {
     const { props, inspectProjectSelection } = dialogProps()
     inspectProjectSelection.mockResolvedValue({
       ok: true,
       projection: {
         type: 'inspect-project-selection',
-        result: { ok: true, selection: selection({ branch: undefined }) },
+        result: { ok: true, selection: selection({ head: { kind: 'unborn', symbolicRef: 'refs/heads/main' } }) },
       },
     })
     render(<RegisterProjectDialog {...props} />)
     fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:\\projects\\demo' } })
     fireEvent.click(screen.getByRole('button', { name: '检查目录' }))
     await waitFor(() => { expect(screen.getByText('—')).toBeTruthy() })
+    expect(screen.getByText('main')).toBeTruthy()
   })
 })

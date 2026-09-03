@@ -16,6 +16,7 @@ import type {
 import type { SakiInjected } from '../index.ts'
 import type { SakiNavigationActionsFace } from '../navigation.ts'
 import { NS } from '../locales.ts'
+import { displayGitHead } from '../git-head.ts'
 import { RegisterProjectDialog } from './RegisterProjectDialog.tsx'
 import css from './ProjectPage.module.css'
 
@@ -256,6 +257,7 @@ function WorkspaceView(props: {
 function WorkspaceFacts(props: { workspace: Workspace; refreshing: boolean; t: TranslateNS<typeof NS> }) {
   const { workspace, t } = props
   const binding = workspace.project.binding
+  const head = displayGitHead(binding.head)
   return (
     <div className={css.facts}>
       {props.refreshing ? <p className={css.refreshing} role="status">{t('workspace.refreshing')}</p> : null}
@@ -263,9 +265,9 @@ function WorkspaceFacts(props: { workspace: Workspace; refreshing: boolean; t: T
         <div className={css.factRow}><dt>{t('workspace.facts.location')}</dt><dd className={css.mono}>{binding.displayLocation}</dd></div>
         <div className={css.factRow}>
           <dt>{t('workspace.facts.branch')}</dt>
-          <dd className={css.mono}>{binding.detached ? t('workspace.facts.detached') : (binding.branch ?? '—')}</dd>
+          <dd className={css.mono}>{head.detached ? t('workspace.facts.detached') : head.branch}</dd>
         </div>
-        <div className={css.factRow}><dt>{t('workspace.facts.head')}</dt><dd className={css.mono}>{binding.head.slice(0, 10)}</dd></div>
+        <div className={css.factRow}><dt>{t('workspace.facts.head')}</dt><dd className={css.mono}>{head.shortHead ?? '—'}</dd></div>
         <div className={css.factRow}>
           <dt>{t('workspace.facts.inherited')}</dt>
           <dd>{binding.inheritedChangeEntryCount === 0 ? t('workspace.facts.none') : `${binding.inheritedChangeEntryCount} ${t('workspace.facts.inherited.count')}`}</dd>

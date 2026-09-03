@@ -13,6 +13,7 @@ import type { ProjectSelectionProjection } from '@breakfastdapaidang/saki-execut
 import type { SakiWireIntent, SakiWireProjectId, SakiWireProjectIndexResult } from '@breakfastdapaidang/saki-host-api/wire'
 import type { SakiInjected } from '../index.ts'
 import type { NS } from '../locales.ts'
+import { displayGitHead } from '../git-head.ts'
 import css from './RegisterProjectDialog.module.css'
 
 /** Inspection evidence the operator reviews before confirming. */
@@ -141,53 +142,76 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
           ) : null}
 
           {phase.step === 'review' ? (
-            <>
-              <dl className={css.evidence}>
-                <div className={css.factRow}><dt>{t('workspace.facts.location')}</dt><dd className={css.mono}>{phase.selection.displayLocation}</dd></div>
-                <div className={css.factRow}>
-                  <dt>{t('workspace.facts.branch')}</dt>
-                  <dd className={css.mono}>{phase.selection.detached ? t('workspace.facts.detached') : (phase.selection.branch ?? '—')}</dd>
-                </div>
-                <div className={css.factRow}><dt>{t('workspace.facts.head')}</dt><dd className={css.mono}>{phase.selection.head.slice(0, 10)}</dd></div>
-                <div className={css.factRow}>
-                  <dt>{t('project.register.remotes')}</dt>
-                  <dd className={css.mono}>{phase.selection.remotes.length === 0 ? t('workspace.facts.none') : phase.selection.remotes.map(remote => remote.coordinate ?? remote.transport).join('，')}</dd>
-                </div>
-                <div className={css.factRow}>
-                  <dt>{t('project.register.github')}</dt>
-                  <dd className={css.mono}>{phase.selection.githubRepositoryCandidates?.join('，') ?? t('workspace.facts.none')}</dd>
-                </div>
-                <div className={css.factRow}>
-                  <dt>{t('workspace.facts.inherited')}</dt>
-                  <dd>
-                    {phase.selection.inheritedChangeEntryCount === 0
-                      ? t('workspace.facts.none')
-                      : `${phase.selection.inheritedChangeEntryCount} ${t('workspace.facts.inherited.count')}`}
-                    {phase.selection.baseline.kind === 'unavailable' ? `（${t('workspace.facts.baseline.unavailable')}）` : ''}
-                  </dd>
-                </div>
-                {phase.selection.blockingReasons.length > 0 ? (
-                  <div className={css.factRow}>
-                    <dt>{t('project.register.blocking')}</dt>
-                    <dd>{phase.selection.blockingReasons.join('；')}</dd>
-                  </div>
-                ) : null}
-              </dl>
-              <label className={css.field}>
-                {t('project.register.nameLabel')}
-                <input className={css.input} value={title} onChange={(event) => { setTitle(event.target.value) }} />
-              </label>
-              <div className={css.actions}>
-                <button type="button" className={css.primary} disabled={!title.trim() || pending} onClick={() => void confirm(phase.selection)}>
-                  {pending ? t('workspace.loading') : t('project.register.confirm')}
-                </button>
-              </div>
-            </>
+            <ReviewEvidence
+              selection={phase.selection}
+              title={title}
+              pending={pending}
+              onTitleChange={setTitle}
+              onConfirm={selection => void confirm(selection)}
+              t={t}
+            />
           ) : null}
 
           {outcome !== null ? <p className={css.error} role="alert">{outcome}</p> : null}
         </div>
       </div>
     </div>
+  )
+}
+
+/** The inspection-evidence review and the confirmation row for one accepted selection. */
+function ReviewEvidence(props: {
+  selection: Selection
+  title: string
+  pending: boolean
+  onTitleChange: (title: string) => void
+  onConfirm: (selection: Selection) => void
+  t: TranslateNS<typeof NS>
+}) {
+  const { selection, t } = props
+  const head = displayGitHead(selection.head)
+  return (
+    <>
+      <dl className={css.evidence}>
+        <div className={css.factRow}><dt>{t('workspace.facts.location')}</dt><dd className={css.mono}>{selection.displayLocation}</dd></div>
+        <div className={css.factRow}>
+          <dt>{t('workspace.facts.branch')}</dt>
+          <dd className={css.mono}>{head.detached ? t('workspace.facts.detached') : head.branch}</dd>
+        </div>
+        <div className={css.factRow}><dt>{t('workspace.facts.head')}</dt><dd className={css.mono}>{head.shortHead ?? '—'}</dd></div>
+        <div className={css.factRow}>
+          <dt>{t('project.register.remotes')}</dt>
+          <dd className={css.mono}>{selection.remotes.length === 0 ? t('workspace.facts.none') : selection.remotes.map(remote => remote.coordinate ?? remote.transport).join('，')}</dd>
+        </div>
+        <div className={css.factRow}>
+          <dt>{t('project.register.github')}</dt>
+          <dd className={css.mono}>{selection.githubRepositoryCandidates?.join('，') ?? t('workspace.facts.none')}</dd>
+        </div>
+        <div className={css.factRow}>
+          <dt>{t('workspace.facts.inherited')}</dt>
+          <dd>
+            {selection.inheritedChangeEntryCount === 0
+              ? t('workspace.facts.none')
+              : `${selection.inheritedChangeEntryCount} ${t('workspace.facts.inherited.count')}`}
+            {selection.baseline.kind === 'unavailable' ? `（${t('workspace.facts.baseline.unavailable')}）` : ''}
+          </dd>
+        </div>
+        {selection.blockingReasons.length > 0 ? (
+          <div className={css.factRow}>
+            <dt>{t('project.register.blocking')}</dt>
+            <dd>{selection.blockingReasons.join('；')}</dd>
+          </div>
+        ) : null}
+      </dl>
+      <label className={css.field}>
+        {t('project.register.nameLabel')}
+        <input className={css.input} value={props.title} onChange={(event) => { props.onTitleChange(event.target.value) }} />
+      </label>
+      <div className={css.actions}>
+        <button type="button" className={css.primary} disabled={!props.title.trim() || props.pending} onClick={() => { props.onConfirm(selection) }}>
+          {props.pending ? t('workspace.loading') : t('project.register.confirm')}
+        </button>
+      </div>
+    </>
   )
 }
