@@ -8,6 +8,7 @@ import type {
   GitHubFailure,
   GitHubInstallationId,
   GitHubIssueId,
+  GitHubMilestoneId,
   GitHubProjectBoardFingerprint,
   GitHubProjectBoardScanCandidate,
   GitHubProjectBoardScanRequest,
@@ -50,6 +51,17 @@ import type {
   StageFilesHostOperationResult,
   UnstageFilesHostOperationResult,
 } from '@breakfastdapaidang/saki-execution'
+import type {
+  BranchDeliveryIntent,
+  BranchDeliveryIntentResult,
+  BranchDeliveryProjection,
+} from './branch-delivery.ts'
+import type {
+  MilestoneDeliveryIntent,
+  MilestoneDeliveryIntentResult,
+} from './milestone-delivery.ts'
+import type { MilestoneViewProjection } from './milestone-view.ts'
+import type { SakiGitHubFailureProjection } from './github-failure-projection.ts'
 
 export type {
   SakiAgentRunId,
@@ -67,6 +79,7 @@ export type {
   GitHubFailure,
   GitHubInstallationId,
   GitHubIssueId,
+  GitHubMilestoneId,
   GitHubProjectBoardFingerprint,
   GitHubProjectBoardScanCandidate,
   GitHubProjectBoardScanRequest,
@@ -220,6 +233,42 @@ export interface SakiBoardQuery {
   readonly type: 'board'
   readonly projectId: SakiDevelopmentProjectId
   readonly refresh: 'cached' | 'interactive'
+}
+
+/** One Work Item's Branch Delivery with an explicit targeted-refresh policy. */
+export interface SakiBranchDeliveryQuery {
+  readonly type: 'branch-delivery'
+  readonly projectId: SakiDevelopmentProjectId
+  readonly workItemId: SakiBoardWorkItemId
+  readonly refresh: 'cached' | 'interactive'
+}
+
+/** Browser-safe Branch Delivery plus the outcome of this query's refresh policy. */
+export interface SakiBranchDeliveryProjection {
+  readonly type: 'branch-delivery'
+  readonly refresh: {
+    readonly requested: 'cached' | 'interactive'
+    readonly state: 'cached' | 'confirmed' | 'unavailable' | 'immutable'
+  }
+  readonly branchDelivery: BranchDeliveryProjection
+}
+
+/** One Project Milestone with an explicit targeted-refresh policy. */
+export interface SakiMilestoneViewQuery {
+  readonly type: 'milestone-view'
+  readonly projectId: SakiDevelopmentProjectId
+  readonly milestoneId: GitHubMilestoneId
+  readonly refresh: 'cached' | 'interactive'
+}
+
+/** Browser-safe Milestone View plus the outcome of this query's refresh policy. */
+export interface SakiMilestoneViewProjection {
+  readonly type: 'milestone-view'
+  readonly refresh: {
+    readonly requested: 'cached' | 'interactive'
+    readonly state: 'cached' | 'confirmed' | 'unavailable' | 'immutable'
+  }
+  readonly milestoneView: MilestoneViewProjection
 }
 
 /** Browser-safe Host inspection result with trusted Host paths removed. */
@@ -464,6 +513,11 @@ export type SakiGitHubScanFailure =
   }
   | { readonly kind: 'attempt'; readonly reason: 'expired' }
 
+/** Credential-free browser projection of one complete GitHub scan failure. */
+export type SakiGitHubScanFailureProjection =
+  | { readonly kind: 'provider'; readonly failure: SakiGitHubFailureProjection }
+  | Exclude<SakiGitHubScanFailure, { readonly kind: 'provider' }>
+
 /** One due complete scan returned to the trusted polling Consumer. */
 export interface SakiGitHubDueScan {
   readonly projectId: SakiDevelopmentProjectId
@@ -486,12 +540,33 @@ export type SakiGitHubScanBeginResult =
   | { readonly ok: true; readonly lease: SakiGitHubScanLease }
   | { readonly ok: false; readonly reason: 'not-found' | 'unconfigured' | 'in-flight' }
 
+/** Immediate scan request plus the already-admitted attempt that cannot satisfy it. */
+export type SakiGitHubScanRequestFenceResult =
+  | {
+    readonly state: 'scheduled'
+    readonly preexistingAttemptId?: SakiGitHubScanAttemptId | undefined
+  }
+  | { readonly state: 'not-found' | 'unconfigured' }
+
 /** Result of publishing one complete scan candidate under its durable fence. */
 export type SakiGitHubScanPublishResult =
   | { readonly state: 'published'; readonly generation: number; readonly configurationRevision: number }
   | { readonly state: 'activation-failed'; readonly issues: readonly SakiGitHubMappingIssue[] }
   | { readonly state: 'failed'; readonly failure: SakiGitHubScanFailure }
   | { readonly state: 'stale' }
+
+/** Result of waiting for one complete Board scan admitted after the request fence. */
+export type SakiGitHubFreshBoardScanResult =
+  | SakiGitHubScanPublishResult
+  | {
+    readonly state: 'unavailable'
+    readonly reason:
+      | 'not-found'
+      | 'unconfigured'
+      | 'provider-detached'
+      | 'provider-failed'
+      | 'consumer-failed'
+  }
 
 /** Result of recording a failed complete scan under its durable fence. */
 export type SakiGitHubScanFailResult = { readonly state: 'failed' | 'stale' }
@@ -506,6 +581,11 @@ export interface SakiGitHubSynchronizationCoordinator {
     attemptAt: number,
     signal: AbortSignal,
   ): Promise<'scheduled' | 'not-found' | 'unconfigured'>
+  /** Persist an immediate interactive request and fence out the currently admitted attempt. */
+  requestScanAfterCurrent(
+    projectId: SakiDevelopmentProjectId,
+    signal: AbortSignal,
+  ): Promise<SakiGitHubScanRequestFenceResult>
   /** List due scans without claiming them. */
   listDueScans(now: number): readonly SakiGitHubDueScan[]
   /** Durably claim one configuration revision before invoking the provider. */
@@ -536,7 +616,7 @@ export interface SakiGitHubSynchronizationFailureProjection {
   readonly attemptId: SakiGitHubScanAttemptId
   readonly configurationRevision: number
   readonly failedAt: number
-  readonly failure: SakiGitHubScanFailure
+  readonly failure: SakiGitHubScanFailureProjection
 }
 
 /** Mapping state owned by the current synchronization configuration lifecycle. */
@@ -1056,6 +1136,18 @@ export interface SakiQueryMap {
     readonly projection: SakiBoardProjection
     readonly failure: 'denied' | 'unavailable' | 'not-found'
   }
+  /** One Work Item's current Branch Delivery. */
+  readonly 'branch-delivery': {
+    readonly request: SakiBranchDeliveryQuery
+    readonly projection: SakiBranchDeliveryProjection
+    readonly failure: 'denied' | 'not-found'
+  }
+  /** One current Milestone Delivery joined to exact GitHub and Board facts. */
+  readonly 'milestone-view': {
+    readonly request: SakiMilestoneViewQuery
+    readonly projection: SakiMilestoneViewProjection
+    readonly failure: 'denied' | 'not-found'
+  }
 }
 
 /** Query request union derived from {@link SakiQueryMap}. */
@@ -1198,6 +1290,29 @@ export interface SakiIntentMap {
   readonly 'create-commit': CreateCommitIntent
   readonly 'create-work-item': CreateWorkItemIntent
   readonly 'move-work-item': MoveWorkItemIntent
+  readonly 'save-branch-delivery': Extract<BranchDeliveryIntent, { readonly type: 'save-branch-delivery' }>
+  readonly 'push-branch-delivery': Extract<BranchDeliveryIntent, { readonly type: 'push-branch-delivery' }>
+  readonly 'create-branch-delivery-pull-request': Extract<
+    BranchDeliveryIntent,
+    { readonly type: 'create-branch-delivery-pull-request' }
+  >
+  readonly 'associate-branch-delivery-pull-request': Extract<
+    BranchDeliveryIntent,
+    { readonly type: 'associate-branch-delivery-pull-request' }
+  >
+  readonly 'mark-branch-delivery-in-review': Extract<
+    BranchDeliveryIntent,
+    { readonly type: 'mark-branch-delivery-in-review' }
+  >
+  readonly 'accept-branch-delivery': Extract<BranchDeliveryIntent, { readonly type: 'accept-branch-delivery' }>
+  readonly 'save-milestone-delivery': Extract<
+    MilestoneDeliveryIntent,
+    { readonly type: 'save-milestone-delivery' }
+  >
+  readonly 'finalize-milestone-delivery': Extract<
+    MilestoneDeliveryIntent,
+    { readonly type: 'finalize-milestone-delivery' }
+  >
   readonly 'give-work-item-to-agent': GiveWorkItemToAgentIntent
   readonly 'answer-intervention': AnswerInterventionIntent
 }
@@ -1654,6 +1769,14 @@ export interface SakiIntentReceiptMap {
   readonly 'create-commit': SakiGitOperationIntentReceipt<'create-commit'>
   readonly 'create-work-item': SakiWorkItemIntentReceipt<'create-work-item'>
   readonly 'move-work-item': SakiWorkItemIntentReceipt<'move-work-item'>
+  readonly 'save-branch-delivery': BranchDeliveryIntentResult
+  readonly 'push-branch-delivery': BranchDeliveryIntentResult
+  readonly 'create-branch-delivery-pull-request': BranchDeliveryIntentResult
+  readonly 'associate-branch-delivery-pull-request': BranchDeliveryIntentResult
+  readonly 'mark-branch-delivery-in-review': BranchDeliveryIntentResult
+  readonly 'accept-branch-delivery': BranchDeliveryIntentResult
+  readonly 'save-milestone-delivery': MilestoneDeliveryIntentResult
+  readonly 'finalize-milestone-delivery': MilestoneDeliveryIntentResult
   readonly 'give-work-item-to-agent': SakiGiveWorkItemToAgentIntentReceipt
   readonly 'answer-intervention': SakiAnswerInterventionIntentReceipt
 }
@@ -1672,6 +1795,8 @@ export type SakiProjectionKey =
   | 'project-changes'
   | 'project-settings'
   | 'board'
+  | 'branch-delivery'
+  | 'milestone-view'
 
 /** Disposer for a contained post-commit Projection invalidation listener. */
 export type SakiChangedDisposer = () => void

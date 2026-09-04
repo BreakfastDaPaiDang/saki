@@ -4,6 +4,8 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type {
   InspectProjectRequest,
   InspectProjectResult,
+  InspectProjectCommitRequest,
+  InspectProjectCommitResult,
   InspectProjectSelectionRequest,
   InspectProjectSelectionResult,
   InspectInterventionOpeningRequest,
@@ -76,6 +78,8 @@ export {
   activeHostProjectBindingSchema,
   inspectProjectRequestSchema,
   inspectProjectResultSchema,
+  inspectProjectCommitRequestSchema,
+  inspectProjectCommitResultSchema,
   inspectProjectSelectionResultSchema,
   inspectInterventionOpeningRequestSchema,
   interventionOpeningEvidenceSchema,
@@ -103,6 +107,9 @@ export {
   appliedProjectGitChangeSchema,
   commitHostOperationRequestSchema,
   commitHostOperationResultSchema,
+  pushBranchHostOperationRequestSchema,
+  pushBranchHostOperationResultSchema,
+  gitCredentialHelperIdSchema,
   controlIntentHostOperationSourceSchema,
   executionDispatchHostOperationSourceSchema,
   hostGitMutationPreconditionSchema,
@@ -149,6 +156,9 @@ export type {
   AppliedProjectGitChange,
   CommitHostOperationRequest,
   CommitHostOperationResult,
+  GitHubRepositoryCoordinates,
+  GitCredentialHelperId,
+  GitRemoteBranchState,
   CompleteInheritedChangeBaseline,
   ControlIntentHostOperationSource,
   ExecutionDispatchHostOperationSource,
@@ -166,6 +176,8 @@ export type {
   InspectProjectFailureReason,
   InspectProjectRequest,
   InspectProjectResult,
+  InspectProjectCommitRequest,
+  InspectProjectCommitResult,
   InspectProjectSelectionRequest,
   InspectProjectSelectionResult,
   HostGitMutationPrecondition,
@@ -223,6 +235,8 @@ export type {
   ProjectSelectionInspection,
   ProjectSelectionProjection,
   ProjectSelectionRejectionReason,
+  PushBranchHostOperationRequest,
+  PushBranchHostOperationResult,
   ReadProjectDiffOperationRequest,
   ReadProjectDiffRequest,
   ReadProjectDiffResult,
@@ -316,6 +330,17 @@ export abstract class SakiHostExecution extends Service {
     request: InspectProjectRequest,
     signal: AbortSignal,
   ): Promise<InspectProjectResult>
+
+  /**
+   * Revalidate one Resource Binding and confirm one exact local object is a Commit.
+   * @param request - active binding and exact object id; arbitrary revisions are not accepted.
+   * @param signal - required caller lifetime and cancellation.
+   * @returns exact Commit presence or one bounded local-boundary failure.
+   */
+  abstract inspectProjectCommit(
+    request: InspectProjectCommitRequest,
+    signal: AbortSignal,
+  ): Promise<InspectProjectCommitResult>
 
   /**
    * Read one bounded page of a stable file-scoped Diff without accepting a

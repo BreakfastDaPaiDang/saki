@@ -9,6 +9,7 @@ export {
   SAKI_GITHUB_MAPPING_ISSUE_LIMIT,
 } from './constants.ts'
 export { SakiInstallationState } from './installation-state.ts'
+export type { SakiGitHubFailureProjection } from './github-failure-projection.ts'
 export {
   agentOperationIntentRecordSchema,
   agentRunRecordSchema,
@@ -20,7 +21,6 @@ export {
   giveWorkItemToAgentIntentSchema,
   interventionRequestRecordSchema,
   gitOperationIntentRecordSchema,
-  sakiControlPlaneDomainSpec,
   workAssignmentRecordSchema,
   workSessionRecordSchema,
 } from './spec.ts'
@@ -36,6 +36,63 @@ export type {
   WorkAssignmentRecord,
   WorkSessionRecord,
 } from './spec.ts'
+export { sakiControlPlaneDomainSpec } from './domain-spec.ts'
+export {
+  branchDeliveryId,
+  branchDeliveryIntentSchema,
+  branchDeliveryRecordSchema,
+} from './branch-delivery.ts'
+export type {
+  BranchDeliveryIntent,
+  BranchDeliveryIntentResult,
+  BranchDeliveryProjection,
+  BranchDeliveryRecord,
+  SakiBranchDeliveryId,
+} from './branch-delivery.ts'
+export {
+  milestoneDeliveryId,
+  milestoneDeliveryIntentSchema,
+  milestoneDeliveryRecordSchema,
+} from './milestone-delivery.ts'
+export type {
+  MilestoneDeliveryIntent,
+  MilestoneDeliveryIntentResult,
+  MilestoneDeliveryPhase,
+  MilestoneDeliveryProjection,
+  MilestoneDeliveryRecord,
+  SakiMilestoneDeliveryId,
+} from './milestone-delivery.ts'
+export {
+  evaluateReleaseEvidencePolicyV1,
+  RELEASE_EVIDENCE_POLICY_V1,
+  releaseEvidencePolicyV1EvidenceSchema,
+} from './release-evidence-policy.ts'
+export type {
+  ReleaseEvidencePolicyV1Blockage,
+  ReleaseEvidencePolicyV1Evidence,
+  ReleaseEvidencePolicyV1Expectation,
+  ReleaseEvidencePolicyV1Snapshot,
+  SakiReleaseBoardFact,
+  SakiReleaseDeliveryFact,
+  SakiTargetedEvidence,
+} from './release-evidence-policy.ts'
+export {
+  milestoneBoardEvidence,
+  projectMilestoneView,
+} from './milestone-view.ts'
+export type {
+  MilestoneViewBlockage,
+  MilestoneViewProjection,
+  MilestoneViewScope,
+  MilestoneViewScopeItem,
+  MilestoneViewSourceProjection,
+  MilestoneViewSourceState,
+} from './milestone-view.ts'
+export { assembleReleaseSnapshot } from './release-snapshot.ts'
+export type {
+  AssembleReleaseSnapshotInput,
+  ReleaseSnapshotDeliveryInput,
+} from './release-snapshot.ts'
 export {
   sakiAgentProfileIdSchema,
   sakiBuildIdSchema,
@@ -53,6 +110,7 @@ export {
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
   sakiStorageGenerationV5DomainSpec,
+  sakiStorageGenerationV6DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationSealRecordSchema,
   storageGenerationV1SealRecordSchema,
@@ -60,6 +118,7 @@ export {
   storageGenerationV3SealRecordSchema,
   storageGenerationV4SealRecordSchema,
   storageGenerationV5SealRecordSchema,
+  storageGenerationV6SealRecordSchema,
 } from './state-version.ts'
 export type {
   StorageGenerationSealRecord,
@@ -68,6 +127,7 @@ export type {
   StorageGenerationV3SealRecord,
   StorageGenerationV4SealRecord,
   StorageGenerationV5SealRecord,
+  StorageGenerationV6SealRecord,
 } from './state-version.ts'
 export {
   validateCurrentSakiState,
@@ -114,6 +174,8 @@ export type {
   SakiBoardMutationUnavailableReason,
   SakiBoardProjection,
   SakiBoardQuery,
+  SakiBranchDeliveryProjection,
+  SakiBranchDeliveryQuery,
   SakiBoardRemoteFingerprint,
   SakiBoardStatus,
   SakiBoardWorkItemId,
@@ -126,6 +188,7 @@ export type {
   GitHubAccountId,
   GitHubAppId,
   GitHubInstallationId,
+  GitHubMilestoneId,
   GitHubProjectFieldId,
   GitHubProjectId,
   GitHubProjectOptionId,
@@ -157,6 +220,8 @@ export type {
   SakiMyWorkItemProjection,
   SakiMyWorkProjection,
   SakiMyWorkQuery,
+  SakiMilestoneViewProjection,
+  SakiMilestoneViewQuery,
   SakiAttentionItemProjection,
   SakiAttentionProjection,
   SakiAttentionQuery,
@@ -182,6 +247,7 @@ export type {
   SakiGitHubRateLimitProjection,
   SakiGitHubScanAttemptId,
   SakiGitHubScanFailure,
+  SakiGitHubScanFailureProjection,
   SakiGitHubScanStateProjection,
   SakiGitHubSyncCheckpointProjection,
   SakiGitHubSynchronizationFailureProjection,
@@ -218,6 +284,7 @@ export {
   sakiControlPlaneV5DomainSpec,
   sakiControlPlaneV6DomainSpec,
   sakiControlPlaneV7DomainSpec,
+  sakiControlPlaneV8DomainSpec,
 } from './migration.ts'
 export { SakiBootstrapHandoff } from './secrets.ts'
 

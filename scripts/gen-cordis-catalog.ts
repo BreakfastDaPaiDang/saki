@@ -552,6 +552,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   HostOperationStartResult: 'saki.md',
   InspectInterventionOpeningRequest: 'saki.md',
   InterventionOpeningEvidence: 'saki.md',
+  InspectProjectCommitRequest: 'saki.md',
+  InspectProjectCommitResult: 'saki.md',
   InspectProjectRequest: 'saki.md',
   InspectProjectResult: 'saki.md',
   InspectProjectSelectionRequest: 'saki.md',

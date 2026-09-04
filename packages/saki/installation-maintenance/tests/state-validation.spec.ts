@@ -1,10 +1,13 @@
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { describe, expect, it } from 'vitest'
 import {
+  branchDeliveryId,
   bindingWriteAdmissionRecordSchema,
   gitOperationIntentRecordSchema,
   sakiControlPlaneDomainSpec,
   type BindingWriteAdmissionRecord,
+  type BranchDeliveryRecord,
   type GitOperationIntentRecord,
   type SakiControlIntentId,
   type SakiDevelopmentProjectId,
@@ -14,6 +17,7 @@ import {
   type SakiPrincipalId,
   type SakiResourceBindingId,
   type SakiStorageGenerationId,
+  type SakiBoardWorkItemId,
 } from '@breakfastdapaidang/saki-control-plane'
 import { SAKI_PROJECT_PROJECTION_FIXTURES } from '@breakfastdapaidang/saki-control-plane/src/fixtures.ts'
 import {
@@ -23,13 +27,18 @@ import {
   type HostOperationId,
   type HostOperationRequest,
   type HostOperationSnapshot,
+  type PushBranchHostOperationRequest,
   type SakiHostId,
 } from '@breakfastdapaidang/saki-execution'
 import {
   sakiHostExecutionDomainSpec,
   type LocalHostOperationRecord,
 } from '@breakfastdapaidang/saki-execution-local'
-import { validateAgentOperationLinks, validateGitOperationLinks } from '../src/state-validation.ts'
+import {
+  validateAgentOperationLinks,
+  validateBranchDeliveryOperationLinks,
+  validateGitOperationLinks,
+} from '../src/state-validation.ts'
 
 const INTENT_ID = 'intent-00000000-0000-4000-8000-000000000071' as SakiControlIntentId
 const RECEIPT_ID = 'receipt-00000000-0000-4000-8000-000000000071' as SakiIntentReceiptId
@@ -57,7 +66,601 @@ const TRUSTED_INSPECTION = {
   comparison: { fileMode: true, symlinks: true, autocrlf: false },
 }
 
-type GitHostOperationRequest = Exclude<HostOperationRequest, { readonly type: 'start-agent-run' }>
+const BRANCH_INTENT_ID = 'intent-00000000-0000-4000-8000-000000000171' as SakiControlIntentId
+const BRANCH_OPERATION_ID = 'host-operation-00000000-0000-4000-8000-000000000171' as HostOperationId
+const BRANCH_WORK_ITEM_ID = `work-item-${'a'.repeat(64)}` as SakiBoardWorkItemId
+const BRANCH_COMMIT_ID = 'b'.repeat(40)
+
+type BranchDeliveryIntentRecord = ReturnType<
+  (typeof sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema)['parse']
+>
+type PushHostOperationRecord = Extract<
+  LocalHostOperationRecord,
+  { readonly request: { readonly type: 'push-branch' } }
+>
+
+interface BranchPushFixture {
+  readonly delivery: BranchDeliveryRecord
+  readonly intent: BranchDeliveryIntentRecord
+  readonly request: PushBranchHostOperationRequest
+  readonly preparation: NonNullable<Extract<BranchDeliveryIntentRecord['checkpoint'], {
+    readonly state: 'push-host-accepted'
+  }>['preparation']>
+  readonly operation: PushHostOperationRecord
+  readonly availableAdmission: BindingWriteAdmissionRecord
+  readonly reservedAdmission: BindingWriteAdmissionRecord
+}
+
+function assertPushHostOperationRecord(
+  operation: LocalHostOperationRecord,
+  message: string,
+): asserts operation is PushHostOperationRecord {
+  if (operation.request.type !== 'push-branch') throw new Error(message)
+}
+
+function branchPushFixture(): BranchPushFixture {
+  const binding = linkedFixture().request.expected.binding
+  const deliveryId = branchDeliveryId(PROJECT_ID, BRANCH_WORK_ITEM_ID)
+  const actor = {
+    installationId: INSTALLATION_ID,
+    storageGenerationId: STORAGE_GENERATION_ID,
+    hostId: HOST_ID,
+    principalId: PRINCIPAL_ID,
+    principalRevision: 1,
+    grantId: GRANT_ID,
+    grantRevision: 1,
+  }
+  const payload = {
+    intent: {
+      type: 'push-branch-delivery' as const,
+      intentId: BRANCH_INTENT_ID,
+      deliveryId,
+      expectedDeliveryRevision: 0,
+    },
+    actor,
+  }
+  const payloadDigest = canonicalDigest('saki/branch-delivery-intent/v1', payload)
+  const parsedRequest = hostOperationRequestSchema.parse({
+    type: 'push-branch',
+    source: { kind: 'control-intent', intentId: BRANCH_INTENT_ID, intentRevision: 0, payloadDigest },
+    expected: {
+      binding,
+      commitId: BRANCH_COMMIT_ID,
+      repository: { nameWithOwner: 'BreakfastDaPaiDang/saki' },
+    },
+    targetRef: 'refs/heads/feature/offline-validation',
+  })
+  if (parsedRequest.type !== 'push-branch') throw new Error('Branch Push fixture parsed as another Host operation')
+  const request = parsedRequest
+  const requestFingerprint = {
+    version: 1 as const,
+    digest: canonicalDigest('saki/host-operation-request/v1', request),
+  }
+  const operationReference = { id: BRANCH_OPERATION_ID, hostId: HOST_ID, type: 'push-branch' as const }
+  const preparation = { operation: operationReference, preparationRevision: 0, requestFingerprint }
+  const preparedSnapshot = hostOperationSnapshotSchema.parse({
+    operation: operationReference,
+    revision: 0,
+    source: request.source,
+    requestFingerprint,
+    bindingId: BINDING_ID,
+    bindingRevision: binding.revision,
+    preparedAt: 3,
+    updatedAt: 3,
+    state: 'prepared',
+    admission: { kind: 'not-accepted' },
+  }) as HostOperationSnapshot<'push-branch'>
+  const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+    id: deliveryId,
+    schemaVersion: 1,
+    revision: 1,
+    projectId: PROJECT_ID,
+    workItemId: BRANCH_WORK_ITEM_ID,
+    target: {
+      registryRevision: 1,
+      projectRevision: 1,
+      binding,
+      synchronizationRevision: 1,
+      mappingRevision: 1,
+      installation: {
+        appId: '1',
+        installationId: '2',
+        accountId: 'A_fixture',
+        privateKeyRef: credentialRef('SAKI_GITHUB_PRIVATE_KEY'),
+      },
+      repository: { id: 'R_fixture', databaseId: '3', nameWithOwner: 'BreakfastDaPaiDang/saki' },
+      workItem: {
+        id: BRANCH_WORK_ITEM_ID,
+        remoteFingerprint: `remote-fingerprint-${'c'.repeat(64)}`,
+        issueId: 'I_fixture',
+      },
+    },
+    commitId: BRANCH_COMMIT_ID,
+    headRef: request.targetRef,
+    baseRef: 'refs/heads/master',
+    markerId: `pull-request-marker-${canonicalDigest(
+      'saki/branch-delivery/pull-request-marker/v1',
+      { deliveryId },
+    )}`,
+    phase: 'draft',
+    activeIntentId: BRANCH_INTENT_ID,
+    remoteRef: { current: { state: 'unobserved' } },
+    pullRequest: { current: { state: 'unobserved' } },
+    reviews: { current: { state: 'unobserved' } },
+    ci: { current: { state: 'unobserved' } },
+    lastIntentId: BRANCH_INTENT_ID,
+    createdAt: 1,
+    updatedAt: 2,
+  })
+  const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+    id: BRANCH_INTENT_ID,
+    schemaVersion: 1,
+    revision: 1,
+    payloadDigest,
+    payload,
+    deliveryId,
+    operation: { kind: 'push', request },
+    checkpoint: { state: 'active', deliveryRevision: delivery.revision },
+    createdAt: 2,
+    updatedAt: 2,
+  })
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    schemaVersion: 4,
+    request,
+    preparationRevision: preparation.preparationRevision,
+    snapshot: preparedSnapshot,
+  })
+  assertPushHostOperationRecord(operation, 'Branch Push fixture stored another operation')
+  const reservedAdmission = bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision: 1,
+    state: 'manual-host-operation',
+    phase: 'reserved',
+    bindingRevision: binding.revision,
+    source: request.source,
+    action: 'project-branch:push',
+    reservedAt: 2,
+    updatedAt: 2,
+  })
+  const availableAdmission = bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision: 0,
+    state: 'available',
+    updatedAt: 1,
+  })
+  return { delivery, intent, request, preparation, operation, availableAdmission, reservedAdmission }
+}
+
+function acceptedBranchPushFixture(fixture = branchPushFixture()): BranchPushFixture & {
+  readonly operation: PushHostOperationRecord
+  readonly acceptedAdmission: BindingWriteAdmissionRecord
+} {
+  const acceptedAt = 4
+  const snapshot = hostOperationSnapshotSchema.parse({
+    ...fixture.operation.snapshot,
+    revision: 1,
+    state: 'accepted',
+    admission: { kind: 'accepted', revision: 2, acceptedAt },
+    updatedAt: acceptedAt,
+  })
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    ...fixture.operation,
+    snapshot,
+  })
+  assertPushHostOperationRecord(operation, 'Accepted Branch Push fixture changed kind')
+  const acceptedAdmission = bindingWriteAdmissionRecordSchema.parse({
+    ...fixture.reservedAdmission,
+    revision: 2,
+    phase: 'accepted',
+    preparation: fixture.preparation,
+    acceptedAt,
+    updatedAt: acceptedAt,
+  })
+  return { ...fixture, operation, acceptedAdmission }
+}
+
+function acceptedAdmissionBeforeBranchCheckpointFixture(fixture = branchPushFixture()): BranchPushFixture & {
+  readonly acceptedAdmission: BindingWriteAdmissionRecord
+} {
+  const acceptedAt = 4
+  return {
+    ...fixture,
+    acceptedAdmission: bindingWriteAdmissionRecordSchema.parse({
+      ...fixture.reservedAdmission,
+      revision: 2,
+      phase: 'accepted',
+      preparation: fixture.preparation,
+      acceptedAt,
+      updatedAt: acceptedAt,
+    }),
+  }
+}
+
+function checkpointedBranchPushFixture(fixture = acceptedBranchPushFixture()): ReturnType<
+  typeof acceptedBranchPushFixture
+> & { readonly intent: BranchDeliveryIntentRecord } {
+  return {
+    ...fixture,
+    intent: sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+      ...fixture.intent,
+      revision: 2,
+      checkpoint: {
+        state: 'push-host-accepted',
+        deliveryRevision: fixture.delivery.revision,
+        preparation: fixture.preparation,
+        admissionRevision: fixture.acceptedAdmission.revision,
+      },
+      updatedAt: 4,
+    }),
+  }
+}
+
+function hostStartPendingBranchPushFixture(
+  fixture = acceptedAdmissionBeforeBranchCheckpointFixture(),
+): ReturnType<typeof acceptedAdmissionBeforeBranchCheckpointFixture> & {
+  readonly intent: BranchDeliveryIntentRecord
+} {
+  return checkpointedBranchPushFixture(fixture)
+}
+
+function terminalHostBeforeBranchCheckpointFixture(
+  state: 'failed' | 'canceled',
+  fixture = checkpointedBranchPushFixture(),
+): ReturnType<typeof checkpointedBranchPushFixture> & {
+  readonly delivery: BranchDeliveryRecord
+  readonly operation: PushHostOperationRecord
+} {
+  const completedAt = 6
+  const snapshot = hostOperationSnapshotSchema.parse({
+    ...fixture.operation.snapshot,
+    revision: fixture.operation.snapshot.revision + 1,
+    state,
+    completedAt,
+    ...(state === 'failed'
+      ? { failure: { reason: 'binding-stale' as const }, effect: 'none' as const }
+      : { reason: 'authority-revoked' as const, effect: 'none' as const }),
+    updatedAt: completedAt,
+  })
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    ...fixture.operation,
+    snapshot,
+  })
+  assertPushHostOperationRecord(operation, 'Terminal Branch Push fixture changed kind')
+  const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+  const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+    ...deliveryWithoutActive,
+    revision: fixture.delivery.revision + 1,
+    lastIntentId: fixture.intent.id,
+    updatedAt: completedAt,
+  })
+  return { ...fixture, delivery, operation }
+}
+
+function preEffectCanceledBeforeBranchCheckpointFixture(
+  fixture = checkpointedBranchPushFixture(),
+): ReturnType<typeof checkpointedBranchPushFixture> & {
+  readonly delivery: BranchDeliveryRecord
+  readonly operation: PushHostOperationRecord
+} {
+  const completedAt = 6
+  const snapshot = hostOperationSnapshotSchema.parse({
+    ...branchPushFixture().operation.snapshot,
+    revision: 1,
+    state: 'canceled',
+    completedAt,
+    reason: 'source-canceled',
+    effect: 'none',
+    updatedAt: completedAt,
+  })
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    ...fixture.operation,
+    snapshot,
+  })
+  assertPushHostOperationRecord(operation, 'Pre-effect canceled Branch Push fixture changed kind')
+  const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+  const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+    ...deliveryWithoutActive,
+    revision: fixture.delivery.revision + 1,
+    lastIntentId: fixture.intent.id,
+    updatedAt: completedAt,
+  })
+  return { ...fixture, delivery, operation }
+}
+
+function repairedBeforeBranchCheckpointFixture(
+  fixture = checkpointedBranchPushFixture(),
+): ReturnType<typeof checkpointedBranchPushFixture> & {
+  readonly delivery: BranchDeliveryRecord
+  readonly operation: PushHostOperationRecord
+} {
+  const result = {
+    type: 'push-branch' as const,
+    repository: fixture.request.expected.repository,
+    targetRef: fixture.request.targetRef,
+    commitId: fixture.request.expected.commitId,
+    previous: { kind: 'absent' as const },
+    credential: { helperId: 'git-credential-manager' as const },
+  }
+  const observedAt = 6
+  const snapshot = hostOperationSnapshotSchema.parse({
+    ...fixture.operation.snapshot,
+    revision: fixture.operation.snapshot.revision + 1,
+    state: 'reconciliation-required',
+    observedAt,
+    reason: 'effect-unknown',
+    updatedAt: observedAt,
+  })
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    ...fixture.operation,
+    snapshot,
+    effectPlan: { kind: 'push-branch', publication: 'attempting', result },
+  })
+  assertPushHostOperationRecord(operation, 'Reconciliation Branch Push fixture changed kind')
+  const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+  const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+    ...deliveryWithoutActive,
+    revision: fixture.delivery.revision + 1,
+    repair: { intentId: fixture.intent.id, reason: 'effect-unknown', recordedAt: observedAt + 1 },
+    lastIntentId: fixture.intent.id,
+    updatedAt: observedAt + 1,
+  })
+  return { ...fixture, delivery, operation }
+}
+
+function terminalPreEffectCanceledBranchPushFixture(
+  fixture = preEffectCanceledBeforeBranchCheckpointFixture(),
+): ReturnType<typeof preEffectCanceledBeforeBranchCheckpointFixture> & {
+  readonly intent: BranchDeliveryIntentRecord
+  readonly availableAdmission: BindingWriteAdmissionRecord
+} {
+  const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+    ...fixture.intent,
+    revision: fixture.intent.revision + 1,
+    checkpoint: {
+      state: 'terminal',
+      outcome: 'failure',
+      reason: 'host-operation',
+      deliveryRevision: fixture.delivery.revision,
+      host: { preparation: fixture.preparation, snapshot: fixture.operation.snapshot },
+    },
+    updatedAt: fixture.operation.snapshot.updatedAt,
+  })
+  const availableAdmission = bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision: 3,
+    state: 'available',
+    updatedAt: fixture.operation.snapshot.updatedAt + 1,
+  })
+  return { ...fixture, intent, availableAdmission }
+}
+
+function appliedBranchPushFixture(fixture = checkpointedBranchPushFixture()): ReturnType<
+  typeof checkpointedBranchPushFixture
+> & {
+  readonly delivery: BranchDeliveryRecord
+  readonly operation: PushHostOperationRecord
+  readonly availableAdmission: BindingWriteAdmissionRecord
+} {
+  const result = {
+    type: 'push-branch' as const,
+    repository: fixture.request.expected.repository,
+    targetRef: fixture.request.targetRef,
+    commitId: fixture.request.expected.commitId,
+    previous: { kind: 'absent' as const },
+    credential: { helperId: 'git-credential-manager' as const },
+  }
+  const completedAt = 6
+  const snapshot = hostOperationSnapshotSchema.parse({
+    ...fixture.operation.snapshot,
+    revision: 2,
+    state: 'succeeded',
+    completedAt,
+    result,
+    updatedAt: completedAt,
+  })
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    ...fixture.operation,
+    snapshot,
+    effectPlan: { kind: 'push-branch', publication: 'applied-recorded', result },
+  })
+  assertPushHostOperationRecord(operation, 'Applied Branch Push fixture changed kind')
+  const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+  const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+    ...deliveryWithoutActive,
+    revision: fixture.delivery.revision + 1,
+    push: { intentId: fixture.intent.id, result, confirmedAt: completedAt },
+    lastIntentId: fixture.intent.id,
+    updatedAt: completedAt,
+  })
+  const availableAdmission = bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision: 3,
+    state: 'available',
+    updatedAt: 7,
+  })
+  return { ...fixture, delivery, operation, availableAdmission }
+}
+
+function terminalBranchPushFixture(fixture = appliedBranchPushFixture()): ReturnType<
+  typeof appliedBranchPushFixture
+> & { readonly intent: BranchDeliveryIntentRecord } {
+  return {
+    ...fixture,
+    intent: sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+      ...fixture.intent,
+      revision: 3,
+      checkpoint: {
+        state: 'terminal',
+        outcome: 'succeeded',
+        deliveryRevision: fixture.delivery.revision,
+        host: { preparation: fixture.preparation, snapshot: fixture.operation.snapshot },
+      },
+      updatedAt: fixture.operation.snapshot.updatedAt,
+    }),
+  }
+}
+
+function repairedBranchDelivery(
+  fixture: BranchPushFixture,
+  reason: 'effect-unknown' | 'evidence-conflict',
+  recordedAt: number,
+): BranchDeliveryRecord {
+  const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+  return sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+    ...deliveryWithoutActive,
+    revision: fixture.delivery.revision + 1,
+    repair: { intentId: fixture.intent.id, reason, recordedAt },
+    lastIntentId: fixture.intent.id,
+    updatedAt: recordedAt,
+  })
+}
+
+function sourceConflictedBranchPushFixture(fixture = branchPushFixture()): BranchPushFixture & {
+  readonly delivery: BranchDeliveryRecord
+  readonly intent: BranchDeliveryIntentRecord
+  readonly operation: PushHostOperationRecord
+} {
+  const recordedAt = 4
+  const delivery = repairedBranchDelivery(fixture, 'evidence-conflict', recordedAt)
+  const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+    ...fixture.intent,
+    revision: 2,
+    checkpoint: {
+      state: 'terminal',
+      outcome: 'reconciliation-required',
+      deliveryRevision: delivery.revision,
+      reason: 'evidence-conflict',
+    },
+    updatedAt: recordedAt,
+  })
+  const parsedRequest = hostOperationRequestSchema.parse({
+    ...fixture.request,
+    expected: {
+      ...fixture.request.expected,
+      repository: { nameWithOwner: 'BreakfastDaPaiDang/other' },
+    },
+  })
+  if (parsedRequest.type !== 'push-branch') throw new Error('Conflicted Branch Push fixture changed kind')
+  const requestFingerprint = {
+    version: 1 as const,
+    digest: canonicalDigest('saki/host-operation-request/v1', parsedRequest),
+  }
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    schemaVersion: 4,
+    request: parsedRequest,
+    preparationRevision: 0,
+    snapshot: {
+      ...fixture.operation.snapshot,
+      requestFingerprint,
+    },
+  })
+  assertPushHostOperationRecord(operation, 'Conflicted Branch Push operation changed kind')
+  return { ...fixture, delivery, intent, operation }
+}
+
+function reconciliationBranchPushFixture(fixture = checkpointedBranchPushFixture()): ReturnType<
+  typeof checkpointedBranchPushFixture
+> & {
+  readonly delivery: BranchDeliveryRecord
+  readonly intent: BranchDeliveryIntentRecord
+  readonly operation: PushHostOperationRecord
+} {
+  const result = {
+    type: 'push-branch' as const,
+    repository: fixture.request.expected.repository,
+    targetRef: fixture.request.targetRef,
+    commitId: fixture.request.expected.commitId,
+    previous: { kind: 'absent' as const },
+    credential: { helperId: 'git-credential-manager' as const },
+  }
+  const observedAt = 6
+  const snapshot = hostOperationSnapshotSchema.parse({
+    ...fixture.operation.snapshot,
+    revision: 2,
+    state: 'reconciliation-required',
+    observedAt,
+    reason: 'effect-unknown',
+    updatedAt: observedAt,
+  })
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    ...fixture.operation,
+    snapshot,
+    effectPlan: { kind: 'push-branch', publication: 'attempting', result },
+  })
+  assertPushHostOperationRecord(operation, 'Reconciliation Branch Push operation changed kind')
+  const delivery = repairedBranchDelivery(fixture, 'effect-unknown', observedAt)
+  const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+    ...fixture.intent,
+    revision: 3,
+    checkpoint: {
+      state: 'terminal',
+      outcome: 'reconciliation-required',
+      deliveryRevision: delivery.revision,
+      reason: 'effect-unknown',
+      host: { preparation: fixture.preparation, snapshot },
+    },
+    updatedAt: observedAt,
+  })
+  return { ...fixture, delivery, intent, operation }
+}
+
+function failedBranchPushFixture(fixture = checkpointedBranchPushFixture()): ReturnType<
+  typeof checkpointedBranchPushFixture
+> & {
+  readonly delivery: BranchDeliveryRecord
+  readonly intent: BranchDeliveryIntentRecord
+  readonly operation: PushHostOperationRecord
+  readonly availableAdmission: BindingWriteAdmissionRecord
+} {
+  const completedAt = 6
+  const snapshot = hostOperationSnapshotSchema.parse({
+    ...fixture.operation.snapshot,
+    revision: 2,
+    state: 'failed',
+    completedAt,
+    failure: { reason: 'unsupported-state' },
+    effect: 'none',
+    updatedAt: completedAt,
+  })
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    ...fixture.operation,
+    snapshot,
+  })
+  assertPushHostOperationRecord(operation, 'Failed Branch Push operation changed kind')
+  const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+  const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+    ...deliveryWithoutActive,
+    revision: fixture.delivery.revision + 1,
+    lastIntentId: fixture.intent.id,
+    updatedAt: completedAt,
+  })
+  const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+    ...fixture.intent,
+    revision: 3,
+    checkpoint: {
+      state: 'terminal',
+      outcome: 'failure',
+      deliveryRevision: delivery.revision,
+      reason: 'host-operation',
+      host: { preparation: fixture.preparation, snapshot },
+    },
+    updatedAt: completedAt,
+  })
+  const availableAdmission = bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision: fixture.acceptedAdmission.revision + 1,
+    state: 'available',
+    updatedAt: completedAt + 1,
+  })
+  return { ...fixture, delivery, intent, operation, availableAdmission }
+}
+
+type GitHostOperationRequest = HostOperationRequest<'stage-files' | 'unstage-files' | 'commit'>
 
 interface LinkedFixture {
   readonly intent: GitOperationIntentRecord
@@ -129,7 +732,9 @@ function linkedFixture(requestType: GitHostOperationRequest['type'] = 'stage-fil
   const parsedRequest = hostOperationRequestSchema.parse(requestType === 'commit'
     ? { type: requestType, source, expected, message: browserIntent.message }
     : { type: requestType, source, expected, changes: browserIntent.changes })
-  if (parsedRequest.type === 'start-agent-run') throw new Error('Git operation fixture parsed as Agent Run')
+  if (parsedRequest.type === 'start-agent-run' || parsedRequest.type === 'push-branch') {
+    throw new Error('Git operation fixture parsed as an unsupported Host operation')
+  }
   const request = parsedRequest
   const requestFingerprint = {
     version: 1 as const,
@@ -166,7 +771,7 @@ function linkedFixture(requestType: GitHostOperationRequest['type'] = 'stage-fil
     updatedAt: 2,
   })
   const operationRecord = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 3,
+    schemaVersion: 4,
     request,
     preparationRevision: 0,
     snapshot: preparedSnapshot,
@@ -284,7 +889,7 @@ function preparedOperation(request: GitHostOperationRequest, updatedAt = 2): Loc
     digest: canonicalDigest('saki/host-operation-request/v1', request),
   }
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     request,
     preparationRevision: 0,
     snapshot: {
@@ -310,7 +915,9 @@ function mismatchedOperation(fixture: LinkedFixture): LocalHostOperationRecord {
       status: { version: 1, digest: '9'.repeat(64) },
     },
   })
-  if (request.type === 'start-agent-run') throw new Error('Git operation fixture parsed as Agent Run')
+  if (request.type === 'start-agent-run' || request.type === 'push-branch') {
+    throw new Error('Git operation fixture parsed as an unsupported Host operation')
+  }
   return preparedOperation(request)
 }
 
@@ -423,7 +1030,770 @@ function readonlyTable(entries: readonly (readonly [string, unknown])[]) {
   }
 }
 
+function branchDomains(
+  deliveries: readonly BranchDeliveryRecord[],
+  intents: readonly BranchDeliveryIntentRecord[],
+  operations: readonly PushHostOperationRecord[],
+  admissions: readonly BindingWriteAdmissionRecord[],
+): readonly [Domain<typeof sakiControlPlaneDomainSpec>, Domain<typeof sakiHostExecutionDomainSpec>] {
+  const controlTables = new Map<string, ReturnType<typeof readonlyTable>>([
+    ['branch_deliveries', readonlyTable(deliveries.map(record => [record.id, record]))],
+    ['branch_delivery_intents', readonlyTable(intents.map(record => [record.id, record]))],
+    ['binding_write_admissions', readonlyTable(admissions.map(record => [record.id, record]))],
+  ])
+  const controlPlane = {
+    name: sakiControlPlaneDomainSpec.name,
+    table: (name: string) => controlTables.get(name),
+    close: () => Promise.resolve(),
+  } as unknown as Domain<typeof sakiControlPlaneDomainSpec>
+  const hostExecution = {
+    name: sakiHostExecutionDomainSpec.name,
+    table: () => readonlyTable(operations.map(record => [record.snapshot.operation.id, record])),
+    close: () => Promise.resolve(),
+  } as unknown as Domain<typeof sakiHostExecutionDomainSpec>
+  return [controlPlane, hostExecution]
+}
+
+function foreignBranchWriteAdmission(fixture = branchPushFixture()): BindingWriteAdmissionRecord {
+  return bindingWriteAdmissionRecordSchema.parse({
+    id: BINDING_ID,
+    schemaVersion: 1,
+    revision: 1,
+    state: 'manual-host-operation',
+    phase: 'reserved',
+    bindingRevision: fixture.request.expected.binding.revision,
+    source: {
+      ...fixture.request.source,
+      intentId: ALT_INTENT_ID,
+      payloadDigest: '9'.repeat(64),
+    },
+    action: 'project-changes:stage',
+    reservedAt: 2,
+    updatedAt: 2,
+  })
+}
+
+describe('current Saki Branch Push cross-domain validation', () => {
+  it('accepts an active Push before its Binding admission is reserved', () => {
+    const fixture = branchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [],
+      [fixture.availableAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('accepts an active Push waiting behind another Binding admission owner', () => {
+    const fixture = branchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [],
+      [foreignBranchWriteAdmission(fixture)],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it.each([
+    ['available', (fixture: BranchPushFixture) => fixture.availableAdmission],
+    ['foreign', (fixture: BranchPushFixture) => foreignBranchWriteAdmission(fixture)],
+  ] as const)(
+    'accepts Push cleanup before Intent completion while the Binding admission is %s',
+    (_state, admissionFor) => {
+      const fixture = branchPushFixture()
+      const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+      const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+        ...deliveryWithoutActive,
+        revision: fixture.delivery.revision + 1,
+        updatedAt: 3,
+      })
+      const [controlPlane, hostExecution] = branchDomains(
+        [delivery],
+        [fixture.intent],
+        [],
+        [admissionFor(fixture)],
+      )
+
+      expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+    },
+  )
+
+  it('rejects Push cleanup before Intent completion while its own admission remains reserved', () => {
+    const fixture = branchPushFixture()
+    const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+    const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+      ...deliveryWithoutActive,
+      revision: fixture.delivery.revision + 1,
+      updatedAt: 3,
+    })
+    const [controlPlane, hostExecution] = branchDomains(
+      [delivery],
+      [fixture.intent],
+      [],
+      [fixture.reservedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push Intent has no Host Operation')
+  })
+
+  it('accepts direct Push cancellation without releasing another admission owner', () => {
+    const fixture = branchPushFixture()
+    const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+    const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+      ...deliveryWithoutActive,
+      revision: fixture.delivery.revision + 1,
+      updatedAt: 3,
+    })
+    const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+      ...fixture.intent,
+      revision: fixture.intent.revision + 1,
+      checkpoint: {
+        state: 'terminal',
+        outcome: 'conflict',
+        reason: 'expected-evidence',
+        deliveryRevision: delivery.revision,
+      },
+      updatedAt: 3,
+    })
+    const [controlPlane, hostExecution] = branchDomains(
+      [delivery],
+      [intent],
+      [],
+      [foreignBranchWriteAdmission(fixture)],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('accepts a reserved active Push before the Host preparation is durable', () => {
+    const fixture = branchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [],
+      [fixture.reservedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('accepts the Host-first prepared gap while the Branch Intent retains its reservation', () => {
+    const fixture = branchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.reservedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('accepts Control admission before the Branch Intent checkpoints the prepared Host operation', () => {
+    const fixture = acceptedAdmissionBeforeBranchCheckpointFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.acceptedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('rejects Host admission before the Branch Intent checkpoints its preparation', () => {
+    const fixture = acceptedBranchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.acceptedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it.each([
+    ['operation identity', (fixture: ReturnType<typeof acceptedAdmissionBeforeBranchCheckpointFixture>) => ({
+      ...fixture.preparation,
+      operation: { ...fixture.preparation.operation, id: ALT_OPERATION_ID },
+    })],
+    ['preparation revision', (fixture: ReturnType<typeof acceptedAdmissionBeforeBranchCheckpointFixture>) => ({
+      ...fixture.preparation,
+      preparationRevision: fixture.preparation.preparationRevision + 1,
+    })],
+    ['request fingerprint', (fixture: ReturnType<typeof acceptedAdmissionBeforeBranchCheckpointFixture>) => ({
+      ...fixture.preparation,
+      requestFingerprint: { ...fixture.preparation.requestFingerprint, digest: '8'.repeat(64) },
+    })],
+  ])('rejects an accepted pre-checkpoint admission with a mismatched %s', (_name, mismatch) => {
+    const fixture = acceptedAdmissionBeforeBranchCheckpointFixture()
+    const admission = bindingWriteAdmissionRecordSchema.parse({
+      ...fixture.acceptedAdmission,
+      preparation: mismatch(fixture),
+    })
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [admission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it('accepts the checkpointed Push while the exact Host operation and admission remain current', () => {
+    const fixture = checkpointedBranchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.acceptedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('accepts a checkpointed Push after Control admission acceptance and before Host start', () => {
+    const fixture = hostStartPendingBranchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.acceptedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it.each(['failed', 'canceled'] as const)(
+    'accepts Delivery cleanup after a %s Host result and before the Branch Intent acknowledges it',
+    (state) => {
+      const fixture = terminalHostBeforeBranchCheckpointFixture(state)
+      const [controlPlane, hostExecution] = branchDomains(
+        [fixture.delivery],
+        [fixture.intent],
+        [fixture.operation],
+        [fixture.acceptedAdmission],
+      )
+
+      expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+    },
+  )
+
+  it('accepts Delivery cleanup after a pre-effect Host cancellation and before Intent acknowledgement', () => {
+    const fixture = preEffectCanceledBeforeBranchCheckpointFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.acceptedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it.each(['accepted', 'released'] as const)(
+    'accepts a terminal pre-effect Host cancellation with its Control admission %s',
+    (phase) => {
+      const fixture = terminalPreEffectCanceledBranchPushFixture()
+      const [controlPlane, hostExecution] = branchDomains(
+        [fixture.delivery],
+        [fixture.intent],
+        [fixture.operation],
+        [phase === 'accepted' ? fixture.acceptedAdmission : fixture.availableAdmission],
+      )
+
+      expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+    },
+  )
+
+  it.each(['before-intent-acknowledgement', 'terminal'] as const)(
+    'rejects a not-accepted Host cancellation with an impossible effect plan at %s',
+    (phase) => {
+      const fixture = phase === 'terminal'
+        ? terminalPreEffectCanceledBranchPushFixture()
+        : preEffectCanceledBeforeBranchCheckpointFixture()
+      const result = {
+        type: 'push-branch' as const,
+        repository: fixture.request.expected.repository,
+        targetRef: fixture.request.targetRef,
+        commitId: fixture.request.expected.commitId,
+        previous: { kind: 'absent' as const },
+        credential: { helperId: 'git-credential-manager' as const },
+      }
+      const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+        ...fixture.operation,
+        effectPlan: { kind: 'push-branch', publication: 'not-started', result },
+      })
+      assertPushHostOperationRecord(operation, 'impossible effect plan changed operation kind')
+      const [controlPlane, hostExecution] = branchDomains(
+        [fixture.delivery],
+        [fixture.intent],
+        [operation],
+        [fixture.acceptedAdmission],
+      )
+
+      expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+        .toThrow('Branch Push checkpoint has no exact Host and admission window')
+    },
+  )
+
+  it('accepts applied reconciliation before the Branch Intent acknowledges the Host snapshot', () => {
+    const fixture = repairedBeforeBranchCheckpointFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.acceptedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('accepts Delivery publication before the nonterminal Intent acknowledges the succeeded Host snapshot', () => {
+    const fixture = appliedBranchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.availableAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('rejects applied Delivery evidence that disagrees with the succeeded Host result or completion', () => {
+    const fixture = appliedBranchPushFixture()
+    const mismatches = [
+      sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+        ...fixture.delivery,
+        push: { ...fixture.delivery.push, confirmedAt: fixture.delivery.push!.confirmedAt + 1 },
+      }),
+      sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+        ...fixture.delivery,
+        push: {
+          ...fixture.delivery.push,
+          result: {
+            ...fixture.delivery.push!.result,
+            previous: { kind: 'commit', objectId: 'd'.repeat(40) },
+          },
+        },
+      }),
+    ]
+
+    for (const delivery of mismatches) {
+      const [controlPlane, hostExecution] = branchDomains(
+        [delivery],
+        [fixture.intent],
+        [fixture.operation],
+        [fixture.availableAdmission],
+      )
+      expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+        .toThrow('applied Branch Push disagrees with its succeeded Host snapshot')
+    }
+  })
+
+  it.each(['accepted', 'available'] as const)(
+    'accepts an exact terminal Host snapshot while its admission is %s',
+    (admissionState) => {
+      const fixture = terminalBranchPushFixture()
+      const admission = admissionState === 'accepted' ? fixture.acceptedAdmission : fixture.availableAdmission
+      const [controlPlane, hostExecution] = branchDomains(
+        [fixture.delivery],
+        [fixture.intent],
+        [fixture.operation],
+        [admission],
+      )
+
+      expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+    },
+  )
+
+  it('accepts a historical terminal Push after the Delivery advances to a later Intent', () => {
+    const fixture = terminalBranchPushFixture()
+    const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+      ...fixture.delivery,
+      lastIntentId: ALT_INTENT_ID,
+    })
+    const [controlPlane, hostExecution] = branchDomains(
+      [delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.availableAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('accepts a historical terminal Push while a later operation owns the Binding', () => {
+    const fixture = terminalBranchPushFixture()
+    const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+      ...fixture.delivery,
+      lastIntentId: ALT_INTENT_ID,
+    })
+    const previousOwner = foreignBranchWriteAdmission(fixture)
+    const laterOwner = bindingWriteAdmissionRecordSchema.parse({
+      ...previousOwner,
+      revision: fixture.acceptedAdmission.revision + 2,
+      updatedAt: fixture.operation.snapshot.updatedAt + 2,
+    })
+    const [controlPlane, hostExecution] = branchDomains(
+      [delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [laterOwner],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('retains exact historical Host evidence after Save replaces the Delivery commit', () => {
+    const fixture = terminalBranchPushFixture()
+    const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+      ...fixture.delivery,
+      revision: fixture.delivery.revision + 1,
+      lastIntentId: ALT_INTENT_ID,
+      commitId: 'b'.repeat(40),
+      headRef: 'refs/heads/revised-delivery',
+      phase: 'draft',
+      push: undefined,
+    })
+    const [controlPlane, hostExecution] = branchDomains(
+      [delivery], [fixture.intent], [fixture.operation], [fixture.availableAdmission],
+    )
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+
+    const changedHost = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+      ...fixture.operation,
+      snapshot: { ...fixture.operation.snapshot, completedAt: fixture.operation.snapshot.updatedAt + 1,
+        updatedAt: fixture.operation.snapshot.updatedAt + 1 },
+    })
+    assertPushHostOperationRecord(changedHost, 'Historical Push fixture changed kind')
+    const [changedControl, changedExecution] = branchDomains(
+      [delivery], [fixture.intent], [changedHost], [fixture.availableAdmission],
+    )
+    expect(() => { validateBranchDeliveryOperationLinks(changedControl, changedExecution) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it('rejects a historical terminal Push when a foreign admission did not advance past it', () => {
+    const fixture = terminalBranchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [foreignBranchWriteAdmission(fixture)],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it('accepts a source-conflict repair only with a reserved admission and no-effect Host record', () => {
+    const fixture = sourceConflictedBranchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.reservedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it.each(['detected', 'repair-written'] as const)(
+    'accepts a source-conflicted Host record while reconciliation is %s',
+    (phase) => {
+      const active = branchPushFixture()
+      const repaired = sourceConflictedBranchPushFixture(active)
+      const [controlPlane, hostExecution] = branchDomains(
+        [phase === 'detected' ? active.delivery : repaired.delivery],
+        [active.intent],
+        [repaired.operation],
+        [active.reservedAdmission],
+      )
+
+      expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+    },
+  )
+
+  it('accepts terminal reconciliation with the exact Host snapshot and accepted admission', () => {
+    const fixture = reconciliationBranchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.acceptedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
+  it('rejects terminal reconciliation after its accepted admission revision changes', () => {
+    const fixture = reconciliationBranchPushFixture()
+    const admission = bindingWriteAdmissionRecordSchema.parse({
+      ...fixture.acceptedAdmission,
+      revision: fixture.acceptedAdmission.revision + 1,
+    })
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [admission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it.each(['accepted', 'available'] as const)(
+    'accepts a terminal no-effect Host failure while its admission is %s',
+    (admissionState) => {
+      const fixture = failedBranchPushFixture()
+      const admission = admissionState === 'accepted' ? fixture.acceptedAdmission : fixture.availableAdmission
+      const [controlPlane, hostExecution] = branchDomains(
+        [fixture.delivery],
+        [fixture.intent],
+        [fixture.operation],
+        [admission],
+      )
+
+      expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+    },
+  )
+
+  it('rejects checkpointed Push state after its preparation or admission revision changes', () => {
+    const fixture = checkpointedBranchPushFixture()
+    const changedPreparation = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+      ...fixture.intent,
+      checkpoint: {
+        ...fixture.intent.checkpoint,
+        preparation: { ...fixture.preparation, preparationRevision: fixture.preparation.preparationRevision + 1 },
+      },
+    })
+    const changedAdmission = bindingWriteAdmissionRecordSchema.parse({
+      ...fixture.acceptedAdmission,
+      revision: fixture.acceptedAdmission.revision + 1,
+    })
+    for (const [intent, admission] of [
+      [changedPreparation, fixture.acceptedAdmission],
+      [fixture.intent, changedAdmission],
+    ] as const) {
+      const [controlPlane, hostExecution] = branchDomains(
+        [fixture.delivery],
+        [intent],
+        [fixture.operation],
+        [admission],
+      )
+      expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+        .toThrow('Branch Push checkpoint has no exact Host and admission window')
+    }
+  })
+
+  it('rejects a Push request whose exact Binding differs from its Delivery', () => {
+    const fixture = checkpointedBranchPushFixture()
+    const request = hostOperationRequestSchema.parse({
+      ...fixture.request,
+      expected: {
+        ...fixture.request.expected,
+        binding: { ...fixture.request.expected.binding, workspaceId: 'workspace-altered' },
+      },
+    })
+    if (request.type !== 'push-branch') throw new Error('altered request changed operation kind')
+    const requestFingerprint = {
+      version: 1 as const,
+      digest: canonicalDigest('saki/host-operation-request/v1', request),
+    }
+    const preparation = { ...fixture.preparation, requestFingerprint }
+    const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+      ...fixture.operation,
+      request,
+      snapshot: { ...fixture.operation.snapshot, requestFingerprint },
+    })
+    assertPushHostOperationRecord(operation, 'altered operation changed kind')
+    const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+      ...fixture.intent,
+      operation: { kind: 'push', request },
+      checkpoint: { ...fixture.intent.checkpoint, preparation },
+    })
+    const admission = bindingWriteAdmissionRecordSchema.parse({
+      ...fixture.acceptedAdmission,
+      preparation,
+    })
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [intent],
+      [operation],
+      [admission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push Intent request disagrees with its Branch Delivery')
+  })
+
+  it('rejects a checkpointed Push whose Delivery no longer names the active Intent', () => {
+    const fixture = checkpointedBranchPushFixture()
+    const { activeIntentId: _activeIntentId, ...deliveryWithoutActive } = fixture.delivery
+    const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse(deliveryWithoutActive)
+    const [controlPlane, hostExecution] = branchDomains(
+      [delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.acceptedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it('rejects terminal reconciliation after its accepted admission was released', () => {
+    const fixture = reconciliationBranchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [bindingWriteAdmissionRecordSchema.parse({
+        id: BINDING_ID,
+        schemaVersion: 1,
+        revision: fixture.acceptedAdmission.revision + 1,
+        state: 'available',
+        updatedAt: fixture.operation.snapshot.updatedAt + 1,
+      })],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it('rejects a source conflict when the mismatched Host record admits a possible effect', () => {
+    const fixture = sourceConflictedBranchPushFixture()
+    const admittedSnapshot = hostOperationSnapshotSchema.parse({
+      ...fixture.operation.snapshot,
+      revision: 1,
+      state: 'accepted',
+      admission: { kind: 'accepted', revision: 2, acceptedAt: 4 },
+      updatedAt: 4,
+    })
+    const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+      ...fixture.operation,
+      snapshot: admittedSnapshot,
+    })
+    assertPushHostOperationRecord(operation, 'Admitted conflict fixture changed kind')
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [operation],
+      [fixture.reservedAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push Host Operation request disagrees with its Intent')
+  })
+
+  it('rejects a terminal Intent whose retained Host snapshot is not current', () => {
+    const fixture = terminalBranchPushFixture()
+    const changedSnapshot = hostOperationSnapshotSchema.parse({
+      ...fixture.operation.snapshot,
+      revision: fixture.operation.snapshot.revision + 1,
+      updatedAt: fixture.operation.snapshot.updatedAt + 1,
+    })
+    const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+      ...fixture.operation,
+      snapshot: changedSnapshot,
+    })
+    assertPushHostOperationRecord(operation, 'Changed terminal fixture changed kind')
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [operation],
+      [fixture.availableAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it('rejects orphan Push Host Operations and write admissions', () => {
+    const fixture = branchPushFixture()
+    const [, orphanHost] = branchDomains([], [], [fixture.operation], [])
+    const [emptyControl] = branchDomains([], [], [], [])
+    expect(() => { validateBranchDeliveryOperationLinks(emptyControl, orphanHost) })
+      .toThrow('Branch Push Host Operation has no Branch Delivery Intent')
+
+    const [orphanAdmissionControl, emptyHost] = branchDomains([], [], [], [fixture.reservedAdmission])
+    expect(() => { validateBranchDeliveryOperationLinks(orphanAdmissionControl, emptyHost) })
+      .toThrow('Branch Push admission has no Branch Delivery Intent')
+  })
+
+  it('rejects a second Binding write admission claiming the same Branch Push Intent', () => {
+    const fixture = branchPushFixture()
+    const duplicate = bindingWriteAdmissionRecordSchema.parse({
+      ...fixture.reservedAdmission,
+      id: ALT_BINDING_ID,
+    })
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [fixture.intent],
+      [fixture.operation],
+      [fixture.reservedAdmission, duplicate],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('Branch Push admission has no exact recovery owner')
+  })
+
+  it('rejects applied Delivery evidence after its Push Intent and Host Operation disappear', () => {
+    const fixture = appliedBranchPushFixture()
+    const [controlPlane, hostExecution] = branchDomains(
+      [fixture.delivery],
+      [],
+      [],
+      [fixture.availableAdmission],
+    )
+
+    expect(() => { validateBranchDeliveryOperationLinks(controlPlane, hostExecution) })
+      .toThrow('applied Branch Delivery has no exact succeeded Push operation')
+  })
+})
+
 describe('current Saki Git-operation cross-domain validation', () => {
+  it('leaves accepted Push admission to the Branch Delivery validator', () => {
+    const admission = bindingWriteAdmissionRecordSchema.parse({
+      id: BINDING_ID,
+      schemaVersion: 1,
+      revision: 2,
+      state: 'manual-host-operation',
+      phase: 'accepted',
+      bindingRevision: 0,
+      source: {
+        kind: 'control-intent',
+        intentId: INTENT_ID,
+        intentRevision: 0,
+        payloadDigest: '1'.repeat(64),
+      },
+      action: 'project-branch:push',
+      reservedAt: 1,
+      preparation: {
+        operation: { id: OPERATION_ID, hostId: HOST_ID, type: 'push-branch' },
+        preparationRevision: 0,
+        requestFingerprint: { version: 1, digest: '2'.repeat(64) },
+      },
+      acceptedAt: 2,
+      updatedAt: 2,
+    })
+    const [controlPlane, hostExecution] = domains([], [], [admission])
+
+    expect(() => { validateGitOperationLinks(controlPlane, hostExecution) }).not.toThrow()
+  })
+
   it('is ignored by Agent-operation validation', () => {
     const fixture = linkedFixture()
     const [controlPlane, hostExecution] = domains([], [fixture.operation], [])

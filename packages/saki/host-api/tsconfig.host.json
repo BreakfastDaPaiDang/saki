@@ -17,6 +17,7 @@
     { "path": "../../host/apiproxy" },
     { "path": "../../runtime-diagnostics/invariants" },
     { "path": "../control-plane" },
-    { "path": "../execution" }
+    { "path": "../execution" },
+    { "path": "../github" }
   ]
 }

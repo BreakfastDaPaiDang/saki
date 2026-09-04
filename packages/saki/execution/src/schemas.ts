@@ -26,6 +26,8 @@ import type {
   InterventionOpeningEvidence,
   InspectProjectRequest,
   InspectProjectResult,
+  InspectProjectCommitRequest,
+  InspectProjectCommitResult,
   InspectProjectSelectionResult,
   ProjectGitChange,
   ProjectGitIndexEvidence,
@@ -40,6 +42,8 @@ import type {
   ProjectInspectionFingerprint,
   ProjectSelectionInspection,
   ProjectSelectionProjection,
+  PushBranchHostOperationRequest,
+  PushBranchHostOperationResult,
   ReadProjectDiffOperationRequest,
   ReadProjectDiffRequest,
   ReadProjectDiffResult,
@@ -1089,6 +1093,40 @@ export const commitHostOperationRequestSchema = z.object({
   message: commitMessageSchema,
 }).strict() satisfies z.ZodType<CommitHostOperationRequest>
 
+const githubRepositoryCoordinatesSchema = z.object({
+  nameWithOwner: z.string()
+    .min(3)
+    .max(201)
+    .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u)
+    .refine(value => value.split('/').every(component => component !== '.' && component !== '..')),
+}).strict()
+
+const githubBranchRefSchema = z.string()
+  .min('refs/heads/a'.length)
+  .max(MAX_GIT_REF_CHARS)
+  .refine(value => value.startsWith('refs/heads/') && isSafeGitRef(value))
+
+/** Strict PushBranch request without caller-controlled URL or credential-helper authority. */
+export const pushBranchHostOperationRequestSchema = z.object({
+  type: z.literal('push-branch'),
+  source: controlIntentHostOperationSourceSchema,
+  expected: z.object({
+    binding: activeHostProjectBindingSchema,
+    commitId: gitObject,
+    repository: githubRepositoryCoordinatesSchema,
+  }).strict(),
+  targetRef: githubBranchRefSchema,
+}).strict().superRefine((value, context) => {
+  const objectWidth = value.expected.binding.expectedInspection.projection.objectFormat === 'sha1' ? 40 : 64
+  if (value.expected.commitId.length !== objectWidth) {
+    context.addIssue({
+      code: 'custom',
+      message: 'expected commit disagrees with binding object format',
+      path: ['expected', 'commitId'],
+    })
+  }
+}) satisfies z.ZodType<PushBranchHostOperationRequest>
+
 const productUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
 const startAgentRunMessageIdSchema = z.string().regex(productUuid)
   .transform(value => value as StartAgentRunInputMessage['id'])
@@ -1236,6 +1274,7 @@ export const hostOperationRequestSchema = z.discriminatedUnion('type', [
   stageFilesHostOperationRequestSchema,
   unstageFilesHostOperationRequestSchema,
   commitHostOperationRequestSchema,
+  pushBranchHostOperationRequestSchema,
   startAgentRunHostOperationRequestSchema,
 ]) satisfies z.ZodType<HostOperationRequest>
 
@@ -1333,6 +1372,35 @@ export const commitHostOperationResultSchema = z.object({
   }
 }) satisfies z.ZodType<CommitHostOperationResult>
 
+const gitRemoteBranchStateSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('absent') }).strict(),
+  z.object({ kind: z.literal('commit'), objectId: gitObject }).strict(),
+])
+
+/** Closed safe identities for supported non-interactive Git credential adapters. */
+export const gitCredentialHelperIdSchema = z.enum([
+  'git-credential-manager',
+  'git-credential-manager-core',
+])
+
+/** Stable evidence of one successful exact-lease PushBranch publication. */
+export const pushBranchHostOperationResultSchema = z.object({
+  type: z.literal('push-branch'),
+  repository: githubRepositoryCoordinatesSchema,
+  targetRef: githubBranchRefSchema,
+  commitId: gitObject,
+  previous: gitRemoteBranchStateSchema,
+  credential: z.object({ helperId: gitCredentialHelperIdSchema }).strict(),
+}).strict().superRefine((value, context) => {
+  if (value.previous.kind === 'commit' && value.previous.objectId.length !== value.commitId.length) {
+    context.addIssue({
+      code: 'custom',
+      message: 'previous remote commit uses a different object format',
+      path: ['previous', 'objectId'],
+    })
+  }
+}) satisfies z.ZodType<PushBranchHostOperationResult>
+
 /** Stable evidence that the intended Agent Run and dispatched input exist. */
 const startAgentRunHostOperationResultObjectSchema = z.object({
   type: z.literal('start-agent-run'),
@@ -1349,6 +1417,7 @@ const hostOperationResultSchema = z.discriminatedUnion('type', [
   stageFilesHostOperationResultSchema,
   unstageFilesHostOperationResultSchema,
   commitHostOperationResultSchema,
+  pushBranchHostOperationResultSchema,
   startAgentRunHostOperationResultObjectSchema,
 ])
 
@@ -1356,7 +1425,7 @@ const hostOperationResultSchema = z.discriminatedUnion('type', [
 export const hostOperationReferenceSchema: z.ZodType<HostOperationReference> = z.object({
   id: hostOperationIdSchema,
   hostId: hostId.transform(value => value as HostOperationReference['hostId']),
-  type: z.enum(['stage-files', 'unstage-files', 'commit', 'start-agent-run']),
+  type: z.enum(['stage-files', 'unstage-files', 'commit', 'push-branch', 'start-agent-run']),
 }).strict()
 
 /** Versioned immutable Host Operation request digest. */
@@ -1509,6 +1578,26 @@ export const hostOperationChangeSchema: z.ZodType<HostOperationChange> = z.objec
 export const inspectProjectRequestSchema: z.ZodType<InspectProjectRequest> = z.object({
   binding: activeHostProjectBindingSchema,
 }).strict()
+
+/** Strict exact-Commit lookup scoped to one active Resource Binding. */
+export const inspectProjectCommitRequestSchema: z.ZodType<InspectProjectCommitRequest> = z.object({
+  binding: activeHostProjectBindingSchema,
+  commitId: gitObject,
+}).strict().superRefine((value, context) => {
+  const objectWidth = value.binding.expectedInspection.projection.objectFormat === 'sha1' ? 40 : 64
+  if (value.commitId.length !== objectWidth) {
+    context.addIssue({ code: 'custom', message: 'Commit id disagrees with binding object format' })
+  }
+})
+
+/** Exact Commit presence evidence or one bounded local-boundary failure. */
+export const inspectProjectCommitResultSchema: z.ZodType<InspectProjectCommitResult> = z.union([
+  z.object({ ok: z.literal(true), commitId: gitObject }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.enum(['binding-stale', 'commit-missing', 'unavailable']),
+  }).strict(),
+])
 
 const successfulInspectProjectResultSchema = z.object({
   ok: z.literal(true),

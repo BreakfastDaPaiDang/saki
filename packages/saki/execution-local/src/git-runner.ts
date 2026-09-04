@@ -4,6 +4,7 @@ import type { Readable, Writable } from 'node:stream'
 import { finished } from 'node:stream/promises'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
+import type { GitCredentialHelperId } from '@breakfastdapaidang/saki-execution'
 
 /** Publicly classifiable Git observation failure without child diagnostics. */
 export class GitCommandError extends Error {
@@ -61,6 +62,9 @@ export interface GitRunnerConfig {
   readonly terminationGraceMs: number
 }
 
+/** Closed Host-trusted helpers whose non-interactive behavior is configured by this provider. */
+export type GitCredentialHelperAdapter = GitCredentialHelperId
+
 /** Closed environment additions used only by structured Git mutation plumbing. */
 export interface GitMutationEnvironment {
   readonly hooksDirectory: string
@@ -89,12 +93,13 @@ export function gitGlobalArguments(platform: NodeJS.Platform): readonly string[]
     '--no-pager',
     '--no-lazy-fetch',
     '--no-replace-objects',
+    '-c', 'core.commitGraph=false',
     '-c', 'core.fsmonitor=false',
     '-c', 'advice.sparseIndexExpanded=false',
     '-c', 'core.pager=cat',
     '-c', 'credential.helper=',
     '-c', 'diff.external=',
-    '-c', 'core.hooksPath=',
+    '-c', `core.hooksPath=${nullDevice}`,
     '-c', `core.excludesFile=${nullDevice}`,
     '-c', `core.attributesFile=${nullDevice}`,
     '--no-optional-locks',
@@ -294,6 +299,42 @@ export class GitRunner {
       cwd,
       env,
       ...(stdin === undefined ? {} : { stdin }),
+      ...this.config,
+    }, signal)
+  }
+
+  /**
+   * Run one fixed GitHub transport command from a private Git directory.
+   * @param privateGitDirectory - repository-isolated Git control directory.
+   * @param args - exact provider-owned transport arguments.
+   * @param signal - required attempt lifetime.
+   * @param adapter - closed Host-configured credential helper adapter.
+   * @returns complete bounded transport output.
+   */
+  async runGitHubTransport(
+    privateGitDirectory: string,
+    args: readonly string[],
+    signal: AbortSignal,
+    adapter: GitCredentialHelperAdapter,
+  ): Promise<RawCommandOutput> {
+    const helper = adapter === 'git-credential-manager' ? 'manager' : 'manager-core'
+    return await runBoundedCommand(this.subprocess, {
+      argv: [
+        this.executable,
+        ...GIT_GLOBAL_ARGS,
+        '-c', `credential.helper=${helper}`,
+        '-c', 'protocol.allow=never',
+        '-c', 'protocol.https.allow=always',
+        '-c', 'http.followRedirects=false',
+        `--git-dir=${privateGitDirectory}`,
+        ...args,
+      ],
+      cwd: privateGitDirectory,
+      env: {
+        ...gitInspectionEnvironment(),
+        GCM_INTERACTIVE: 'Never',
+        GIT_CREDENTIAL_INTERACTIVE: 'never',
+      },
       ...this.config,
     }, signal)
   }

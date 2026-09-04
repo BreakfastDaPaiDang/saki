@@ -35,7 +35,8 @@ import type {
 } from '@breakfastdapaidang/saki-control-plane'
 import { providePreparedSakiState } from '@breakfastdapaidang/saki-installation-maintenance'
 import { takeSakiCookieHeader } from '@breakfastdapaidang/saki-control-plane/host'
-import { CONTROL_STATE_KEY, sakiControlPlaneDomainSpec } from '@breakfastdapaidang/saki-control-plane/src/spec.ts'
+import { sakiControlPlaneDomainSpec } from '@breakfastdapaidang/saki-control-plane/src/domain-spec.ts'
+import { CONTROL_STATE_KEY } from '@breakfastdapaidang/saki-control-plane/src/spec.ts'
 import * as SakiHostApi from '../src/index.ts'
 import { promisify } from 'node:util'
 
@@ -89,7 +90,7 @@ async function start(): Promise<RunningHost> {
     databasePath: join(directory, 'saki.sqlite'),
     installationId: INSTALLATION_ID,
     storageGenerationId: STORAGE_GENERATION_ID,
-    stateVersion: 8,
+    stateVersion: 9,
     createdByBuildId: BUILD_ID,
     promoteToReady: () => Promise.resolve(),
   })
@@ -1031,6 +1032,162 @@ describe('Saki /saki Host transport', () => {
       cookie,
       'x-saki-request-token': token,
     })).message.result).toEqual(OPAQUE_ERROR_RESULT)
+    expect(submit).toHaveBeenCalledTimes(2)
+    await host.close()
+  })
+
+  it('routes the Branch Delivery query and all six path-free Intents', async () => {
+    const host = await start()
+    const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
+    const exchange = await rpc(host, 'access/exchange', { secret })
+    const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
+    const token = (exchange.message.result as { value: { access: { requestToken: string } } }).value.access.requestToken
+    const projectId = 'project-22222222-2222-4222-8222-222222222222'
+    const workItemId = `work-item-${'3'.repeat(64)}`
+    const deliveryId = `branch-delivery-${'4'.repeat(64)}`
+    const remoteFingerprint = `remote-fingerprint-${'5'.repeat(64)}`
+    const intents = [
+      {
+        type: 'save-branch-delivery',
+        intentId: 'intent-11111111-1111-4111-8111-111111111111',
+        projectId,
+        workItemId,
+        expected: {
+          deliveryRevision: null,
+          registryRevision: 1,
+          projectRevision: 2,
+          binding: { id: 'binding-66666666-6666-4666-8666-666666666666', revision: 3 },
+          synchronizationRevision: 4,
+          mappingRevision: 4,
+          workItemRemoteFingerprint: remoteFingerprint,
+        },
+        commitId: '7'.repeat(40),
+        headRef: 'refs/heads/saki/issue-32',
+        baseRef: 'refs/heads/master',
+      },
+      {
+        type: 'push-branch-delivery',
+        intentId: 'intent-22222222-2222-4222-8222-222222222222',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+      },
+      {
+        type: 'create-branch-delivery-pull-request',
+        intentId: 'intent-33333333-3333-4333-8333-333333333333',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+        title: 'Deliver issue 32',
+        body: 'Exact delivery evidence.',
+      },
+      {
+        type: 'associate-branch-delivery-pull-request',
+        intentId: 'intent-44444444-4444-4444-8444-444444444444',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+        pullRequestId: 'PR_issue_32',
+        pullRequestNumber: 32,
+      },
+      {
+        type: 'mark-branch-delivery-in-review',
+        intentId: 'intent-55555555-5555-4555-8555-555555555555',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+        expectedWorkItemRemoteFingerprint: remoteFingerprint,
+      },
+      {
+        type: 'accept-branch-delivery',
+        intentId: 'intent-66666666-6666-4666-8666-666666666666',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+        expectedWorkItemRemoteFingerprint: remoteFingerprint,
+      },
+    ] as const
+    const query = vi.spyOn(host.context.sakiControlPlane, 'query')
+      .mockResolvedValue({ ok: false, reason: 'not-found' } as never)
+    const submit = vi.spyOn(host.context.sakiControlPlane, 'submit')
+      .mockResolvedValue({ ok: false, reason: 'unavailable' } as never)
+
+    expect((await rpc(host, 'control/query', {
+      type: 'branch-delivery', projectId, workItemId, refresh: 'interactive',
+    }, { cookie })).message.result).toEqual({ ok: true, value: { ok: false, reason: 'not-found' } })
+    for (const intent of intents) {
+      expect((await rpc(host, 'control/submit', intent, {
+        cookie,
+        'x-saki-request-token': token,
+      })).message.result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
+    }
+    expect(query.mock.calls[0]?.[1]).toEqual({
+      type: 'branch-delivery', projectId, workItemId, refresh: 'interactive',
+    })
+    expect(submit.mock.calls.map(call => call[1])).toEqual(intents)
+    expect((await rpc(host, 'control/submit', {
+      ...intents[0],
+      directoryLocator: 'D:/private-repository',
+    }, { cookie, 'x-saki-request-token': token })).message.result).toEqual(OPAQUE_ERROR_RESULT)
+    expect(submit).toHaveBeenCalledTimes(6)
+    await host.close()
+  })
+
+  it('routes the Milestone View query and both exact release Intents', async () => {
+    const host = await start()
+    const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
+    const exchange = await rpc(host, 'access/exchange', { secret })
+    const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
+    const token = (exchange.message.result as { value: { access: { requestToken: string } } }).value.access.requestToken
+    const projectId = 'project-22222222-2222-4222-8222-222222222222'
+    const release = {
+      repositoryId: 'R_saki',
+      projectId: 'P_saki',
+      milestoneId: 'M_release_010',
+      milestoneNumber: 1,
+      tagName: 'saki-v0.1.0',
+      releaseCommitId: '3'.repeat(40),
+      upstreamRepositoryId: 'R_upstream',
+      upstreamRepositoryDatabaseId: '321',
+      upstreamRepositoryNameWithOwner: 'deepseek-ai/deepseek-harness',
+      upstreamCommitId: '4'.repeat(40),
+    }
+    const intents = [
+      {
+        type: 'save-milestone-delivery',
+        intentId: 'intent-77777777-7777-4777-8777-777777777777',
+        projectId,
+        expectedDeliveryRevision: null,
+        expectedRegistryRevision: 5,
+        expectedProjectRevision: 3,
+        phase: 'planned',
+        release,
+      },
+      {
+        type: 'finalize-milestone-delivery',
+        intentId: 'intent-88888888-8888-4888-8888-888888888888',
+        deliveryId: `milestone-delivery-${'2'.repeat(64)}`,
+        expectedDeliveryRevision: 2,
+        release,
+      },
+    ] as const
+    const query = vi.spyOn(host.context.sakiControlPlane, 'query')
+      .mockResolvedValue({ ok: false, reason: 'not-found' } as never)
+    const submit = vi.spyOn(host.context.sakiControlPlane, 'submit')
+      .mockResolvedValue({ ok: false, reason: 'unavailable' } as never)
+
+    expect((await rpc(host, 'control/query', {
+      type: 'milestone-view', projectId, milestoneId: release.milestoneId, refresh: 'interactive',
+    }, { cookie })).message.result).toEqual({ ok: true, value: { ok: false, reason: 'not-found' } })
+    for (const intent of intents) {
+      expect((await rpc(host, 'control/submit', intent, {
+        cookie,
+        'x-saki-request-token': token,
+      })).message.result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
+    }
+    expect(query.mock.calls[0]?.[1]).toEqual({
+      type: 'milestone-view', projectId, milestoneId: release.milestoneId, refresh: 'interactive',
+    })
+    expect(submit.mock.calls.map(call => call[1])).toEqual(intents)
+    expect((await rpc(host, 'control/submit', {
+      ...intents[0],
+      privateKeyRef: 'PRODUCT_APP_KEY',
+    }, { cookie, 'x-saki-request-token': token })).message.result).toEqual(OPAQUE_ERROR_RESULT)
     expect(submit).toHaveBeenCalledTimes(2)
     await host.close()
   })

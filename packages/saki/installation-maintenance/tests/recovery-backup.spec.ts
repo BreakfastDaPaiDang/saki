@@ -624,7 +624,7 @@ describe('Saki Recovery Backup primitive', () => {
       async reservation => await store.create(
         reservation,
         source,
-        { ...request(), stateVersion: 9 } as unknown as RecoveryBackupCreateRequest,
+        { ...request(), stateVersion: 10 } as unknown as RecoveryBackupCreateRequest,
         sakiStateCapability,
         AbortSignal.timeout(2_000),
       ),
@@ -731,7 +731,7 @@ describe('Saki Recovery Backup primitive', () => {
   it('rejects unsupported, noncanonical, malformed, and oversized metadata', async () => {
     const cases: Array<(installationRoot: string) => Promise<void>> = [
       async (installationRoot) => {
-        await rewriteManifest(installationRoot, (value) => { value.stateVersion = 9 })
+        await rewriteManifest(installationRoot, (value) => { value.stateVersion = 10 })
       },
       async (installationRoot) => {
         await rewriteManifest(installationRoot, (value) => { value.purpose = 'portable-backup' })

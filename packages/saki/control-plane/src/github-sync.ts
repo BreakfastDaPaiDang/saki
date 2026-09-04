@@ -46,14 +46,18 @@ import type {
   SakiGitHubScanBeginResult,
   SakiGitHubScanFailResult,
   SakiGitHubScanFailure,
+  SakiGitHubFreshBoardScanResult,
   SakiGitHubScanPublishResult,
+  SakiGitHubScanRequestFenceResult,
   SakiGitHubScanStateProjection,
   SakiGitHubSynchronizationCoordinator,
+  SakiGitHubSynchronizationFailureProjection,
   SakiIntentReceipt,
   SakiIntentReceiptId,
   SakiProjectSettingsProjection,
 } from './types.ts'
 import { enqueueKeyedOperation } from './keyed-operation.ts'
+import { projectGitHubFailure } from './github-failure-projection.ts'
 import {
   boardWorkItemId,
   joinedBoardRemoteFingerprint,
@@ -259,13 +263,32 @@ export class GitHubProjectSynchronization implements SakiGitHubSynchronizationCo
     attemptAt: number,
     signal: AbortSignal,
   ): Promise<'scheduled' | 'not-found' | 'unconfigured'> {
+    const result = await this.scheduleScan(projectId, priority, reason, attemptAt, signal)
+    return result.state
+  }
+
+  /** @inheritdoc */
+  async requestScanAfterCurrent(
+    projectId: SakiDevelopmentProjectId,
+    signal: AbortSignal,
+  ): Promise<SakiGitHubScanRequestFenceResult> {
+    return await this.scheduleScan(projectId, 'interactive', 'interactive', Date.now(), signal)
+  }
+
+  private async scheduleScan(
+    projectId: SakiDevelopmentProjectId,
+    priority: 'interactive' | 'background',
+    reason: 'startup' | 'configuration' | 'poll' | 'interactive' | 'retry',
+    attemptAt: number,
+    signal: AbortSignal,
+  ): Promise<SakiGitHubScanRequestFenceResult> {
     return await this.enqueueProjectOperation(projectId, async () => {
       signal.throwIfAborted()
-      if (!this.options.projectExists(projectId)) return 'not-found'
+      if (!this.options.projectExists(projectId)) return { state: 'not-found' }
       const currentValue = this.options.syncTable.get(projectId)
-      if (currentValue === undefined) return 'unconfigured'
+      if (currentValue === undefined) return { state: 'unconfigured' }
       const current = githubProjectSyncRecordSchema.parse(currentValue)
-      if (current.pending === undefined && current.active === undefined) return 'unconfigured'
+      if (current.pending === undefined && current.active === undefined) return { state: 'unconfigured' }
       await this.options.syncTable.update(projectId, (storedValue) => {
         const stored = githubProjectSyncRecordSchema.parse(storedValue)
         return githubProjectSyncRecordSchema.parse({
@@ -273,7 +296,12 @@ export class GitHubProjectSynchronization implements SakiGitHubSynchronizationCo
           nextScanAttempt: mergeScanRequest(stored.nextScanAttempt, { priority, reason, attemptAt }),
         })
       })
-      return 'scheduled'
+      return {
+        state: 'scheduled',
+        ...(current.inFlightAttempt === undefined
+          ? {}
+          : { preexistingAttemptId: current.inFlightAttempt.attemptId }),
+      }
     })
   }
 
@@ -811,16 +839,41 @@ interface GitHubSynchronizationConsumerOptions {
   readonly reportUnexpectedFailure: (scope: 'provider' | 'consumer') => void
 }
 
+interface FreshBoardScanWaiter {
+  readonly projectId: SakiDevelopmentProjectId
+  readonly excludedAttemptIds: Set<SakiGitHubScanAttemptId>
+  completionBeforeFence: {
+    readonly attemptId: SakiGitHubScanAttemptId
+    readonly result: SakiGitHubFreshBoardScanResult
+  } | undefined
+  readonly signal: AbortSignal
+  readonly resolve: (result: SakiGitHubFreshBoardScanResult) => void
+  readonly reject: (reason: unknown) => void
+  readonly abortListener: () => void
+  fenceReady: boolean
+  settled: boolean
+}
+
 /** Optional Provider-bound Consumer that drains durable complete-scan work in priority order. */
 export class GitHubSynchronizationConsumer {
   private readonly lifetime = new AbortController()
   private readonly settled: Promise<void>
+  private readonly freshBoardScanWaiters = new Map<SakiDevelopmentProjectId, Set<FreshBoardScanWaiter>>()
+  private state: 'active' | 'failed' | 'disposed' = 'active'
+  private activeAttempt: {
+    readonly projectId: SakiDevelopmentProjectId
+    readonly attemptId: SakiGitHubScanAttemptId
+  } | undefined
   private waitingWake: (() => void) | undefined
 
   /** @param options - contained coordinator, active Provider, lease lifetime, and safe diagnostic sink. */
   constructor(private readonly options: GitHubSynchronizationConsumerOptions) {
     this.settled = this.run().catch(() => {
-      if (!this.lifetime.signal.aborted) this.options.reportUnexpectedFailure('consumer')
+      if (this.state === 'active') {
+        this.state = 'failed'
+        this.settleAllFreshBoardScans({ state: 'unavailable', reason: 'consumer-failed' })
+        this.options.reportUnexpectedFailure('consumer')
+      }
     })
   }
 
@@ -829,8 +882,57 @@ export class GitHubSynchronizationConsumer {
     this.waitingWake?.()
   }
 
+  /**
+   * Request and await one complete Board scan admitted after this call's durable fence.
+   * @param projectId - Development Project whose complete Board must be refreshed.
+   * @param signal - caller cancellation; abort rejects with the signal reason.
+   * @returns the new attempt's publication, safe failure, or bounded availability outcome.
+   */
+  async requestFreshBoardScan(
+    projectId: SakiDevelopmentProjectId,
+    signal: AbortSignal,
+  ): Promise<SakiGitHubFreshBoardScanResult> {
+    signal.throwIfAborted()
+    if (this.state !== 'active') {
+      return {
+        state: 'unavailable',
+        reason: this.state === 'failed' ? 'consumer-failed' : 'provider-detached',
+      }
+    }
+    let resolve!: (result: SakiGitHubFreshBoardScanResult) => void
+    let reject!: (reason: unknown) => void
+    const promise = new Promise<SakiGitHubFreshBoardScanResult>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise
+      reject = rejectPromise
+    })
+    const abortListener = (): void => { this.rejectFreshBoardScan(waiter, signal.reason) }
+    const waiter: FreshBoardScanWaiter = {
+      projectId,
+      excludedAttemptIds: new Set(
+        this.activeAttempt?.projectId === projectId ? [this.activeAttempt.attemptId] : [],
+      ),
+      completionBeforeFence: undefined,
+      signal,
+      resolve,
+      reject,
+      abortListener,
+      fenceReady: false,
+      settled: false,
+    }
+    signal.addEventListener('abort', abortListener, { once: true })
+    const projectWaiters = this.freshBoardScanWaiters.get(projectId) ?? new Set()
+    projectWaiters.add(waiter)
+    this.freshBoardScanWaiters.set(projectId, projectWaiters)
+    void this.armFreshBoardScan(waiter, AbortSignal.any([signal, this.lifetime.signal]))
+    return await promise
+  }
+
   /** Abort an active Provider call and wait until the Consumer is quiescent. */
   async dispose(): Promise<void> {
+    if (this.state !== 'disposed') {
+      this.state = 'disposed'
+      this.settleAllFreshBoardScans({ state: 'unavailable', reason: 'provider-detached' })
+    }
     this.lifetime.abort(new Error('Saki GitHub synchronization Consumer is disposing'))
     this.wake()
     await this.settled
@@ -850,32 +952,139 @@ export class GitHubSynchronizationConsumer {
         safeTimestampAdd(Date.now(), this.options.attemptTtlMs),
         signal,
       )
-      if (!begun.ok) continue
-      let candidate: GitHubProjectBoardScanCandidate
-      try {
-        candidate = await this.options.github.scan(begun.lease.request, signal)
-      } catch (error) {
-        signal.throwIfAborted()
-        if (error instanceof GitHubProviderError) {
-          await this.options.synchronization.failScan(
-            due.projectId,
-            begun.lease.attemptId,
-            { kind: 'provider', failure: error.failure },
-            signal,
-          )
-        } else {
-          this.options.reportUnexpectedFailure('provider')
+      if (!begun.ok) {
+        if (begun.reason !== 'in-flight') {
+          this.settleProjectFreshBoardScans({
+            state: 'unavailable',
+            reason: begun.reason,
+          }, due.projectId)
         }
         continue
       }
-      signal.throwIfAborted()
-      await this.options.synchronization.publishScan(
-        due.projectId,
-        begun.lease.attemptId,
-        candidate,
-        signal,
-      )
+      this.activeAttempt = {
+        projectId: due.projectId,
+        attemptId: begun.lease.attemptId,
+      }
+      try {
+        let candidate: GitHubProjectBoardScanCandidate
+        try {
+          candidate = await this.options.github.scan(begun.lease.request, signal)
+        } catch (error) {
+          signal.throwIfAborted()
+          if (error instanceof GitHubProviderError) {
+            const failure = { kind: 'provider', failure: error.failure } as const
+            const failed = await this.options.synchronization.failScan(
+              due.projectId,
+              begun.lease.attemptId,
+              failure,
+              signal,
+            )
+            this.completeFreshBoardScan(due.projectId, begun.lease.attemptId, failed.state === 'failed'
+              ? { state: 'failed', failure }
+              : { state: 'stale' })
+          } else {
+            this.options.reportUnexpectedFailure('provider')
+            this.completeFreshBoardScan(due.projectId, begun.lease.attemptId, {
+              state: 'unavailable',
+              reason: 'provider-failed',
+            })
+          }
+          continue
+        }
+        signal.throwIfAborted()
+        const published = await this.options.synchronization.publishScan(
+          due.projectId,
+          begun.lease.attemptId,
+          candidate,
+          signal,
+        )
+        this.completeFreshBoardScan(due.projectId, begun.lease.attemptId, published)
+      } finally {
+        this.activeAttempt = undefined
+      }
     }
+  }
+
+  private async armFreshBoardScan(waiter: FreshBoardScanWaiter, signal: AbortSignal): Promise<void> {
+    try {
+      const requested = await this.options.synchronization.requestScanAfterCurrent(waiter.projectId, signal)
+      if (requested.state === 'scheduled') this.wake()
+      if (waiter.settled) return
+      if (requested.state !== 'scheduled') {
+        this.settleFreshBoardScan(waiter, { state: 'unavailable', reason: requested.state })
+        return
+      }
+      if (requested.preexistingAttemptId !== undefined) {
+        waiter.excludedAttemptIds.add(requested.preexistingAttemptId)
+      }
+      waiter.fenceReady = true
+      const completion = waiter.completionBeforeFence
+      waiter.completionBeforeFence = undefined
+      if (completion !== undefined) {
+        this.deliverFreshBoardScanCompletion(waiter, completion.attemptId, completion.result)
+      }
+    } catch (error) {
+      if (waiter.settled) return
+      this.rejectFreshBoardScan(waiter, error)
+    }
+  }
+
+  private completeFreshBoardScan(
+    projectId: SakiDevelopmentProjectId,
+    attemptId: SakiGitHubScanAttemptId,
+    result: SakiGitHubFreshBoardScanResult,
+  ): void {
+    for (const waiter of [...(this.freshBoardScanWaiters.get(projectId) ?? [])]) {
+      this.deliverFreshBoardScanCompletion(waiter, attemptId, result)
+    }
+  }
+
+  private deliverFreshBoardScanCompletion(
+    waiter: FreshBoardScanWaiter,
+    attemptId: SakiGitHubScanAttemptId,
+    result: SakiGitHubFreshBoardScanResult,
+  ): void {
+    if (!waiter.fenceReady) {
+      waiter.completionBeforeFence = { attemptId, result }
+      return
+    }
+    if (!waiter.excludedAttemptIds.has(attemptId)) this.settleFreshBoardScan(waiter, result)
+  }
+
+  private settleProjectFreshBoardScans(
+    result: SakiGitHubFreshBoardScanResult,
+    projectId: SakiDevelopmentProjectId,
+  ): void {
+    for (const waiter of [...(this.freshBoardScanWaiters.get(projectId) ?? [])]) {
+      this.settleFreshBoardScan(waiter, result)
+    }
+  }
+
+  private settleAllFreshBoardScans(result: SakiGitHubFreshBoardScanResult): void {
+    for (const waiters of this.freshBoardScanWaiters.values()) {
+      for (const waiter of [...waiters]) this.settleFreshBoardScan(waiter, result)
+    }
+  }
+
+  private settleFreshBoardScan(
+    waiter: FreshBoardScanWaiter,
+    result: SakiGitHubFreshBoardScanResult,
+  ): void {
+    this.removeFreshBoardScanWaiter(waiter)
+    waiter.resolve(result)
+  }
+
+  private rejectFreshBoardScan(waiter: FreshBoardScanWaiter, reason: unknown): void {
+    this.removeFreshBoardScanWaiter(waiter)
+    waiter.reject(reason)
+  }
+
+  private removeFreshBoardScanWaiter(waiter: FreshBoardScanWaiter): void {
+    waiter.settled = true
+    waiter.signal.removeEventListener('abort', waiter.abortListener)
+    const projectWaiters = this.freshBoardScanWaiters.get(waiter.projectId)
+    projectWaiters?.delete(waiter)
+    if (projectWaiters?.size === 0) this.freshBoardScanWaiters.delete(waiter.projectId)
   }
 
   private async waitForWork(nextScanAt: number | undefined): Promise<void> {
@@ -1279,10 +1488,25 @@ function synchronizationProjection(
     state: record?.pending?.state ?? (record?.active === undefined ? 'unconfigured' : 'activated'),
     ...(record?.checkpoint === undefined ? {} : { checkpoint: record.checkpoint }),
     mapping,
-    ...(record?.currentFailure === undefined ? {} : { failure: record.currentFailure }),
+    ...(record?.currentFailure === undefined ? {} : {
+      failure: projectSynchronizationFailure(record.currentFailure),
+    }),
     freshness,
     scan: scanState(record),
     effectiveMutationAvailability: mutationAvailability(record, mapping),
+  }
+}
+
+function projectSynchronizationFailure(
+  current: NonNullable<GitHubProjectSyncRecord['currentFailure']>,
+): SakiGitHubSynchronizationFailureProjection {
+  return {
+    attemptId: current.attemptId,
+    configurationRevision: current.configurationRevision,
+    failedAt: current.failedAt,
+    failure: current.failure.kind === 'provider'
+      ? { kind: 'provider', failure: projectGitHubFailure(current.failure.failure) }
+      : structuredClone(current.failure),
   }
 }
 

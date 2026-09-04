@@ -4,8 +4,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { chmod, lstat as nativeLstat, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { lstat as nativeLstat, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, normalize, relative, resolve as resolvePath, sep, win32 } from 'node:path'
 import type { FileSystem, FsVersion } from '@deepseek-ai/dsh-fs'
 import {
@@ -23,6 +22,11 @@ import {
   type RepositoryInventoryGit,
 } from './inventory.ts'
 import { isSafeProjectStatusQuery } from './status-query.ts'
+import {
+  createOwnedPrivateGitDirectory,
+  type OwnedPrivateGitDirectory,
+  type OwnedPrivateGitDirectoryDraft,
+} from './owned-private-git-directory.ts'
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
 const NANOSECONDS_PER_SECOND = 1_000_000_000n
@@ -34,6 +38,8 @@ export interface SafeRepositoryView extends AsyncDisposable {
   readonly topLevelPath: string
   readonly gitDirectoryPath: string
   readonly commonDirectoryPath: string
+  /** Provider-private isolated Git directory admitted for this observation round. */
+  readonly privateGitDirectory: OwnedPrivateGitDirectory
   readonly locked: boolean
   /** Whether admitted repository-local configuration enables sparse index semantics. */
   readonly sparseIndexEnabled: boolean
@@ -113,7 +119,8 @@ export async function openSafeRepositoryView(
   signal: AbortSignal,
   scope?: SafeRepositoryScope,
 ): Promise<SafeRepositoryOpenResult> {
-  let scratch: string | undefined
+  let directoryDraft: OwnedPrivateGitDirectoryDraft | undefined
+  let directoryOwner: OwnedPrivateGitDirectory | undefined
   try {
     signal.throwIfAborted()
     if (!isSafeLocalRepositoryPath(selectedPath) || selectedPath.length > MAX_TRUSTED_PATH_CHARS) {
@@ -127,8 +134,8 @@ export async function openSafeRepositoryView(
     const { topLevel, gitDirectory, commonDirectory, locked } = discovered.topology
     const config = await readStableFile(fs, join(commonDirectory.path, 'config'), maxControlFileBytes, signal, true)
 
-    scratch = await mkdtemp(join(tmpdir(), 'saki-git-view-'))
-    await chmod(scratch, 0o700)
+    directoryDraft = await createOwnedPrivateGitDirectory('repository-view')
+    const scratch = directoryDraft.path
     const configSnapshot = join(scratch, 'source.config')
     await writePrivateFile(configSnapshot, config.bytes)
     if (await configSnapshotIsUnsafe(rawGit, scratch, configSnapshot, signal)) {
@@ -229,7 +236,7 @@ export async function openSafeRepositoryView(
       signal,
     )
     const sparseIndexEnabled = sparseCheckout === true || sparseIndex === true
-    await writeMinimalRepositoryConfig(
+    const privateConfig = await writeMinimalRepositoryConfig(
       rawGit,
       scratch,
       configSnapshot,
@@ -303,10 +310,8 @@ export async function openSafeRepositoryView(
     const privateObjectInfo = join(scratch, 'objects', 'info')
     await mkdir(privateObjectInfo, { recursive: true, mode: 0o700 })
     await mkdir(join(scratch, 'refs'), { recursive: true, mode: 0o700 })
-    await writePrivateFile(
-      join(privateObjectInfo, 'alternates'),
-      Buffer.from(`${gitAlternatePath(objects.path)}\n`, 'utf8'),
-    )
+    const privateAlternate = Buffer.from(`${gitAlternatePath(objects.path)}\n`, 'utf8')
+    await writePrivateFile(join(privateObjectInfo, 'alternates'), privateAlternate)
     if (index !== undefined && await hasSplitIndex(rawGit, scratch, topLevel.path, signal)) {
       throw new SafeRepositoryError('unavailable')
     }
@@ -364,7 +369,13 @@ export async function openSafeRepositoryView(
       sparseIndexEnabled,
     })
 
-    const privateGitDirectory = scratch
+    const privateGitDirectory = await directoryDraft.seal({
+      config: privateConfig,
+      objectAlternates: { kind: 'exact', bytes: privateAlternate },
+    })
+    directoryOwner = privateGitDirectory
+    directoryDraft = undefined
+    const privateGitDirectoryPath = privateGitDirectory.path
     let observedHead: string | undefined
     const git: RepositoryInventoryGit = {
       async run(_cwd, args, commandSignal, stdin, outputBudget) {
@@ -395,11 +406,13 @@ export async function openSafeRepositoryView(
         if (!repositoryQueryIsAllowed(args, stdin !== undefined, configuredObjectFormat)) {
           throw new SafeRepositoryError('unavailable')
         }
+        const privateArgs = [`--git-dir=${privateGitDirectoryPath}`, `--work-tree=${topLevel.path}`, ...args]
+        await privateGitDirectory.assertIntegrity()
         let output: Awaited<ReturnType<RepositoryInventoryGit['run']>>
         try {
           output = await rawGit.run(
-            privateGitDirectory,
-            [`--git-dir=${privateGitDirectory}`, `--work-tree=${topLevel.path}`, ...args],
+            privateGitDirectoryPath,
+            privateArgs,
             commandSignal,
             stdin,
             outputBudget,
@@ -420,14 +433,14 @@ export async function openSafeRepositoryView(
         return output
       },
     }
-    const ownedScratch = scratch
-    scratch = undefined
+    directoryOwner = undefined
     return {
       kind: 'repository',
       view: {
         topLevelPath: topLevel.path,
         gitDirectoryPath: gitDirectory.path,
         commonDirectoryPath: commonDirectory.path,
+        privateGitDirectory,
         locked,
         sparseIndexEnabled,
         git,
@@ -471,7 +484,7 @@ export async function openSafeRepositoryView(
           }
         },
         async [Symbol.asyncDispose]() {
-          await rm(ownedScratch, { recursive: true, force: true })
+          await privateGitDirectory[Symbol.asyncDispose]()
         },
       },
     }
@@ -480,7 +493,8 @@ export async function openSafeRepositoryView(
     if (error instanceof SafeRepositoryError) return { kind: error.kind }
     return { kind: 'unavailable' }
   } finally {
-    if (scratch !== undefined) await rm(scratch, { recursive: true, force: true })
+    if (directoryDraft !== undefined) await directoryDraft[Symbol.asyncDispose]()
+    else if (directoryOwner !== undefined) await directoryOwner[Symbol.asyncDispose]()
   }
 }
 
@@ -946,7 +960,7 @@ async function writeMinimalRepositoryConfig(
   commonSnapshot: string,
   worktreeSnapshot: string | undefined,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<Buffer> {
   const destination = join(cwd, 'config')
   const entries: PrivateConfigEntry[] = []
   const snapshots: ReadonlyArray<readonly [string, 'common' | 'worktree']> = [
@@ -976,7 +990,9 @@ async function writeMinimalRepositoryConfig(
   ] as const) {
     entries.push({ section: 'core', variable, value })
   }
-  await writePrivateFile(destination, Buffer.from(serializePrivateConfig(entries), 'utf8'))
+  const bytes = Buffer.from(serializePrivateConfig(entries), 'utf8')
+  await writePrivateFile(destination, bytes)
+  return bytes
 }
 
 interface PrivateConfigEntry {
@@ -1149,6 +1165,17 @@ function repositoryQueryIsAllowed(
   if (hasStdin) return false
   if (isSafeProjectDiffQuery(args, objectFormat)) return true
   if (isSafeProjectStatusQuery(args)) return true
+  const exactCommit = args.length === 3
+    && args[0] === 'rev-parse'
+    && args[1] === '--verify'
+    ? exactCommitObjectId(args[2], objectFormat)
+    : undefined
+  if (exactCommit !== undefined) return true
+  if (args.length === 4
+    && args[0] === 'merge-base'
+    && args[1] === '--is-ancestor'
+    && exactCommitObjectId(args[2], objectFormat) !== undefined
+    && exactCommitObjectId(args[3], objectFormat) !== undefined) return true
   if (argsEqual(args, ['ls-files', '--no-sparse', '-t', '--stage', '--full-name', '-z'])
     || argsEqual(args, ['ls-files', '-v', '-z', '--'])
     || argsEqual(args, ['ls-files', '--others', '--exclude-standard', '--full-name', '-z'])
@@ -1198,6 +1225,15 @@ function repositoryQueryIsAllowed(
     && args[5] === '--get-all'
     && scopedKey !== undefined
     && SCOPED_BOOLEAN_CONFIG_KEYS.has(scopedKey)
+}
+
+function exactCommitObjectId(
+  expression: string | undefined,
+  objectFormat: 'sha1' | 'sha256',
+): string | undefined {
+  if (expression?.endsWith('^{commit}') !== true) return undefined
+  const objectId = expression.slice(0, -'^{commit}'.length)
+  return isGitObjectId(objectId, objectFormat) ? objectId : undefined
 }
 
 function argsEqual(actual: readonly string[], expected: readonly string[]): boolean {

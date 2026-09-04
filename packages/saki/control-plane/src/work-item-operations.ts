@@ -97,7 +97,7 @@ interface GitHubWorkItemOperationsOptions {
 }
 
 /** Fully parsed Work Item saga state after targeted-recovery validation. */
-interface ValidatedGitHubWorkItemState {
+export interface ValidatedGitHubWorkItemState {
   readonly intents: readonly GitHubWorkItemIntentRecord[]
 }
 
@@ -161,6 +161,119 @@ const STATUS_OPTION_FIELD_BY_STATUS = {
   canceled: 'canceled',
 } as const satisfies Readonly<Record<SakiBoardStatus, keyof GitHubStatusOptionMapping>>
 
+type ReadonlyTable<K extends string, V> = Pick<KvTable<K, V>, 'entries' | 'get' | 'size'>
+
+/**
+ * Validate the complete Work Item Intent/recovery relation without provider calls or writes.
+ * @param intentTable - opened Work Item Intent table.
+ * @param recoveryTable - opened targeted Work Item recovery table.
+ * @param projectRevision - current Project revision lookup, including absence.
+ * @param otherIntentIds - ids already retained by earlier Control Intent families.
+ * @param validateActorReference - Foundation relationship validator for immutable attribution.
+ * @returns detached Intents in deterministic recovery order.
+ */
+export function validateGitHubWorkItemOperationsDurableState(
+  intentTable: ReadonlyTable<SakiControlIntentId, GitHubWorkItemIntentRecord>,
+  recoveryTable: ReadonlyTable<SakiWorkItemRecoveryId, GitHubWorkItemRecoveryRecord>,
+  projectRevision: (projectId: SakiDevelopmentProjectId) => number | 'not-found',
+  otherIntentIds: ReadonlySet<SakiControlIntentId>,
+  validateActorReference: (actor: ControlIntentActor) => void,
+): ValidatedGitHubWorkItemState {
+  const intents = [...intentTable.entries()].map(([key, value]) => {
+    const record = githubWorkItemIntentRecordSchema.parse(value)
+    if (record.id !== key) throw new Error('GitHub Work Item Intent id disagrees with its table key')
+    if (otherIntentIds.has(key)) {
+      throw new Error(`Saki Control Intent '${key}' is retained by multiple Intent kinds`)
+    }
+    validateActorReference(record.payload.actor)
+    if (projectRevision(record.payload.intent.projectId) === 'not-found') {
+      throw new Error('GitHub Work Item Intent targets a missing Development Project')
+    }
+    if (record.payload.intent.type === 'move-work-item') {
+      if (record.target.kind !== 'move-work-item'
+        || record.payload.intent.workItemId !== boardWorkItemId(record.target.repositoryId, record.target.issueId)) {
+        throw new Error('GitHub Work Item move target disagrees with its Saki Work Item identity')
+      }
+    }
+    return record
+  })
+  const recoveries = [...recoveryTable.entries()].map(([key, value]) => {
+    const record = githubWorkItemRecoveryRecordSchema.parse(value)
+    if (record.id !== key) throw new Error('GitHub Work Item recovery id disagrees with its table key')
+    if (projectRevision(record.projectId) === 'not-found') {
+      throw new Error('GitHub Work Item recovery targets a missing Development Project')
+    }
+    return record
+  })
+  const intentById = new Map(intents.map(record => [record.id, record] as const))
+  const recoveryById = new Map(recoveries.map(record => [record.id, record] as const))
+  const activeIntentWorkItems = new Map<SakiDevelopmentProjectId, Set<SakiBoardWorkItemId>>()
+  for (const intent of intents) {
+    if (terminalPhase(intent.phase)) continue
+    const workItemId = intentWorkItemId(intent)
+    if (workItemId === undefined) continue
+    const projectId = intent.payload.intent.projectId
+    const activeWorkItems = activeIntentWorkItems.get(projectId) ?? new Set<SakiBoardWorkItemId>()
+    if (activeWorkItems.has(workItemId)) {
+      throw new Error('multiple active GitHub Work Item Intents target one Work Item')
+    }
+    activeWorkItems.add(workItemId)
+    activeIntentWorkItems.set(projectId, activeWorkItems)
+  }
+  for (const recovery of recoveries) {
+    const sourceIntent = intentById.get(recovery.confirmed.sourceIntentId)
+    if (sourceIntent === undefined
+      || sourceIntent.payload.intent.projectId !== recovery.projectId
+      || intentWorkItemId(sourceIntent) !== recovery.workItemId
+      || !recoveryObservationMatchesSource(recovery, sourceIntent)) {
+      throw new Error('GitHub Work Item recovery source Intent disagrees with its scoped Work Item')
+    }
+  }
+  for (const intent of intents) {
+    if (intent.payload.intent.type !== 'move-work-item') continue
+    const hasPossibleTargetedEffect = intent.stages.some(stage => stage.effectPossible
+      && (stage.kind === 'project-item-status-set'
+        || stage.kind === 'project-item-position-set'
+        || stage.kind === 'issue-state-set'))
+    const recovery = recoveryById.get(githubWorkItemRecoveryId(
+      intent.payload.intent.projectId,
+      intent.payload.intent.workItemId,
+    ))
+    const terminalObservation = intent.terminalEvidence?.kind === 'succeeded'
+      ? intent.terminalEvidence.confirmedObservation
+      : intent.terminalEvidence?.kind === 'conflict'
+        ? intent.terminalEvidence.confirmedObservation
+        : undefined
+    const terminalConfirmedAt = intent.terminalEvidence?.kind === 'succeeded'
+      || intent.terminalEvidence?.kind === 'conflict'
+      ? intent.terminalEvidence.confirmedAt
+      : undefined
+    if ((hasPossibleTargetedEffect || (terminalObservation !== undefined
+      && boardObservationView(terminalObservation) !== undefined)) && recovery?.confirmed === undefined) {
+      throw new Error('effect-bearing GitHub Work Item Intent has no targeted recovery observation')
+    }
+    if (hasPossibleTargetedEffect && !terminalPhase(intent.phase)
+      && recovery?.confirmed.sourceIntentId !== intent.id) {
+      throw new Error('active effect-bearing GitHub Work Item Intent does not own targeted recovery')
+    }
+    if (terminalObservation !== undefined && recovery?.confirmed.sourceIntentId === intent.id
+      && !isDeepStrictEqual(recovery.confirmed.observation, terminalObservation)) {
+      throw new Error('terminal GitHub Work Item evidence disagrees with targeted recovery')
+    }
+    if (terminalObservation !== undefined && recovery?.confirmed !== undefined
+      && recovery.confirmed.sourceIntentId !== intent.id) {
+      const successor = intentById.get(recovery.confirmed.sourceIntentId)
+      if (terminalConfirmedAt === undefined || successor === undefined
+        || successor.createdAt < terminalConfirmedAt) {
+        throw new Error('terminal GitHub Work Item recovery was superseded by a non-successor Intent')
+      }
+    }
+  }
+  return {
+    intents: intents.toSorted(compareIntentOrder),
+  }
+}
+
 /** Owns durable staged CreateWorkItem and MoveWorkItem execution and recovery. */
 export class GitHubWorkItemOperations {
   private readonly intentTails = new Map<SakiControlIntentId, Promise<void>>()
@@ -178,99 +291,13 @@ export class GitHubWorkItemOperations {
    * @returns detached Intents in deterministic recovery order.
    */
   validateDurableState(otherIntentIds: ReadonlySet<SakiControlIntentId>): ValidatedGitHubWorkItemState {
-    const intents = [...this.options.intentTable.entries()].map(([key, value]) => {
-      const record = githubWorkItemIntentRecordSchema.parse(value)
-      if (record.id !== key) throw new Error('GitHub Work Item Intent id disagrees with its table key')
-      if (otherIntentIds.has(key)) {
-        throw new Error(`Saki Control Intent '${key}' is retained by multiple Intent kinds`)
-      }
-      this.options.validateActorReference(record.payload.actor)
-      if (this.options.projectRevision(record.payload.intent.projectId) === 'not-found') {
-        throw new Error('GitHub Work Item Intent targets a missing Development Project')
-      }
-      if (record.payload.intent.type === 'move-work-item') {
-        if (record.target.kind !== 'move-work-item'
-          || record.payload.intent.workItemId !== boardWorkItemId(record.target.repositoryId, record.target.issueId)) {
-          throw new Error('GitHub Work Item move target disagrees with its Saki Work Item identity')
-        }
-      }
-      return record
-    })
-    const recoveries = [...this.options.recoveryTable.entries()].map(([key, value]) => {
-      const record = githubWorkItemRecoveryRecordSchema.parse(value)
-      if (record.id !== key) throw new Error('GitHub Work Item recovery id disagrees with its table key')
-      if (this.options.projectRevision(record.projectId) === 'not-found') {
-        throw new Error('GitHub Work Item recovery targets a missing Development Project')
-      }
-      return record
-    })
-    const intentById = new Map(intents.map(record => [record.id, record] as const))
-    const recoveryById = new Map(recoveries.map(record => [record.id, record] as const))
-    const activeIntentWorkItems = new Map<SakiDevelopmentProjectId, Set<SakiBoardWorkItemId>>()
-    for (const intent of intents) {
-      if (terminalPhase(intent.phase)) continue
-      const workItemId = intentWorkItemId(intent)
-      if (workItemId === undefined) continue
-      const projectId = intent.payload.intent.projectId
-      const activeWorkItems = activeIntentWorkItems.get(projectId) ?? new Set<SakiBoardWorkItemId>()
-      if (activeWorkItems.has(workItemId)) {
-        throw new Error('multiple active GitHub Work Item Intents target one Work Item')
-      }
-      activeWorkItems.add(workItemId)
-      activeIntentWorkItems.set(projectId, activeWorkItems)
-    }
-    for (const recovery of recoveries) {
-      const sourceIntent = intentById.get(recovery.confirmed.sourceIntentId)
-      if (sourceIntent === undefined
-        || sourceIntent.payload.intent.projectId !== recovery.projectId
-        || intentWorkItemId(sourceIntent) !== recovery.workItemId
-        || !recoveryObservationMatchesSource(recovery, sourceIntent)) {
-        throw new Error('GitHub Work Item recovery source Intent disagrees with its scoped Work Item')
-      }
-    }
-    for (const intent of intents) {
-      if (intent.payload.intent.type !== 'move-work-item') continue
-      const hasPossibleTargetedEffect = intent.stages.some(stage => stage.effectPossible
-        && (stage.kind === 'project-item-status-set'
-          || stage.kind === 'project-item-position-set'
-          || stage.kind === 'issue-state-set'))
-      const recovery = recoveryById.get(githubWorkItemRecoveryId(
-        intent.payload.intent.projectId,
-        intent.payload.intent.workItemId,
-      ))
-      const terminalObservation = intent.terminalEvidence?.kind === 'succeeded'
-        ? intent.terminalEvidence.confirmedObservation
-        : intent.terminalEvidence?.kind === 'conflict'
-          ? intent.terminalEvidence.confirmedObservation
-          : undefined
-      const terminalConfirmedAt = intent.terminalEvidence?.kind === 'succeeded'
-        || intent.terminalEvidence?.kind === 'conflict'
-        ? intent.terminalEvidence.confirmedAt
-        : undefined
-      if ((hasPossibleTargetedEffect || (terminalObservation !== undefined
-        && boardObservationView(terminalObservation) !== undefined)) && recovery?.confirmed === undefined) {
-        throw new Error('effect-bearing GitHub Work Item Intent has no targeted recovery observation')
-      }
-      if (hasPossibleTargetedEffect && !terminalPhase(intent.phase)
-        && recovery?.confirmed.sourceIntentId !== intent.id) {
-        throw new Error('active effect-bearing GitHub Work Item Intent does not own targeted recovery')
-      }
-      if (terminalObservation !== undefined && recovery?.confirmed.sourceIntentId === intent.id
-        && !isDeepStrictEqual(recovery.confirmed.observation, terminalObservation)) {
-        throw new Error('terminal GitHub Work Item evidence disagrees with targeted recovery')
-      }
-      if (terminalObservation !== undefined && recovery?.confirmed !== undefined
-        && recovery.confirmed.sourceIntentId !== intent.id) {
-        const successor = intentById.get(recovery.confirmed.sourceIntentId)
-        if (terminalConfirmedAt === undefined || successor === undefined
-          || successor.createdAt < terminalConfirmedAt) {
-          throw new Error('terminal GitHub Work Item recovery was superseded by a non-successor Intent')
-        }
-      }
-    }
-    return {
-      intents: intents.toSorted(compareIntentOrder),
-    }
+    return validateGitHubWorkItemOperationsDurableState(
+      this.options.intentTable,
+      this.options.recoveryTable,
+      this.options.projectRevision,
+      otherIntentIds,
+      this.options.validateActorReference,
+    )
   }
 
   /**

@@ -6380,6 +6380,9 @@ importers:
       '@breakfastdapaidang/saki-execution-local':
         specifier: workspace:^
         version: link:../execution-local
+      '@breakfastdapaidang/saki-github':
+        specifier: workspace:^
+        version: link:../github
       '@breakfastdapaidang/saki-installation-maintenance':
         specifier: workspace:^
         version: link:../installation-maintenance

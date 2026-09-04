@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { KvUnitSnapshot } from '@deepseek-ai/dsh-storage'
 import { descriptorOf, type DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
@@ -9,14 +10,20 @@ import {
   sakiHostExecutionDomainSpec,
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
+  sakiHostExecutionV3DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import {
   canonicalDigest,
   computeStartAgentRunPayloadDigest,
   startAgentRunHostOperationRequestSchema,
   startAgentRunInputMessageSchema,
+  hostOperationRequestSchema,
+  hostOperationSnapshotSchema,
+  type HostOperationId,
 } from '@breakfastdapaidang/saki-execution'
 import {
+  branchDeliveryId,
+  bindingWriteAdmissionRecordSchema,
   createStorageGenerationSeal,
   agentOperationIntentRecordSchema,
   sakiControlPlaneV2DomainSpec,
@@ -25,19 +32,25 @@ import {
   sakiControlPlaneV5DomainSpec,
   sakiControlPlaneV6DomainSpec,
   sakiControlPlaneV7DomainSpec,
+  sakiControlPlaneV8DomainSpec,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
   sakiStorageGenerationV5DomainSpec,
+  sakiStorageGenerationV6DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
   storageGenerationV3SealRecordSchema,
   storageGenerationV4SealRecordSchema,
   storageGenerationV5SealRecordSchema,
+  storageGenerationV6SealRecordSchema,
   type SakiBuildId,
+  type SakiBoardWorkItemId,
+  type SakiControlIntentId,
+  type SakiDevelopmentProjectId,
   type SakiGrantId,
   type SakiHostId,
   type SakiInstallationAccessId,
@@ -53,8 +66,8 @@ import {
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
-  sakiControlPlaneDomainSpec,
 } from '@breakfastdapaidang/saki-control-plane/src/spec.ts'
+import { sakiControlPlaneDomainSpec } from '@breakfastdapaidang/saki-control-plane/src/domain-spec.ts'
 import {
   readClosedCurrentSakiState,
   readClosedProvisioningSakiState,
@@ -64,6 +77,7 @@ import {
   readClosedSakiV5State,
   readClosedSakiV6State,
   readClosedSakiV7State,
+  readClosedSakiV8State,
 } from '../src/closed-state.ts'
 
 const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId
@@ -192,8 +206,166 @@ function currentControlSnapshot(): KvUnitSnapshot {
       agent_runs: {},
       execution_dispatches: {},
       intervention_requests: {},
+      branch_deliveries: {},
+      branch_delivery_intents: {},
+      milestone_deliveries: {},
+      milestone_delivery_intents: {},
     },
   }
+}
+
+function closedBranchPushCorruption(): {
+  readonly delivery: { readonly id: string }
+  readonly intent: { readonly id: string }
+  readonly admission: { readonly id: string }
+  readonly operation: { readonly snapshot: { readonly operation: { readonly id: string } } }
+} {
+  const projectId = 'project-00000000-0000-4000-8000-000000000181' as SakiDevelopmentProjectId
+  const workItemId = `work-item-${'a'.repeat(64)}` as SakiBoardWorkItemId
+  const intentId = 'intent-00000000-0000-4000-8000-000000000182' as SakiControlIntentId
+  const operationId = 'host-operation-00000000-0000-4000-8000-000000000182' as HostOperationId
+  const bindingId = 'binding-00000000-0000-4000-8000-000000000183'
+  const deliveryId = branchDeliveryId(projectId, workItemId)
+  const binding = {
+    id: bindingId,
+    revision: 0,
+    health: 'active' as const,
+    hostId: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.hostId,
+    workspaceId: 'workspace-closed-branch-push',
+    expectedInspection: {
+      projection: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection,
+      trusted: {
+        canonicalWorktreePath: '/fixture/repository',
+        canonicalGitDirectory: '/fixture/repository/.git',
+        canonicalCommonGitDirectory: '/fixture/repository/.git',
+        gitDirectoryIdentity: { version: 1 as const, digest: '4'.repeat(64) },
+        commonGitDirectoryIdentity: { version: 1 as const, digest: '4'.repeat(64) },
+        comparison: { fileMode: true, symlinks: true, autocrlf: false },
+      },
+    },
+    inheritedChangeBaseline: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline,
+  }
+  const actor = {
+    installationId: INSTALLATION_ID,
+    storageGenerationId: STORAGE_GENERATION_ID,
+    hostId: HOST_ID,
+    principalId: PRINCIPAL_ID,
+    principalRevision: 1,
+    grantId: GRANT_ID,
+    grantRevision: 1,
+  }
+  const payload = {
+    intent: { type: 'push-branch-delivery' as const, intentId, deliveryId, expectedDeliveryRevision: 0 },
+    actor,
+  }
+  const payloadDigest = canonicalDigest('saki/branch-delivery-intent/v1', payload)
+  const request = hostOperationRequestSchema.parse({
+    type: 'push-branch',
+    source: { kind: 'control-intent', intentId, intentRevision: 0, payloadDigest },
+    expected: {
+      binding,
+      commitId: 'b'.repeat(40),
+      repository: { nameWithOwner: 'BreakfastDaPaiDang/saki' },
+    },
+    targetRef: 'refs/heads/feature/offline-validation',
+  })
+  if (request.type !== 'push-branch') throw new Error('Closed Branch Push request changed kind')
+  const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+    id: deliveryId,
+    schemaVersion: 1,
+    revision: 1,
+    projectId,
+    workItemId,
+    target: {
+      registryRevision: 1,
+      projectRevision: 1,
+      binding,
+      synchronizationRevision: 1,
+      mappingRevision: 1,
+      installation: {
+        appId: '1', installationId: '2', accountId: 'A_fixture',
+        privateKeyRef: credentialRef('SAKI_GITHUB_PRIVATE_KEY'),
+      },
+      repository: { id: 'R_fixture', databaseId: '3', nameWithOwner: 'BreakfastDaPaiDang/saki' },
+      workItem: {
+        id: workItemId,
+        remoteFingerprint: `remote-fingerprint-${'c'.repeat(64)}`,
+        issueId: 'I_fixture',
+      },
+    },
+    commitId: request.expected.commitId,
+    headRef: request.targetRef,
+    baseRef: 'refs/heads/master',
+    markerId: `pull-request-marker-${canonicalDigest(
+      'saki/branch-delivery/pull-request-marker/v1',
+      { deliveryId },
+    )}`,
+    phase: 'draft',
+    activeIntentId: intentId,
+    remoteRef: { current: { state: 'unobserved' } },
+    pullRequest: { current: { state: 'unobserved' } },
+    reviews: { current: { state: 'unobserved' } },
+    ci: { current: { state: 'unobserved' } },
+    lastIntentId: intentId,
+    createdAt: 1,
+    updatedAt: 2,
+  })
+  const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+    id: intentId,
+    schemaVersion: 1,
+    revision: 1,
+    payloadDigest,
+    payload,
+    deliveryId,
+    operation: { kind: 'push', request },
+    checkpoint: { state: 'active', deliveryRevision: delivery.revision },
+    createdAt: 2,
+    updatedAt: 2,
+  })
+  const mismatchedRequest = hostOperationRequestSchema.parse({
+    ...request,
+    expected: { ...request.expected, repository: { nameWithOwner: 'BreakfastDaPaiDang/other' } },
+  })
+  if (mismatchedRequest.type !== 'push-branch') throw new Error('Closed mismatched Push request changed kind')
+  const requestFingerprint = {
+    version: 1 as const,
+    digest: canonicalDigest('saki/host-operation-request/v1', mismatchedRequest),
+  }
+  const operationReference = {
+    id: operationId,
+    hostId: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.hostId,
+    type: 'push-branch' as const,
+  }
+  const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+    schemaVersion: 4,
+    request: mismatchedRequest,
+    preparationRevision: 0,
+    snapshot: hostOperationSnapshotSchema.parse({
+      operation: operationReference,
+      revision: 0,
+      source: mismatchedRequest.source,
+      requestFingerprint,
+      bindingId,
+      bindingRevision: binding.revision,
+      preparedAt: 3,
+      updatedAt: 3,
+      state: 'prepared',
+      admission: { kind: 'not-accepted' },
+    }),
+  })
+  const admission = bindingWriteAdmissionRecordSchema.parse({
+    id: bindingId,
+    schemaVersion: 1,
+    revision: 1,
+    state: 'manual-host-operation',
+    phase: 'reserved',
+    bindingRevision: binding.revision,
+    source: request.source,
+    action: 'project-branch:push',
+    reservedAt: 2,
+    updatedAt: 2,
+  })
+  return { delivery, intent, admission, operation }
 }
 
 function orphanAgentIntentRecord(): unknown {
@@ -386,6 +558,10 @@ function v6ControlSnapshot(): KvUnitSnapshot {
   delete tables['agent_runs']
   delete tables['execution_dispatches']
   delete tables['intervention_requests']
+  delete tables['branch_deliveries']
+  delete tables['branch_delivery_intents']
+  delete tables['milestone_deliveries']
+  delete tables['milestone_delivery_intents']
   return {
     global: null,
     tables: {
@@ -482,6 +658,23 @@ function v5SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapsho
   }
 }
 
+function v6SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot {
+  return {
+    global: null,
+    tables: {
+      storage_generation: {
+        [STORAGE_GENERATION_KEY]: storageGenerationV6SealRecordSchema.parse({
+          schemaVersion: 6,
+          installationId: INSTALLATION_ID,
+          storageGenerationId: STORAGE_GENERATION_ID,
+          stateVersion: 8,
+          createdByBuildId,
+        }),
+      },
+    },
+  }
+}
+
 async function materialize(
   path: string,
   units: readonly { readonly spec: DomainSpec; readonly snapshot: KvUnitSnapshot }[],
@@ -535,6 +728,17 @@ async function materializeV7(
   ])
 }
 
+async function materializeV8(
+  path: string,
+  storageGenerationSnapshot: KvUnitSnapshot = v6SealSnapshot(),
+): Promise<void> {
+  await materialize(path, [
+    { spec: sakiControlPlaneV8DomainSpec, snapshot: emptySnapshot(sakiControlPlaneV8DomainSpec) },
+    { spec: sakiHostExecutionV3DomainSpec, snapshot: emptySnapshot(sakiHostExecutionV3DomainSpec) },
+    { spec: sakiStorageGenerationV6DomainSpec, snapshot: storageGenerationSnapshot },
+  ])
+}
+
 async function exactFiles(path: string): Promise<readonly [Buffer, Buffer]> {
   return await Promise.all([readFile(path), readFile(`${path}-shm`)])
 }
@@ -584,7 +788,7 @@ describe('closed Saki state reads', () => {
     const state = await readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))
 
@@ -620,7 +824,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -638,7 +842,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     await expect(readFile(path)).resolves.toEqual(before)
@@ -657,7 +861,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -698,6 +902,25 @@ describe('closed Saki state reads', () => {
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
+  })
+
+  it('rejects a closed current generation whose Branch Push Host request changed identity', async () => {
+    const path = await databasePath()
+    const control = currentControlSnapshot()
+    const corruption = closedBranchPushCorruption()
+    control.tables.branch_deliveries = { [corruption.delivery.id]: corruption.delivery }
+    control.tables.branch_delivery_intents = { [corruption.intent.id]: corruption.intent }
+    control.tables.binding_write_admissions = { [corruption.admission.id]: corruption.admission }
+    const host = emptySnapshot(sakiHostExecutionDomainSpec)
+    host.tables.operations = { [corruption.operation.snapshot.operation.id]: corruption.operation }
+    await materialize(path, [
+      { spec: sakiControlPlaneDomainSpec, snapshot: control },
+      { spec: sakiHostExecutionDomainSpec, snapshot: host },
+      { spec: sakiStorageGenerationDomainSpec, snapshot: sealSnapshot() },
+    ])
+
+    await expect(readClosedCurrentSakiState(path, V5_EXPECTATION, AbortSignal.timeout(2_000)))
+      .rejects.toMatchObject({ code: 'recovery-required' })
   })
 
   it.each([
@@ -841,6 +1064,19 @@ describe('closed Saki state reads', () => {
     expect(historical.hostExecution.table('operations').size).toBe(0)
     expect(historical.storageGeneration.table('storage_generation').get(STORAGE_GENERATION_KEY))
       .toMatchObject({ schemaVersion: 5, stateVersion: 7 })
+  })
+
+  it('validates the exact v8 control, Host v3, and storage v6 domains', async () => {
+    const path = await databasePath()
+    await materializeV8(path)
+
+    const historical = await readClosedSakiV8State(path, V5_EXPECTATION, AbortSignal.timeout(2_000))
+
+    expect(historical.stateVersion).toBe(8)
+    expect(historical.controlPlane.table('agent_runs').size).toBe(0)
+    expect(historical.hostExecution.table('operations').size).toBe(0)
+    expect(historical.storageGeneration.table('storage_generation').get(STORAGE_GENERATION_KEY))
+      .toMatchObject({ schemaVersion: 6, stateVersion: 8 })
   })
 
   it.each([

@@ -581,12 +581,13 @@ describe('bounded raw command runner', () => {
       '--no-pager',
       '--no-lazy-fetch',
       '--no-replace-objects',
+      '-c', 'core.commitGraph=false',
       '-c', 'core.fsmonitor=false',
       '-c', 'advice.sparseIndexExpanded=false',
       '-c', 'core.pager=cat',
       '-c', 'credential.helper=',
       '-c', 'diff.external=',
-      '-c', 'core.hooksPath=',
+      '-c', `core.hooksPath=${nullDevice}`,
       '-c', `core.excludesFile=${nullDevice}`,
       '-c', `core.attributesFile=${nullDevice}`,
       '--no-optional-locks',
@@ -628,12 +629,13 @@ describe('bounded raw command runner', () => {
       '--no-pager',
       '--no-lazy-fetch',
       '--no-replace-objects',
+      '-c', 'core.commitGraph=false',
       '-c', 'core.fsmonitor=false',
       '-c', 'advice.sparseIndexExpanded=false',
       '-c', 'core.pager=cat',
       '-c', 'credential.helper=',
       '-c', 'diff.external=',
-      '-c', 'core.hooksPath=',
+      '-c', `core.hooksPath=${nullDevice}`,
       '-c', `core.excludesFile=${nullDevice}`,
       '-c', `core.attributesFile=${nullDevice}`,
       '--no-optional-locks',
@@ -734,12 +736,13 @@ describe('bounded raw command runner', () => {
           '--no-pager',
           '--no-lazy-fetch',
           '--no-replace-objects',
+          '-c', 'core.commitGraph=false',
           '-c', 'core.fsmonitor=false',
           '-c', 'advice.sparseIndexExpanded=false',
           '-c', 'core.pager=cat',
           '-c', 'credential.helper=',
           '-c', 'diff.external=',
-          '-c', 'core.hooksPath=',
+          '-c', `core.hooksPath=${nullDevice}`,
           '-c', `core.excludesFile=${nullDevice}`,
           '-c', `core.attributesFile=${nullDevice}`,
           '--no-optional-locks',
@@ -826,5 +829,47 @@ describe('bounded raw command runner', () => {
         else process.env[key] = value
       }
     }
+  })
+
+  it('runs GitHub transport with one fixed non-interactive credential adapter', async () => {
+    const spawn = vi.fn((_spec: Parameters<SubprocessRuntime['spawn']>[0]) => ({
+      stdout: Readable.from([]),
+      stderr: Readable.from([]),
+      done: Promise.resolve({ exitCode: 0, signal: null }),
+      terminate: vi.fn(),
+      waitForExit: () => Promise.resolve(true),
+    }))
+    const runner = new GitRunner({ spawn } as unknown as SubprocessRuntime, 'git', {
+      maxStdoutBytes: 2,
+      maxStderrBytes: 3,
+      timeoutMs: 5_000,
+      terminationGraceMs: 100,
+    })
+
+    await runner.runGitHubTransport(
+      'private-git-directory',
+      ['ls-remote', '--refs', 'https://github.com/o/r.git', 'refs/heads/main'],
+      new AbortController().signal,
+      'git-credential-manager',
+    )
+
+    const spec = spawn.mock.calls[0]?.[0]
+    if (spec === undefined) throw new Error('GitHub transport did not spawn')
+    expect(spec.argv).toEqual(expect.arrayContaining([
+      '-c', 'credential.helper=',
+      '-c', 'credential.helper=manager',
+      '-c', 'protocol.allow=never',
+      '-c', 'protocol.https.allow=always',
+      '-c', 'http.followRedirects=false',
+      '--git-dir=private-git-directory',
+      'ls-remote', '--refs', 'https://github.com/o/r.git', 'refs/heads/main',
+    ]))
+    expect(spec.env).toMatchObject({
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_ASKPASS: '',
+      SSH_ASKPASS: '',
+      GCM_INTERACTIVE: 'Never',
+      GIT_CREDENTIAL_INTERACTIVE: 'never',
+    })
   })
 })

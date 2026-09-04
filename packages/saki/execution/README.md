@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-The private Saki Host Execution Service Definition registers `ctx.sakiHostExecution`. It defines provider-neutral project inspection and Diff values plus the durable Host Operation lifecycle used for structured StageFiles, UnstageFiles, Commit, and Agent Run start effects. The [Saki control plane](../control-plane/README.md) owns authorization, Project policy, write admission, and durable Control Intents. The wider control-plane and execution-plane split is defined by the [Saki backend architecture](../../../docs/saki/architecture/0.1.0-backend.md).
+The private Saki Host Execution Service Definition registers `ctx.sakiHostExecution`. It defines provider-neutral project inspection and Diff values plus the durable Host Operation lifecycle used for structured StageFiles, UnstageFiles, Commit, PushBranch, and Agent Run start effects. The [Saki control plane](../control-plane/README.md) owns authorization, Project policy, write admission, and durable Control Intents. The wider control-plane and execution-plane split is defined by the [Saki backend architecture](../../../docs/saki/architecture/0.1.0-backend.md).
 
 ## Project-selection inspection
 
@@ -18,6 +18,8 @@ The baseline schemas distinguish a complete capture, including a clean zero-entr
 
 A successful `ProjectGitStatusObservation` contains branch, HEAD, upstream, canonical index and worktree digests, and a complete UTF-8-byte-ordered list of changed repository-relative paths. Each change has an opaque observation-scoped `ProjectGitChangeId` and distinguishes tracked, untracked, or conflicted state; staged and unstaged facts; and inherited, subsequent, mixed, or unknown registration provenance. Before full row parsing or fingerprint validation, the strict status schema rejects a raw changes array above the protocol row limit and rejects an aggregate UTF-8 path-byte overflow while scanning at most the admitted row count. Strict schemas then rebuild the id-free whole-status seed, every change id, and the final versioned fingerprint. They also reject traversal, NUL, invalid Unicode, duplicate or noncanonical path order, impossible untracked flags, inconsistent Git object widths, and mismatched fingerprints. Failure is one closed path-free reason: `binding-stale`, `missing`, `malformed`, `limit`, `invalid-path`, `ambiguous`, or `unavailable`; caller cancellation rejects through the required `AbortSignal` rather than returning partial status.
 
+`inspectProjectCommit` revalidates an active Binding and accepts only an exact object id whose width matches the repository format. It confirms that the local object is a Commit and returns the same id, or distinguishes stale Binding, missing Commit, and unavailable Host evidence without accepting an arbitrary revision, ref, or path.
+
 ## Bound project Diff
 
 `readDiff` accepts an active Binding, exact status fingerprint, opaque change id, staged, unstaged, or conflict layer, and optional continuation cursor. The Service Provider resolves the file internally and returns one bounded `ProjectGitDiffPage`; the patch fingerprint binds every page to the same complete patch, while line and byte ranges make truncation explicit. The request contains no caller-selected path or Git command. Stale observations or cursors, missing or ambiguous rows, unsupported untracked, conflict, or binary content, invalid UTF-8, and resource limits return closed path-free reasons instead of partial output.
@@ -27,6 +29,8 @@ A successful `ProjectGitStatusObservation` contains branch, HEAD, upstream, cano
 `prepareOperation` durably binds one immutable Host request to its Control Intent source before any effect and returns provider-owned acceptance that cannot cross JSON. `startOperation` checks that acceptance and a current same-process Binding Write Admission before planning or publication. `inspectOperation` advances recovery from durable evidence without repeating an ambiguous effect, `cancelOperation` records only the closed durable cancellation reasons, and `onChanged` supplies post-commit wake-ups while snapshots remain authoritative. A caller `AbortSignal` limits one call; it is not durable cancellation.
 
 StageFiles and UnstageFiles carry observation-scoped change ids and fingerprints, never paths. Commit carries the exact status, HEAD, index tree, worktree, inherited-change baseline, and message; the Host derives Git identity and publication target. Commit accepts attached and unborn HEAD states, while detached HEAD remains available for inspection, Diff, stage, and unstage but fails Commit before an effect. Successful results record the Host-resolved paths or the commit id, tree, parent, target, author, and committer; each Commit signature is the exact identity the Service Provider used to create the object after applying any execution-world canonicalization, not an unnormalized configuration input. The lifecycle distinguishes prepared, accepted, planning, publishing, succeeded, proven no-effect failure or cancellation, and `reconciliation-required` when publication evidence is unknown or contradictory.
+
+PushBranch binds one exact local Commit and active Resource Binding to one canonical GitHub `nameWithOwner` and `refs/heads/*` target. The request carries no remote URL, credential-helper selection, or caller-supplied remote observation. The Provider observes and freezes the pre-publication remote state during planning, owns transport and credential-helper selection, and returns the exact repository, ref, Commit, previous remote state, and safe helper identity without credential bytes.
 
 The Service Definition has no configuration. Each Service Provider owns its execution-world mechanism and required resource bounds.
 
@@ -58,4 +62,4 @@ Each initial input or Intervention answer is a new user turn rather than part of
 
 ## Known Limitations and Deferred Work
 
-- **Constrained Git operation set** — per-hunk staging, stash, conflict editing, branch management, push, worktree management, repair, and retirement remain outside this service. Commit is hook-free and unsigned; repositories that require hooks, signing, or unsupported external filters need a different explicitly trusted provider.
+- **Constrained Git operation set** — per-hunk staging, stash, conflict editing, general branch management, worktree management, repair, and retirement remain outside this service. Commit is hook-free and unsigned; repositories that require hooks, signing, or unsupported external filters need a different explicitly trusted provider.

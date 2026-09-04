@@ -28,7 +28,7 @@ const roots: string[] = []
 const contexts: Context[] = []
 const HOST_ID = 'host-11111111-1111-4111-8111-111111111111' as SakiHostId
 const MAX_CONTROL_FILE_BYTES = 1024 * 1024
-const CONFIG: Required<Config> = {
+const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
   gitCommandTimeoutMs: 10_000,
   gitTerminationGraceMs: 100,
   maxGitStdoutBytes: 1024 * 1024,
@@ -331,6 +331,9 @@ describe('safe repository admission', () => {
       [['rev-parse', '--show-object-format'], undefined],
       [['rev-parse', '--verify', 'HEAD'], undefined],
       [['rev-parse', '--verify', 'HEAD^{commit}'], undefined],
+      [[
+        'merge-base', '--is-ancestor', `${'a'.repeat(40)}^{commit}`, `${'b'.repeat(40)}^{commit}`,
+      ], undefined],
       [['symbolic-ref', '--quiet', 'HEAD'], undefined],
       [['config', '--no-includes', '--null', '--name-only', '--list'], undefined],
       [['config', '--no-includes', '--local', '--null', '--name-only', '--list'], undefined],
@@ -360,6 +363,7 @@ describe('safe repository admission', () => {
     for (const [args, stdin] of [
       [['check-attr', '--all', '-z', '--stdin'], undefined],
       [['rev-parse', '--show-object-format'], emptyInput],
+      [['merge-base', '--is-ancestor', 'a'.repeat(40), 'b'.repeat(40)], undefined],
       [['symbolic-ref', 'HEAD', 'refs/heads/unsafe'], undefined],
       [['config', '--no-includes', '--null', '--get-all', 'core.hooksPath'], undefined],
       [[
@@ -374,6 +378,43 @@ describe('safe repository admission', () => {
 
     await view.git.run(root, ['rev-parse', '--verify', 'HEAD'], signal)
     await expect(view.git.run(root, worktreeList, signal)).resolves.toMatchObject({ stderr: Buffer.alloc(0) })
+  })
+
+  it.each([
+    ['config changes', async (path: string) => {
+      await writeFile(join(path, 'config'), '[core]\n\tbare = true\n')
+    }],
+    ['common-directory redirect appears', async (path: string) => {
+      await writeFile(join(path, 'commondir'), '../other.git\n')
+    }],
+    ['graft ancestry override appears', async (path: string) => {
+      await mkdir(join(path, 'info'), { recursive: true })
+      await writeFile(join(path, 'info', 'grafts'), `${'a'.repeat(40)} ${'b'.repeat(40)}\n`)
+    }],
+  ])('does not invoke the read-only runner after its private Git %s', async (_name, mutate) => {
+    const root = await repository()
+    const harness = await localHarness()
+    const signal = new AbortController().signal
+    const opened = await openSafeRepositoryView(
+      harness.fs,
+      harness.git,
+      await realpath(root),
+      MAX_CONTROL_FILE_BYTES,
+      signal,
+    )
+    expect(opened.kind).toBe('repository')
+    if (opened.kind !== 'repository') return
+    await using view = opened.view
+    const rawRun = vi.spyOn(harness.git, 'run').mockResolvedValue({
+      stdout: Buffer.from('sha1\n'),
+      stderr: Buffer.alloc(0),
+    })
+    await mutate(view.privateGitDirectory.path)
+
+    await expect(view.git.run(root, [
+      'merge-base', '--is-ancestor', `${'a'.repeat(40)}^{commit}`, `${'b'.repeat(40)}^{commit}`,
+    ], signal)).rejects.toThrow()
+    expect(rawRun).not.toHaveBeenCalled()
   })
 
   it.each(['core.sparseCheckout', 'index.sparse'])(

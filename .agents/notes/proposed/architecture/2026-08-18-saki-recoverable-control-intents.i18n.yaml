@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-recoverable-control-intents.md
-2026-08-18-saki-recoverable-control-intents.md: 54e4b0905dc3525f1755f2f2b6787b3b825c7a37
-2026-08-18-saki-recoverable-control-intents.zh.md: c33ae8d73828f4ef88d7df57ad38bddfb4995f8c
+2026-08-18-saki-recoverable-control-intents.md: 99df7f167502763e306b173df6cde9a39d178e6a
+2026-08-18-saki-recoverable-control-intents.zh.md: 908a1e2153bb35a5ff6572a74c65b2559235d8ae

@@ -162,6 +162,14 @@ abstract inspectProjectSelection( request: InspectProjectSelectionRequest, signa
 abstract inspectProject( request: InspectProjectRequest, signal: AbortSignal, ): Promise<InspectProjectResult>
 
 /**
+ * Revalidate one Resource Binding and confirm one exact local object is a Commit.
+ * @param request - active binding and exact object id; arbitrary revisions are not accepted.
+ * @param signal - required caller lifetime and cancellation.
+ * @returns exact Commit presence or one bounded local-boundary failure.
+ */
+abstract inspectProjectCommit( request: InspectProjectCommitRequest, signal: AbortSignal, ): Promise<InspectProjectCommitResult>
+
+/**
  * Read one bounded page of a stable file-scoped Diff without accepting a
  * caller-controlled path or Git command.
  * @param binding - active Resource Binding evidence from the authorized control plane.

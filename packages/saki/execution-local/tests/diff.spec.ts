@@ -62,7 +62,7 @@ const contexts: Context[] = []
 const HOST_ID = 'host-11111111-1111-4111-8111-111111111111' as SakiHostId
 const BINDING_ID = 'binding-11111111-1111-4111-8111-111111111111' as SakiResourceBindingId
 const WORKSPACE_ID = WorkspaceId('workspace-diff')
-const CONFIG: Required<Config> = {
+const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
   gitCommandTimeoutMs: 10_000,
   gitTerminationGraceMs: 100,
   maxGitStdoutBytes: 20 * 1024 * 1024,
@@ -1609,6 +1609,11 @@ function fakeRepository(
     topLevelPath: overrides.topLevelPath ?? 'C:\\repo',
     gitDirectoryPath: overrides.gitDirectoryPath ?? 'C:\\repo\\.git',
     commonDirectoryPath: overrides.commonDirectoryPath ?? 'C:\\repo\\.git',
+    privateGitDirectory: {
+      path: 'C:\\private-git',
+      async assertIntegrity() {},
+      async [Symbol.asyncDispose]() {},
+    },
     locked: overrides.locked ?? false,
     sparseIndexEnabled: false,
     sourceControlIdentity: 'source-control',
@@ -1751,7 +1756,7 @@ async function register(
 
 async function provider(
   root: string,
-  config: Required<Config> = CONFIG,
+  config: Omit<Required<Config>, 'pushCredentialHelper'> & Pick<Config, 'pushCredentialHelper'> = CONFIG,
 ): Promise<LocalSakiHostExecution> {
   const ctx = new Context()
   contexts.push(ctx)

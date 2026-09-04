@@ -18,10 +18,13 @@
 需要：`agentPresets` · `agents` · `fs` · `sessionPersistence` · `sessions` · `storageDomain` · `subprocess` · `workspaceRegistry`
 
 ```ts config-catalog
-type ResolvedConfig = Required<Config>
+type ResolvedConfig = Required<Omit<Config, 'pushCredentialHelper'>>
+  & Pick<Config, 'pushCredentialHelper'>
 
 /** Local Git observation, baseline, and operation resource limits. */
 export interface Config {
+  /** Closed non-interactive system credential adapter available to Push operations. */
+  pushCredentialHelper?: GitCredentialHelperId
   /** Wall-clock bound for each Git process. */
   gitCommandTimeoutMs?: number
   /** TERM-to-KILL grace for each Git process tree. */
@@ -61,7 +64,9 @@ export interface Config {
 }
 ```
 
-来源：[`packages/saki/execution-local/src/index.ts:115`](../packages/saki/execution-local/src/index.ts)
+依赖：[`GitCredentialHelperId`](../packages/saki/execution/src/index.ts)
+
+来源：[`packages/saki/execution-local/src/index.ts:130`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 
@@ -94,7 +99,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/saki/github-app/src/index.ts:66`](../packages/saki/github-app/src/index.ts)
+来源：[`packages/saki/github-app/src/index.ts:76`](../packages/saki/github-app/src/index.ts)
 
 <a id="breakfastdapaidangsaki-tool-intervention"></a>
 

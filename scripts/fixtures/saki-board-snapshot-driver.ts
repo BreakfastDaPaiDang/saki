@@ -18,6 +18,8 @@ import {
   sakiServingInstallationOptions,
 } from '../../packages/saki/bundle/src/launcher.ts'
 import type {} from '../../packages/saki/bundle/tests/fixtures/controllable-fake-llm.ts'
+import { installLocalGitPushInternals } from '../../packages/saki/execution-local/src/git-push-internals.ts'
+import { sakiBoardSnapshotGitPushTransport } from './saki-board-fake-github.ts'
 
 const ROOT_CONFIG = fileURLToPath(new URL('../../packages/saki/bundle/cordis.yml', import.meta.url))
 const BUNDLE_PATCH = fileURLToPath(new URL('../../packages/saki/bundle/cordis.patch.yml', import.meta.url))
@@ -46,6 +48,23 @@ function agentRunControlProfilePatch(bundlePatches: readonly PatchOptions[]): Pa
         modelRouteRequest: { provider: 'saki-test', model: 'controllable' },
       },
     },
+  }
+}
+
+function deliveryExecutionPatch(bundlePatches: readonly PatchOptions[]): PatchOptions {
+  const execution = bundlePatches
+    .flatMap(patch => patch.insert ?? [])
+    .find((entry: EntryOptions) => entry.id === 'saki-execution-local')
+  if (execution === undefined || execution.name !== '@breakfastdapaidang/saki-execution-local') {
+    throw new Error('Saki Delivery snapshot could not locate the production Local Host row')
+  }
+  const config = typeof execution.config === 'object' && execution.config !== null && !Array.isArray(execution.config)
+    ? structuredClone(execution.config as Record<string, unknown>)
+    : {}
+  return {
+    id: execution.id,
+    name: execution.name,
+    config: { ...config, pushCredentialHelper: 'git-credential-manager' },
   }
 }
 
@@ -156,6 +175,7 @@ try {
     async (prepared) => {
       const fakeProviderEnabled = process.env.SAKI_BOARD_SNAPSHOT_PROVIDER_ENABLED !== '0'
       const agentRunSnapshot = process.env.SAKI_AGENT_RUN_SNAPSHOT === '1'
+      const deliverySnapshot = process.env.SAKI_DELIVERY_SNAPSHOT === '1'
       const bundlePatches = loadOverlayPatches('saki-board-snapshot', BUNDLE_PATCH)
       const patches = [
         ...bundlePatches,
@@ -176,6 +196,7 @@ try {
             }],
           },
         ] : []),
+        ...(deliverySnapshot ? [deliveryExecutionPatch(bundlePatches)] : []),
         sakiPreparedStoragePatch(prepared.databasePath),
       ]
       app = await announceSakiReadiness(
@@ -186,6 +207,9 @@ try {
           (ctx) => {
             providePreparedSakiState(ctx, prepared)
             provideCmdline(ctx, { args: [], exit: requestStop })
+            if (deliverySnapshot) {
+              installLocalGitPushInternals(ctx, { transport: sakiBoardSnapshotGitPushTransport })
+            }
           },
           import.meta.url,
         ),

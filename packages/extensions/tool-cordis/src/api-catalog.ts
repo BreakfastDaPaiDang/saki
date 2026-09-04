@@ -1235,6 +1235,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'browser-safe structured status or one bounded safe failure.',
       },
       {
+        signature: 'abstract inspectProjectCommit( request: InspectProjectCommitRequest, signal: AbortSignal, ): Promise<InspectProjectCommitResult>',
+        description: 'Revalidate one Resource Binding and confirm one exact local object is a Commit.',
+        parameters: [{ name: 'request', description: 'active binding and exact object id; arbitrary revisions are not accepted.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
+        returns: 'exact Commit presence or one bounded local-boundary failure.',
+      },
+      {
         signature: 'abstract readDiff( binding: ActiveHostProjectBinding, request: ReadProjectDiffRequest, signal: AbortSignal, ): Promise<ReadProjectDiffResult>',
         description: 'Read one bounded page of a stable file-scoped Diff without accepting a caller-controlled path or Git command.',
         parameters: [{ name: 'binding', description: 'active Resource Binding evidence from the authorized control plane.' }, { name: 'request', description: 'expected status, opaque change id, layer, and optional continuation.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
@@ -1306,7 +1312,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'abstract readonly stateVersion: 8',
+        signature: 'abstract readonly stateVersion: 9',
         description: 'State-format version selected by the Installation manifest.',
         parameters: [],
       },
@@ -3090,10 +3096,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type AgentStatus = \'idle\' | \'running\';',
   },
   {
-    name: 'AnswerInterventionIntent',
-    declaration: 'export interface AnswerInterventionIntent {\n    readonly type: \'answer-intervention\';\n    readonly intentId: SakiControlIntentId;\n    readonly interventionId: SakiInterventionRequestId;\n    readonly expectedInterventionRevision: number;\n    readonly answer: SakiInterventionTextAnswer;\n}',
-  },
-  {
     name: 'ApiKeyRecord',
     declaration: 'export interface ApiKeyRecord {\n    readonly kind: \'api-key\';\n    readonly key?: string;\n    readonly env?: Readonly<Record<string, string>>;\n}',
   },
@@ -3228,6 +3230,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'BashEnvVariableInfo',
     declaration: 'export interface BashEnvVariableInfo extends BashEnvVariable {\n    contributor: string;\n    key: DshEnvironmentKey;\n}',
+  },
+  {
+    name: 'BranchDeliveryIntent',
+    declaration: 'export type BranchDeliveryIntent = z.infer<typeof branchDeliveryIntentSchema>;',
   },
   {
     name: 'Branded',
@@ -3634,6 +3640,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface FileReferenceCandidate {\n    path: string;\n    kind: \'file\' | \'directory\';\n}',
   },
   {
+    name: 'FinalizeMilestoneDeliveryIntent',
+    declaration: 'export interface FinalizeMilestoneDeliveryIntent {\n    readonly type: \'finalize-milestone-delivery\';\n    readonly intentId: SakiControlIntentId;\n    readonly deliveryId: SakiMilestoneDeliveryId;\n    readonly expectedDeliveryRevision: number;\n    readonly release: ReleaseEvidencePolicyV1Expectation;\n}',
+  },
+  {
     name: 'FinishReason',
     declaration: 'export type FinishReason = FinishReasonMap[keyof FinishReasonMap];',
   },
@@ -3698,6 +3708,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GenericResultView {\n    card: \'generic\';\n    title?: string;\n    content?: ContentBlock[];\n}',
   },
   {
+    name: 'GitCredentialHelperId',
+    declaration: 'export type GitCredentialHelperId = \'git-credential-manager\' | \'git-credential-manager-core\';',
+  },
+  {
     name: 'GitHubAccountId',
     declaration: 'export type GitHubAccountId = Branded<\'GitHubAccountId\'>;',
   },
@@ -3706,16 +3720,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type GitHubAppId = Branded<\'GitHubAppId\'>;',
   },
   {
+    name: 'GitHubBranchHeadFact',
+    declaration: 'export type GitHubBranchHeadFact = {\n    readonly state: \'present\';\n    readonly repositoryId: GitHubRepositoryId;\n    readonly branch: string;\n    readonly commitId: GitHubCommitId;\n    readonly observedAt: number;\n} | {\n    readonly state: \'absent\';\n    readonly repositoryId: GitHubRepositoryId;\n    readonly branch: string;\n    readonly observedAt: number;\n};',
+  },
+  {
+    name: 'GitHubBranchHeadReadRequest',
+    declaration: 'export interface GitHubBranchHeadReadRequest {\n    readonly kind: \'branch-head\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly branch: string;\n}',
+  },
+  {
     name: 'GitHubBranchSafetyFact',
     declaration: 'export type GitHubBranchSafetyFact = {\n    readonly kind: \'safe\';\n    readonly branchExists: true;\n    readonly observedAt: number;\n} | {\n    readonly kind: \'protected\';\n    readonly branchExists: boolean;\n    readonly observedAt: number;\n} | {\n    readonly kind: \'legacy-protection-unknown\';\n    readonly branchExists: false;\n    readonly observedAt: number;\n};',
   },
   {
     name: 'GitHubBranchSafetyReadRequest',
     declaration: 'export interface GitHubBranchSafetyReadRequest {\n    readonly kind: \'branch-safety\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly branch: string;\n}',
-  },
-  {
-    name: 'GitHubCommitComparisonFact',
-    declaration: 'export interface GitHubCommitComparisonFact {\n    readonly repositoryId: GitHubRepositoryId;\n    readonly baseCommitId: GitHubCommitId;\n    readonly headCommitId: GitHubCommitId;\n    readonly status: \'ahead\' | \'behind\' | \'identical\' | \'diverged\';\n    readonly aheadBy: number;\n    readonly behindBy: number;\n    readonly mergeBaseCommitId?: GitHubCommitId | undefined;\n    readonly observedAt: number;\n}',
   },
   {
     name: 'GitHubCommitFact',
@@ -3728,10 +3746,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitHubCommitReadRequest',
     declaration: 'export interface GitHubCommitReadRequest {\n    readonly kind: \'commit\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly commitId: GitHubCommitId;\n}',
-  },
-  {
-    name: 'GitHubCompareCommitsReadRequest',
-    declaration: 'export interface GitHubCompareCommitsReadRequest {\n    readonly kind: \'compare-commits\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly baseCommitId: GitHubCommitId;\n    readonly headCommitId: GitHubCommitId;\n}',
   },
   {
     name: 'GitHubExternalOperationId',
@@ -3810,8 +3824,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitHubIssueStateSetRequest {\n    readonly kind: \'issue-state-set\';\n    readonly operationId: GitHubExternalOperationId;\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly issueId: GitHubIssueId;\n    readonly desiredState: \'open\' | \'closed\';\n}',
   },
   {
+    name: 'GitHubMilestoneId',
+    declaration: 'export type GitHubMilestoneId = Branded<\'GitHubMilestoneId\'>;',
+  },
+  {
     name: 'GitHubMutationMap',
-    declaration: 'export interface GitHubMutationMap {\n    \'issue-create\': {\n        readonly request: GitHubIssueCreateRequest;\n        readonly result: GitHubIssueCreateInspectionHint;\n        readonly inspection: GitHubIssueCreateInspection;\n    };\n    \'project-item-add\': {\n        readonly request: GitHubProjectItemAddRequest;\n        readonly result: void;\n        readonly inspection: GitHubProjectItemAddInspection;\n    };\n    \'project-item-status-set\': {\n        readonly request: GitHubProjectItemStatusSetRequest;\n        readonly result: void;\n        readonly inspection: GitHubProjectItemStatusSetInspection;\n    };\n    \'project-item-position-set\': {\n        readonly request: GitHubProjectItemPositionSetRequest;\n        readonly result: void;\n        readonly inspection: GitHubProjectItemPositionSetInspection;\n    };\n    \'issue-state-set\': {\n        readonly request: GitHubIssueStateSetRequest;\n        readonly result: void;\n        readonly inspection: GitHubIssueStateSetInspection;\n    };\n}',
+    declaration: 'export interface GitHubMutationMap {\n    \'issue-create\': {\n        readonly request: GitHubIssueCreateRequest;\n        readonly result: GitHubIssueCreateInspectionHint;\n        readonly inspection: GitHubIssueCreateInspection;\n    };\n    \'project-item-add\': {\n        readonly request: GitHubProjectItemAddRequest;\n        readonly result: void;\n        readonly inspection: GitHubProjectItemAddInspection;\n    };\n    \'project-item-status-set\': {\n        readonly request: GitHubProjectItemStatusSetRequest;\n        readonly result: void;\n        readonly inspection: GitHubProjectItemStatusSetInspection;\n    };\n    \'project-item-position-set\': {\n        readonly request: GitHubProjectItemPositionSetRequest;\n        readonly result: void;\n        readonly inspection: GitHubProjectItemPositionSetInspection;\n    };\n    \'issue-state-set\': {\n        readonly request: GitHubIssueStateSetRequest;\n        readonly result: void;\n        readonly inspection: GitHubIssueStateSetInspection;\n    };\n    \'pull-request-create\': {\n        readonly request: GitHubPullRequestCreateRequest;\n        readonly result: GitHubPullRequestCreateInspectionHint;\n        readonly inspection: GitHubPullRequestCreateInspection;\n    };\n}',
   },
   {
     name: 'GitHubPermissionFact',
@@ -3898,6 +3916,34 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitHubProjectReadRequest {\n    readonly kind: \'project\';\n    readonly installation: GitHubInstallationProfile;\n    readonly projectId: GitHubProjectId;\n}',
   },
   {
+    name: 'GitHubPullRequestCreateInspection',
+    declaration: 'export interface GitHubPullRequestCreateInspection {\n    readonly snapshot: GitHubPullRequestCreateSnapshot;\n    readonly observedAt: number;\n}',
+  },
+  {
+    name: 'GitHubPullRequestCreateInspectionHint',
+    declaration: 'export interface GitHubPullRequestCreateInspectionHint {\n    readonly pullRequestId: GitHubPullRequestId;\n    readonly pullRequestNumber: number;\n}',
+  },
+  {
+    name: 'GitHubPullRequestCreateInspectionOutcome',
+    declaration: 'export type GitHubPullRequestCreateInspectionOutcome = {\n    readonly state: \'unique-pull-request\';\n    readonly pullRequest: GitHubPullRequestFact;\n} | {\n    readonly state: \'absent-complete\';\n} | {\n    readonly state: \'marker-removed\';\n} | {\n    readonly state: \'known-pull-request-absent\';\n} | {\n    readonly state: \'identity-conflict\';\n} | {\n    readonly state: \'multiple-matches\';\n} | {\n    readonly state: \'incomplete\';\n};',
+  },
+  {
+    name: 'GitHubPullRequestCreateMarkerId',
+    declaration: 'export type GitHubPullRequestCreateMarkerId = Branded<\'GitHubPullRequestCreateMarkerId\'>;',
+  },
+  {
+    name: 'GitHubPullRequestCreateRequest',
+    declaration: 'export interface GitHubPullRequestCreateRequest {\n    readonly kind: \'pull-request-create\';\n    readonly operationId: GitHubExternalOperationId;\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly markerId: GitHubPullRequestCreateMarkerId;\n    readonly headRef: string;\n    readonly baseRef: string;\n    readonly expectedHeadCommitId: GitHubCommitId;\n    readonly title: string;\n    readonly body: string;\n    readonly inspectionHint?: GitHubPullRequestCreateInspectionHint | undefined;\n}',
+  },
+  {
+    name: 'GitHubPullRequestCreateSnapshot',
+    declaration: 'export interface GitHubPullRequestCreateSnapshot {\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly outcome: GitHubPullRequestCreateInspectionOutcome;\n}',
+  },
+  {
+    name: 'GitHubPullRequestFact',
+    declaration: 'export interface GitHubPullRequestFact {\n    readonly id: GitHubPullRequestId;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly number: number;\n    readonly state: \'open\' | \'closed\';\n    readonly merged: boolean;\n    readonly draft: boolean;\n    readonly title: string;\n    readonly url: string;\n    readonly head: {\n        readonly repositoryId: GitHubRepositoryId;\n        readonly ref: string;\n        readonly commitId: GitHubCommitId;\n    };\n    readonly base: {\n        readonly repositoryId: GitHubRepositoryId;\n        readonly ref: string;\n        readonly commitId: GitHubCommitId;\n    };\n    readonly authorAccountId?: GitHubAccountId | undefined;\n    readonly updatedAt: number;\n    readonly observedAt: number;\n}',
+  },
+  {
     name: 'GitHubPullRequestId',
     declaration: 'export type GitHubPullRequestId = Branded<\'GitHubPullRequestId\'>;',
   },
@@ -3907,7 +3953,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GitHubReadMap',
-    declaration: 'export interface GitHubReadMap {\n    installation: {\n        readonly request: GitHubInstallationReadRequest;\n        readonly result: GitHubInstallationFact;\n    };\n    repository: {\n        readonly request: GitHubRepositoryReadRequest;\n        readonly result: GitHubRepositoryFact;\n    };\n    issue: {\n        readonly request: GitHubIssueReadRequest;\n        readonly result: GitHubIssueFact;\n    };\n    \'issue-detail\': {\n        readonly request: GitHubIssueDetailReadRequest;\n        readonly result: GitHubIssueDetailFact;\n    };\n    \'branch-safety\': {\n        readonly request: GitHubBranchSafetyReadRequest;\n        readonly result: GitHubBranchSafetyFact;\n    };\n    project: {\n        readonly request: GitHubProjectReadRequest;\n        readonly result: GitHubProjectFact;\n    };\n    \'tag-reference\': {\n        readonly request: GitHubTagReferenceReadRequest;\n        readonly result: GitHubTagReferenceFact;\n    };\n    \'tag-object\': {\n        readonly request: GitHubTagObjectReadRequest;\n        readonly result: GitHubTagPeelFact;\n    };\n    \'release-by-tag\': {\n        readonly request: GitHubReleaseByTagReadRequest;\n        readonly result: GitHubReleaseByTagObservation;\n    };\n    commit: {\n        readonly request: GitHubCommitReadRequest;\n        readonly result: GitHubCommitFact;\n    };\n    \'compare-commits\': {\n        readonly request: GitHubCompareCommitsReadRequest;\n        readonly result: GitHubCommitComparisonFact;\n    };\n}',
+    declaration: 'export interface GitHubReadMap {\n    installation: {\n        readonly request: GitHubInstallationReadRequest;\n        readonly result: GitHubInstallationFact;\n    };\n    repository: {\n        readonly request: GitHubRepositoryReadRequest;\n        readonly result: GitHubRepositoryFact;\n    };\n    issue: {\n        readonly request: GitHubIssueReadRequest;\n        readonly result: GitHubIssueFact;\n    };\n    \'issue-detail\': {\n        readonly request: GitHubIssueDetailReadRequest;\n        readonly result: GitHubIssueDetailFact;\n    };\n    \'branch-safety\': {\n        readonly request: GitHubBranchSafetyReadRequest;\n        readonly result: GitHubBranchSafetyFact;\n    };\n    \'branch-head\': {\n        readonly request: GitHubBranchHeadReadRequest;\n        readonly result: GitHubBranchHeadFact;\n    };\n    project: {\n        readonly request: GitHubProjectReadRequest;\n        readonly result: GitHubProjectFact;\n    };\n    \'tag-reference\': {\n        readonly request: GitHubTagReferenceReadRequest;\n        readonly result: GitHubTagReferenceFact;\n    };\n    \'tag-object\': {\n        readonly request: GitHubTagObjectReadRequest;\n        readonly result: GitHubTagPeelFact;\n    };\n    \'release-by-tag\': {\n        readonly request: GitHubReleaseByTagReadRequest;\n        readonly result: GitHubReleaseByTagObservation;\n    };\n    commit: {\n        readonly request: GitHubCommitReadRequest;\n        readonly result: GitHubCommitFact;\n    };\n    \'public-commit\': {\n        readonly request: GitHubPub /* …truncated — full shape in source */',
   },
   {
     name: 'GitHubReleaseByTagObservation',
@@ -3928,6 +3974,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitHubReleaseTagName',
     declaration: 'export type GitHubReleaseTagName = Branded<\'GitHubReleaseTagName\'>;',
+  },
+  {
+    name: 'GitHubRepositoryCoordinates',
+    declaration: 'export interface GitHubRepositoryCoordinates {\n    readonly nameWithOwner: string;\n}',
   },
   {
     name: 'GitHubRepositoryDatabaseId',
@@ -4006,8 +4056,8 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitMutationExpectation {\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n    readonly expectedProjectRevision: number;\n    readonly expectedBinding: {\n        readonly id: SakiResourceBindingId;\n        readonly revision: number;\n    };\n    readonly expectedStatus: ProjectGitStatusFingerprint;\n    readonly expectedHead: ProjectGitHead;\n    readonly expectedIndex: Extract<ProjectGitIndexEvidence, {\n        readonly kind: \'tree\';\n    }>;\n    readonly expectedWorktree: ProjectGitWorktreeFingerprint;\n}',
   },
   {
-    name: 'GiveWorkItemToAgentIntent',
-    declaration: 'export interface GiveWorkItemToAgentIntent {\n    readonly type: \'give-work-item-to-agent\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly workItemId: SakiBoardWorkItemId;\n    readonly expectedProjectRevision: number;\n    readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint;\n}',
+    name: 'GitRemoteBranchState',
+    declaration: 'export type GitRemoteBranchState = {\n    readonly kind: \'absent\';\n} | {\n    readonly kind: \'commit\';\n    readonly objectId: string;\n};',
   },
   {
     name: 'GoalActivation',
@@ -4107,7 +4157,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'HostOperationRequestMap',
-    declaration: 'export interface HostOperationRequestMap {\n    readonly \'stage-files\': {\n        readonly request: StageFilesHostOperationRequest;\n        readonly result: StageFilesHostOperationResult;\n    };\n    readonly \'unstage-files\': {\n        readonly request: UnstageFilesHostOperationRequest;\n        readonly result: UnstageFilesHostOperationResult;\n    };\n    readonly commit: {\n        readonly request: CommitHostOperationRequest;\n        readonly result: CommitHostOperationResult;\n    };\n    readonly \'start-agent-run\': {\n        readonly request: StartAgentRunHostOperationRequest;\n        readonly result: StartAgentRunHostOperationResult;\n    };\n}',
+    declaration: 'export interface HostOperationRequestMap {\n    readonly \'stage-files\': {\n        readonly request: StageFilesHostOperationRequest;\n        readonly result: StageFilesHostOperationResult;\n    };\n    readonly \'unstage-files\': {\n        readonly request: UnstageFilesHostOperationRequest;\n        readonly result: UnstageFilesHostOperationResult;\n    };\n    readonly commit: {\n        readonly request: CommitHostOperationRequest;\n        readonly result: CommitHostOperationResult;\n    };\n    readonly \'push-branch\': {\n        readonly request: PushBranchHostOperationRequest;\n        readonly result: PushBranchHostOperationResult;\n    };\n    readonly \'start-agent-run\': {\n        readonly request: StartAgentRunHostOperationRequest;\n        readonly result: StartAgentRunHostOperationResult;\n    };\n}',
   },
   {
     name: 'HostOperationResult',
@@ -4200,6 +4250,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'InspectInterventionOpeningRequest',
     declaration: 'export interface InspectInterventionOpeningRequest {\n    readonly hostId: SakiHostId;\n    readonly sessionId: SessionId;\n    readonly callId: CallId;\n    readonly interventionId: SakiInterventionRequestId;\n    readonly expectedQuestion: string;\n    readonly expectedToolResult: InterventionOpeningExpectedToolResult;\n}',
+  },
+  {
+    name: 'InspectProjectCommitRequest',
+    declaration: 'export interface InspectProjectCommitRequest {\n    readonly binding: ActiveHostProjectBinding;\n    readonly commitId: string;\n}',
+  },
+  {
+    name: 'InspectProjectCommitResult',
+    declaration: 'export type InspectProjectCommitResult = {\n    readonly ok: true;\n    readonly commitId: string;\n} | {\n    readonly ok: false;\n    readonly reason: \'binding-stale\' | \'commit-missing\' | \'unavailable\';\n};',
   },
   {
     name: 'InspectProjectFailureReason',
@@ -4546,6 +4604,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface MessageSourceMap {\n    user: {\n        kind: \'user\';\n    };\n    plugin: {\n        kind: \'plugin\';\n        plugin: string;\n    } & ContextFormed;\n    model: ModelMessageSource;\n    tool: ToolMessageSource;\n}',
   },
   {
+    name: 'MilestoneDeliveryIntent',
+    declaration: 'export type MilestoneDeliveryIntent = SaveMilestoneDeliveryIntent | FinalizeMilestoneDeliveryIntent;',
+  },
+  {
+    name: 'MilestoneDeliveryPhase',
+    declaration: 'export type MilestoneDeliveryPhase = \'planned\' | \'in-progress\' | \'ready-to-release\' | \'canceled\';',
+  },
+  {
     name: 'ModelMessageSource',
     declaration: 'export interface ModelMessageSource extends AssistantProvenance {\n    kind: \'model\';\n}',
   },
@@ -4782,6 +4848,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PruneResult {\n    readonly pruned: readonly PrunedEntry[];\n    readonly charsRemoved: number;\n}',
   },
   {
+    name: 'PushBranchHostOperationRequest',
+    declaration: 'export interface PushBranchHostOperationRequest {\n    readonly type: \'push-branch\';\n    readonly source: ControlIntentHostOperationSource;\n    readonly expected: {\n        readonly binding: ActiveHostProjectBinding;\n        readonly commitId: string;\n        readonly repository: GitHubRepositoryCoordinates;\n    };\n    readonly targetRef: string;\n}',
+  },
+  {
+    name: 'PushBranchHostOperationResult',
+    declaration: 'export interface PushBranchHostOperationResult {\n    readonly type: \'push-branch\';\n    readonly repository: GitHubRepositoryCoordinates;\n    readonly targetRef: string;\n    readonly commitId: string;\n    readonly previous: GitRemoteBranchState;\n    readonly credential: {\n        readonly helperId: GitCredentialHelperId;\n    };\n}',
+  },
+  {
     name: 'ReadFileLine',
     declaration: 'export interface ReadFileLine {\n    number: number;\n    text: string;\n}',
   },
@@ -4812,6 +4886,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'RegisterDevelopmentProjectIntent',
     declaration: 'export interface RegisterDevelopmentProjectIntent {\n    readonly type: \'register-development-project\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectTitle: string;\n    readonly hostId: SakiHostId;\n    readonly directoryLocator: string;\n    readonly expectedRegistryRevision: number;\n    readonly confirmedFingerprint: ProjectInspectionFingerprint;\n    readonly confirmedBaseline: InheritedChangeBaseline;\n}',
+  },
+  {
+    name: 'ReleaseEvidencePolicyV1Expectation',
+    declaration: 'export interface ReleaseEvidencePolicyV1Expectation {\n    readonly repositoryId: GitHubRepositoryId;\n    readonly projectId: GitHubProjectId;\n    readonly milestoneId: GitHubMilestoneId;\n    readonly milestoneNumber: number;\n    readonly tagName: GitHubReleaseTagName;\n    readonly releaseCommitId: GitHubCommitId;\n    readonly upstreamRepositoryId: GitHubRepositoryId;\n    readonly upstreamRepositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly upstreamRepositoryNameWithOwner: string;\n    readonly upstreamCommitId: GitHubCommitId;\n}',
   },
   {
     name: 'ReplayEnvelope',
@@ -5087,7 +5165,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiIntentMap',
-    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n    readonly \'create-work-item\': CreateWorkItemIntent;\n    readonly \'move-work-item\': MoveWorkItemIntent;\n    readonly \'give-work-item-to-agent\': GiveWorkItemToAgentIntent;\n    readonly \'answer-intervention\': AnswerInterventionIntent;\n}',
+    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n    readonly \'create-work-item\': CreateWorkItemIntent;\n    readonly \'move-work-item\': MoveWorkItemIntent;\n    readonly \'save-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'save-branch-delivery\';\n    }>;\n    readonly \'push-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'push-branch-delivery\';\n    }>;\n    readonly \'create-branch-delivery-pull-request\': Extract<BranchDeliveryIntent, {\n        readonly type: \'create-branch-delivery-pull-request\';\n    }>;\n    readonly \'associate-branch-delivery-pull-request\': Extract<BranchDeliveryIntent, {\n        readonly type: \'associate-branch-delivery-pull-request\';\n    }>;\n    readonly \'mark-branch-delivery-in-review\': Extract<BranchDeliveryIntent, {\n        readonly type: \'mark-branch-delivery-in-review\';\n    }>;\n    readonly \'accept-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'accept-branch-delivery\';\n    }>;\n    readonly \'save-milestone-delivery\': Extract<MilestoneDeliveryIntent, {\n        readonly type: \'save-milestone-delivery\';\n    }>;\n    readonly \'finalize-milestone-delivery\': Extract<MilestoneDeliveryIntent, {\n    /* …truncated — full shape in source */',
   },
   {
     name: 'SakiIntentReceipt',
@@ -5110,8 +5188,8 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SakiInterventionRequiredAnswer {\n    readonly kind: \'text\';\n    readonly prompt: string;\n    readonly maxLength: number;\n}',
   },
   {
-    name: 'SakiInterventionTextAnswer',
-    declaration: 'export interface SakiInterventionTextAnswer {\n    readonly kind: \'text\';\n    readonly text: string;\n}',
+    name: 'SakiMilestoneDeliveryId',
+    declaration: 'export type SakiMilestoneDeliveryId = Branded<\'SakiMilestoneDeliveryId\'>;',
   },
   {
     name: 'SakiMyWorkGroup',
@@ -5159,7 +5237,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiProjectionKey',
-    declaration: 'export type SakiProjectionKey = \'access\' | \'my-work\' | \'attention\' | \'project-index\' | \'development-workspace\' | \'project-changes\' | \'project-settings\' | \'board\';',
+    declaration: 'export type SakiProjectionKey = \'access\' | \'my-work\' | \'attention\' | \'project-index\' | \'development-workspace\' | \'project-changes\' | \'project-settings\' | \'board\' | \'branch-delivery\' | \'milestone-view\';',
   },
   {
     name: 'SakiProjectSelectionInspectionProjection',
@@ -5220,6 +5298,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SaveImageAttachment',
     declaration: 'export interface SaveImageAttachment {\n    data: Uint8Array;\n    mediaType: ImageMediaType;\n    name?: string;\n}',
+  },
+  {
+    name: 'SaveMilestoneDeliveryIntent',
+    declaration: 'export interface SaveMilestoneDeliveryIntent {\n    readonly type: \'save-milestone-delivery\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedDeliveryRevision: number | null;\n    readonly expectedRegistryRevision: number;\n    readonly expectedProjectRevision: number;\n    readonly phase: MilestoneDeliveryPhase;\n    readonly release: ReleaseEvidencePolicyV1Expectation;\n}',
   },
   {
     name: 'SaveTextSpill',

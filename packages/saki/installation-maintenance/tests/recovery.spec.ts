@@ -16,7 +16,7 @@ import { descriptorOf, type DomainSpec } from '@deepseek-ai/dsh-storage-domain'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   sakiHostExecutionV1DomainSpec,
-  sakiHostExecutionV2DomainSpec,
+  sakiHostExecutionV3DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import type {
   SakiBuildId,
@@ -54,18 +54,18 @@ import {
   sakiControlPlaneV4DomainSpec,
   sakiControlPlaneV5DomainSpec,
   sakiControlPlaneV6DomainSpec,
-  sakiControlPlaneV7DomainSpec,
+  sakiControlPlaneV8DomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
-  sakiStorageGenerationV5DomainSpec,
+  sakiStorageGenerationV6DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
   storageGenerationV3SealRecordSchema,
   storageGenerationV4SealRecordSchema,
-  storageGenerationV5SealRecordSchema,
+  storageGenerationV6SealRecordSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
   captureSqliteArtifactSet,
@@ -104,7 +104,7 @@ const CANDIDATE_ID =
 const OTHER_GENERATION_ID =
   'storage-generation-00000000-0000-4000-8000-000000000099' as SakiStorageGenerationId
 const BUILD_ID = 'saki-build-recovery-test' as SakiBuildId
-const PREVIOUS_WRITABLE_BUILD_ID = 'saki-build-0.1.0-b07' as SakiBuildId
+const PREVIOUS_WRITABLE_BUILD_ID = 'saki-build-0.1.0-b09' as SakiBuildId
 const OLD_BUILD_ID = LEGACY_B03_BUILD_ID
 const HISTORICAL_GENERATION_ID =
   'installation-generation-00000000-0000-4000-8000-000000000009'
@@ -372,27 +372,27 @@ async function materializePreviousWritableGeneration(
   signal: AbortSignal,
 ): Promise<void> {
   const units: readonly { readonly spec: DomainSpec; readonly snapshot: KvUnitSnapshot }[] = [
-    { spec: sakiControlPlaneV7DomainSpec, snapshot: controlPlaneSnapshot },
+    { spec: sakiControlPlaneV8DomainSpec, snapshot: controlPlaneSnapshot },
     {
-      spec: sakiHostExecutionV2DomainSpec,
+      spec: sakiHostExecutionV3DomainSpec,
       snapshot: {
         global: null,
         tables: Object.fromEntries(
-          Object.keys(sakiHostExecutionV2DomainSpec.tables).map(table => [table, {}]),
+          Object.keys(sakiHostExecutionV3DomainSpec.tables).map(table => [table, {}]),
         ),
       },
     },
     {
-      spec: sakiStorageGenerationV5DomainSpec,
+      spec: sakiStorageGenerationV6DomainSpec,
       snapshot: {
         global: null,
         tables: {
           storage_generation: {
-            [STORAGE_GENERATION_KEY]: storageGenerationV5SealRecordSchema.parse({
-              schemaVersion: 5,
+            [STORAGE_GENERATION_KEY]: storageGenerationV6SealRecordSchema.parse({
+              schemaVersion: 6,
               installationId: INSTALLATION_ID,
               storageGenerationId,
-              stateVersion: 7,
+              stateVersion: 8,
               createdByBuildId: PREVIOUS_WRITABLE_BUILD_ID,
             }),
           },
@@ -420,7 +420,7 @@ function previousWritableControlPlaneSnapshot(source: 'fresh' | 'upgrade'): KvUn
     return {
       global: null,
       tables: Object.fromEntries(
-        Object.keys(sakiControlPlaneV7DomainSpec.tables).map(table => [table, {}]),
+        Object.keys(sakiControlPlaneV8DomainSpec.tables).map(table => [table, {}]),
       ),
     }
   }
@@ -428,7 +428,8 @@ function previousWritableControlPlaneSnapshot(source: 'fresh' | 'upgrade'): KvUn
   const v4Snapshot = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3Snapshot)
   const v5Snapshot = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4Snapshot)
   const v6Snapshot = sakiControlPlaneMigrationPlan.steps[3]!.migrate(v5Snapshot)
-  return sakiControlPlaneMigrationPlan.steps[4]!.migrate(v6Snapshot)
+  const v7Snapshot = sakiControlPlaneMigrationPlan.steps[4]!.migrate(v6Snapshot)
+  return sakiControlPlaneMigrationPlan.steps[5]!.migrate(v7Snapshot)
 }
 
 async function publishPreviousWritableCandidate(
@@ -449,7 +450,7 @@ async function publishPreviousWritableCandidate(
   const generationBytes = renderGenerationManifest(
     INSTALLATION_ID,
     CANDIDATE_ID,
-    7,
+    8,
     PREVIOUS_WRITABLE_BUILD_ID,
   )
   await writeFile(join(generationDirectory, 'generation.json'), generationBytes)
@@ -862,7 +863,7 @@ describe('active Saki operation recovery', () => {
     await expect(readFile(candidate.databasePath)).resolves.not.toHaveLength(0)
   })
 
-  it('settles a previous writable build fresh journal after its v7 manifest was published', async () => {
+  it('settles a previous writable build fresh journal after its v8 manifest was published', async () => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(5_000)
     const journal = createOperationJournal({
@@ -885,7 +886,7 @@ describe('active Saki operation recovery', () => {
     await expect(readInstallationManifest(root, signal)).resolves.toMatchObject({
       value: {
         phase: 'provisioning',
-        stateVersion: 7,
+        stateVersion: 8,
         storageGenerationId: CANDIDATE_ID,
       },
     })
@@ -1094,7 +1095,7 @@ describe('active Saki operation recovery', () => {
     }, signal, async () => undefined)).rejects.toMatchObject({ code: 'upgrade-required' })
   })
 
-  it('rolls back a previous writable build v7 candidate before its authority commit', async () => {
+  it('rolls back a previous writable build v8 candidate before its authority commit', async () => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(10_000)
     const legacyPath = join(root, 'legacy.sqlite')
@@ -1405,7 +1406,7 @@ describe('active Saki operation recovery', () => {
   it.each([
     ['provisioning', 'provisioning', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
     ['another Installation', 'ready', OTHER_INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
-    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 8],
+    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 9],
     ['the candidate generation', 'ready', INSTALLATION_ID, CANDIDATE_ID, 2],
   ] as const)(
     'retains an upgrade when published authority selects %s',
@@ -1604,7 +1605,7 @@ describe('active Saki operation recovery', () => {
     })
   })
 
-  it('settles a previous writable build upgrade journal after its v7 authority commit', async () => {
+  it('settles a previous writable build upgrade journal after its v8 authority commit', async () => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(10_000)
     const legacyPath = join(root, 'legacy.sqlite')
@@ -1633,7 +1634,7 @@ describe('active Saki operation recovery', () => {
     await expect(readInstallationManifest(root, signal)).resolves.toMatchObject({
       value: {
         phase: 'ready',
-        stateVersion: 7,
+        stateVersion: 8,
         storageGenerationId: CANDIDATE_ID,
       },
     })

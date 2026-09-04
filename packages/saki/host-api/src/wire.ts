@@ -8,6 +8,8 @@ import {
   hostOperationIdSchema,
   inheritedChangeBaselineSchema,
   isGitObjectId,
+  isSafeGitRef,
+  MAX_GIT_REF_CHARS,
   isSafeDisplayLocation,
   MAX_HOST_OPERATION_SELECTED_CHANGES,
   MAX_DISPLAY_LOCATION_CHARS,
@@ -29,6 +31,44 @@ import {
   unstageFilesHostOperationResultSchema,
 } from '@breakfastdapaidang/saki-execution'
 import {
+  githubAccountIdSchema,
+  githubAppIdSchema,
+  githubBranchHeadFactSchema,
+  githubCommitCiFactSchema,
+  githubCommitComparisonFactSchema,
+  githubCommitFactSchema,
+  githubCommitIdSchema,
+  githubFailureSchema,
+  githubInstallationIdSchema,
+  githubIssueIdSchema,
+  githubMilestoneFactSchema,
+  githubMilestoneIdSchema,
+  githubProjectBoardFingerprintSchema,
+  githubProjectIdSchema,
+  githubPullRequestFactSchema,
+  githubPullRequestCreateMarkerIdSchema,
+  githubPullRequestCreateTextPreparationSchema,
+  githubPullRequestIdSchema,
+  githubPullRequestReviewsFactSchema,
+  githubReleaseByTagObservationSchema,
+  githubReleaseFactSchema,
+  githubReleaseTagNameSchema,
+  githubRepositoryDatabaseIdSchema,
+  githubRepositoryIdSchema,
+  githubRepositoryNameWithOwnerSchema,
+  githubTagPeelFactSchema,
+  githubTagReferenceFactSchema,
+  type GitHubAccountId,
+  type GitHubAppId,
+  type GitHubInstallationId,
+  type GitHubProjectFieldId,
+  type GitHubProjectId,
+  type GitHubProjectOptionId,
+  type GitHubRepositoryDatabaseId,
+  type GitHubRepositoryId,
+} from '@breakfastdapaidang/saki-github'
+import { GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT } from '@breakfastdapaidang/saki-github/constants'
+import {
   MAX_INTERVENTION_ANSWER_CHARS,
   MAX_INTERVENTION_PROMPT_CHARS,
   SAKI_BOARD_WORK_ITEM_LIMIT,
@@ -43,14 +83,6 @@ import type {
   CreateCommitIntent,
   GiveWorkItemToAgentIntent,
   GitMutationExpectation,
-  GitHubAccountId,
-  GitHubAppId,
-  GitHubInstallationId,
-  GitHubProjectFieldId,
-  GitHubProjectId,
-  GitHubProjectOptionId,
-  GitHubRepositoryDatabaseId,
-  GitHubRepositoryId,
   GitHubSynchronizationConfiguration,
   GitHubSynchronizationConfigurationField,
   GitHubSynchronizationConfigurationPatch,
@@ -67,6 +99,7 @@ import type {
   SakiDevelopmentProjectSummary,
   SakiDevelopmentWorkspaceProjection,
   SakiHostId,
+  SakiInstallationId,
   SakiIntentReceipt,
   SakiIntentInput,
   SakiIntentReceiptId,
@@ -79,6 +112,7 @@ import type {
   SakiWorkAssignmentId,
   SakiWorkItemDetailProjection,
   SakiGitHubMappingHealthProjection,
+  SakiGitHubFailureProjection,
   SakiGitHubMappingIssue,
   SakiGitHubRateLimitProjection,
   SakiGitHubScanAttemptId,
@@ -92,6 +126,8 @@ import type {
   SakiGitOperationReferenceProjection,
   SakiGitOperationsProjection,
   SakiPrincipalId,
+  SakiGrantId,
+  SakiStorageGenerationId,
   SakiProjectIndexProjection,
   SakiProjectDiffProjection,
   SakiProjectChangesProjection,
@@ -110,7 +146,10 @@ const brandedId = <T extends string>(prefix: string) => z.string()
   .regex(new RegExp(`^${prefix}-${UUID_PATTERN}$`))
   .transform(value => value as T)
 const hostId = brandedId<SakiHostId>('host')
+const installationId = brandedId<SakiInstallationId>('installation')
+const storageGenerationId = brandedId<SakiStorageGenerationId>('storage-generation')
 const principalId = brandedId<SakiPrincipalId>('principal')
+const grantId = brandedId<SakiGrantId>('grant')
 const projectId = brandedId<SakiDevelopmentProjectId>('project')
 const bindingId = brandedId<SakiResourceBindingId>('binding')
 const intentId = brandedId<SakiControlIntentId>('intent')
@@ -137,9 +176,7 @@ const MIN_POLL_INTERVAL_MS = 1_000
 const MAX_POLL_INTERVAL_MS = 86_400_000
 const pollInterval = z.number().int().min(MIN_POLL_INTERVAL_MS).max(MAX_POLL_INTERVAL_MS)
 const rateLimitReserve = z.number().int().nonnegative().max(5_000)
-const safeName = z.string().min(1).max(255).regex(/^[^\u0000-\u001f\u007f]+$/u)
 const safeText = z.string().min(1).max(4_096).regex(/^[^\u0000\u007f]*$/u)
-const safeRequestId = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u)
 const safeUrl = z.url().max(2_048).refine((value) => {
   const parsed = new URL(value)
   return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === '' && parsed.hash === ''
@@ -151,6 +188,22 @@ const scanAttemptId = z.string().regex(new RegExp(`^scan-attempt-${UUID_PATTERN}
   .transform(value => value as SakiGitHubScanAttemptId)
 const boardRemoteFingerprint = z.string().regex(/^remote-fingerprint-[0-9a-f]{64}$/u)
   .transform(value => value as SakiBoardRemoteFingerprint)
+type BranchDeliveryQueryProjection = Extract<
+  SakiQueryResult<'branch-delivery'>,
+  { readonly ok: true }
+>['projection']
+type BranchDeliveryId = BranchDeliveryQueryProjection['branchDelivery']['delivery']['id']
+type BranchDeliveryIntent = Extract<SakiIntentInput, { readonly type: `${string}branch-delivery${string}` }>
+const branchDeliveryId = z.string().regex(/^branch-delivery-[0-9a-f]{64}$/u)
+  .transform(value => value as BranchDeliveryId)
+type MilestoneViewQueryProjection = Extract<
+  SakiQueryResult<'milestone-view'>,
+  { readonly ok: true }
+>['projection']
+type MilestoneDeliveryId = MilestoneViewQueryProjection['milestoneView']['delivery']['id']
+type MilestoneDeliveryIntent = Extract<SakiIntentInput, { readonly type: `${string}milestone-delivery` }>
+const milestoneDeliveryId = z.string().regex(/^milestone-delivery-[0-9a-f]{64}$/u)
+  .transform(value => value as MilestoneDeliveryId)
 const sakiBoardStatusSchema = z.enum([
   'inbox',
   'backlog',
@@ -208,6 +261,18 @@ export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('board'),
     projectId,
+    refresh: z.enum(['cached', 'interactive']),
+  }).strict(),
+  z.object({
+    type: z.literal('branch-delivery'),
+    projectId,
+    workItemId: boardWorkItemId,
+    refresh: z.enum(['cached', 'interactive']),
+  }).strict(),
+  z.object({
+    type: z.literal('milestone-view'),
+    projectId,
+    milestoneId: githubMilestoneIdSchema,
     refresh: z.enum(['cached', 'interactive']),
   }).strict(),
 ]) satisfies z.ZodType<SakiQuery>
@@ -391,6 +456,141 @@ export const sakiMoveWorkItemIntentSchema = z.object({
   }
 }) satisfies z.ZodType<MoveWorkItemIntent>
 
+const branchDeliveryExpectationSchema = z.object({
+  deliveryRevision: revision.nullable(),
+  registryRevision: revision,
+  projectRevision: revision,
+  binding: z.object({ id: bindingId, revision }).strict(),
+  synchronizationRevision: revision,
+  mappingRevision: revision,
+  workItemRemoteFingerprint: boardRemoteFingerprint,
+}).strict()
+const branchDeliveryRefSchema = z.string().min('refs/heads/a'.length).max(MAX_GIT_REF_CHARS)
+  .refine(ref => ref.startsWith('refs/heads/') && isSafeGitRef(ref))
+// Every admitted marker id has this ASCII width; Host admission need not duplicate Control's delivery digest.
+const pullRequestTextValidationMarkerId = githubPullRequestCreateMarkerIdSchema.parse(
+  `pull-request-marker-${'0'.repeat(64)}`,
+)
+
+/** Strict Branch Delivery selection Intent without Host paths or credentials. */
+export const sakiSaveBranchDeliveryIntentSchema = z.object({
+  type: z.literal('save-branch-delivery'),
+  intentId,
+  projectId,
+  workItemId: boardWorkItemId,
+  expected: branchDeliveryExpectationSchema,
+  commitId: githubCommitIdSchema,
+  headRef: branchDeliveryRefSchema,
+  baseRef: branchDeliveryRefSchema,
+}).strict().superRefine((intent, context) => {
+  if (intent.headRef === intent.baseRef) {
+    context.addIssue({ code: 'custom', message: 'Branch Delivery head and base refs must differ' })
+  }
+}) satisfies z.ZodType<Extract<BranchDeliveryIntent, { readonly type: 'save-branch-delivery' }>>
+
+const existingBranchDeliveryIntentShape = {
+  intentId,
+  deliveryId: branchDeliveryId,
+  expectedDeliveryRevision: revision,
+} as const
+
+/** Strict Branch Delivery Push Intent without Git credentials. */
+export const sakiPushBranchDeliveryIntentSchema = z.object({
+  type: z.literal('push-branch-delivery'),
+  ...existingBranchDeliveryIntentShape,
+}).strict() satisfies z.ZodType<Extract<BranchDeliveryIntent, { readonly type: 'push-branch-delivery' }>>
+
+/** Strict marker-owned Pull Request creation Intent. */
+export const sakiCreateBranchDeliveryPullRequestIntentSchema = z.object({
+  type: z.literal('create-branch-delivery-pull-request'),
+  ...existingBranchDeliveryIntentShape,
+  title: z.string(),
+  body: z.string().max(65_536),
+}).strict().superRefine((intent, context) => {
+  const prepared = githubPullRequestCreateTextPreparationSchema.safeParse({
+    markerId: pullRequestTextValidationMarkerId,
+    title: intent.title,
+    body: intent.body,
+  })
+  if (!prepared.success) {
+    for (const textIssue of prepared.error.issues) {
+      context.addIssue({
+        code: 'custom',
+        message: textIssue.message,
+        path: textIssue.path.length === 0 ? ['body'] : textIssue.path,
+      })
+    }
+  }
+}) satisfies z.ZodType<Extract<
+  BranchDeliveryIntent,
+  { readonly type: 'create-branch-delivery-pull-request' }
+>>
+
+/** Strict observed Pull Request association Intent. */
+export const sakiAssociateBranchDeliveryPullRequestIntentSchema = z.object({
+  type: z.literal('associate-branch-delivery-pull-request'),
+  ...existingBranchDeliveryIntentShape,
+  pullRequestId: githubPullRequestIdSchema,
+  pullRequestNumber: positiveInteger,
+}).strict() satisfies z.ZodType<Extract<
+  BranchDeliveryIntent,
+  { readonly type: 'associate-branch-delivery-pull-request' }
+>>
+
+const branchDeliveryTransitionIntentShape = {
+  ...existingBranchDeliveryIntentShape,
+  expectedWorkItemRemoteFingerprint: boardRemoteFingerprint,
+} as const
+
+/** Strict human transition Intent for moving the Work Item to In review. */
+export const sakiMarkBranchDeliveryInReviewIntentSchema = z.object({
+  type: z.literal('mark-branch-delivery-in-review'),
+  ...branchDeliveryTransitionIntentShape,
+}).strict() satisfies z.ZodType<Extract<
+  BranchDeliveryIntent,
+  { readonly type: 'mark-branch-delivery-in-review' }
+>>
+
+/** Strict attributed Branch Delivery acceptance Intent. */
+export const sakiAcceptBranchDeliveryIntentSchema = z.object({
+  type: z.literal('accept-branch-delivery'),
+  ...branchDeliveryTransitionIntentShape,
+}).strict() satisfies z.ZodType<Extract<BranchDeliveryIntent, { readonly type: 'accept-branch-delivery' }>>
+
+const releaseExpectationSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  projectId: githubProjectIdSchema,
+  milestoneId: githubMilestoneIdSchema,
+  milestoneNumber: positiveInteger,
+  tagName: githubReleaseTagNameSchema,
+  releaseCommitId: githubCommitIdSchema,
+  upstreamRepositoryId: githubRepositoryIdSchema,
+  upstreamRepositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  upstreamRepositoryNameWithOwner: githubRepositoryNameWithOwnerSchema,
+  upstreamCommitId: githubCommitIdSchema,
+}).strict()
+
+/** Strict Milestone metadata Intent with an exact release target. */
+export const sakiSaveMilestoneDeliveryIntentSchema = z.object({
+  type: z.literal('save-milestone-delivery'),
+  intentId,
+  projectId,
+  expectedDeliveryRevision: revision.nullable(),
+  expectedRegistryRevision: revision,
+  expectedProjectRevision: revision,
+  phase: z.enum(['planned', 'in-progress', 'ready-to-release', 'canceled']),
+  release: releaseExpectationSchema,
+}).strict() satisfies z.ZodType<Extract<MilestoneDeliveryIntent, { readonly type: 'save-milestone-delivery' }>>
+
+/** Strict Milestone finalization Intent with an exact release target. */
+export const sakiFinalizeMilestoneDeliveryIntentSchema = z.object({
+  type: z.literal('finalize-milestone-delivery'),
+  intentId,
+  deliveryId: milestoneDeliveryId,
+  expectedDeliveryRevision: revision,
+  release: releaseExpectationSchema,
+}).strict() satisfies z.ZodType<Extract<MilestoneDeliveryIntent, { readonly type: 'finalize-milestone-delivery' }>>
+
 /** Strict manual Agent assignment Intent without execution or Host authority. */
 export const sakiGiveWorkItemToAgentIntentSchema = z.object({
   type: z.literal('give-work-item-to-agent'),
@@ -423,6 +623,14 @@ export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
   sakiCreateCommitIntentSchema,
   sakiCreateWorkItemIntentSchema,
   sakiMoveWorkItemIntentSchema,
+  sakiSaveBranchDeliveryIntentSchema,
+  sakiPushBranchDeliveryIntentSchema,
+  sakiCreateBranchDeliveryPullRequestIntentSchema,
+  sakiAssociateBranchDeliveryPullRequestIntentSchema,
+  sakiMarkBranchDeliveryInReviewIntentSchema,
+  sakiAcceptBranchDeliveryIntentSchema,
+  sakiSaveMilestoneDeliveryIntentSchema,
+  sakiFinalizeMilestoneDeliveryIntentSchema,
   sakiGiveWorkItemToAgentIntentSchema,
   sakiAnswerInterventionIntentSchema,
 ]) satisfies z.ZodType<SakiIntentInput>
@@ -789,67 +997,15 @@ const githubMappingIssueListSchema = boundedArray(
     }
   })
 
-// Browser input must remain independently validated without loading provider or durable-state modules.
-/* jscpd:ignore-start */
-const standardGitHubProviderFailureSchema = z.discriminatedUnion('code', [
-  z.object({ code: z.literal('cancelled') }).strict(),
-  z.object({ code: z.literal('auth-unavailable'), credentialRef: credentialRef.optional() }).strict(),
-  z.object({
-    code: z.literal('permission-mismatch'),
-    permission: safeName,
-    required: z.enum(['none', 'read', 'write', 'admin']),
-    observed: z.enum(['none', 'read', 'write', 'admin']).optional(),
-    requestId: safeRequestId.optional(),
-  }).strict(),
-  z.object({ code: z.literal('not-found'), resource: safeName, requestId: safeRequestId.optional() }).strict(),
-  z.object({
-    code: z.literal('invalid-external-response'),
-    operation: safeName,
-    requestId: safeRequestId.optional(),
-  }).strict(),
-  z.object({
-    code: z.literal('primary-rate-limit'),
-    resetAt: safeInteger.optional(),
-    requestId: safeRequestId.optional(),
-  }).strict(),
-  z.object({
-    code: z.literal('secondary-rate-limit'),
-    retryAfterMs: safeInteger.optional(),
-    requestId: safeRequestId.optional(),
-  }).strict(),
-  z.object({
-    code: z.literal('transient-transport'),
-    retryAfterMs: safeInteger.optional(),
-    requestId: safeRequestId.optional(),
-  }).strict(),
-  z.object({
-    code: z.literal('permanent-rejection'),
-    status: z.number().int().min(100).max(599).optional(),
-    requestId: safeRequestId.optional(),
-  }).strict(),
-])
+const browserGitHubFailureSchema: z.ZodType<SakiGitHubFailureProjection> = githubFailureSchema.transform((failure) => {
+  if (failure.code !== 'auth-unavailable') return failure
+  const { credentialRef: _credentialRef, ...browserFailure } = failure
+  return browserFailure
+})
 
-const githubMappingMismatchFailureSchema = z.discriminatedUnion('reason', [
-  z.object({
-    code: z.literal('mapping-mismatch'),
-    reason: z.literal('field-missing-or-not-single-select'),
-    statusFieldId: githubNodeId<GitHubProjectFieldId>(),
-  }).strict(),
-  z.object({
-    code: z.literal('mapping-mismatch'),
-    reason: z.literal('required-options-missing'),
-    statusFieldId: githubNodeId<GitHubProjectFieldId>(),
-    missingRequiredStatusOptionIds: z.array(githubNodeId<GitHubProjectOptionId>()).min(1).max(100)
-      .refine(ids => new Set(ids).size === ids.length),
-  }).strict(),
-])
-const githubProviderFailureSchema = z.union([
-  standardGitHubProviderFailureSchema,
-  githubMappingMismatchFailureSchema,
-])
-
+/* jscpd:ignore-start -- the browser wire repeats durable scan-failure validation after credential stripping */
 const githubScanFailureSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('provider'), failure: githubProviderFailureSchema }).strict(),
+  z.object({ kind: z.literal('provider'), failure: browserGitHubFailureSchema }).strict(),
   z.object({
     kind: z.literal('mapping'),
     issues: githubMappingIssueListSchema,
@@ -2112,6 +2268,317 @@ const principalWorkFailureSchema = z.object({
   reason: z.enum(['denied', 'unavailable']),
 }).strict()
 
+const branchDeliveryObservationStateSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('unobserved') }).strict(),
+  z.object({ state: z.literal('confirmed'), observedAt: safeInteger }).strict(),
+  z.object({
+    state: z.literal('failure'),
+    failedAt: safeInteger,
+    failure: browserGitHubFailureSchema,
+  }).strict(),
+  z.object({
+    state: z.literal('invalidated'),
+    invalidatedAt: safeInteger,
+    reason: z.enum(['target-absent', 'target-changed']),
+  }).strict(),
+  z.object({ state: z.literal('stale'), observedAt: safeInteger, staleAt: safeInteger }).strict(),
+])
+
+function branchDeliverySourceProjectionSchema<F extends z.ZodType>(fact: F) {
+  return z.object({
+    confirmed: z.object({ fact, confirmedAt: safeInteger }).strict().optional(),
+    current: branchDeliveryObservationStateSchema,
+  }).strict()
+}
+
+const commitCiSummarySchema = z.object({
+  state: z.enum(['pending', 'successful', 'failed', 'canceled', 'unavailable']),
+  signalCount: safeInteger,
+  observedAt: safeInteger,
+}).strict()
+
+const branchDeliveryActorSchema = z.object({
+  installationId,
+  storageGenerationId,
+  hostId,
+  principalId,
+  principalRevision: revision,
+  grantId,
+  grantRevision: revision,
+}).strict()
+
+const branchDeliveryBrowserRecordSchema = z.object({
+  id: branchDeliveryId,
+  schemaVersion: z.literal(1),
+  revision,
+  projectId,
+  workItemId: boardWorkItemId,
+  target: z.object({
+    registryRevision: revision,
+    projectRevision: revision,
+    binding: z.object({
+      id: bindingId,
+      revision,
+      hostId,
+      health: z.literal('active'),
+    }).strict(),
+    synchronizationRevision: revision,
+    mappingRevision: revision,
+    installation: z.object({
+      appId: githubAppIdSchema,
+      installationId: githubInstallationIdSchema,
+      accountId: githubAccountIdSchema,
+    }).strict(),
+    repository: z.object({
+      id: githubRepositoryIdSchema,
+      databaseId: githubRepositoryDatabaseIdSchema,
+      nameWithOwner: z.string().regex(/^[^/\u0000-\u001f\u007f]+\/[^/\u0000-\u001f\u007f]+$/u).max(201),
+    }).strict(),
+    workItem: z.object({
+      id: boardWorkItemId,
+      remoteFingerprint: boardRemoteFingerprint,
+      issueId: githubIssueIdSchema,
+    }).strict(),
+  }).strict(),
+  commitId: githubCommitIdSchema,
+  headRef: branchDeliveryRefSchema,
+  baseRef: branchDeliveryRefSchema,
+  phase: z.enum(['draft', 'in-review', 'accepted']),
+  activeIntentId: intentId.optional(),
+  push: z.object({ intentId, confirmedAt: safeInteger }).strict().optional(),
+  acceptance: z.object({
+    intentId,
+    actor: branchDeliveryActorSchema,
+    acceptedAt: safeInteger,
+    evidenceDigest: digest,
+  }).strict().optional(),
+  repair: z.object({
+    intentId,
+    reason: z.enum(['effect-unknown', 'evidence-conflict', 'marker-ambiguous']),
+    recordedAt: safeInteger,
+  }).strict().optional(),
+  lastIntentId: intentId,
+  createdAt: safeInteger,
+  updatedAt: safeInteger,
+}).strict()
+
+/** Strict browser-safe Branch Delivery projection without Host-local or credential references. */
+export const sakiBranchDeliveryProjectionSchema: z.ZodType<BranchDeliveryQueryProjection> = z.object({
+  type: z.literal('branch-delivery'),
+  refresh: z.object({
+    requested: z.enum(['cached', 'interactive']),
+    state: z.enum(['cached', 'confirmed', 'unavailable', 'immutable']),
+  }).strict(),
+  branchDelivery: z.object({
+    delivery: branchDeliveryBrowserRecordSchema,
+    remoteRef: branchDeliverySourceProjectionSchema(githubBranchHeadFactSchema),
+    pullRequest: branchDeliverySourceProjectionSchema(githubPullRequestFactSchema),
+    reviews: branchDeliverySourceProjectionSchema(githubPullRequestReviewsFactSchema),
+    ci: branchDeliverySourceProjectionSchema(githubCommitCiFactSchema).extend({
+      confirmedSummary: commitCiSummarySchema.optional(),
+    }),
+  }).strict(),
+}).strict()
+
+const releaseEvidenceBlockageSchema = z.union([
+  z.object({
+    kind: z.enum(['source-unavailable', 'source-failed', 'source-stale', 'source-invalidated']),
+    pass: z.enum(['evaluation', 'final-reread']),
+    source: z.string().min(1).max(512),
+  }).strict(),
+  z.object({
+    kind: z.enum([
+      'milestone-target-mismatch',
+      'milestone-closed',
+      'scope-empty',
+      'tag-mismatch',
+      'release-mismatch',
+      'release-commit-mismatch',
+      'upstream-commit-mismatch',
+      'upstream-ancestry-mismatch',
+      'final-reread-mismatch',
+    ]),
+  }).strict(),
+  z.object({ kind: z.literal('scope-unmapped'), issueId: githubIssueIdSchema }).strict(),
+  z.object({
+    kind: z.enum([
+      'work-item-nonterminal',
+      'delivery-duplicate',
+      'delivery-not-accepted',
+      'delivery-pr-mismatch',
+      'delivery-ci-not-successful',
+      'delivery-ancestry-mismatch',
+    ]),
+    workItemId: boardWorkItemId,
+  }).strict(),
+])
+
+const releaseEvidenceSchema = z.object({
+  policy: z.literal('release-evidence/v1'),
+  evaluationDigest: digest,
+  projectId: githubProjectIdSchema,
+  boardGeneration: revision,
+  boardFingerprint: githubProjectBoardFingerprintSchema,
+  milestoneId: githubMilestoneIdSchema,
+  milestoneNumber: positiveInteger,
+  milestone: githubMilestoneFactSchema,
+  scopeFingerprint: digest,
+  workItems: z.array(z.object({
+    workItemId: boardWorkItemId,
+    issueId: githubIssueIdSchema,
+    status: z.enum(['done', 'canceled']),
+    remoteFingerprint: boardRemoteFingerprint,
+  }).strict()).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+  deliveries: z.array(z.object({
+    deliveryId: branchDeliveryId,
+    deliveryRevision: revision,
+    workItemId: boardWorkItemId,
+    commitId: githubCommitIdSchema,
+    headRef: branchDeliveryRefSchema,
+    baseRef: branchDeliveryRefSchema,
+    pullRequest: githubPullRequestFactSchema,
+    ci: githubCommitCiFactSchema,
+    acceptance: z.object({
+      deliveryRevision: revision,
+      acceptedAt: safeInteger,
+      /* jscpd:ignore-start -- browser Release Evidence independently validates the persisted policy tail before projection */
+      intentId,
+      actorDigest: digest,
+    }).strict(),
+    ancestry: githubCommitComparisonFactSchema,
+  }).strict()).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+  tag: z.object({
+    reference: githubTagReferenceFactSchema,
+    peel: githubTagPeelFactSchema,
+  }).strict(),
+  release: githubReleaseFactSchema,
+  releaseCommit: githubCommitFactSchema,
+  upstreamRepositoryId: githubRepositoryIdSchema,
+  upstreamRepositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  upstreamRepositoryNameWithOwner: githubRepositoryNameWithOwnerSchema,
+  upstreamCommit: githubCommitFactSchema,
+  upstreamAncestry: githubCommitComparisonFactSchema,
+  confirmedAt: safeInteger,
+  /* jscpd:ignore-end */
+}).strict()
+
+/* jscpd:ignore-start -- Branch and Milestone browser sources retain distinct invalidation payloads despite parallel observation states */
+const milestoneViewSourceStateSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('unobserved') }).strict(),
+  z.object({ state: z.literal('confirmed'), observedAt: safeInteger }).strict(),
+  z.object({
+    state: z.literal('failure'),
+    failedAt: safeInteger,
+    failure: browserGitHubFailureSchema,
+  }).strict(),
+  z.object({ state: z.literal('invalidated'), invalidatedAt: safeInteger }).strict(),
+  z.object({ state: z.literal('stale'), observedAt: safeInteger, staleAt: safeInteger }).strict(),
+])
+/* jscpd:ignore-end */
+
+function milestoneViewSourceSchema<T extends z.ZodType>(value: T) {
+  return z.object({
+    confirmed: z.object({ value, observedAt: safeInteger }).strict().optional(),
+    failure: z.object({ failure: browserGitHubFailureSchema, failedAt: safeInteger }).strict().optional(),
+    invalidatedAt: safeInteger.optional(),
+    current: milestoneViewSourceStateSchema,
+  }).strict()
+}
+
+const releaseBoardFactSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  projectId: githubProjectIdSchema,
+  generation: revision,
+  sourceFingerprint: githubProjectBoardFingerprintSchema,
+  items: z.array(z.object({
+    workItemId: boardWorkItemId,
+    issueId: githubIssueIdSchema,
+    status: sakiBoardStatusSchema,
+    remoteFingerprint: boardRemoteFingerprint,
+  }).strict()).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+}).strict()
+
+const milestoneViewBlockageSchema = z.union([
+  z.object({
+    kind: z.literal('view-source'),
+    source: z.enum(['board', 'milestone']),
+    state: z.enum(['unobserved', 'failure', 'invalidated', 'stale']),
+  }).strict(),
+  z.object({ kind: z.literal('milestone-target-mismatch') }).strict(),
+  z.object({ kind: z.literal('scope-unmapped'), issueId: githubIssueIdSchema }).strict(),
+])
+
+const milestoneViewProjectionSchema: z.ZodType<MilestoneViewQueryProjection> = z.object({
+  type: z.literal('milestone-view'),
+  refresh: z.object({
+    requested: z.enum(['cached', 'interactive']),
+    state: z.enum(['cached', 'confirmed', 'unavailable', 'immutable']),
+  }).strict(),
+  milestoneView: z.object({
+    delivery: z.object({
+      id: milestoneDeliveryId,
+      revision,
+      phase: z.enum(['planned', 'in-progress', 'ready-to-release', 'canceled', 'released']),
+      release: releaseExpectationSchema,
+      releaseEvidence: z.object({
+        intentId,
+        actor: branchDeliveryActorSchema,
+        priorMetadataRevision: revision,
+        evidence: releaseEvidenceSchema,
+        embeddedAt: safeInteger,
+      }).strict().optional(),
+      repair: z.object({
+        reason: z.enum(['external-milestone-closed', 'concurrent-github-change']),
+        source: z.enum(['record', 'current-milestone']),
+        observedAt: safeInteger,
+        intentId: intentId.optional(),
+        blockages: z.array(releaseEvidenceBlockageSchema).min(1).max(10_000),
+      }).strict().optional(),
+    }).strict(),
+    sources: z.object({
+      board: milestoneViewSourceSchema(releaseBoardFactSchema),
+      milestone: milestoneViewSourceSchema(githubMilestoneFactSchema),
+      tag: milestoneViewSourceSchema(z.object({
+        reference: githubTagReferenceFactSchema,
+        peel: githubTagPeelFactSchema,
+      }).strict()),
+      release: milestoneViewSourceSchema(githubReleaseByTagObservationSchema),
+      releaseCommit: milestoneViewSourceSchema(githubCommitFactSchema),
+      upstreamCommit: milestoneViewSourceSchema(githubCommitFactSchema),
+      upstreamAncestry: milestoneViewSourceSchema(githubCommitComparisonFactSchema),
+    }).strict(),
+    scope: z.object({
+      scopeFingerprint: digest,
+      boardGeneration: revision,
+      boardFingerprint: githubProjectBoardFingerprintSchema,
+      total: revision,
+      mapped: revision,
+      unmapped: revision,
+      unsupported: revision,
+      complete: z.boolean(),
+      statusCounts: z.object({
+        inbox: revision,
+        backlog: revision,
+        ready: revision,
+        'in-progress': revision,
+        'in-review': revision,
+        done: revision,
+        canceled: revision,
+      }).strict(),
+      items: z.array(z.object({
+        issueId: githubIssueIdSchema,
+        number: positiveInteger,
+        state: z.enum(['open', 'closed']),
+        title: safeText,
+        url: safeUrl,
+        workItemId: boardWorkItemId.optional(),
+        status: sakiBoardStatusSchema.optional(),
+      }).strict()).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+    }).strict().optional(),
+    blockages: z.array(milestoneViewBlockageSchema).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+  }).strict(),
+}).strict()
+
 /** Exact result schema for a Principal-scoped My Work query. */
 export const sakiMyWorkResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), projection: sakiMyWorkProjectionSchema }).strict(),
@@ -2166,6 +2633,18 @@ export const sakiBoardResultSchema: z.ZodType<SakiQueryResult<'board'>> = z.disc
   boardFailureSchema,
 ])
 
+/** Exact result schema for a targeted Branch Delivery query. */
+export const sakiBranchDeliveryResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: sakiBranchDeliveryProjectionSchema }).strict(),
+  z.object({ ok: z.literal(false), reason: z.enum(['denied', 'not-found']) }).strict(),
+]) satisfies z.ZodType<SakiQueryResult<'branch-delivery'>>
+
+/** Exact result schema for one browser-safe Milestone View query. */
+export const sakiMilestoneViewResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: milestoneViewProjectionSchema }).strict(),
+  z.object({ ok: z.literal(false), reason: z.enum(['denied', 'not-found']) }).strict(),
+]) satisfies z.ZodType<SakiQueryResult<'milestone-view'>>
+
 /** Union schema retained for callers that intentionally handle every query kind. */
 export const sakiQueryResultSchema = z.union([
   sakiMyWorkResultSchema,
@@ -2177,6 +2656,8 @@ export const sakiQueryResultSchema = z.union([
   sakiProjectDiffResultSchema,
   sakiProjectSettingsResultSchema,
   sakiBoardResultSchema,
+  sakiBranchDeliveryResultSchema,
+  sakiMilestoneViewResultSchema,
 ])
 
 const receiptIdentity = { id: receiptId, intentId } as const
@@ -2507,6 +2988,101 @@ export const sakiMoveWorkItemResultSchema = createWorkItemResultSchema(
   'move-work-item',
 ) satisfies z.ZodType<SakiWorkItemIntentReceipt<'move-work-item'>>
 
+const branchDeliveryReceiptBase = {
+  intentId,
+  deliveryId: branchDeliveryId,
+  deliveryRevision: revision.optional(),
+} as const
+const branchDeliveryPendingReceiptSchema = z.object({
+  ...branchDeliveryReceiptBase,
+  state: z.literal('pending'),
+}).strict()
+const branchDeliverySucceededReceiptSchema = z.object({
+  ...branchDeliveryReceiptBase,
+  state: z.literal('succeeded'),
+}).strict()
+const branchDeliveryDeniedReceiptSchema = z.object({
+  ...branchDeliveryReceiptBase,
+  state: z.literal('denied'),
+}).strict()
+const branchDeliveryConflictReceiptSchema = z.object({
+  ...branchDeliveryReceiptBase,
+  state: z.literal('conflict'),
+}).strict()
+const branchDeliveryFailureReceiptSchema = z.object({
+  ...branchDeliveryReceiptBase,
+  state: z.literal('failure'),
+}).strict()
+const branchDeliveryReconciliationReceiptSchema = z.object({
+  ...branchDeliveryReceiptBase,
+  state: z.literal('reconciliation-required'),
+}).strict()
+
+/** Shared browser-safe result for all six Branch Delivery Intents. */
+export const sakiBranchDeliveryIntentResultSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    receipt: z.union([branchDeliveryPendingReceiptSchema, branchDeliverySucceededReceiptSchema]),
+  }).strict(),
+  deniedIntentResultSchema,
+  z.object({ ok: z.literal(false), reason: z.literal('denied'), receipt: branchDeliveryDeniedReceiptSchema }).strict(),
+  plainConflictIntentResultSchema,
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('conflict'),
+    receipt: branchDeliveryConflictReceiptSchema,
+  }).strict(),
+  unavailableIntentResultSchema,
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('unavailable'),
+    receipt: branchDeliveryFailureReceiptSchema,
+  }).strict(),
+  z.object({ ok: z.literal(false), reason: z.literal('reconciliation-required') }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('reconciliation-required'),
+    receipt: branchDeliveryReconciliationReceiptSchema,
+  }).strict(),
+]) satisfies z.ZodType<SakiIntentReceipt<'save-branch-delivery'>>
+
+const milestoneDeliveryReceiptBase = {
+  intentId,
+  deliveryId: milestoneDeliveryId,
+  deliveryRevision: revision.optional(),
+} as const
+function milestoneDeliveryReceipt<S extends 'pending' | 'succeeded' | 'conflict' | 'denied' | 'blocked'
+  | 'reconciliation-required'>(state: S) {
+  return z.object({ ...milestoneDeliveryReceiptBase, state: z.literal(state) }).strict()
+}
+
+function milestoneDeliveryFailure<
+  R extends 'denied' | 'conflict' | 'unavailable' | 'reconciliation-required',
+  S extends 'denied' | 'conflict' | 'blocked' | 'reconciliation-required',
+>(reason: R, state: S) {
+  const shape = {
+    ok: z.literal(false),
+    reason: z.literal(reason),
+    blockages: z.array(releaseEvidenceBlockageSchema).max(10_000).optional(),
+  } as const
+  return z.union([
+    z.object(shape).strict(),
+    z.object({ ...shape, receipt: milestoneDeliveryReceipt(state) }).strict(),
+  ])
+}
+
+/** Shared browser-safe result for both Milestone Delivery Intents. */
+export const sakiMilestoneDeliveryIntentResultSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    receipt: z.union([milestoneDeliveryReceipt('pending'), milestoneDeliveryReceipt('succeeded')]),
+  }).strict(),
+  milestoneDeliveryFailure('denied', 'denied'),
+  milestoneDeliveryFailure('conflict', 'conflict'),
+  milestoneDeliveryFailure('unavailable', 'blocked'),
+  milestoneDeliveryFailure('reconciliation-required', 'reconciliation-required'),
+]) satisfies z.ZodType<SakiIntentReceipt<'save-milestone-delivery'>>
+
 const giveWorkItemToAgentReceiptBase = {
   ...receiptIdentity,
   type: z.literal('give-work-item-to-agent'),
@@ -2650,6 +3226,8 @@ export const sakiIntentResultSchema = z.union([
   sakiCreateCommitResultSchema,
   sakiCreateWorkItemResultSchema,
   sakiMoveWorkItemResultSchema,
+  sakiBranchDeliveryIntentResultSchema,
+  sakiMilestoneDeliveryIntentResultSchema,
   sakiGiveWorkItemToAgentResultSchema,
   sakiAnswerInterventionResultSchema,
 ]) satisfies z.ZodType<SakiIntentReceipt>
@@ -2682,6 +3260,14 @@ export type SakiWireProjectSettingsResult = z.infer<typeof sakiProjectSettingsRe
 export type SakiWireBoardResult = z.infer<typeof sakiBoardResultSchema>
 /** Explicit browser Board refresh policy. */
 export type SakiWireBoardRefresh = Extract<SakiQuery, { readonly type: 'board' }>['refresh']
+/** Browser Branch Delivery result inferred from its exact safe projection schema. */
+export type SakiWireBranchDeliveryResult = z.infer<typeof sakiBranchDeliveryResultSchema>
+/** Explicit browser Branch Delivery refresh policy. */
+export type SakiWireBranchDeliveryRefresh = Extract<SakiQuery, { readonly type: 'branch-delivery' }>['refresh']
+/** Browser Milestone View result inferred from its exact safe projection schema. */
+export type SakiWireMilestoneViewResult = z.infer<typeof sakiMilestoneViewResultSchema>
+/** Explicit browser Milestone View refresh policy. */
+export type SakiWireMilestoneViewRefresh = Extract<SakiQuery, { readonly type: 'milestone-view' }>['refresh']
 /** Browser result union for code that handles every protected query kind. */
 export type SakiWireQueryResult = z.infer<typeof sakiQueryResultSchema>
 /** Browser Control Intent inferred from the strict wire schema. */
@@ -2722,6 +3308,37 @@ export type SakiWireCreateWorkItemResult = z.infer<typeof sakiCreateWorkItemResu
 export type SakiWireMoveWorkItemIntent = z.infer<typeof sakiMoveWorkItemIntentSchema>
 /** Browser MoveWorkItem result inferred from its exact safe receipt schema. */
 export type SakiWireMoveWorkItemResult = z.infer<typeof sakiMoveWorkItemResultSchema>
+/** Browser Branch Delivery Intent union inferred from the six strict schemas. */
+export type SakiWireBranchDeliveryIntent = Extract<SakiWireIntent, { readonly type: `${string}branch-delivery${string}` }>
+/** Browser Intent that selects one exact Branch Delivery Commit. */
+export type SakiWireSaveBranchDeliveryIntent = z.infer<typeof sakiSaveBranchDeliveryIntentSchema>
+/** Browser Intent that pushes one selected Branch Delivery. */
+export type SakiWirePushBranchDeliveryIntent = z.infer<typeof sakiPushBranchDeliveryIntentSchema>
+/** Browser Intent that creates the selected Branch Delivery Pull Request. */
+export type SakiWireCreateBranchDeliveryPullRequestIntent = z.infer<
+  typeof sakiCreateBranchDeliveryPullRequestIntentSchema
+>
+/** Browser Intent that associates one observed Branch Delivery Pull Request. */
+export type SakiWireAssociateBranchDeliveryPullRequestIntent = z.infer<
+  typeof sakiAssociateBranchDeliveryPullRequestIntentSchema
+>
+/** Browser Intent that transitions one Branch Delivery to In review. */
+export type SakiWireMarkBranchDeliveryInReviewIntent = z.infer<typeof sakiMarkBranchDeliveryInReviewIntentSchema>
+/** Browser Intent that attributes and seals one accepted Branch Delivery. */
+export type SakiWireAcceptBranchDeliveryIntent = z.infer<typeof sakiAcceptBranchDeliveryIntentSchema>
+/** Browser Branch Delivery result shared by its six exact Intent kinds. */
+export type SakiWireBranchDeliveryIntentResult = z.infer<typeof sakiBranchDeliveryIntentResultSchema>
+/** Browser Milestone Delivery Intent union inferred from both strict schemas. */
+export type SakiWireMilestoneDeliveryIntent = Extract<
+  SakiWireIntent,
+  { readonly type: `${string}milestone-delivery` }
+>
+/** Browser Intent that saves Milestone metadata and an exact release target. */
+export type SakiWireSaveMilestoneDeliveryIntent = z.infer<typeof sakiSaveMilestoneDeliveryIntentSchema>
+/** Browser Intent that finalizes one exact Milestone Delivery revision. */
+export type SakiWireFinalizeMilestoneDeliveryIntent = z.infer<typeof sakiFinalizeMilestoneDeliveryIntentSchema>
+/** Browser Milestone Delivery result shared by both exact Intent kinds. */
+export type SakiWireMilestoneDeliveryIntentResult = z.infer<typeof sakiMilestoneDeliveryIntentResultSchema>
 /** Browser Give-to-Agent Intent inferred from its strict authority-free schema. */
 export type SakiWireGiveWorkItemToAgentIntent = z.infer<typeof sakiGiveWorkItemToAgentIntentSchema>
 /** Browser Give-to-Agent result inferred from its exact safe receipt schema. */

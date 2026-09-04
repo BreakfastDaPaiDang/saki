@@ -177,6 +177,10 @@ class FakeExecution extends SakiHostExecution {
     return { ok: false, reason: 'unavailable' }
   }
 
+  async inspectProjectCommit(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
+    return { ok: false, reason: 'unavailable' }
+  }
+
   async inspectProject(): Promise<InspectProjectResult> { return this.inspectResult }
   async inspectInterventionOpening(): Promise<InterventionOpeningEvidence> {
     return { kind: 'absent' }
@@ -197,7 +201,9 @@ class FakeExecution extends SakiHostExecution {
       ok: false,
       reason: this.prepareMode,
     }
-    if (request.type === 'start-agent-run') return { ok: false, reason: 'source-conflict' }
+    if (request.type === 'start-agent-run' || request.type === 'push-branch') {
+      return { ok: false, reason: 'source-conflict' }
+    }
     const gitRequest: HostOperationRequest<'stage-files' | 'unstage-files' | 'commit'> = request
     const existing = [...this.operations.values()].find(candidate =>
       candidate.request.source.intentId === gitRequest.source.intentId)
@@ -749,6 +755,36 @@ describe('Saki structured Git operations', () => {
     )).resolves.toMatchObject({ ok: false, reason: 'unavailable' })
     expect(test.admissions.get(BINDING_ID)).toEqual(admission)
     expect(test.execution.prepareCount).toBe(0)
+  })
+
+  it('leaves Branch Push admissions to Branch Delivery validation', () => {
+    const test = harness()
+    test.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
+      id: BINDING_ID,
+      schemaVersion: 1,
+      revision: 1,
+      state: 'manual-host-operation',
+      phase: 'reserved',
+      bindingRevision: 0,
+      source: {
+        kind: 'control-intent',
+        intentId: 'intent-00000000-0000-4000-8000-000000000393',
+        intentRevision: 0,
+        payloadDigest: '3'.repeat(64),
+      },
+      action: 'project-branch:push',
+      reservedAt: 1,
+      updatedAt: 1,
+    }))
+
+    expect(validateGitOperationsDurableState(
+      test.intents,
+      test.admissions,
+      test.registry,
+      new Set(),
+      new Set(),
+      () => {},
+    )).toEqual({ intents: [] })
   })
 
   it('keeps all three browser Intents strict, path-free, and selection-bounded', () => {

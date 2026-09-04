@@ -594,6 +594,16 @@ async function flushConsumer(): Promise<void> {
   for (let turn = 0; turn < 20; turn++) await Promise.resolve()
 }
 
+async function idleSynchronizationHarness(): Promise<SynchronizationHarness> {
+  const harness = synchronizationHarness()
+  await saveConfiguration(harness)
+  await harness.syncTable.update(PROJECT_A, (current) => {
+    const { nextScanAttempt: _scheduled, ...idle } = current
+    return idle
+  })
+  return harness
+}
+
 describe('GitHub synchronization coordinator regressions', () => {
   it('returns typed misses and projects every unconfigured scan state', async () => {
     const harness = synchronizationHarness()
@@ -1203,6 +1213,36 @@ describe('GitHub synchronization coordinator regressions', () => {
     } finally {
       date.mockRestore()
     }
+  })
+
+  it('omits an authentication credential reference from Board and Settings failure projections', async () => {
+    const harness = synchronizationHarness()
+    const credentialRef = configuration().credentialRef
+    await saveConfiguration(harness)
+    const lease = await begin(harness)
+
+    expect(await harness.synchronization.failScan(
+      PROJECT_A,
+      lease.attemptId,
+      { kind: 'provider', failure: { code: 'auth-unavailable', credentialRef } },
+      new AbortController().signal,
+    )).toEqual({ state: 'failed' })
+    expect(harness.syncTable.get(PROJECT_A)?.currentFailure?.failure).toEqual({
+      kind: 'provider',
+      failure: { code: 'auth-unavailable', credentialRef },
+    })
+
+    const board = harness.synchronization.board(PROJECT_A)
+    const settings = harness.synchronization.projectSettings(PROJECT_A)
+    if (board === 'not-found' || settings === 'not-found') throw new Error('Project projections are missing')
+    expect(board.failure?.failure).toEqual({
+      kind: 'provider',
+      failure: { code: 'auth-unavailable' },
+    })
+    expect(settings.synchronization.failure?.failure).toEqual({
+      kind: 'provider',
+      failure: { code: 'auth-unavailable' },
+    })
   })
 
   it('preserves an interactive refresh that arrives while a background lease expires', async () => {
@@ -3240,6 +3280,380 @@ describe('GitHub synchronization coordinator regressions', () => {
     expect(harness.syncTable.get(PROJECT_A)?.inFlightAttempt).toBeUndefined()
   })
 
+  it('waits past an existing scan and lets one newly begun attempt satisfy concurrent requests', async () => {
+    const harness = synchronizationHarness()
+    const githubConfiguration = configuration()
+    await saveConfiguration(harness, { patch: githubConfiguration })
+    const ctx = new Context()
+    let startFirst: (() => void) | undefined
+    let finishFirst: ((candidate: GitHubProjectBoardScanCandidate) => void) | undefined
+    const firstStarted = new Promise<void>((resolve) => { startFirst = resolve })
+    const firstFinished = new Promise<GitHubProjectBoardScanCandidate>((resolve) => { finishFirst = resolve })
+    let startSecond: (() => void) | undefined
+    let finishSecond: ((candidate: GitHubProjectBoardScanCandidate) => void) | undefined
+    const secondStarted = new Promise<void>((resolve) => { startSecond = resolve })
+    const secondFinished = new Promise<GitHubProjectBoardScanCandidate>((resolve) => { finishSecond = resolve })
+    const requestAfterCurrent = harness.synchronization.requestScanAfterCurrent.bind(harness.synchronization)
+    let scheduledCount = 0
+    let markBothScheduled: (() => void) | undefined
+    const bothScheduled = new Promise<void>((resolve) => { markBothScheduled = resolve })
+    let releaseFences: (() => void) | undefined
+    const fencesReleased = new Promise<void>((resolve) => { releaseFences = resolve })
+    const requestSpy = vi.spyOn(harness.synchronization, 'requestScanAfterCurrent')
+      .mockImplementation(async (projectId, signal) => {
+        const result = await requestAfterCurrent(projectId, signal)
+        scheduledCount += 1
+        if (scheduledCount === 2) markBothScheduled?.()
+        await fencesReleased
+        return result
+      })
+    const provider = new ScriptedGitHub(ctx, [
+      async () => {
+        startFirst?.()
+        return await firstFinished
+      },
+      async () => {
+        startSecond?.()
+        return await secondFinished
+      },
+    ])
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: provider,
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    try {
+      await firstStarted
+      let firstSettled = false
+      let secondSettled = false
+      const first = consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal)
+        .then((result) => {
+          firstSettled = true
+          return result
+        })
+      const second = consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal)
+        .then((result) => {
+          secondSettled = true
+          return result
+        })
+      await bothScheduled
+      expect(harness.syncTable.get(PROJECT_A)?.nextScanAttempt).toMatchObject({
+        priority: 'interactive',
+        reason: 'interactive',
+      })
+
+      finishFirst?.(boardCandidate(githubConfiguration))
+      await secondStarted
+      expect(firstSettled).toBe(false)
+      expect(secondSettled).toBe(false)
+      releaseFences?.()
+      await flushConsumer()
+      expect(firstSettled).toBe(false)
+      expect(secondSettled).toBe(false)
+
+      finishSecond?.(boardCandidate(githubConfiguration))
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        { state: 'published', generation: 2, configurationRevision: 1 },
+        { state: 'published', generation: 2, configurationRevision: 1 },
+      ])
+      expect(provider.requests).toHaveLength(2)
+    } finally {
+      releaseFences?.()
+      finishFirst?.(boardCandidate(githubConfiguration))
+      finishSecond?.(boardCandidate(githubConfiguration))
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+      requestSpy.mockRestore()
+    }
+  })
+
+  it('returns a safe typed Provider failure from the newly requested attempt', async () => {
+    const harness = await idleSynchronizationHarness()
+    const ctx = new Context()
+    const provider = new ScriptedGitHub(ctx, [
+      new GitHubProviderError({ code: 'transient-transport', retryAfterMs: 1_000 }),
+    ])
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: provider,
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    try {
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal))
+        .resolves.toEqual({
+          state: 'failed',
+          failure: {
+            kind: 'provider',
+            failure: { code: 'transient-transport', retryAfterMs: 1_000 },
+          },
+        })
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('returns stale when the requested Provider failure loses its durable attempt fence', async () => {
+    const harness = await idleSynchronizationHarness()
+    const failScan = vi.spyOn(harness.synchronization, 'failScan').mockResolvedValue({ state: 'stale' })
+    const ctx = new Context()
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: new ScriptedGitHub(ctx, [new GitHubProviderError({ code: 'transient-transport' })]),
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    try {
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal))
+        .resolves.toEqual({ state: 'stale' })
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+      failScan.mockRestore()
+    }
+  })
+
+  it('contains an unexpected Provider throw as a safe fresh-scan availability outcome', async () => {
+    const harness = await idleSynchronizationHarness()
+    const ctx = new Context()
+    const report = vi.fn()
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: new ScriptedGitHub(ctx, [new Error('unsafe provider detail')]),
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: report,
+    })
+    try {
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal))
+        .resolves.toEqual({ state: 'unavailable', reason: 'provider-failed' })
+      expect(report).toHaveBeenCalledWith('provider')
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it.each([
+    ['mapping', {
+      state: 'activation-failed',
+      issues: [{ reason: 'status-field-missing', statusFieldId: configuration().statusFieldNodeId }],
+    }],
+    ['candidate', {
+      state: 'failed',
+      failure: { kind: 'candidate', reason: 'target-mismatch' },
+    }],
+    ['capacity', {
+      state: 'failed',
+      failure: {
+        kind: 'capacity',
+        resource: 'board-work-items',
+        limit: SAKI_BOARD_WORK_ITEM_LIMIT,
+        observed: SAKI_BOARD_WORK_ITEM_LIMIT + 1,
+      },
+    }],
+    ['stale', { state: 'stale' }],
+  ] as const)('returns the newly requested attempt\'s %s publication outcome', async (_label, outcome) => {
+    const harness = await idleSynchronizationHarness()
+    const publish = vi.spyOn(harness.synchronization, 'publishScan').mockResolvedValue(outcome)
+    const ctx = new Context()
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: new ScriptedGitHub(ctx, [boardCandidate()]),
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    try {
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal))
+        .resolves.toEqual(outcome)
+      expect(publish).toHaveBeenCalledTimes(1)
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+      publish.mockRestore()
+    }
+  })
+
+  it('terminates fresh-scan requests for unknown and unconfigured Projects', async () => {
+    const harness = synchronizationHarness()
+    const ctx = new Context()
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: new UnusedGitHub(ctx),
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    try {
+      await expect(consumer.requestFreshBoardScan(PROJECT_B, new AbortController().signal))
+        .resolves.toEqual({ state: 'unavailable', reason: 'not-found' })
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal))
+        .resolves.toEqual({ state: 'unavailable', reason: 'unconfigured' })
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('terminates when synchronization becomes unconfigured before the requested scan is admitted', async () => {
+    const harness = await idleSynchronizationHarness()
+    const beginScan = vi.spyOn(harness.synchronization, 'beginScan')
+      .mockImplementationOnce(async () => {
+        await harness.syncTable.update(PROJECT_A, (current) => {
+          const { nextScanAttempt: _scheduled, ...idle } = current
+          return idle
+        })
+        return { ok: false, reason: 'unconfigured' }
+      })
+    const ctx = new Context()
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: new UnusedGitHub(ctx),
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    try {
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal))
+        .resolves.toEqual({ state: 'unavailable', reason: 'unconfigured' })
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+      beginScan.mockRestore()
+    }
+  })
+
+  it('settles active and later fresh-scan requests when the Provider-bound Consumer is disposed', async () => {
+    const harness = await idleSynchronizationHarness()
+    const ctx = new Context()
+    let started: (() => void) | undefined
+    const scanStarted = new Promise<void>((resolve) => { started = resolve })
+    const provider = new ScriptedGitHub(ctx, [async (signal) => {
+      started?.()
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error('scan aborted'))
+        }, { once: true })
+      })
+      throw new Error('unreachable scan completion')
+    }])
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: provider,
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    try {
+      const pending = consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal)
+      await scanStarted
+      const disposing = consumer.dispose()
+      await expect(pending).resolves.toEqual({ state: 'unavailable', reason: 'provider-detached' })
+      await disposing
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal))
+        .resolves.toEqual({ state: 'unavailable', reason: 'provider-detached' })
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('removes a fresh-scan waiter immediately when its caller aborts', async () => {
+    const harness = await idleSynchronizationHarness()
+    const ctx = new Context()
+    const provider = new ScriptedGitHub(ctx, [async (signal) => {
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error('scan aborted'))
+        }, { once: true })
+      })
+      throw new Error('unreachable scan completion')
+    }])
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: provider,
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    const caller = new AbortController()
+    const reason = new Error('finalization canceled')
+    try {
+      const pending = consumer.requestFreshBoardScan(PROJECT_A, caller.signal)
+      caller.abort(reason)
+      await expect(pending).rejects.toBe(reason)
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('keeps a committed interactive scan wake after cancellation removes its waiter', async () => {
+    const harness = await idleSynchronizationHarness()
+    const ctx = new Context()
+    const provider = new ScriptedGitHub(ctx, [boardCandidate()])
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: provider,
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    const caller = new AbortController()
+    const reason = new Error('canceled after durable scheduling')
+    harness.syncTable.afterNextCommit = () => { caller.abort(reason) }
+    try {
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, caller.signal)).rejects.toBe(reason)
+      await flushConsumer()
+      expect(provider.requests).toHaveLength(1)
+      expect(harness.synchronization.board(PROJECT_A)).toMatchObject({ state: 'confirmed' })
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('rejects a fresh-scan request whose signal was already aborted', async () => {
+    const harness = synchronizationHarness()
+    const ctx = new Context()
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: new UnusedGitHub(ctx),
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    const errorSignal = new AbortController()
+    const reason = new Error('finalization already canceled')
+    errorSignal.abort(reason)
+    const valueSignal = new AbortController()
+    valueSignal.abort('canceled')
+    try {
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, errorSignal.signal)).rejects.toBe(reason)
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, valueSignal.signal))
+        .rejects.toBe('canceled')
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('rejects a fresh-scan request when durable scheduling itself fails', async () => {
+    const harness = synchronizationHarness()
+    const failure = new Error('storage unavailable')
+    const request = vi.spyOn(harness.synchronization, 'requestScanAfterCurrent').mockRejectedValue(failure)
+    const ctx = new Context()
+    const consumer = new GitHubSynchronizationConsumer({
+      synchronization: harness.synchronization,
+      github: new UnusedGitHub(ctx),
+      attemptTtlMs: 60_000,
+      reportUnexpectedFailure: vi.fn(),
+    })
+    try {
+      await expect(consumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal))
+        .rejects.toBe(failure)
+    } finally {
+      await consumer.dispose()
+      await ctx.fiber.dispose()
+      request.mockRestore()
+    }
+  })
+
   it('records typed Provider failure and recovers through its durable retry', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(100_000)
@@ -3312,6 +3726,8 @@ describe('GitHub synchronization coordinator regressions', () => {
     try {
       await flushConsumer()
       expect(malformedReport).toHaveBeenCalledWith('consumer')
+      await expect(malformedConsumer.requestFreshBoardScan(PROJECT_A, new AbortController().signal))
+        .resolves.toEqual({ state: 'unavailable', reason: 'consumer-failed' })
     } finally {
       await malformedConsumer.dispose()
       await malformedContext.fiber.dispose()
@@ -3346,6 +3762,11 @@ describe('GitHub synchronization coordinator regressions', () => {
         expect.any(Number),
         expect.any(AbortSignal),
       )
+      dueSpy.mockReturnValueOnce([due])
+      beginSpy.mockResolvedValueOnce({ ok: false, reason: 'unconfigured' })
+      staleConsumer.wake()
+      await flushConsumer()
+      expect(beginSpy).toHaveBeenCalledTimes(2)
       expect(staleReport).not.toHaveBeenCalled()
     } finally {
       await staleConsumer.dispose()

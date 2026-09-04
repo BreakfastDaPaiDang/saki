@@ -9,6 +9,8 @@ import {
   GITHUB_INSTALLATION_REPOSITORY_LIMIT,
   GITHUB_PROJECT_BOARD_FIELD_LIMIT,
   GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT,
+  GITHUB_PULL_REQUEST_CREATE_BODY_UTF8_LIMIT,
+  GITHUB_PULL_REQUEST_CREATE_TITLE_UTF8_LIMIT,
   GITHUB_RATE_OBSERVATION_LIMIT,
   GITHUB_TAG_PEEL_DEPTH_LIMIT,
 } from './constants.ts'
@@ -19,20 +21,27 @@ import {
   githubAccountIdSchema,
   githubAppIdSchema,
   githubCommitIdSchema,
+  githubCommitStatusIdSchema,
+  githubCheckRunIdSchema,
   githubExternalOperationIdSchema,
   githubInstallationIdSchema,
   githubIssueIdSchema,
   githubIssueCreateMarkerIdSchema,
+  githubMilestoneIdSchema,
   githubProjectFieldIdSchema,
   githubProjectIdSchema,
   githubProjectItemIdSchema,
   githubProjectOptionIdSchema,
   githubPullRequestIdSchema,
+  githubPullRequestReviewIdSchema,
+  githubPullRequestCreateMarkerIdSchema,
   githubReleaseIdSchema,
   githubReleaseTagNameSchema,
   githubRepositoryDatabaseIdSchema,
   githubRepositoryIdSchema,
   githubTagObjectIdSchema,
+  githubWorkflowRunIdSchema,
+  githubWorkflowIdSchema,
 } from './ids.ts'
 
 const safeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
@@ -48,6 +57,10 @@ const safeUrl = z.url().max(2_048).refine((value) => {
   const parsed = new URL(value)
   return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === '' && parsed.hash === ''
 }, 'URL must be credential-free HTTPS without a fragment')
+const safeReviewUrl = z.url().max(2_048).refine((value) => {
+  const parsed = new URL(value)
+  return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === ''
+}, 'review URL must be credential-free HTTPS')
 
 /** Strict caller installation profile schema. */
 export const githubInstallationProfileSchema = z.object({
@@ -89,12 +102,16 @@ export const githubInstallationFactSchema = z.object({
   observedAt: safeTimestamp,
 }).strict()
 
+/** Strict canonical GitHub `owner/name` Repository locator. */
+export const githubRepositoryNameWithOwnerSchema = z.string()
+  .regex(/^[^/\u0000-\u001f\u007f]+\/[^/\u0000-\u001f\u007f]+$/).max(201)
+
 /** Strict raw Repository-fact schema. */
 export const githubRepositoryFactSchema = z.object({
   id: githubRepositoryIdSchema,
   databaseId: githubRepositoryDatabaseIdSchema,
   ownerAccountId: githubAccountIdSchema,
-  nameWithOwner: z.string().regex(/^[^/\u0000-\u001f\u007f]+\/[^/\u0000-\u001f\u007f]+$/).max(201),
+  nameWithOwner: githubRepositoryNameWithOwnerSchema,
   visibility: z.enum(['public', 'private', 'internal']),
   url: safeUrl,
   updatedAt: safeTimestamp,
@@ -501,6 +518,15 @@ export const githubCommitReadRequestSchema = z.object({
   commitId: githubCommitIdSchema,
 }).strict()
 
+/** Strict public exact Commit-read request schema. */
+export const githubPublicCommitReadRequestSchema = z.object({
+  kind: z.literal('public-commit'),
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  repositoryNameWithOwner: githubRepositoryNameWithOwnerSchema,
+  commitId: githubCommitIdSchema,
+}).strict()
+
 /** Strict exact Commit-fact schema. */
 export const githubCommitFactSchema = z.object({
   id: githubCommitIdSchema,
@@ -531,6 +557,234 @@ export const githubCommitComparisonFactSchema = z.object({
   mergeBaseCommitId: githubCommitIdSchema.optional(),
   observedAt: safeTimestamp,
 }).strict()
+
+/** Strict exact Pull Request read request schema. */
+export const githubPullRequestReadRequestSchema = z.object({
+  kind: z.literal('pull-request'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  pullRequestId: githubPullRequestIdSchema,
+  pullRequestNumber: positiveInteger,
+}).strict()
+
+/** Strict exact branch-head read request schema. */
+export const githubBranchHeadReadRequestSchema = z.object({
+  kind: z.literal('branch-head'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  branch: githubBranchNameSchema,
+}).strict()
+
+/** Strict exact branch-head observation schema. */
+export const githubBranchHeadFactSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('present'), repositoryId: githubRepositoryIdSchema, branch: githubBranchNameSchema,
+    commitId: githubCommitIdSchema, observedAt: safeTimestamp }).strict(),
+  z.object({ state: z.literal('absent'), repositoryId: githubRepositoryIdSchema, branch: githubBranchNameSchema,
+    observedAt: safeTimestamp }).strict(),
+])
+
+const githubPullRequestEndpointSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  ref: githubBranchNameSchema,
+  commitId: githubCommitIdSchema,
+}).strict()
+
+/** Strict raw exact Pull Request fact schema. */
+export const githubPullRequestFactSchema = z.object({
+  id: githubPullRequestIdSchema,
+  repositoryId: githubRepositoryIdSchema,
+  number: positiveInteger,
+  state: z.enum(['open', 'closed']),
+  merged: z.boolean(),
+  draft: z.boolean(),
+  title: safeText,
+  url: safeUrl,
+  head: githubPullRequestEndpointSchema,
+  base: githubPullRequestEndpointSchema,
+  authorAccountId: githubAccountIdSchema.optional(),
+  updatedAt: safeTimestamp,
+  observedAt: safeTimestamp,
+}).strict().superRefine((fact, ctx) => {
+  if (fact.repositoryId !== fact.base.repositoryId) {
+    issue(ctx, 'Pull Request base must belong to the target Repository')
+  }
+  if (fact.state === 'open' && fact.merged) issue(ctx, 'an open Pull Request cannot be merged')
+})
+
+/** Strict complete Pull Request review read request schema. */
+export const githubPullRequestReviewsReadRequestSchema = z.object({
+  kind: z.literal('pull-request-reviews'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  pullRequestId: githubPullRequestIdSchema,
+  pullRequestNumber: positiveInteger,
+}).strict()
+
+/** Strict raw Pull Request review fact schema. */
+export const githubPullRequestReviewFactSchema = z.object({
+  id: githubPullRequestReviewIdSchema,
+  authorAccountId: githubAccountIdSchema.optional(),
+  state: z.enum(['approved', 'changes-requested', 'commented', 'dismissed', 'pending']),
+  commitId: githubCommitIdSchema.optional(),
+  url: safeReviewUrl,
+  submittedAt: safeTimestamp.optional(),
+  updatedAt: safeTimestamp,
+}).strict()
+
+/** Strict complete review collection for one exact Pull Request observation. */
+export const githubPullRequestReviewsFactSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  pullRequestId: githubPullRequestIdSchema,
+  pullRequestNumber: positiveInteger,
+  headCommitId: githubCommitIdSchema,
+  pullRequestUpdatedAt: safeTimestamp,
+  reviews: z.array(githubPullRequestReviewFactSchema).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT)
+    .superRefine((reviews, ctx) => {
+      rejectDuplicate(reviews.map(review => review.id), 'Pull Request review id', ctx)
+    }),
+  observedAt: safeTimestamp,
+}).strict()
+
+/** Strict same-Repository Pull Request association request schema. */
+export const githubPullRequestAssociationReadRequestSchema = z.object({
+  kind: z.literal('pull-request-association'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  headRef: githubBranchNameSchema,
+  baseRef: githubBranchNameSchema,
+  expectedHeadCommitId: githubCommitIdSchema,
+}).strict()
+
+/** Strict complete Pull Request association observation schema. */
+export const githubPullRequestAssociationFactSchema = z.discriminatedUnion('state', [
+  z.object({
+    state: z.literal('absent'),
+    repositoryId: githubRepositoryIdSchema,
+    headRef: githubBranchNameSchema,
+    baseRef: githubBranchNameSchema,
+    expectedHeadCommitId: githubCommitIdSchema,
+    observedAt: safeTimestamp,
+  }).strict(),
+  z.object({
+    state: z.literal('unique'),
+    pullRequest: githubPullRequestFactSchema,
+    observedAt: safeTimestamp,
+  }).strict(),
+  z.object({
+    state: z.literal('duplicate-conflict'),
+    pullRequests: z.array(githubPullRequestFactSchema).min(2).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT)
+      .superRefine((pullRequests, ctx) => {
+        rejectDuplicate(pullRequests.map(pullRequest => pullRequest.id), 'Pull Request id', ctx)
+        rejectDuplicate(pullRequests.map(pullRequest => String(pullRequest.number)), 'Pull Request number', ctx)
+      }),
+    observedAt: safeTimestamp,
+  }).strict(),
+])
+
+/** Strict exact Commit CI request schema. */
+export const githubCommitCiReadRequestSchema = z.object({
+  kind: z.literal('commit-ci'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  commitId: githubCommitIdSchema,
+}).strict()
+
+const githubCiStatusSchema = z.enum(['queued', 'in-progress', 'completed', 'pending', 'requested', 'waiting'])
+const githubCiConclusionSchema = z.enum([
+  'action-required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'startup-failure', 'success', 'timed-out',
+])
+
+/** Strict raw GitHub Actions workflow-run fact schema. */
+export const githubWorkflowRunFactSchema = z.object({
+  id: githubWorkflowRunIdSchema,
+  workflowId: githubWorkflowIdSchema,
+  name: safeText,
+  event: safeName,
+  runNumber: positiveInteger,
+  runAttempt: positiveInteger,
+  status: githubCiStatusSchema,
+  conclusion: githubCiConclusionSchema.optional(),
+  url: safeUrl,
+  createdAt: safeTimestamp,
+  updatedAt: safeTimestamp,
+}).strict()
+
+/** Strict raw GitHub check-run fact schema. */
+export const githubCheckRunFactSchema = z.object({
+  id: githubCheckRunIdSchema,
+  name: safeText,
+  status: githubCiStatusSchema,
+  conclusion: githubCiConclusionSchema.optional(),
+  url: safeUrl,
+  startedAt: safeTimestamp.optional(),
+  completedAt: safeTimestamp.optional(),
+}).strict().superRefine((fact, ctx) => {
+  if (fact.startedAt !== undefined && fact.completedAt !== undefined && fact.completedAt < fact.startedAt) {
+    issue(ctx, 'check-run completion cannot precede its start')
+  }
+})
+
+/** Strict raw GitHub commit-status fact schema. */
+export const githubCommitStatusFactSchema = z.object({
+  id: githubCommitStatusIdSchema,
+  context: safeText,
+  state: z.enum(['error', 'failure', 'pending', 'success']),
+  targetUrl: safeUrl.optional(),
+  createdAt: safeTimestamp,
+  updatedAt: safeTimestamp,
+}).strict()
+
+/** Strict complete source-preserving CI observation schema. */
+export const githubCommitCiFactSchema = z.object({
+  repositoryId: githubRepositoryIdSchema,
+  commitId: githubCommitIdSchema,
+  workflowRuns: z.array(githubWorkflowRunFactSchema).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+  checkRuns: z.array(githubCheckRunFactSchema).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+  commitStatuses: z.array(githubCommitStatusFactSchema).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+  observedAt: safeTimestamp,
+}).strict().superRefine((fact, ctx) => {
+  rejectDuplicate(fact.workflowRuns.map(run => run.id), 'workflow-run id', ctx)
+  rejectDuplicate(fact.checkRuns.map(run => run.id), 'check-run id', ctx)
+  rejectDuplicate(fact.commitStatuses.map(status => status.id), 'commit-status id', ctx)
+})
+
+/** Strict exact Milestone read request schema. */
+export const githubMilestoneReadRequestSchema = z.object({
+  kind: z.literal('milestone'),
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  milestoneId: githubMilestoneIdSchema,
+  milestoneNumber: positiveInteger,
+}).strict()
+
+/** Strict raw Milestone metadata and complete Issue-scope schema. */
+export const githubMilestoneFactSchema = z.object({
+  id: githubMilestoneIdSchema,
+  repositoryId: githubRepositoryIdSchema,
+  number: positiveInteger,
+  state: z.enum(['open', 'closed']),
+  title: safeText,
+  description: z.string().max(65_536).optional(),
+  dueOn: safeTimestamp.optional(),
+  url: safeUrl,
+  updatedAt: safeTimestamp,
+  issues: z.array(githubIssueFactSchema).max(GITHUB_PROJECT_BOARD_SCAN_COLLECTION_LIMIT),
+  observedAt: safeTimestamp,
+}).strict().superRefine((fact, ctx) => {
+  rejectDuplicate(fact.issues.map(issueFact => issueFact.id), 'Milestone Issue id', ctx)
+  rejectDuplicate(fact.issues.map(issueFact => String(issueFact.number)), 'Milestone Issue number', ctx)
+  for (const issueFact of fact.issues) {
+    if (issueFact.repositoryId !== fact.repositoryId) {
+      issue(ctx, 'Milestone Issue must belong to the target Repository')
+    }
+  }
+})
 
 /** Strict complete Project-board scan request schema. */
 export const githubProjectBoardScanRequestSchema = z.object({
@@ -597,8 +851,13 @@ const mappingMismatchFailureSchema = z.discriminatedUnion('reason', [
   }).strict(),
 ])
 
-/** Strict closed provider-failure data schema. */
+/** Strict closed provider-failure data schema with JSON-exact optional-member omission. */
 export const githubFailureSchema = z.union([standardGitHubFailureSchema, mappingMismatchFailureSchema])
+  .transform(omitUndefinedMembers)
+
+function omitUndefinedMembers<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, member]) => member !== undefined)) as T
+}
 
 /** Strict exact Issue identity returned by create and used by inspection. */
 export const githubIssueCreateInspectionHintSchema = z.object({
@@ -644,6 +903,80 @@ export const githubIssueCreateRequestSchema = z.object({
   }
   if (request.body.split('<!-- saki-work-item:').length !== 2) {
     issue(ctx, 'Issue-create body must contain exactly one Saki Work Item marker prefix')
+  }
+})
+
+/** Strict exact Pull Request identity returned by create and used by inspection. */
+export const githubPullRequestCreateInspectionHintSchema = z.object({
+  pullRequestId: githubPullRequestIdSchema,
+  pullRequestNumber: positiveInteger,
+}).strict()
+
+const pullRequestCreateTitleSchema = z.string()
+  .min(1)
+  .max(GITHUB_PULL_REQUEST_CREATE_TITLE_UTF8_LIMIT)
+  .superRefine((value, ctx) => {
+    if (!value.isWellFormed()) issue(ctx, 'Pull Request title must be well-formed Unicode')
+    if (value.trim() === '') issue(ctx, 'Pull Request title must contain visible text')
+    if (/\r|\n|[\u0000-\u001f\u007f]/u.test(value)) issue(ctx, 'Pull Request title must be one safe line')
+    if (utf8ByteLength(value) > GITHUB_PULL_REQUEST_CREATE_TITLE_UTF8_LIMIT) {
+      issue(ctx, 'Pull Request title exceeds the complete UTF-8 byte limit')
+    }
+  })
+
+const pullRequestCreateBodySchema = z.string().min(1).max(GITHUB_PULL_REQUEST_CREATE_BODY_UTF8_LIMIT)
+  .superRefine((value, ctx) => {
+    if (!value.isWellFormed()) issue(ctx, 'Pull Request body must be well-formed Unicode')
+    if (value.includes('\r')) issue(ctx, 'Pull Request body must use normalized LF line endings')
+    if (/[\u0000\u007f]/u.test(value)) issue(ctx, 'Pull Request body contains a forbidden control character')
+    if (utf8ByteLength(value) > GITHUB_PULL_REQUEST_CREATE_BODY_UTF8_LIMIT) {
+      issue(ctx, 'Pull Request body exceeds the complete UTF-8 byte limit')
+    }
+  })
+
+const pullRequestCreateTextSchema = z.object({
+  markerId: githubPullRequestCreateMarkerIdSchema,
+  title: pullRequestCreateTitleSchema,
+  body: pullRequestCreateBodySchema,
+}).strict().superRefine((text, ctx) => {
+  validatePullRequestCreateMarker(text.body, text.markerId, ctx)
+})
+
+/** Strict preparation from caller-owned Pull Request text to the complete marker-bound GitHub text. */
+export const githubPullRequestCreateTextPreparationSchema = z.object({
+  markerId: githubPullRequestCreateMarkerIdSchema,
+  title: z.string(),
+  body: z.string(),
+}).strict().transform(text => ({
+  ...text,
+  body: `${text.body.trimEnd()}\n<!-- saki-pull-request:${text.markerId} -->\n`,
+})).superRefine((text, ctx) => {
+  const admitted = pullRequestCreateTextSchema.safeParse(text)
+  if (!admitted.success) {
+    for (const textIssue of admitted.error.issues) {
+      ctx.addIssue({ code: 'custom', message: textIssue.message, path: textIssue.path })
+    }
+  }
+})
+
+/** Strict marker-bound Pull Request creation request schema. */
+export const githubPullRequestCreateRequestSchema = z.object({
+  kind: z.literal('pull-request-create'),
+  operationId: githubExternalOperationIdSchema,
+  installation: githubInstallationProfileSchema,
+  repositoryId: githubRepositoryIdSchema,
+  repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+  markerId: githubPullRequestCreateMarkerIdSchema,
+  headRef: githubBranchNameSchema,
+  baseRef: githubBranchNameSchema,
+  expectedHeadCommitId: githubCommitIdSchema,
+  title: pullRequestCreateTitleSchema,
+  body: pullRequestCreateBodySchema,
+  inspectionHint: githubPullRequestCreateInspectionHintSchema.optional(),
+}).strict().superRefine((request, ctx) => {
+  validatePullRequestCreateMarker(request.body, request.markerId, ctx)
+  if (request.headRef === request.baseRef) {
+    issue(ctx, 'Pull Request head and base refs must differ')
   }
 })
 
@@ -897,8 +1230,52 @@ export const githubIssueCreateInspectionSchema = z.object({
   observedAt: safeTimestamp,
 }).strict()
 
+/* Issue and Pull Request creation outcomes are separate closed wire contracts;
+ * their discriminants remain explicit because the Issue contract has marker
+ * states that must never become valid for Pull Request creation by sharing. */
+/* jscpd:ignore-start */
+const githubPullRequestCreateInspectionOutcomeSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('unique-pull-request'), pullRequest: githubPullRequestFactSchema }).strict(),
+  z.object({ state: z.literal('absent-complete') }).strict(),
+  z.object({ state: z.literal('marker-removed') }).strict(),
+  z.object({ state: z.literal('known-pull-request-absent') }).strict(),
+  z.object({ state: z.literal('identity-conflict') }).strict(),
+  z.object({ state: z.literal('multiple-matches') }).strict(),
+  z.object({ state: z.literal('incomplete') }).strict(),
+])
+/* jscpd:ignore-end */
+
+/** Strict targeted Pull Request creation inspection schema. */
+export const githubPullRequestCreateInspectionSchema = z.object({
+  snapshot: z.object({
+    repositoryId: githubRepositoryIdSchema,
+    repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
+    outcome: githubPullRequestCreateInspectionOutcomeSchema,
+  }).strict().superRefine((snapshot, ctx) => {
+    if (snapshot.outcome.state === 'unique-pull-request'
+      && snapshot.outcome.pullRequest.repositoryId !== snapshot.repositoryId) {
+      issue(ctx, 'Pull Request creation outcome must match the inspected Repository')
+    }
+  }),
+  observedAt: safeTimestamp,
+}).strict()
+
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength
+}
+
+function validatePullRequestCreateMarker(
+  body: string,
+  markerId: z.infer<typeof githubPullRequestCreateMarkerIdSchema>,
+  ctx: z.core.$RefinementCtx,
+): void {
+  const marker = `<!-- saki-pull-request:${markerId} -->`
+  if (!body.endsWith(`\n${marker}\n`)) {
+    issue(ctx, 'Pull Request body must end with the exact persisted marker on its own line')
+  }
+  if (body.split('<!-- saki-pull-request:').length !== 2) {
+    issue(ctx, 'Pull Request body must contain exactly one Saki Pull Request marker prefix')
+  }
 }
 
 function rejectDuplicate(values: readonly string[], subject: string, ctx: z.core.$RefinementCtx): void {

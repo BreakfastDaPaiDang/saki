@@ -32,8 +32,8 @@ import {
   installationRecordSchema,
   principalRecordSchema,
   registrationIntentRecordSchema,
-  sakiControlPlaneDomainSpec,
 } from '../src/spec.ts'
+import { sakiControlPlaneDomainSpec } from '../src/domain-spec.ts'
 import type {
   ControlStateRecord,
   DevelopmentProjectRegistryRecord,
@@ -47,6 +47,7 @@ import type {
 } from '../src/spec.ts'
 import {
   validateCurrentSakiState,
+  validateDisjointControlIntentIds,
   validateSakiV2SourceState,
   validateSakiV3SourceState,
   validateSakiV4SourceState,
@@ -358,8 +359,14 @@ function currentDomains(
     registration_intents: readonlyTable(fixture.intents),
     github_project_sync: readonlyTable(githubProjectSync),
     github_sync_configuration_intents: readonlyTable(new Map()),
+    github_work_item_intents: readonlyTable(new Map()),
+    github_work_item_recovery: readonlyTable(new Map()),
     git_operation_intents: readonlyTable(new Map()),
     binding_write_admissions: readonlyTable(new Map()),
+    branch_deliveries: readonlyTable(new Map()),
+    branch_delivery_intents: readonlyTable(new Map()),
+    milestone_deliveries: readonlyTable(new Map()),
+    milestone_delivery_intents: readonlyTable(new Map()),
     agent_operation_intents: readonlyTable(new Map()),
     work_assignments: readonlyTable(new Map()),
     work_sessions: readonlyTable(new Map()),
@@ -861,6 +868,14 @@ function requiredMapRecord<K, V>(records: ReadonlyMap<K, V>, key: K): V {
 }
 
 describe('current Saki state validation', () => {
+  it('rejects one identity retained by separate Control Intent families', () => {
+    const id = 'intent-00000000-0000-4000-8000-000000000110' as SakiControlIntentId
+
+    expect(() => { validateDisjointControlIntentIds([{ id }], [{ id }]) }).toThrow(
+      `Saki Control Intent '${id}' is retained by multiple Intent kinds`,
+    )
+  })
+
   it('accepts a complete ready generation without writes or external calls', () => {
     const fixture = currentFixture()
     const domains = currentDomains(fixture)

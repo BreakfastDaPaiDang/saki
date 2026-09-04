@@ -23,8 +23,8 @@ import {
 } from '../src/host.ts'
 import {
   CONTROL_STATE_KEY,
-  sakiControlPlaneDomainSpec,
 } from '../src/spec.ts'
+import { sakiControlPlaneDomainSpec } from '../src/domain-spec.ts'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import type { InstallationAccessRecord } from '../src/spec.ts'
 import {
@@ -45,6 +45,9 @@ const CONTROL_PLANE_CONFIG = {
   terminalRetentionMs: 86_400_000,
   githubScanAttemptTtlMs: 300_000,
   agentDispatchClaimTtlMs: 30_000,
+  branchDeliveryObservationFreshForMs: 300_000,
+  milestoneDeliveryObservationFreshForMs: 300_000,
+  targetedPendingPollIntervalMs: 300_000,
   cookieName: COOKIE_NAME,
   defaultAgentProfile: { agentPresetId: 'standard' },
 } as const

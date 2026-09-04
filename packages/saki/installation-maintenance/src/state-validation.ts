@@ -26,33 +26,58 @@ import {
   sakiHostExecutionDomainSpec,
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
+  sakiHostExecutionV3DomainSpec,
   type LocalHostGitOperationRecordV1,
   type LocalHostOperationRecord,
   type LocalHostOperationRecordV2,
+  type LocalHostOperationRecordV3,
 } from '@breakfastdapaidang/saki-execution-local'
 
 type CurrentControlPlaneDomain = Domain<typeof sakiControlPlaneDomainSpec>
 type CurrentHostExecutionDomain = Domain<typeof sakiHostExecutionDomainSpec>
 type HistoricalV1HostExecutionDomain = Domain<typeof sakiHostExecutionV1DomainSpec>
 type HistoricalV2HostExecutionDomain = Domain<typeof sakiHostExecutionV2DomainSpec>
+type HistoricalV3HostExecutionDomain = Domain<typeof sakiHostExecutionV3DomainSpec>
 type CurrentStorageGenerationDomain = Domain<typeof sakiStorageGenerationDomainSpec>
 type CurrentGitHostOperationRecord = Exclude<
   LocalHostOperationRecord,
-  { readonly request: { readonly type: 'start-agent-run' } }
+  { readonly request: { readonly type: 'start-agent-run' | 'push-branch' } }
 >
+type CurrentPushHostOperationRecord = Extract<
+  LocalHostOperationRecord,
+  { readonly request: { readonly type: 'push-branch' } }
+>
+type CurrentBranchDeliveryRecord = ReturnType<
+  (typeof sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema)['parse']
+>
+type CurrentBranchDeliveryIntentRecord = ReturnType<
+  (typeof sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema)['parse']
+>
+type CurrentBranchPushIntentRecord = CurrentBranchDeliveryIntentRecord & {
+  readonly operation: Extract<CurrentBranchDeliveryIntentRecord['operation'], { readonly kind: 'push' }>
+}
+type BranchPushAdmissionRecord = Extract<
+  BindingWriteAdmissionRecord,
+  { readonly state: 'manual-host-operation' }
+> & { readonly action: 'project-branch:push' }
 type HistoricalV2GitHostOperationRecord = Exclude<
   LocalHostOperationRecordV2,
   { readonly request: { readonly type: 'start-agent-run' } }
 >
+type HistoricalV3GitHostOperationRecord = Exclude<
+  LocalHostOperationRecordV3,
+  { readonly request: { readonly type: 'start-agent-run' } }
+>
 type GitHostOperationRecord = LocalHostGitOperationRecordV1
   | HistoricalV2GitHostOperationRecord
+  | HistoricalV3GitHostOperationRecord
   | CurrentGitHostOperationRecord
 type AgentHostOperationRecord = Extract<
   LocalHostOperationRecord,
   { readonly request: { readonly type: 'start-agent-run' } }
 >
 type HistoricalAgentHostOperationRecord = Extract<
-  LocalHostOperationRecordV2,
+  LocalHostOperationRecordV2 | LocalHostOperationRecordV3,
   { readonly request: { readonly type: 'start-agent-run' } }
 >
 type LinkedAgentRunRecord = AgentRunRecord | AgentRunV1Record
@@ -67,12 +92,17 @@ interface AgentOperationControlPlaneDomain {
   table(name: 'agent_runs' | 'execution_dispatches' | 'binding_write_admissions'): KvTable<string, unknown>
 }
 
+interface BranchDeliveryControlPlaneDomain {
+  table(name: 'branch_deliveries' | 'branch_delivery_intents' | 'binding_write_admissions'):
+  KvTable<string, unknown>
+}
+
 /**
  * Validate complete current product relationships across Control Plane, Host Execution, and generation identity.
  * Recoverable write-order gaps are accepted only when the Host still proves that no effect was admitted.
- * @param controlPlane - opened exact `saki_control_plane@8` domain.
- * @param hostExecution - opened exact `saki_host_execution@3` domain.
- * @param storageGeneration - opened exact `saki_storage_generation@6` domain.
+ * @param controlPlane - opened exact `saki_control_plane@9` domain.
+ * @param hostExecution - opened exact `saki_host_execution@4` domain.
+ * @param storageGeneration - opened exact `saki_storage_generation@7` domain.
  * @param expectedInstallationId - Installation selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation selected by maintenance metadata.
  * @param expectedCreatedByBuildId - generation provenance repeated by its seal.
@@ -94,18 +124,381 @@ export function validateCurrentSakiProductState(
     expectedCreatedByBuildId,
   )
   validateGitOperationLinks(controlPlane, hostExecution)
+  validateBranchDeliveryOperationLinks(controlPlane, hostExecution)
   validateAgentOperationLinks(controlPlane, hostExecution)
 }
 
 /**
+ * Validate current Branch Delivery Push Intent, Host Operation, and write-admission links.
+ * @param controlPlane - opened current Control Plane domain exposing Branch Delivery tables.
+ * @param hostExecution - opened current Host Execution domain.
+ * @returns nothing after every Push recovery relationship passes.
+ */
+export function validateBranchDeliveryOperationLinks(
+  controlPlane: BranchDeliveryControlPlaneDomain,
+  hostExecution: CurrentHostExecutionDomain,
+): void {
+  const deliveries = identifiedRecords(
+    controlPlane.table('branch_deliveries'),
+    sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema,
+    'Branch Delivery',
+  )
+  const intents = identifiedRecords(
+    controlPlane.table('branch_delivery_intents'),
+    sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema,
+    'Branch Delivery Intent',
+  )
+  const pushIntents = new Map<CurrentBranchPushIntentRecord['id'], CurrentBranchPushIntentRecord>()
+  for (const record of intents.values()) {
+    if (isBranchPushIntent(record)) pushIntents.set(record.id, record)
+  }
+  const admissions = identifiedRecords(
+    controlPlane.table('binding_write_admissions'),
+    bindingWriteAdmissionRecordSchema,
+    'Binding write admission',
+  )
+  const pushAdmissions = new Map<BranchPushAdmissionRecord['id'], BranchPushAdmissionRecord>()
+  for (const record of admissions.values()) {
+    if (isBranchPushAdmission(record)) pushAdmissions.set(record.id, record)
+  }
+  const pushOperations = new Map<CurrentPushHostOperationRecord['snapshot']['operation']['id'],
+    CurrentPushHostOperationRecord>()
+
+  for (const [key, value] of hostExecution.table('operations').entries()) {
+    if (value.snapshot.operation.id !== key) {
+      throw new Error('Saki Host Operation id disagrees with its table key')
+    }
+    if (!isCurrentPushHostOperation(value)) continue
+    const operation = value
+    const expectedId = operation.request.source.intentId.replace(/^intent-/u, 'host-operation-')
+    if (key !== expectedId) throw new Error('Branch Push Host Operation id disagrees with its Intent source')
+    const intent = pushIntents.get(operation.request.source.intentId)
+    if (intent === undefined) throw new Error('Branch Push Host Operation has no Branch Delivery Intent')
+    const delivery = deliveries.get(intent.deliveryId)
+    if (delivery === undefined) throw new Error('Branch Push Intent has no Branch Delivery')
+    if (!supersededBranchPush(intent, delivery) && !branchPushRequestMatchesDelivery(intent.operation.request, delivery)) {
+      throw new Error('Branch Push Intent request disagrees with its Branch Delivery')
+    }
+    const admission = admissions.get(intent.operation.request.expected.binding.id)
+    if (!isDeepStrictEqual(operation.request, intent.operation.request)
+      && !sourceConflictedBranchPushValid(intent, delivery, operation, admission)) {
+      throw new Error('Branch Push Host Operation request disagrees with its Intent')
+    }
+    if (!branchPushWindowValid(intent, delivery, operation, admission)) {
+      throw new Error('Branch Push checkpoint has no exact Host and admission window')
+    }
+    pushOperations.set(operation.snapshot.operation.id, operation)
+  }
+
+  for (const intent of pushIntents.values()) {
+    const operationId = intent.id.replace(/^intent-/u, 'host-operation-')
+    if (pushOperations.has(operationId as CurrentPushHostOperationRecord['snapshot']['operation']['id'])) continue
+    const delivery = deliveries.get(intent.deliveryId)
+    const request = intent.operation.request
+    const admission = admissions.get(request.expected.binding.id)
+    if (delivery === undefined || (!supersededBranchPush(intent, delivery) && !branchPushRequestMatchesDelivery(request, delivery))
+      || !branchPushWithoutHostValid(intent, delivery, admission)) {
+      throw new Error('Branch Push Intent has no Host Operation')
+    }
+  }
+  for (const delivery of deliveries.values()) {
+    if (delivery.push === undefined) continue
+    const intent = pushIntents.get(delivery.push.intentId)
+    const operationId = delivery.push.intentId.replace(/^intent-/u, 'host-operation-')
+    const operation = pushOperations.get(operationId as CurrentPushHostOperationRecord['snapshot']['operation']['id'])
+    if (intent === undefined || intent.deliveryId !== delivery.id
+      || operation?.snapshot.state !== 'succeeded'
+      || !isDeepStrictEqual(delivery.push.result, operation.snapshot.result)
+      || delivery.push.confirmedAt !== operation.snapshot.completedAt) {
+      throw new Error('applied Branch Delivery has no exact succeeded Push operation')
+    }
+  }
+  for (const admission of pushAdmissions.values()) {
+    const intent = pushIntents.get(admission.source.intentId)
+    if (intent === undefined) throw new Error('Branch Push admission has no Branch Delivery Intent')
+    if (!branchPushAdmissionMatchesRequest(admission, intent, intent.operation.request)) {
+      throw new Error('Branch Push admission has no exact recovery owner')
+    }
+  }
+}
+
+function branchPushWithoutHostValid(
+  intent: CurrentBranchDeliveryIntentRecord,
+  delivery: CurrentBranchDeliveryRecord,
+  admission: BindingWriteAdmissionRecord | undefined,
+): boolean {
+  if (intent.operation.kind !== 'push') return false
+  const checkpoint = intent.checkpoint
+  const ownedAdmission = admission !== undefined && isBranchPushAdmission(admission)
+    && branchPushAdmissionMatchesRequest(admission, intent, intent.operation.request)
+  if (checkpoint.state === 'prepared') {
+    return !ownedAdmission
+  }
+  if (checkpoint.state === 'active') {
+    if (delivery.lastIntentId !== intent.id || admission === undefined) return false
+    if (delivery.activeIntentId === undefined) return !ownedAdmission
+    if (delivery.activeIntentId !== intent.id) return false
+    return !ownedAdmission || (isBranchPushAdmission(admission) && admission.phase === 'reserved')
+  }
+  return checkpoint.state === 'terminal' && checkpoint.host === undefined
+    && (checkpoint.outcome === 'conflict' || checkpoint.outcome === 'denied')
+    && !ownedAdmission
+}
+
+function identifiedRecords<K extends string, V extends { readonly id: K }>(
+  table: KvTable<string, unknown>,
+  schema: { parse(value: unknown): V },
+  kind: string,
+): ReadonlyMap<K, V> {
+  return new Map([...table.entries()].map(([key, value]) => {
+    const parsed = schema.parse(value)
+    if (parsed.id !== key) throw new Error(`Saki ${kind} id disagrees with its table key`)
+    return [parsed.id, parsed] as const
+  }))
+}
+
+function isBranchPushAdmission(
+  record: BindingWriteAdmissionRecord,
+): record is BranchPushAdmissionRecord {
+  return record.state === 'manual-host-operation' && record.action === 'project-branch:push'
+}
+
+function isBranchPushIntent(record: CurrentBranchDeliveryIntentRecord): record is CurrentBranchPushIntentRecord {
+  return record.operation.kind === 'push'
+}
+
+function isCurrentPushHostOperation(
+  operation: LocalHostOperationRecord,
+): operation is CurrentPushHostOperationRecord {
+  return operation.request.type === 'push-branch'
+}
+
+function branchPushRequestMatchesDelivery(
+  request: CurrentPushHostOperationRecord['request'],
+  delivery: CurrentBranchDeliveryRecord,
+): boolean {
+  return isDeepStrictEqual(request.expected.binding, delivery.target.binding)
+    && request.expected.commitId === delivery.commitId
+    && request.expected.repository.nameWithOwner === delivery.target.repository.nameWithOwner
+    && request.targetRef === delivery.headRef
+}
+
+function supersededBranchPush(intent: CurrentBranchDeliveryIntentRecord, delivery: CurrentBranchDeliveryRecord): boolean {
+  const checkpoint = intent.checkpoint
+  return checkpoint.state === 'terminal' && checkpoint.outcome !== 'reconciliation-required'
+    && checkpoint.deliveryRevision !== undefined && checkpoint.deliveryRevision < delivery.revision
+    && delivery.lastIntentId !== intent.id && delivery.activeIntentId !== intent.id
+    && delivery.push?.intentId !== intent.id && delivery.repair?.intentId !== intent.id
+}
+
+function branchPushAdmissionMatchesRequest(
+  admission: BranchPushAdmissionRecord,
+  intent: CurrentBranchDeliveryIntentRecord,
+  request: CurrentPushHostOperationRecord['request'],
+): boolean {
+  return admission.id === request.expected.binding.id
+    && admission.bindingRevision === request.expected.binding.revision
+    && admission.source.intentId === intent.id
+    && isDeepStrictEqual(admission.source, request.source)
+}
+
+function activeBranchPushWindowValid(
+  intent: CurrentBranchDeliveryIntentRecord,
+  operation: CurrentPushHostOperationRecord,
+  admission: Extract<BindingWriteAdmissionRecord, {
+    readonly state: 'manual-host-operation'
+    readonly action: 'project-branch:push'
+  }> | undefined,
+): boolean {
+  if (admission === undefined || !branchPushAdmissionMatchesRequest(admission, intent, operation.request)) return false
+  if (operation.snapshot.state === 'prepared') {
+    if (admission.phase === 'reserved') return true
+    return isDeepStrictEqual(admission.preparation, operationPreparation(operation))
+  }
+  return false
+}
+
+function branchPushWindowValid(
+  intent: CurrentBranchDeliveryIntentRecord,
+  delivery: CurrentBranchDeliveryRecord,
+  operation: CurrentPushHostOperationRecord,
+  admission: BindingWriteAdmissionRecord | undefined,
+): boolean {
+  if (intent.operation.kind !== 'push') return false
+  const checkpoint = intent.checkpoint
+  if (!isDeepStrictEqual(operation.request, intent.operation.request)) {
+    return sourceConflictedBranchPushValid(intent, delivery, operation, admission)
+  }
+  if (checkpoint.state === 'active') {
+    return delivery.activeIntentId === intent.id && delivery.lastIntentId === intent.id
+      && admission !== undefined && isBranchPushAdmission(admission)
+      && activeBranchPushWindowValid(intent, operation, admission)
+  }
+  if (checkpoint.state === 'terminal') {
+    return terminalBranchPushWindowValid(intent, delivery, operation, admission)
+  }
+  if (checkpoint.state !== 'push-host-accepted') return false
+  const preparation = operationPreparation(operation)
+  if (!isDeepStrictEqual(checkpoint.preparation, preparation)) return false
+  const hostAdmission = operation.snapshot.admission
+  const hostAccepted = hostAdmission.kind === 'accepted'
+    && hostAdmission.revision === checkpoint.admissionRevision
+  const hostStartPending = operation.snapshot.state === 'prepared'
+    && hostAdmission.kind === 'not-accepted'
+  const canceledBeforeEffectAdmission = operation.snapshot.state === 'canceled'
+    && hostAdmission.kind === 'not-accepted'
+    && operation.effectPlan === undefined
+  if (!hostAccepted && !hostStartPending && !canceledBeforeEffectAdmission) return false
+  const appliedPush = delivery.activeIntentId === undefined && delivery.lastIntentId === intent.id
+    && delivery.push?.intentId === intent.id ? delivery.push : undefined
+  if (appliedPush !== undefined) {
+    if (operation.snapshot.state !== 'succeeded'
+      || !isDeepStrictEqual(appliedPush.result, operation.snapshot.result)
+      || appliedPush.confirmedAt !== operation.snapshot.completedAt) {
+      throw new Error('applied Branch Push disagrees with its succeeded Host snapshot')
+    }
+    return branchPushAdmissionAfterHostMatches(admission, intent, operation, checkpoint.preparation)
+  }
+  if (admission === undefined || !isBranchPushAdmission(admission) || admission.phase !== 'accepted'
+    || admission.revision !== checkpoint.admissionRevision
+    || !branchPushAcceptedAdmissionMatches(admission, intent, operation, preparation)) return false
+  if (delivery.activeIntentId === intent.id && delivery.lastIntentId === intent.id) return true
+  if (delivery.activeIntentId !== undefined || delivery.lastIntentId !== intent.id) return false
+  if (delivery.repair?.intentId === intent.id) {
+    return operation.snapshot.state === 'reconciliation-required'
+      && delivery.repair.reason === operation.snapshot.reason
+  }
+  return delivery.push?.intentId !== intent.id
+    && (operation.snapshot.state === 'failed' || operation.snapshot.state === 'canceled')
+}
+
+function sourceConflictedBranchPushValid(
+  intent: CurrentBranchDeliveryIntentRecord,
+  delivery: CurrentBranchDeliveryRecord,
+  operation: CurrentPushHostOperationRecord,
+  admission: BindingWriteAdmissionRecord | undefined,
+): boolean {
+  const checkpoint = intent.checkpoint
+  const noEffect = operation.effectPlan === undefined
+    && operation.snapshot.admission.kind === 'not-accepted'
+    && (operation.snapshot.state === 'prepared' || operation.snapshot.state === 'failed'
+      || operation.snapshot.state === 'canceled')
+  const activeWindow = checkpoint.state === 'active'
+    && delivery.lastIntentId === intent.id
+    && ((delivery.activeIntentId === intent.id && delivery.repair === undefined)
+      || (delivery.activeIntentId === undefined && delivery.repair?.intentId === intent.id
+        && delivery.repair.reason === 'evidence-conflict'))
+  const terminalWindow = checkpoint.state === 'terminal' && checkpoint.outcome === 'reconciliation-required'
+    && checkpoint.reason === 'evidence-conflict'
+    && checkpoint.host === undefined && delivery.activeIntentId === undefined
+    && delivery.lastIntentId === intent.id && delivery.repair?.intentId === intent.id
+    && delivery.repair.reason === 'evidence-conflict'
+  return intent.operation.kind === 'push'
+    && !isDeepStrictEqual(operation.request, intent.operation.request)
+    && isDeepStrictEqual(operation.request.source, intent.operation.request.source)
+    && admission !== undefined && isBranchPushAdmission(admission) && admission.phase === 'reserved'
+    && branchPushAdmissionMatchesRequest(admission, intent, intent.operation.request)
+    && noEffect && (activeWindow || terminalWindow)
+}
+
+function terminalBranchPushWindowValid(
+  intent: CurrentBranchDeliveryIntentRecord,
+  delivery: CurrentBranchDeliveryRecord,
+  operation: CurrentPushHostOperationRecord,
+  admission: BindingWriteAdmissionRecord | undefined,
+): boolean {
+  const checkpoint = intent.checkpoint
+  if (checkpoint.state !== 'terminal' || checkpoint.host === undefined
+    || !isDeepStrictEqual(checkpoint.host.preparation, operationPreparation(operation))
+    || !isDeepStrictEqual(checkpoint.host.snapshot, operation.snapshot)) return false
+  if (operation.snapshot.state === 'succeeded' && !supersededBranchPush(intent, delivery)) {
+    if (delivery.push?.intentId !== intent.id
+      || !isDeepStrictEqual(delivery.push.result, operation.snapshot.result)
+      || delivery.push.confirmedAt !== operation.snapshot.completedAt) {
+      throw new Error('terminal Branch Push disagrees with its applied Delivery evidence')
+    }
+  }
+  if (checkpoint.outcome === 'reconciliation-required') {
+    return delivery.activeIntentId === undefined && delivery.lastIntentId === intent.id
+      && delivery.repair?.intentId === intent.id
+      && operation.snapshot.state === 'reconciliation-required'
+      && delivery.repair.reason === operation.snapshot.reason
+      && admission !== undefined && isBranchPushAdmission(admission) && admission.phase === 'accepted'
+      && admission.revision === operation.snapshot.admission.revision
+      && branchPushAcceptedAdmissionMatches(admission, intent, operation, checkpoint.host.preparation)
+  }
+  return delivery.activeIntentId !== intent.id
+    && terminalBranchPushAdmissionMatches(admission, intent, operation, checkpoint.host.preparation)
+}
+
+function terminalBranchPushAdmissionMatches(
+  admission: BindingWriteAdmissionRecord | undefined,
+  intent: CurrentBranchDeliveryIntentRecord,
+  operation: CurrentPushHostOperationRecord,
+  preparation: ReturnType<typeof operationPreparation>,
+): boolean {
+  if (admission === undefined || admission.id !== operation.request.expected.binding.id) return false
+  const evidence = operation.snapshot.admission
+  if (evidence.kind === 'not-accepted' && operation.effectPlan !== undefined) return false
+  const sameSource = admission.state === 'manual-host-operation'
+    && isDeepStrictEqual(admission.source, operation.request.source)
+  if (sameSource) {
+    return isBranchPushAdmission(admission) && admission.phase === 'accepted'
+      && (evidence.kind === 'not-accepted' || admission.revision === evidence.revision)
+      && branchPushAcceptedAdmissionMatches(admission, intent, operation, preparation)
+  }
+  if (operation.snapshot.state !== 'succeeded' && operation.snapshot.state !== 'failed'
+    && operation.snapshot.state !== 'canceled') return false
+  return admission.updatedAt >= operation.snapshot.completedAt
+    && (evidence.kind === 'not-accepted' || admission.revision > evidence.revision)
+}
+
+function branchPushAdmissionAfterHostMatches(
+  admission: BindingWriteAdmissionRecord | undefined,
+  intent: CurrentBranchDeliveryIntentRecord,
+  operation: CurrentPushHostOperationRecord,
+  preparation: ReturnType<typeof operationPreparation>,
+): boolean {
+  const evidence = operation.snapshot.admission
+  if (admission === undefined) return false
+  if (evidence.kind === 'not-accepted') {
+    if (operation.snapshot.state !== 'canceled' || operation.effectPlan !== undefined) return false
+    if (admission.state === 'available') return admission.id === operation.request.expected.binding.id
+    return isBranchPushAdmission(admission) && admission.phase === 'accepted'
+      && branchPushAcceptedAdmissionMatches(admission, intent, operation, preparation)
+  }
+  if (admission.state === 'available') {
+    return admission.id === operation.request.expected.binding.id && admission.revision === evidence.revision + 1
+  }
+  return isBranchPushAdmission(admission) && admission.phase === 'accepted'
+    && admission.revision === evidence.revision
+    && branchPushAcceptedAdmissionMatches(admission, intent, operation, preparation)
+}
+
+function branchPushAcceptedAdmissionMatches(
+  admission: Extract<BindingWriteAdmissionRecord, {
+    readonly state: 'manual-host-operation'
+    readonly action: 'project-branch:push'
+    readonly phase: 'accepted'
+  }>,
+  intent: CurrentBranchDeliveryIntentRecord,
+  operation: CurrentPushHostOperationRecord,
+  preparation: ReturnType<typeof operationPreparation>,
+): boolean {
+  return branchPushAdmissionMatchesRequest(admission, intent, operation.request)
+    && isDeepStrictEqual(admission.preparation, preparation)
+}
+
+/**
  * Validate current Control Intent, Host Operation, and Binding write-admission links.
- * @param controlPlane - opened exact current Control Plane domain.
- * @param hostExecution - opened exact current Host Execution domain.
+ * @param controlPlane - opened current or retained Control Plane domain exposing exact Git tables.
+ * @param hostExecution - opened current or retained Host Execution domain.
  * @returns nothing after every cross-domain relationship passes.
  */
 export function validateGitOperationLinks(
   controlPlane: GitOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain | HistoricalV1HostExecutionDomain | HistoricalV2HostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV1HostExecutionDomain | HistoricalV2HostExecutionDomain
+    | HistoricalV3HostExecutionDomain,
 ): void {
   const intents = new Map([...controlPlane.table('git_operation_intents').entries()].map(([key, value]) => {
     const intent = gitOperationIntentRecordSchema.parse(value)
@@ -155,6 +548,7 @@ export function validateGitOperationLinks(
 
   for (const admission of admissions.values()) {
     if (admission.state !== 'manual-host-operation' || admission.phase !== 'accepted') continue
+    if (admission.action === 'project-branch:push') continue
     const operation = operations.get(admission.preparation.operation.id)
     const intent = intents.get(admission.source.intentId)
     if (operation === undefined || intent === undefined || sourceConflictedIntent(intent)
@@ -170,13 +564,13 @@ export function validateGitOperationLinks(
  * Validate current Execution Dispatch, Agent Run, Host Operation, and write-admission links.
  * Host-first preparation is the sole accepted missing-backlink gap: once a Dispatch retains
  * preparation or snapshot evidence, the exact provider record must still exist.
- * @param controlPlane - opened exact current Control Plane domain.
- * @param hostExecution - opened exact current Host Execution domain.
+ * @param controlPlane - opened current or exact v8 Control Plane domain using current Agent schemas.
+ * @param hostExecution - opened current or exact v8 Host Execution domain using current Agent schemas.
  * @returns nothing after every StartAgentRun cross-domain relationship passes.
  */
 export function validateAgentOperationLinks(
   controlPlane: AgentOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV3HostExecutionDomain,
 ): void {
   validateAgentOperationLinksWithSchemas(
     controlPlane,
@@ -206,21 +600,21 @@ export function validateSakiV7AgentOperationLinks(
 
 function validateAgentOperationLinksWithSchemas(
   controlPlane: AgentOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain | HistoricalV2HostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV2HostExecutionDomain | HistoricalV3HostExecutionDomain,
   runSchema: { parse(value: unknown): LinkedAgentRunRecord },
   dispatchSchema: { parse(value: unknown): LinkedExecutionDispatchRecord },
 ): void {
-  const runs = identifiedAgentRecords(
+  const runs = identifiedRecords(
     controlPlane.table('agent_runs'),
     runSchema,
     'Agent Run',
   )
-  const dispatches = identifiedAgentRecords(
+  const dispatches = identifiedRecords(
     controlPlane.table('execution_dispatches'),
     dispatchSchema,
     'Execution Dispatch',
   )
-  const admissions = identifiedAgentRecords(
+  const admissions = identifiedRecords(
     controlPlane.table('binding_write_admissions'),
     bindingWriteAdmissionRecordSchema,
     'Binding write admission',
@@ -296,20 +690,8 @@ function retainedAgentSourceConflict(
     && admission.payloadDigest === dispatch.payloadDigest
 }
 
-function identifiedAgentRecords<K extends string, V extends { readonly id: K }>(
-  table: KvTable<string, unknown>,
-  schema: { parse(value: unknown): V },
-  kind: string,
-): ReadonlyMap<K, V> {
-  return new Map([...table.entries()].map(([key, value]) => {
-    const parsed = schema.parse(value)
-    if (parsed.id !== key) throw new Error(`Saki ${kind} id disagrees with its table key`)
-    return [parsed.id, parsed] as const
-  }))
-}
-
 function isAgentHostOperation(
-  operation: LocalHostOperationRecord | LocalHostOperationRecordV2,
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostOperationRecordV3,
 ): operation is LinkedAgentHostOperationRecord {
   return operation.request.type === 'start-agent-run'
 }
@@ -358,9 +740,10 @@ function validateAgentHostAdmission(
 }
 
 function isGitHostOperation(
-  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostGitOperationRecordV1,
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
+    | LocalHostGitOperationRecordV1,
 ): operation is GitHostOperationRecord {
-  return operation.request.type !== 'start-agent-run'
+  return operation.request.type !== 'start-agent-run' && operation.request.type !== 'push-branch'
 }
 
 function sourceConflictedIntent(intent: GitOperationIntentRecord): boolean {
@@ -411,7 +794,8 @@ function validateSourceConflictHostRecord(
 }
 
 function operationPreparation(
-  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostGitOperationRecordV1,
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
+    | LocalHostGitOperationRecordV1,
 ) {
   return {
     operation: operation.snapshot.operation,

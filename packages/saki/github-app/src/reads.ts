@@ -55,7 +55,11 @@ import {
 import { GitHubOperationSession } from './operation-session.ts'
 import type { InstallationPriorityQueue } from './priority-queue.ts'
 
-type RepositoryTarget = Pick<GitHubRepositoryReadRequest, 'repositoryId' | 'repositoryDatabaseId'> & {
+/** Internal Repository-bound read identity accepted by the shared read preparation. */
+export type RepositoryTarget = Pick<
+  GitHubRepositoryReadRequest,
+  'installation' | 'repositoryId' | 'repositoryDatabaseId'
+> & {
   readonly kind: string
 }
 
@@ -620,7 +624,17 @@ async function readMissingBranchSafety(
   })
 }
 
-async function createSession(
+/**
+ * Create one interactive read session bound to an optional Repository.
+ * @param installation - Product App installation identity.
+ * @param privateKey - operation-scoped Product App private key.
+ * @param repositoryDatabaseId - optional exact Repository database id.
+ * @param config - validated provider bounds.
+ * @param signal - operation lifetime.
+ * @param queue - per-installation request scheduler.
+ * @returns authenticated operation session.
+ */
+export async function createSession(
   installation: GitHubRepositoryReadRequest['installation'],
   privateKey: string,
   repositoryDatabaseId: GitHubRepositoryReadRequest['repositoryDatabaseId'] | undefined,
@@ -639,7 +653,14 @@ async function createSession(
   )
 }
 
-async function repositoryFromSession(
+/**
+ * Read and validate one exact Repository through an existing session.
+ * @param session - authenticated Repository-bound session.
+ * @param request - exact Repository identity and operation kind.
+ * @param signal - operation lifetime.
+ * @returns detached Repository fact.
+ */
+export async function repositoryFromSession(
   session: GitHubOperationSession,
   request: RepositoryTarget,
   signal: AbortSignal,
@@ -652,7 +673,9 @@ async function repositoryFromSession(
     request.kind,
   ))
   if (data.node === null) notFound(request.kind)
-  if (data.node.id !== request.repositoryId || data.node.databaseId !== request.repositoryDatabaseId) {
+  if (data.node.id !== request.repositoryId
+    || data.node.databaseId !== request.repositoryDatabaseId
+    || data.node.owner.id !== request.installation.accountId) {
     throw new Error('GitHub returned a different Repository identity')
   }
   return githubRepositoryFactSchema.parse({
@@ -689,27 +712,52 @@ function tagTarget(type: 'tag' | 'commit', id: string): GitHubTagTarget {
   }
 }
 
-function repositoryCoordinates(repository: GitHubRepositoryFact): readonly [string, string] {
+/**
+ * Split a validated Repository display identity for REST routes.
+ * @param repository - validated fact.
+ * @returns owner and name.
+ */
+export function repositoryCoordinates(repository: GitHubRepositoryFact): readonly [string, string] {
   const separator = repository.nameWithOwner.indexOf('/')
   return [repository.nameWithOwner.slice(0, separator), repository.nameWithOwner.slice(separator + 1)]
 }
 
-function httpStatus(error: unknown): number | undefined {
+/**
+ * Read an integer HTTP status from an SDK error.
+ * @param error - unknown thrown value.
+ * @returns status when present.
+ */
+export function httpStatus(error: unknown): number | undefined {
   if (typeof error !== 'object' || error === null) return undefined
   const status = (error as { status?: unknown }).status
   return typeof status === 'number' && Number.isInteger(status) ? status : undefined
 }
 
-function timestamp(value: string): number {
+/**
+ * Parse an admitted ISO timestamp to epoch milliseconds.
+ * @param value - ISO timestamp.
+ * @returns safe epoch milliseconds.
+ */
+export function timestamp(value: string): number {
   const parsed = Date.parse(value)
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error('GitHub returned an invalid timestamp')
   return parsed
 }
 
-function invalid(operation: string): never {
+/**
+ * Throw a safe invalid-response failure.
+ * @param operation - attributed operation.
+ * @returns never.
+ */
+export function invalid(operation: string): never {
   throw new GitHubProviderError({ code: 'invalid-external-response', operation })
 }
 
-function notFound(resource: string): never {
+/**
+ * Throw a safe missing-resource failure.
+ * @param resource - attributed resource.
+ * @returns never.
+ */
+export function notFound(resource: string): never {
   throw new GitHubProviderError({ code: 'not-found', resource })
 }

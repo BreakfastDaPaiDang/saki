@@ -21,6 +21,7 @@ import {
 } from '@breakfastdapaidang/saki-execution'
 import type {
   ActiveHostProjectBinding,
+  GitCredentialHelperId,
   HostOperationAdmissionSource,
   HostOperationCancellationReason,
   HostOperationChange,
@@ -35,6 +36,8 @@ import type {
   InterventionOpeningEvidence,
   InspectProjectRequest,
   InspectProjectResult,
+  InspectProjectCommitRequest,
+  InspectProjectCommitResult,
   InspectProjectSelectionRequest,
   InspectProjectSelectionResult,
   ReadProjectDiffRequest,
@@ -60,8 +63,9 @@ import {
   MIN_OPERATION_MAX_INDEX_BYTES,
   sakiHostExecutionDomainSpec,
   type LocalHostAgentRunOperationRecord,
-  type LocalHostGitOperationRecord,
   type LocalHostOperationRecord,
+  type LocalHostPushBranchOperationRecord,
+  type LocalHostStructuredGitOperationRecord,
 } from './operation-state.ts'
 import {
   advanceLocalAgentRun,
@@ -71,9 +75,20 @@ import {
   resumeSucceededLocalAgentRun,
 } from './agent-run.ts'
 import { inspectLocalInterventionOpening } from './intervention-opening.ts'
+import { inspectLocalProjectCommit } from './commit-inspection.ts'
+import {
+  advanceLocalGitPush,
+  cancelLocalGitPush,
+  createGitHubPushTransport,
+  createTransportGitDirectory,
+  recoverLocalGitPush,
+} from './git-push.ts'
+import { localGitPushInternalsFor } from './git-push-internals.ts'
 
 /** Local Git observation, baseline, and operation resource limits. */
 export interface Config {
+  /** Closed non-interactive system credential adapter available to Push operations. */
+  pushCredentialHelper?: GitCredentialHelperId
   /** Wall-clock bound for each Git process. */
   gitCommandTimeoutMs?: number
   /** TERM-to-KILL grace for each Git process tree. */
@@ -112,7 +127,8 @@ export interface Config {
   operationMaxReflogBytes?: number
 }
 
-type ResolvedConfig = Required<Config>
+type ResolvedConfig = Required<Omit<Config, 'pushCredentialHelper'>>
+  & Pick<Config, 'pushCredentialHelper'>
 
 const MINIMUM_GIT_VERSION = [2, 45, 0] as const
 const GIT_VERSION_DECODER = new TextDecoder('utf-8', { fatal: true })
@@ -124,6 +140,10 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     'storageDomain', 'subprocess', 'workspaceRegistry',
   ]
   static Config: z<Config> = z.object({
+    pushCredentialHelper: z.union([
+      z.const('git-credential-manager'),
+      z.const('git-credential-manager-core'),
+    ]),
     gitCommandTimeoutMs: z.natural().min(1).max(MAX_TIMER_DELAY_MS).default(10_000),
     gitTerminationGraceMs: z.natural().min(1).max(MAX_TIMER_DELAY_MS).default(250),
     maxGitStdoutBytes: z.natural().min(1).max(bufferConstants.MAX_LENGTH).default(4 * 1024 * 1024),
@@ -217,6 +237,21 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     return await this.track(this.inspectBoundProject(request.binding, fused))
   }
 
+  override async inspectProjectCommit(
+    request: InspectProjectCommitRequest,
+    signal: AbortSignal,
+  ): Promise<InspectProjectCommitResult> {
+    if (this.lifetime.signal.aborted) throw this.lifetime.signal.reason
+    const fused = AbortSignal.any([signal, this.lifetime.signal])
+    return await this.track(inspectLocalProjectCommit({
+      fs: this.ctx.fs,
+      workspaces: this.ctx.workspaceRegistry,
+      git: this.git,
+      config: this.config,
+      identityReader: readLocalAdministrativeDirectoryIdentity,
+    }, request.binding, request.commitId, fused))
+  }
+
   override async readDiff(
     binding: ActiveHostProjectBinding,
     request: ReadProjectDiffRequest,
@@ -257,6 +292,10 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       const existing = table.get(operationId)
       if (existing !== undefined && existing.snapshot.requestFingerprint.digest !== fingerprint.digest) {
         return { ok: false, reason: 'source-conflict' }
+      }
+      if (existing === undefined && request.type === 'push-branch'
+        && this.config.pushCredentialHelper === undefined) {
+        return { ok: false, reason: 'unavailable' }
       }
       if (existing === undefined && request.type === 'commit' && request.expected.head.kind === 'commit'
         && request.expected.head.symbolicRef === undefined) {
@@ -307,9 +346,13 @@ export class LocalSakiHostExecution extends SakiHostExecution {
           this.liveOperations.delete(operation.id)
           return { ok: true, snapshot: inspected.snapshot as HostOperationSnapshot<K> }
         }
+        if (record.request.type === 'push-branch') {
+          this.liveOperations.delete(operation.id)
+          return { ok: true, snapshot: record.snapshot as HostOperationSnapshot<K> }
+        }
         const advanced = await advanceLocalGitMutation(
           this.gitMutationDependencies(),
-          record as LocalHostGitOperationRecord,
+          record as LocalHostStructuredGitOperationRecord,
           /* v8 ignore next -- terminal advance only cleans private artifacts;
            * its persistence sink is unreachable. */
           next => this.persistOperation(next),
@@ -327,6 +370,13 @@ export class LocalSakiHostExecution extends SakiHostExecution {
         return {
           ok: false,
           reason: 'acceptance-mismatch',
+          snapshot: record.snapshot as HostOperationSnapshot<K>,
+        }
+      }
+      if (record.request.type === 'push-branch' && this.config.pushCredentialHelper === undefined) {
+        return {
+          ok: false,
+          reason: 'unavailable',
           snapshot: record.snapshot as HostOperationSnapshot<K>,
         }
       }
@@ -374,12 +424,19 @@ export class LocalSakiHostExecution extends SakiHostExecution {
           next => this.persistOperation(next),
           fused,
         )
-        : await advanceLocalGitMutation(
-          this.gitMutationDependencies(),
-          record as LocalHostGitOperationRecord,
-          next => this.persistOperation(next),
-          fused,
-        )
+        : record.request.type === 'push-branch'
+          ? await advanceLocalGitPush(
+            this.gitPushDependencies(),
+            record as LocalHostPushBranchOperationRecord,
+            next => this.persistOperation(next),
+            fused,
+          )
+          : await advanceLocalGitMutation(
+            this.gitMutationDependencies(),
+            record as LocalHostStructuredGitOperationRecord,
+            next => this.persistOperation(next),
+            fused,
+          )
       if (advanced.kind === 'retryable') {
         return {
           ok: false,
@@ -436,16 +493,33 @@ export class LocalSakiHostExecution extends SakiHostExecution {
         return inspected.snapshot as HostOperationSnapshot<K>
       }
       if (record.snapshot.state === 'publishing') {
-        const recovered = await recoverPublishingOperation(
-          this.gitMutationDependencies(),
-          record as LocalHostGitOperationRecord,
-          next => this.persistOperation(next),
-          fused,
-        )
-        record = recovered.record
+        if (record.request.type === 'push-branch') {
+          if (this.config.pushCredentialHelper !== undefined) {
+            const recovered = await recoverLocalGitPush(
+              this.gitPushDependencies(),
+              record as LocalHostPushBranchOperationRecord,
+              next => this.persistOperation(next),
+              fused,
+            )
+            record = recovered.record
+          }
+        } else {
+          const recovered = await recoverPublishingOperation(
+            this.gitMutationDependencies(),
+            record as LocalHostStructuredGitOperationRecord,
+            next => this.persistOperation(next),
+            fused,
+          )
+          record = recovered.record
+        }
       }
       if (isTerminalHostOperation(record.snapshot)) {
-        await cleanupTerminalGitMutation(this.gitMutationDependencies(), record as LocalHostGitOperationRecord)
+        if (record.request.type !== 'push-branch') {
+          await cleanupTerminalGitMutation(
+            this.gitMutationDependencies(),
+            record as LocalHostStructuredGitOperationRecord,
+          )
+        }
         this.liveOperations.delete(operation.id)
       }
       return record.snapshot as HostOperationSnapshot<K>
@@ -467,8 +541,11 @@ export class LocalSakiHostExecution extends SakiHostExecution {
             next => this.persistOperation(next),
             fused,
           )
-        } else {
-          await cleanupTerminalGitMutation(this.gitMutationDependencies(), record as LocalHostGitOperationRecord)
+        } else if (record.request.type !== 'push-branch') {
+          await cleanupTerminalGitMutation(
+            this.gitMutationDependencies(),
+            record as LocalHostStructuredGitOperationRecord,
+          )
         }
         this.liveOperations.delete(operation.id)
         return record.snapshot as HostOperationSnapshot<K>
@@ -485,13 +562,19 @@ export class LocalSakiHostExecution extends SakiHostExecution {
           if (isTerminalHostOperation(canceled.snapshot)) this.liveOperations.delete(operation.id)
           return canceled.snapshot as HostOperationSnapshot<K>
         }
-        record = await cancelPublishingOperation(
-          this.gitMutationDependencies(),
-          record as LocalHostGitOperationRecord,
-          reason,
-          next => this.persistOperation(next),
-          fused,
-        )
+        record = record.request.type === 'push-branch'
+          ? await cancelLocalGitPush(
+            record as LocalHostPushBranchOperationRecord,
+            reason,
+            next => this.persistOperation(next),
+          )
+          : await cancelPublishingOperation(
+            this.gitMutationDependencies(),
+            record as LocalHostStructuredGitOperationRecord,
+            reason,
+            next => this.persistOperation(next),
+            fused,
+          )
         if (isTerminalHostOperation(record.snapshot)) this.liveOperations.delete(operation.id)
         return record.snapshot as HostOperationSnapshot<K>
       }
@@ -608,11 +691,28 @@ export class LocalSakiHostExecution extends SakiHostExecution {
       git: this.git,
       config: this.config,
       identityReader: readLocalAdministrativeDirectoryIdentity,
-      isOperationDurable: (record: LocalHostGitOperationRecord) => isDeepStrictEqual(
+      isOperationDurable: (record: LocalHostStructuredGitOperationRecord) => isDeepStrictEqual(
         this.requireOperationTable().get(record.snapshot.operation.id),
         record,
       ),
       ...(internals === undefined ? {} : { internals }),
+    }
+  }
+
+  private gitPushDependencies() {
+    const internals = localGitPushInternalsFor(this.ctx)
+    const transport = internals?.transport
+    const credential = this.config.pushCredentialHelper
+    if (credential === undefined) throw new Error('Saki Local Host Push credential adapter is unavailable')
+    return {
+      fs: this.ctx.fs,
+      workspaces: this.ctx.workspaceRegistry,
+      git: this.git,
+      config: this.config,
+      identityReader: readLocalAdministrativeDirectoryIdentity,
+      credential,
+      transport: transport ?? createGitHubPushTransport(this.git),
+      createTransportGitDirectory: internals?.createTransportGitDirectory ?? createTransportGitDirectory,
     }
   }
 
@@ -680,7 +780,7 @@ function createPreparedOperationRecord<K extends HostOperationKind>(
   const preparedAt = Date.now()
   const operation = { id, hostId: request.expected.binding.hostId, type: request.type }
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     request,
     preparationRevision: 0,
     snapshot: {
@@ -741,11 +841,13 @@ export {
   sakiHostExecutionDomainSpec,
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
+  sakiHostExecutionV3DomainSpec,
 } from './operation-state.ts'
 export type {
   LocalHostGitOperationRecordV1,
   LocalHostOperationRecord,
   LocalHostOperationRecordV2,
+  LocalHostOperationRecordV3,
 } from './operation-state.ts'
 
 export default LocalSakiHostExecution

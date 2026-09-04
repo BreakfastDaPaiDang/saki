@@ -102,6 +102,7 @@ export const recoveryBackupManifestSchema = z.object({
     z.literal(6),
     z.literal(7),
     z.literal(8),
+    z.literal(9),
   ]),
   sourceBuildId: sakiBuildIdSchema,
   databaseLeaf: z.literal(BACKUP_DATABASE_LEAF),
@@ -138,7 +139,7 @@ export interface RecoveryBackupCreateRequest {
   /** Physical storage generation copied into the backup. */
   readonly storageGenerationId: SakiStorageGenerationId
   /** Product-state format of the copied database. */
-  readonly stateVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8
+  readonly stateVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
   /** Build provenance; this value never decides readability. */
   readonly sourceBuildId: SakiBuildId
 }

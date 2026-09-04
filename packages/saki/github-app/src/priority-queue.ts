@@ -1,4 +1,4 @@
-/** Per-installation API-call serialization with stable interactive priority. @module @breakfastdapaidang/saki-github-app/priority-queue */
+/** Per-authority API-call serialization with stable interactive priority. @module @breakfastdapaidang/saki-github-app/priority-queue */
 
 /** Priorities for Product App requests and scan pages. */
 export type GitHubRequestPriority = 'interactive' | 'background'
@@ -16,7 +16,8 @@ interface QueueEntry<T> {
 const priorityRank = (priority: GitHubRequestPriority): number => priority === 'interactive' ? 0 : 1
 
 /**
- * Concurrency-one queue for requests authenticated by one installation token.
+ * Concurrency-one queue for requests sharing one GitHub rate-limit authority.
+ * The provider owns one queue per installation and one separate anonymous queue.
  * A scan releases the queue after every page, so an interactive request can
  * overtake background pages that have not started.
  */
@@ -30,7 +31,7 @@ export class InstallationPriorityQueue {
    * @param priority - interactive work sorts before queued background work.
    * @param signal - caller lifetime; cancellation removes work that has not started.
    * @param task - one bounded API call, never a complete multi-page scan.
-   * @returns the task result after this installation's earlier selected call settles.
+   * @returns the task result after this authority's earlier selected call settles.
    */
   run<T>(priority: GitHubRequestPriority, signal: AbortSignal, task: () => Promise<T>): Promise<T> {
     if (signal.aborted) return Promise.reject(cancellationError())

@@ -27,6 +27,20 @@ export type GitHubIssueId = Branded<'GitHubIssueId'>
 export type GitHubIssueCreateMarkerId = Branded<'GitHubIssueCreateMarkerId'>
 /** Opaque GitHub pull-request node identity retained as raw item content. */
 export type GitHubPullRequestId = Branded<'GitHubPullRequestId'>
+/** Opaque GitHub pull-request review node identity. */
+export type GitHubPullRequestReviewId = Branded<'GitHubPullRequestReviewId'>
+/** Persisted high-entropy identity embedded in one Saki-created pull-request body. */
+export type GitHubPullRequestCreateMarkerId = Branded<'GitHubPullRequestCreateMarkerId'>
+/** Opaque GitHub Milestone node identity. */
+export type GitHubMilestoneId = Branded<'GitHubMilestoneId'>
+/** Canonical positive-decimal GitHub Actions workflow-run identity. */
+export type GitHubWorkflowRunId = Branded<'GitHubWorkflowRunId'>
+/** Canonical positive-decimal GitHub Actions workflow identity. */
+export type GitHubWorkflowId = Branded<'GitHubWorkflowId'>
+/** Canonical positive-decimal GitHub check-run identity. */
+export type GitHubCheckRunId = Branded<'GitHubCheckRunId'>
+/** Canonical positive-decimal GitHub commit-status identity. */
+export type GitHubCommitStatusId = Branded<'GitHubCommitStatusId'>
 /** Opaque annotated-tag object identity. */
 export type GitHubTagObjectId = Branded<'GitHubTagObjectId'>
 /** Opaque GitHub Release node identity. */
@@ -419,12 +433,21 @@ export type GitHubReleaseByTagObservation =
     readonly observedAt: number
   }
 
-/** Read one exact Commit, including a configured-upstream existence check. */
+/** Read one exact Commit through an App installation. */
 export interface GitHubCommitReadRequest {
   readonly kind: 'commit'
   readonly installation: GitHubInstallationProfile
   readonly repositoryId: GitHubRepositoryId
   readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly commitId: GitHubCommitId
+}
+
+/** Read one exact Commit from a public Repository without installation authority. */
+export interface GitHubPublicCommitReadRequest {
+  readonly kind: 'public-commit'
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly repositoryNameWithOwner: string
   readonly commitId: GitHubCommitId
 }
 
@@ -456,6 +479,207 @@ export interface GitHubCommitComparisonFact {
   readonly aheadBy: number
   readonly behindBy: number
   readonly mergeBaseCommitId?: GitHubCommitId | undefined
+  readonly observedAt: number
+}
+
+/** Read one exact Pull Request by stable node id and Repository-local number. */
+export interface GitHubPullRequestReadRequest {
+  readonly kind: 'pull-request'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly pullRequestId: GitHubPullRequestId
+  readonly pullRequestNumber: number
+}
+
+/** Read the exact remote Commit at one Repository branch, or prove absence. */
+export interface GitHubBranchHeadReadRequest {
+  readonly kind: 'branch-head'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly branch: string
+}
+
+/** Raw exact branch-head observation without branch policy inference. */
+export type GitHubBranchHeadFact =
+  | { readonly state: 'present'; readonly repositoryId: GitHubRepositoryId; readonly branch: string; readonly commitId: GitHubCommitId; readonly observedAt: number }
+  | { readonly state: 'absent'; readonly repositoryId: GitHubRepositoryId; readonly branch: string; readonly observedAt: number }
+
+/** Raw exact Pull Request identity, refs, Commits, state, and display facts. */
+export interface GitHubPullRequestFact {
+  readonly id: GitHubPullRequestId
+  readonly repositoryId: GitHubRepositoryId
+  readonly number: number
+  readonly state: 'open' | 'closed'
+  readonly merged: boolean
+  readonly draft: boolean
+  readonly title: string
+  readonly url: string
+  readonly head: {
+    readonly repositoryId: GitHubRepositoryId
+    readonly ref: string
+    readonly commitId: GitHubCommitId
+  }
+  readonly base: {
+    readonly repositoryId: GitHubRepositoryId
+    readonly ref: string
+    readonly commitId: GitHubCommitId
+  }
+  readonly authorAccountId?: GitHubAccountId | undefined
+  readonly updatedAt: number
+  readonly observedAt: number
+}
+
+/** Read every review for one exact Pull Request. */
+export interface GitHubPullRequestReviewsReadRequest {
+  readonly kind: 'pull-request-reviews'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly pullRequestId: GitHubPullRequestId
+  readonly pullRequestNumber: number
+}
+
+/** Raw review state retained without review body content or product authority. */
+export interface GitHubPullRequestReviewFact {
+  readonly id: GitHubPullRequestReviewId
+  readonly authorAccountId?: GitHubAccountId | undefined
+  readonly state: 'approved' | 'changes-requested' | 'commented' | 'dismissed' | 'pending'
+  readonly commitId?: GitHubCommitId | undefined
+  readonly url: string
+  readonly submittedAt?: number | undefined
+  readonly updatedAt: number
+}
+
+/** Complete bounded reviews observed with one exact Pull Request head. */
+export interface GitHubPullRequestReviewsFact {
+  readonly repositoryId: GitHubRepositoryId
+  readonly pullRequestId: GitHubPullRequestId
+  readonly pullRequestNumber: number
+  readonly headCommitId: GitHubCommitId
+  readonly pullRequestUpdatedAt: number
+  readonly reviews: readonly GitHubPullRequestReviewFact[]
+  readonly observedAt: number
+}
+
+/** Read every open Pull Request matching one exact same-Repository branch delivery. */
+export interface GitHubPullRequestAssociationReadRequest {
+  readonly kind: 'pull-request-association'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly headRef: string
+  readonly baseRef: string
+  readonly expectedHeadCommitId: GitHubCommitId
+}
+
+/** Complete branch-delivery association result without choosing among duplicates. */
+export type GitHubPullRequestAssociationFact =
+  | {
+    readonly state: 'absent'
+    readonly repositoryId: GitHubRepositoryId
+    readonly headRef: string
+    readonly baseRef: string
+    readonly expectedHeadCommitId: GitHubCommitId
+    readonly observedAt: number
+  }
+  | { readonly state: 'unique'; readonly pullRequest: GitHubPullRequestFact; readonly observedAt: number }
+  | {
+    readonly state: 'duplicate-conflict'
+    readonly pullRequests: readonly GitHubPullRequestFact[]
+    readonly observedAt: number
+  }
+
+/** Read complete raw Actions, Checks, and commit-status facts for one exact Commit. */
+export interface GitHubCommitCiReadRequest {
+  readonly kind: 'commit-ci'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly commitId: GitHubCommitId
+}
+
+/** Raw GitHub Actions workflow-run fact for one requested Commit. */
+export interface GitHubWorkflowRunFact {
+  readonly id: GitHubWorkflowRunId
+  readonly workflowId: GitHubWorkflowId
+  readonly name: string
+  readonly event: string
+  readonly runNumber: number
+  readonly runAttempt: number
+  readonly status: 'queued' | 'in-progress' | 'completed' | 'pending' | 'requested' | 'waiting'
+  readonly conclusion?: GitHubCiConclusion | undefined
+  readonly url: string
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+/** Raw terminal outcome shared by GitHub Actions and Checks. */
+export type GitHubCiConclusion =
+  | 'action-required'
+  | 'cancelled'
+  | 'failure'
+  | 'neutral'
+  | 'skipped'
+  | 'stale'
+  | 'startup-failure'
+  | 'success'
+  | 'timed-out'
+
+/** Raw GitHub check-run fact for one requested Commit. */
+export interface GitHubCheckRunFact {
+  readonly id: GitHubCheckRunId
+  readonly name: string
+  readonly status: 'queued' | 'in-progress' | 'completed' | 'pending' | 'requested' | 'waiting'
+  readonly conclusion?: GitHubCiConclusion | undefined
+  readonly url: string
+  readonly startedAt?: number | undefined
+  readonly completedAt?: number | undefined
+}
+
+/** Raw legacy commit-status context for one requested Commit. */
+export interface GitHubCommitStatusFact {
+  readonly id: GitHubCommitStatusId
+  readonly context: string
+  readonly state: 'error' | 'failure' | 'pending' | 'success'
+  readonly targetUrl?: string | undefined
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+/** One complete, source-preserving CI observation for an exact Commit. */
+export interface GitHubCommitCiFact {
+  readonly repositoryId: GitHubRepositoryId
+  readonly commitId: GitHubCommitId
+  readonly workflowRuns: readonly GitHubWorkflowRunFact[]
+  readonly checkRuns: readonly GitHubCheckRunFact[]
+  readonly commitStatuses: readonly GitHubCommitStatusFact[]
+  readonly observedAt: number
+}
+
+/** Read one exact GitHub Milestone and its complete Issue scope. */
+export interface GitHubMilestoneReadRequest {
+  readonly kind: 'milestone'
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly milestoneId: GitHubMilestoneId
+  readonly milestoneNumber: number
+}
+
+/** Raw GitHub Milestone metadata and complete Issue scope. */
+export interface GitHubMilestoneFact {
+  readonly id: GitHubMilestoneId
+  readonly repositoryId: GitHubRepositoryId
+  readonly number: number
+  readonly state: 'open' | 'closed'
+  readonly title: string
+  readonly description?: string | undefined
+  readonly dueOn?: number | undefined
+  readonly url: string
+  readonly updatedAt: number
+  readonly issues: readonly GitHubIssueFact[]
   readonly observedAt: number
 }
 
@@ -550,6 +774,53 @@ export interface GitHubIssueCreateRequest {
   readonly markerId: GitHubIssueCreateMarkerId
   /** Reconciliation-only evidence; never sent by dispatch. */
   readonly inspectionHint?: GitHubIssueCreateInspectionHint | undefined
+}
+
+/** Pull Request identity returned by create and optionally supplied to reconcile that attempt. */
+export interface GitHubPullRequestCreateInspectionHint {
+  readonly pullRequestId: GitHubPullRequestId
+  readonly pullRequestNumber: number
+}
+
+/** Create one marker-bound same-Repository Pull Request without an internal retry. */
+export interface GitHubPullRequestCreateRequest {
+  readonly kind: 'pull-request-create'
+  /** Caller-assigned id persisted before dispatch. */
+  readonly operationId: GitHubExternalOperationId
+  readonly installation: GitHubInstallationProfile
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly markerId: GitHubPullRequestCreateMarkerId
+  readonly headRef: string
+  readonly baseRef: string
+  readonly expectedHeadCommitId: GitHubCommitId
+  readonly title: string
+  readonly body: string
+  /** Reconciliation-only evidence; never sent by dispatch. */
+  readonly inspectionHint?: GitHubPullRequestCreateInspectionHint | undefined
+}
+
+/** Closed exact-marker outcomes for Pull Request creation recovery. */
+export type GitHubPullRequestCreateInspectionOutcome =
+  | { readonly state: 'unique-pull-request'; readonly pullRequest: GitHubPullRequestFact }
+  | { readonly state: 'absent-complete' }
+  | { readonly state: 'marker-removed' }
+  | { readonly state: 'known-pull-request-absent' }
+  | { readonly state: 'identity-conflict' }
+  | { readonly state: 'multiple-matches' }
+  | { readonly state: 'incomplete' }
+
+/** Targeted repository-bound Pull Request creation snapshot. */
+export interface GitHubPullRequestCreateSnapshot {
+  readonly repositoryId: GitHubRepositoryId
+  readonly repositoryDatabaseId: GitHubRepositoryDatabaseId
+  readonly outcome: GitHubPullRequestCreateInspectionOutcome
+}
+
+/** Targeted Pull Request creation recovery observation. */
+export interface GitHubPullRequestCreateInspection {
+  readonly snapshot: GitHubPullRequestCreateSnapshot
+  readonly observedAt: number
 }
 
 /** Durable-safe classification of one bounded exact-marker inspection. */
@@ -704,12 +975,25 @@ export interface GitHubReadMap {
   issue: { readonly request: GitHubIssueReadRequest; readonly result: GitHubIssueFact }
   'issue-detail': { readonly request: GitHubIssueDetailReadRequest; readonly result: GitHubIssueDetailFact }
   'branch-safety': { readonly request: GitHubBranchSafetyReadRequest; readonly result: GitHubBranchSafetyFact }
+  'branch-head': { readonly request: GitHubBranchHeadReadRequest; readonly result: GitHubBranchHeadFact }
   project: { readonly request: GitHubProjectReadRequest; readonly result: GitHubProjectFact }
   'tag-reference': { readonly request: GitHubTagReferenceReadRequest; readonly result: GitHubTagReferenceFact }
   'tag-object': { readonly request: GitHubTagObjectReadRequest; readonly result: GitHubTagPeelFact }
   'release-by-tag': { readonly request: GitHubReleaseByTagReadRequest; readonly result: GitHubReleaseByTagObservation }
   commit: { readonly request: GitHubCommitReadRequest; readonly result: GitHubCommitFact }
+  'public-commit': { readonly request: GitHubPublicCommitReadRequest; readonly result: GitHubCommitFact }
   'compare-commits': { readonly request: GitHubCompareCommitsReadRequest; readonly result: GitHubCommitComparisonFact }
+  'pull-request': { readonly request: GitHubPullRequestReadRequest; readonly result: GitHubPullRequestFact }
+  'pull-request-reviews': {
+    readonly request: GitHubPullRequestReviewsReadRequest
+    readonly result: GitHubPullRequestReviewsFact
+  }
+  'pull-request-association': {
+    readonly request: GitHubPullRequestAssociationReadRequest
+    readonly result: GitHubPullRequestAssociationFact
+  }
+  'commit-ci': { readonly request: GitHubCommitCiReadRequest; readonly result: GitHubCommitCiFact }
+  milestone: { readonly request: GitHubMilestoneReadRequest; readonly result: GitHubMilestoneFact }
 }
 
 /** Declaration-merge operation map for complete GitHub scans. */
@@ -746,6 +1030,11 @@ export interface GitHubMutationMap {
     readonly request: GitHubIssueStateSetRequest
     readonly result: void
     readonly inspection: GitHubIssueStateSetInspection
+  }
+  'pull-request-create': {
+    readonly request: GitHubPullRequestCreateRequest
+    readonly result: GitHubPullRequestCreateInspectionHint
+    readonly inspection: GitHubPullRequestCreateInspection
   }
 }
 

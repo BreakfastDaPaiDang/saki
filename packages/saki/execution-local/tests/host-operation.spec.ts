@@ -26,6 +26,7 @@ import type {
   SakiControlIntentId,
   SakiHostId,
   SakiResourceBindingId,
+  PushBranchHostOperationRequest,
   StageFilesHostOperationRequest,
   StartAgentRunHostOperationRequest,
   StartAgentRunInputMessage,
@@ -34,6 +35,9 @@ import type {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GitCommandError, type GitRunner } from '../src/git-runner.ts'
 import { installLocalGitMutationInternals } from '../src/git-mutation-internals.ts'
+import { installLocalGitPushInternals } from '../src/git-push-internals.ts'
+import { gitHubPushArguments, type LocalGitPushTransport } from '../src/git-push.ts'
+import type { OwnedPrivateGitDirectory } from '../src/owned-private-git-directory.ts'
 import {
   localGitMutationNodeAdapter,
   type LocalGitMutationNodeAdapter,
@@ -44,14 +48,16 @@ import LocalSakiHostExecution, {
   sakiHostExecutionDomainSpec,
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
+  sakiHostExecutionV3DomainSpec,
   type Config,
 } from '../src/index.ts'
 import {
   hostOperationSnapshotCore,
   localHostAgentRunResultFor,
   localHostOperationRequestFingerprint,
-  type LocalHostGitOperationRecord,
   type LocalHostOperationRecord,
+  type LocalHostPushBranchOperationRecord,
+  type LocalHostStructuredGitOperationRecord,
 } from '../src/operation-state.ts'
 import { provideInertLocalAgentRunDependencies } from './storage.ts'
 
@@ -62,7 +68,7 @@ const HOST_ID = 'host-11111111-1111-4111-8111-111111111111' as SakiHostId
 const BINDING_ID = 'binding-11111111-1111-4111-8111-111111111111' as SakiResourceBindingId
 const INTENT_ID = 'intent-11111111-1111-4111-8111-111111111111' as SakiControlIntentId
 const WORKSPACE_ID = WorkspaceId('workspace-host-operation')
-const CONFIG: Required<Config> = {
+const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
   gitCommandTimeoutMs: 10_000,
   gitTerminationGraceMs: 100,
   maxGitStdoutBytes: 1024 * 1024,
@@ -302,6 +308,768 @@ describe.skipIf(process.platform === 'win32')('POSIX detached process-group test
 })
 
 describe('LocalSakiHostExecution Host Operation lifecycle', () => {
+  it('builds exact absent and existing branch leases for the fixed GitHub HTTPS target', () => {
+    const common = {
+      repository: { nameWithOwner: 'BreakfastDaPaiDang/saki' },
+      targetRef: 'refs/heads/main',
+      commitId: 'a'.repeat(40),
+    }
+    expect(gitHubPushArguments({ ...common, previous: { kind: 'absent' } })).toEqual([
+      'push', '--porcelain', '--no-progress', '--no-verify', '--recurse-submodules=no',
+      '--force-with-lease=refs/heads/main:',
+      'https://github.com/BreakfastDaPaiDang/saki.git',
+      `${'a'.repeat(40)}^{commit}:refs/heads/main`,
+    ])
+    expect(gitHubPushArguments({
+      ...common,
+      previous: { kind: 'commit', objectId: 'b'.repeat(40) },
+    })[5]).toBe(`--force-with-lease=refs/heads/main:${'b'.repeat(40)}`)
+  })
+
+  it('publishes one exact Commit to an absent remote branch and replays without a second Push', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote)
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const commitId = await gitText(root, 'rev-parse', 'HEAD')
+    const request: PushBranchHostOperationRequest = {
+      type: 'push-branch',
+      source: { kind: 'control-intent', intentId: INTENT_ID, intentRevision: 2, payloadDigest: '1'.repeat(64) },
+      expected: { binding, commitId, repository: { nameWithOwner: 'BreakfastDaPaiDang/saki' } },
+      targetRef: 'refs/heads/main',
+    }
+    const prepared = await execution.prepareOperation(request, acceptedAdmission(1), signal)
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    const started = await execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+    expect(started).toMatchObject({
+      ok: true,
+      snapshot: {
+        state: 'succeeded',
+        result: {
+          type: 'push-branch',
+          commitId,
+          previous: { kind: 'absent' },
+          credential: { helperId: 'git-credential-manager' },
+        },
+      },
+    })
+    expect(await gitText(remote, 'rev-parse', '--verify', 'refs/heads/main')).toBe(commitId)
+    expect(transport.pushCount).toBe(1)
+    await expect(execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toEqual(started.snapshot)
+    expect(transport.pushCount).toBe(1)
+  }, 30_000)
+
+  it('publishes only a proven fast-forward over the exact remote Commit', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    await git(root, 'push', remote, 'HEAD:refs/heads/main')
+    const previous = await gitText(root, 'rev-parse', 'HEAD')
+    await writeFile(join(root, 'next.txt'), 'next\n')
+    await git(root, 'add', 'next.txt')
+    await git(root, 'commit', '-m', 'next')
+    const commitId = await gitText(root, 'rev-parse', 'HEAD')
+    const transport = localPushTransport(remote, {
+      async beforeRead(count, request) {
+        if (count !== 1) return
+        const refs = join(request.privateGitDirectory.path, 'refs', 'heads')
+        await mkdir(refs, { recursive: true })
+        await writeFile(join(refs, previous), `${commitId}\n`)
+        await writeFile(join(refs, commitId), `${previous}\n`)
+      },
+    })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager-core' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, commitId, '2'), acceptedAdmission(2), signal,
+    )
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    const started = await execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+    expect(started).toMatchObject({ ok: true, snapshot: { state: 'succeeded', result: {
+      previous: { kind: 'commit', objectId: previous },
+      credential: { helperId: 'git-credential-manager-core' },
+    } } })
+    expect(transport.pushCount).toBe(1)
+    expect(await gitText(remote, 'rev-parse', '--verify', 'refs/heads/main')).toBe(commitId)
+  }, 30_000)
+
+  it('rejects a remote Commit that cannot be proven as an ancestor without attempting Push', async () => {
+    const root = await repository()
+    const unrelated = await repository()
+    await writeFile(join(unrelated, 'unrelated.txt'), 'unrelated\n')
+    await git(unrelated, 'add', 'unrelated.txt')
+    await git(unrelated, 'commit', '-m', 'unrelated')
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    await git(unrelated, 'push', remote, 'HEAD:refs/heads/main')
+    const transport = localPushTransport(remote)
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '3'), acceptedAdmission(3), signal,
+    )
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    const started = await execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+    expect(started).toMatchObject({ ok: true, snapshot: {
+      state: 'failed', failure: { reason: 'unsupported-state' }, effect: 'none',
+    } })
+    expect(transport.pushCount).toBe(0)
+  }, 30_000)
+
+  it('propagates cancellation while proving a remote Commit ancestry', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    await git(root, 'push', remote, 'HEAD:refs/heads/main')
+    await writeFile(join(root, 'next.txt'), 'next\n')
+    await git(root, 'add', 'next.txt')
+    await git(root, 'commit', '-m', 'next')
+    const controller = new AbortController()
+    const reason = new Error('stop Push ancestry proof')
+    const transport = localPushTransport(remote, {
+      async beforeRead(count) {
+        if (count === 1) controller.abort(reason)
+      },
+    })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const binding = await activeBinding(execution, root, controller.signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '9'),
+      acceptedAdmission(9),
+      controller.signal,
+    )
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    await expect(execution.startOperation(
+      prepared.preparation.operation,
+      prepared.acceptance,
+      controller.signal,
+    )).rejects.toBe(reason)
+    expect(transport.pushCount).toBe(0)
+  }, 30_000)
+
+  it('fails without effect when the remote CAS premise moves before attempting Push', async () => {
+    const root = await repository()
+    const racer = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, {
+      async beforeRead(count) {
+        if (count === 2) await git(racer, 'push', remote, 'HEAD:refs/heads/main')
+      },
+    })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '4'), acceptedAdmission(4), signal,
+    )
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    const started = await execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+    expect(started).toMatchObject({ ok: true, snapshot: {
+      state: 'failed', failure: { reason: 'observation-stale' }, effect: 'none',
+    } })
+    expect(transport.pushCount).toBe(0)
+  }, 30_000)
+
+  it('classifies bound Commit failures and resumes one durable planning Push', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, { failReads: new Set([1]) })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const commitId = await gitText(root, 'rev-parse', 'HEAD')
+
+    const stale = pushRequest({ ...binding, workspaceId: WorkspaceId('workspace-stale') }, commitId, 'a', 'a')
+    const stalePrepared = await execution.prepareOperation(stale, acceptedAdmission(8), signal)
+    if (!stalePrepared.ok) throw new Error('stale-binding Push was not prepared')
+    await expect(execution.startOperation(stalePrepared.preparation.operation, stalePrepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: true, snapshot: {
+        state: 'failed', failure: { reason: 'binding-stale' }, effect: 'none',
+      } })
+
+    const missing = pushRequest(binding, 'f'.repeat(40), 'b', 'b')
+    const missingPrepared = await execution.prepareOperation(missing, acceptedAdmission(9), signal)
+    if (!missingPrepared.ok) throw new Error('missing-Commit Push was not prepared')
+    await expect(execution.startOperation(missingPrepared.preparation.operation, missingPrepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: true, snapshot: {
+        state: 'failed', failure: { reason: 'unsupported-state' }, effect: 'none',
+      } })
+
+    const retry = pushRequest(binding, commitId, 'c', 'c')
+    const retryPrepared = await execution.prepareOperation(retry, acceptedAdmission(10), signal)
+    if (!retryPrepared.ok) throw new Error('retryable Push was not prepared')
+    await expect(execution.startOperation(retryPrepared.preparation.operation, retryPrepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'planning' } })
+    const replayed = await execution.prepareOperation(retry, acceptedAdmission(10), signal)
+    if (!replayed.ok) throw new Error('planning Push was not replayed')
+    await expect(execution.startOperation(replayed.preparation.operation, replayed.acceptance, signal))
+      .resolves.toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+    expect(transport.pushCount).toBe(1)
+
+    const unavailable = pushRequest(binding, commitId, 'd', 'd')
+    const unavailablePrepared = await execution.prepareOperation(unavailable, acceptedAdmission(11), signal)
+    if (!unavailablePrepared.ok) throw new Error('unavailable Push was not prepared')
+    await writeFile(join(root, '.git', 'config'), '[include]\n\tpath = ../outside\n')
+    await expect(execution.startOperation(
+      unavailablePrepared.preparation.operation,
+      unavailablePrepared.acceptance,
+      signal,
+    )).resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'planning' } })
+  }, 30_000)
+
+  it('recovers a lost Push acknowledgement by inspection without a second attempt', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, { failReads: new Set([3]) })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const commitId = await gitText(root, 'rev-parse', 'HEAD')
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, commitId, '5'), acceptedAdmission(5), signal,
+    )
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    const started = await execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+    expect(started).toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    expect(transport.pushCount).toBe(1)
+    await expect(execution.cancelOperation(prepared.preparation.operation, 'source-canceled', signal))
+      .resolves.toMatchObject({ state: 'publishing' })
+    await rm(join(root, '.git', 'objects'), { recursive: true, force: true })
+    await expect(execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'succeeded', result: { commitId } })
+    expect(transport.pushCount).toBe(1)
+  }, 30_000)
+
+  it.each([
+    { name: 'creation fails', aborts: false },
+    { name: 'caller cancels creation', aborts: true },
+  ])('handles attempted Push recovery when its private directory $name', async ({ aborts }) => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote)
+    const controller = new AbortController()
+    const cancellation = new Error('stop private recovery directory creation')
+    const createTransportDirectory = vi.fn(async (): Promise<OwnedPrivateGitDirectory> => {
+      if (aborts) controller.abort(cancellation)
+      throw new Error('simulated private recovery directory failure')
+    })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+      createTransportGitDirectory: createTransportDirectory,
+    })
+    const signal = controller.signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '5', '9'),
+      acceptedAdmission(25),
+      signal,
+    )
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    const started = execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+    if (aborts) await expect(started).rejects.toBe(cancellation)
+    else {
+      await expect(started)
+        .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    }
+    expect(transport.pushCount).toBe(1)
+    expect(createTransportDirectory).toHaveBeenCalledOnce()
+  }, 30_000)
+
+  it('unlinks a directory link from its private recovery tree without touching the target', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    const linkedTarget = await mkdtemp(join(tmpdir(), 'saki-host-operation-linked-target-'))
+    roots.push(remote, linkedTarget)
+    await git(remote, 'init', '--bare')
+    const sentinel = join(linkedTarget, 'sentinel.txt')
+    await writeFile(sentinel, 'keep\n')
+    let linked = false
+    const transport = localPushTransport(remote, {
+      async beforeRead(count, request) {
+        if (count !== 3) return
+        const linkPath = join(request.privateGitDirectory.path, 'refs', 'heads')
+        await rmdir(linkPath)
+        await symlink(linkedTarget, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+        linked = true
+      },
+    })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '1', '2'),
+      acceptedAdmission(15),
+      signal,
+    )
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+    expect(linked).toBe(true)
+    await expect(readFile(sentinel, 'utf8')).resolves.toBe('keep\n')
+  }, 30_000)
+
+  it.each([
+    { name: 'unchanged remote', outcome: 'effect-unknown' as const, replaceRemote: false },
+    { name: 'different remote Commit', outcome: 'evidence-conflict' as const, replaceRemote: true },
+  ])('requires reconciliation when an attempted Push leaves a $name', async ({ outcome, replaceRemote }) => {
+    const root = await repository()
+    const racer = replaceRemote ? await repository() : undefined
+    if (racer !== undefined) {
+      await writeFile(join(racer, 'racer.txt'), 'racer\n')
+      await git(racer, 'add', 'racer.txt')
+      await git(racer, 'commit', '-m', 'racer')
+    }
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, {
+      failPush: !replaceRemote,
+      async afterPush() {
+        if (racer !== undefined) await git(racer, 'push', '--force', remote, 'HEAD:refs/heads/main')
+      },
+    })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), replaceRemote ? '8' : '7'),
+      acceptedAdmission(7),
+      signal,
+    )
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: true, snapshot: { state: 'reconciliation-required', reason: outcome } })
+    expect(transport.pushCount).toBe(1)
+  }, 30_000)
+
+  it('cancels a durable not-started Push without reopening local or remote evidence', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, { failReads: new Set([2]) })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '6'), acceptedAdmission(6), signal,
+    )
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    await rename(join(root, '.git'), join(root, '.git-away'))
+    await expect(execution.cancelOperation(prepared.preparation.operation, 'source-canceled', signal))
+      .resolves.toMatchObject({ state: 'canceled', reason: 'source-canceled', effect: 'none' })
+    expect(transport.readCount).toBe(2)
+    expect(transport.pushCount).toBe(0)
+  }, 30_000)
+
+  it('fails a not-started Push when recovery observes a moved remote premise', async () => {
+    const root = await repository()
+    const racer = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, { failReads: new Set([2, 3]) })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), 'f'), acceptedAdmission(13), signal,
+    )
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+
+    await expect(execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'publishing' })
+    await git(racer, 'push', remote, 'HEAD:refs/heads/main')
+    await expect(execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'failed', failure: { reason: 'observation-stale' }, effect: 'none' })
+    expect(transport.pushCount).toBe(0)
+  }, 30_000)
+
+  it('fails without effect when a durable not-started Push loses its exact local Commit', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, { failReads: new Set([2]) })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const commitId = await gitText(root, 'rev-parse', 'HEAD')
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, commitId, '2', '3'), acceptedAdmission(16), signal,
+    )
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    await rm(join(root, '.git', 'objects', commitId.slice(0, 2), commitId.slice(2)), { force: true })
+
+    await expect(execution.inspectOperation(prepared.preparation.operation, signal)).resolves.toMatchObject({
+      state: 'failed',
+      failure: { reason: 'unsupported-state' },
+      effect: 'none',
+    })
+    expect(transport.pushCount).toBe(0)
+  }, 30_000)
+
+  it('fails without effect when starting a durable not-started Push after its Binding becomes stale', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, { failReads: new Set([2]) })
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '3', '4'),
+      acceptedAdmission(19),
+      signal,
+    )
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    await rename(join(root, '.git'), join(root, '.git-away'))
+
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({
+        ok: true,
+        snapshot: { state: 'failed', failure: { reason: 'binding-stale' }, effect: 'none' },
+      })
+    expect(transport.readCount).toBe(2)
+    expect(transport.pushCount).toBe(0)
+  }, 30_000)
+
+  it('keeps a durable Push inert when its trusted credential adapter changes across restart', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    const storageRoot = await mkdtemp(join(tmpdir(), 'saki-host-operation-storage-'))
+    roots.push(remote, storageRoot)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, { failReads: new Set([2]) })
+    const execution = await provider(root, {
+      storageRoot,
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const request = pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), 'e')
+    const prepared = await execution.prepareOperation(request, acceptedAdmission(12), signal)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    const firstContext = contexts.pop()
+    if (firstContext === undefined) throw new Error('test provider context was not retained')
+    await firstContext.fiber.dispose()
+
+    const restarted = await provider(root, {
+      storageRoot,
+      config: { pushCredentialHelper: 'git-credential-manager-core' },
+      pushTransport: transport,
+    })
+    await expect(restarted.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'publishing' })
+    expect(transport.readCount).toBe(2)
+    expect(transport.pushCount).toBe(0)
+
+    const changedContext = contexts.pop()
+    if (changedContext === undefined) throw new Error('restarted test provider context was not retained')
+    await changedContext.fiber.dispose()
+    const restored = await provider(root, {
+      storageRoot,
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const replayed = await restored.prepareOperation(request, acceptedAdmission(12), signal)
+    if (!replayed.ok) throw new Error('durable Push was not replayed after restoring its credential adapter')
+    await expect(restored.startOperation(replayed.preparation.operation, replayed.acceptance, signal))
+      .resolves.toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+    expect(transport.pushCount).toBe(1)
+  }, 30_000)
+
+  it('replays a terminal Push after its credential helper is unconfigured', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    const storageRoot = await mkdtemp(join(tmpdir(), 'saki-host-operation-storage-'))
+    roots.push(remote, storageRoot)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote)
+    const execution = await provider(root, {
+      storageRoot,
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const request = pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '4')
+    const prepared = await execution.prepareOperation(request, acceptedAdmission(17), signal)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+    const started = await execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+    if (!started.ok) throw new Error('test Push did not succeed')
+    const readCount = transport.readCount
+    const firstContext = contexts.pop()
+    if (firstContext === undefined) throw new Error('test provider context was not retained')
+    await firstContext.fiber.dispose()
+
+    const restarted = await provider(root, { storageRoot, pushTransport: transport })
+    await expect(restarted.prepareOperation(request, acceptedAdmission(17), signal)).resolves.toMatchObject({
+      ok: true,
+      snapshot: started.snapshot,
+    })
+    await expect(restarted.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toEqual(started.snapshot)
+    await expect(restarted.cancelOperation(prepared.preparation.operation, 'source-canceled', signal))
+      .resolves.toEqual(started.snapshot)
+    expect(transport.readCount).toBe(readCount)
+    expect(transport.pushCount).toBe(1)
+  }, 30_000)
+
+  it('inspects and cancels a durable not-started Push after its helper is unconfigured', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    const storageRoot = await mkdtemp(join(tmpdir(), 'saki-host-operation-storage-'))
+    roots.push(remote, storageRoot)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, { failReads: new Set([2]) })
+    const execution = await provider(root, {
+      storageRoot,
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const request = pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '5')
+    const prepared = await execution.prepareOperation(request, acceptedAdmission(18), signal)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    const firstContext = contexts.pop()
+    if (firstContext === undefined) throw new Error('test provider context was not retained')
+    await firstContext.fiber.dispose()
+
+    const restarted = await provider(root, { storageRoot, pushTransport: transport })
+    const replayed = await restarted.prepareOperation(request, acceptedAdmission(18), signal)
+    if (!replayed.ok) throw new Error('durable Push was not replayed without its credential helper')
+    await expect(restarted.startOperation(replayed.preparation.operation, replayed.acceptance, signal))
+      .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    await expect(restarted.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'publishing' })
+    await expect(restarted.cancelOperation(prepared.preparation.operation, 'source-canceled', signal))
+      .resolves.toMatchObject({ state: 'canceled', reason: 'source-canceled', effect: 'none' })
+    expect(transport.readCount).toBe(2)
+    expect(transport.pushCount).toBe(0)
+  }, 30_000)
+
+  it('keeps an attempted Push inert when its helper is unconfigured', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    const storageRoot = await mkdtemp(join(tmpdir(), 'saki-host-operation-storage-'))
+    roots.push(remote, storageRoot)
+    await git(remote, 'init', '--bare')
+    const transport = localPushTransport(remote, { failReads: new Set([3]) })
+    const execution = await provider(root, {
+      storageRoot,
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: transport,
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '6', '5'),
+      acceptedAdmission(20),
+      signal,
+    )
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+    const started = await execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+    expect(started).toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    const firstContext = contexts.pop()
+    if (firstContext === undefined) throw new Error('test provider context was not retained')
+    await firstContext.fiber.dispose()
+
+    const restarted = await provider(root, { storageRoot, pushTransport: transport })
+    await expect(restarted.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toEqual(started.snapshot)
+    await expect(restarted.cancelOperation(prepared.preparation.operation, 'source-canceled', signal))
+      .resolves.toEqual(started.snapshot)
+    expect(transport.readCount).toBe(3)
+    expect(transport.pushCount).toBe(1)
+  }, 30_000)
+
+  it('rejects corrupted durable Push result evidence', async () => {
+    const root = await repository()
+    const remote = await mkdtemp(join(tmpdir(), 'saki-host-operation-remote-'))
+    roots.push(remote)
+    await git(remote, 'init', '--bare')
+    const execution = await provider(root, {
+      config: { pushCredentialHelper: 'git-credential-manager' },
+      pushTransport: localPushTransport(remote, { failReads: new Set([2]) }),
+    })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(
+      pushRequest(binding, await gitText(root, 'rev-parse', 'HEAD'), '0'), acceptedAdmission(14), signal,
+    )
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+    const persistence = operationPersistence(execution)
+    let durable: LocalHostPushBranchOperationRecord | undefined
+    persistence.replace(async (record) => {
+      if (isPushOperationRecord(record) && record.effectPlan?.kind === 'push-branch') durable = record
+      await persistence.original(record)
+    })
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+    persistence.restore()
+    if (durable?.effectPlan?.kind !== 'push-branch') throw new Error('test did not retain a Push plan')
+
+    expect(sakiHostExecutionDomainSpec.tables.operations.valueSchema.safeParse(durable).success).toBe(true)
+    expectOperationRecordIssue({
+      ...durable,
+      effectPlan: {
+        ...durable.effectPlan,
+        result: {
+          ...durable.effectPlan.result,
+          repository: { nameWithOwner: 'BreakfastDaPaiDang/other' },
+        },
+      },
+    }, 'Push effect plan result disagrees with request')
+  }, 30_000)
+
+  it('rereads only one exact local Commit through the active Binding', async () => {
+    const root = await repository()
+    const execution = await provider(root)
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const commitId = await gitText(root, 'rev-parse', 'HEAD')
+    await writeFile(join(root, 'later.txt'), 'later\n')
+    await git(root, 'add', 'later.txt')
+    await git(root, 'commit', '-m', 'later')
+
+    await expect(execution.inspectProjectCommit({ binding, commitId }, signal))
+      .resolves.toEqual({ ok: true, commitId })
+    await expect(execution.inspectProjectCommit({
+      binding: { ...binding, workspaceId: WorkspaceId('workspace-other') },
+      commitId,
+    }, signal)).resolves.toEqual({ ok: false, reason: 'binding-stale' })
+    await expect(execution.inspectProjectCommit({ binding, commitId: 'f'.repeat(40) }, signal))
+      .resolves.toEqual({ ok: false, reason: 'commit-missing' })
+    const blobId = await gitText(root, 'hash-object', 'tracked.txt')
+    await expect(execution.inspectProjectCommit({ binding, commitId: blobId }, signal))
+      .resolves.toEqual({ ok: false, reason: 'commit-missing' })
+
+    await rename(join(root, '.git'), join(root, '.git-away'))
+    await expect(execution.inspectProjectCommit({ binding, commitId }, signal))
+      .resolves.toEqual({ ok: false, reason: 'binding-stale' })
+    await rename(join(root, '.git-away'), join(root, '.git'))
+
+    await writeFile(join(root, '.git', 'config'), '[include]\n\tpath = ../outside\n')
+    await expect(execution.inspectProjectCommit({ binding, commitId }, signal))
+      .resolves.toEqual({ ok: false, reason: 'unavailable' })
+  }, 30_000)
+
+  it('keeps Push unavailable when no trusted credential adapter is configured', async () => {
+    const root = await repository()
+    const execution = await provider(root)
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const request: PushBranchHostOperationRequest = {
+      type: 'push-branch',
+      source: {
+        kind: 'control-intent',
+        intentId: INTENT_ID,
+        intentRevision: 2,
+        payloadDigest: '0'.repeat(64),
+      },
+      expected: {
+        binding,
+        commitId: await gitText(root, 'rev-parse', 'HEAD'),
+        repository: { nameWithOwner: 'BreakfastDaPaiDang/saki' },
+      },
+      targetRef: 'refs/heads/main',
+    }
+
+    await expect(execution.prepareOperation(request, acceptedAdmission(1), signal))
+      .resolves.toEqual({ ok: false, reason: 'unavailable' })
+  }, 30_000)
+
   it('prepares one inert durable operation, replays it exactly, and cancels before effect', async () => {
     const root = await repository()
     const execution = await provider(root)
@@ -647,7 +1415,7 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     persistence.replace(async (record) => {
       await persistence.original(record)
       if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started'
-        && record.effectPlan.kind !== 'agent-run') {
+        && (record.effectPlan.kind === 'index' || record.effectPlan.kind === 'commit')) {
         durable = record
         throw new Error('simulated Unstage plan acknowledgement loss')
       }
@@ -1838,7 +2606,7 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     let scratchPath: string | undefined
     persistence.replace(async (record) => {
       if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started'
-        && record.effectPlan.kind !== 'agent-run') {
+        && (record.effectPlan.kind === 'index' || record.effectPlan.kind === 'commit')) {
         scratchPath = record.effectPlan.scratch.path
         throw new Error('simulated first Stage plan persistence failure')
       }
@@ -2048,10 +2816,11 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
       signal,
     )).rejects.toThrow('simulated crash before scratch recovery')
     persistence.restore()
-    if (durable?.effectPlan === undefined || durable.effectPlan.kind === 'agent-run') {
+    if (durable?.effectPlan === undefined
+      || (durable.effectPlan.kind !== 'index' && durable.effectPlan.kind !== 'commit')) {
       throw new Error('test did not retain a Git effect plan')
     }
-    const gitDurable = durable as LocalHostGitOperationRecord
+    const gitDurable = durable as LocalHostStructuredGitOperationRecord
     if (gitDurable.effectPlan === undefined) throw new Error('test did not retain a Git effect plan')
     roots.push(gitDurable.effectPlan.scratch.path)
     const unrelated = await mkdtemp(join(tmpdir(), 'saki-unrelated-temporary-'))
@@ -2323,7 +3092,7 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     let durable: LocalHostOperationRecord | undefined
     persistence.replace(async (record) => {
       if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started'
-        && record.effectPlan.kind !== 'agent-run') {
+        && (record.effectPlan.kind === 'index' || record.effectPlan.kind === 'commit')) {
         durable = record
       }
       if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'attempting') {
@@ -5468,7 +6237,7 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     let scratchPath: string | undefined
     persistence.replace(async (record) => {
       if (record.snapshot.state === 'publishing' && record.effectPlan?.publication === 'not-started'
-        && record.effectPlan.kind !== 'agent-run') {
+        && (record.effectPlan.kind === 'index' || record.effectPlan.kind === 'commit')) {
         scratchPath = record.effectPlan.scratch.path
         throw new Error('simulated first Commit plan persistence failure')
       }
@@ -7172,6 +7941,10 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     expect(migratedV2).toEqual({ tables: { operations: {} }, global: null })
     expect(sakiHostExecutionDomainMigrations.steps[1]!.migrate({ tables: {}, global: null }))
       .toEqual({ tables: { operations: {} }, global: null })
+    expect(sakiHostExecutionDomainMigrations.steps[2]!.migrate({ tables: {}, global: null }))
+      .toEqual({ tables: { operations: {} }, global: null })
+    expect(sakiHostExecutionV3DomainSpec.version).toBe(3)
+    expect(sakiHostExecutionDomainSpec.version).toBe(4)
   })
 
   it('fails a replayed historical detached Commit before effect', async () => {
@@ -7237,11 +8010,16 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
       migratedV2.tables['operations']![operation.id],
     )
     expect(versionTwoRecord).toEqual({ ...historicalRecord, schemaVersion: 2 })
-    const migrated = sakiHostExecutionDomainMigrations.steps[1]!.migrate(migratedV2)
+    const migratedV3 = sakiHostExecutionDomainMigrations.steps[1]!.migrate(migratedV2)
+    const versionThreeRecord = sakiHostExecutionV3DomainSpec.tables.operations.valueSchema.parse(
+      migratedV3.tables['operations']![operation.id],
+    )
+    expect(versionThreeRecord).toEqual({ ...historicalRecord, schemaVersion: 3 })
+    const migrated = sakiHostExecutionDomainMigrations.steps[2]!.migrate(migratedV3)
     const record = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse(
       migrated.tables['operations']![operation.id],
     )
-    expect(record).toEqual({ ...historicalRecord, schemaVersion: 3 })
+    expect(record).toEqual({ ...historicalRecord, schemaVersion: 4 })
     expect(record.request).toEqual(historicalRecord.request)
     expect(record.snapshot.requestFingerprint).toEqual(historicalRecord.snapshot.requestFingerprint)
     const operationTable = (execution as unknown as {
@@ -8558,7 +9336,9 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
         'first recovery target failure\n',
         'first recovery target failure\n',
       )
-      if (durable.effectPlan?.kind !== 'commit') throw new Error('test retained no durable Commit plan')
+      if (durable.effectPlan?.kind !== 'commit' || durable.request.type !== 'commit') {
+        throw new Error('test retained no durable Commit plan')
+      }
       const plan = durable.effectPlan
       const indexPath = join(
         durable.request.expected.binding.expectedInspection.trusted.canonicalGitDirectory,
@@ -10518,7 +11298,9 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
         'inter-read Commit candidate\n',
         'retain inter-read Commit target\n',
       )
-      if (durable.effectPlan?.kind !== 'commit') throw new Error('test retained no durable Commit plan')
+      if (durable.effectPlan?.kind !== 'commit' || durable.request.type !== 'commit') {
+        throw new Error('test retained no durable Commit plan')
+      }
       const targetRef = durable.effectPlan.targetRef
       const alternate = await gitTextWithInput(
         root,
@@ -17215,7 +17997,8 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
 })
 
 async function asHistoricalDetached(record: LocalHostOperationRecord): Promise<LocalHostOperationRecord> {
-  if (record.effectPlan?.kind !== 'commit' || record.request.expected.head.kind !== 'commit') {
+  if (record.effectPlan?.kind !== 'commit' || record.request.type !== 'commit'
+    || record.request.expected.head.kind !== 'commit') {
     throw new Error('test retained no historical Commit plan')
   }
   const detachedRequest = {
@@ -17448,12 +18231,15 @@ async function provider(
   options?: {
     readonly node?: LocalGitMutationNodeAdapter
     readonly config?: Partial<Config>
+    readonly pushTransport?: LocalGitPushTransport
+    readonly createTransportGitDirectory?: () => Promise<OwnedPrivateGitDirectory>
+    readonly storageRoot?: string
   },
 ): Promise<LocalSakiHostExecution> {
   const ctx = new Context()
   contexts.push(ctx)
-  const storageRoot = await mkdtemp(join(tmpdir(), 'saki-host-operation-storage-'))
-  roots.push(storageRoot)
+  const storageRoot = options?.storageRoot ?? await mkdtemp(join(tmpdir(), 'saki-host-operation-storage-'))
+  if (options?.storageRoot === undefined) roots.push(storageRoot)
   await ctx.plugin(Storage)
   await ctx.plugin(StorageSqlite, { path: join(storageRoot, 'saki.db'), journalMode: 'delete' })
   await ctx.plugin(StorageDomain, { backend: 'sqlite' })
@@ -17464,6 +18250,14 @@ async function provider(
   await ctx.plugin(LocalSakiHostExecution, { ...CONFIG, ...options?.config })
   const execution = ctx.sakiHostExecution as LocalSakiHostExecution
   if (options?.node !== undefined) installLocalGitMutationInternals(ctx, { node: options.node })
+  if (options?.pushTransport !== undefined) {
+    installLocalGitPushInternals(ctx, {
+      transport: options.pushTransport,
+      ...(options.createTransportGitDirectory === undefined
+        ? {}
+        : { createTransportGitDirectory: options.createTransportGitDirectory }),
+    })
+  }
   return execution
 }
 
@@ -18744,6 +19538,71 @@ function zeroBytesBase64(byteLength: number): string {
   const completeGroups = Math.floor(byteLength / 3)
   const tail = byteLength % 3 === 0 ? '' : byteLength % 3 === 1 ? 'AA==' : 'AAA='
   return `${'AAAA'.repeat(completeGroups)}${tail}`
+}
+
+interface TestPushTransport extends LocalGitPushTransport {
+  readonly pushCount: number
+  readonly readCount: number
+}
+
+function localPushTransport(
+  remote: string,
+  controls?: {
+    readonly failReads?: ReadonlySet<number>
+    readonly beforeRead?: (count: number, request: Parameters<LocalGitPushTransport['readBranch']>[0]) => Promise<void>
+    readonly failPush?: boolean
+    readonly afterPush?: () => Promise<void>
+  },
+): TestPushTransport {
+  let pushCount = 0
+  let readCount = 0
+  return {
+    get pushCount() { return pushCount },
+    get readCount() { return readCount },
+    async readBranch(request) {
+      readCount += 1
+      await controls?.beforeRead?.(readCount, request)
+      if (controls?.failReads?.has(readCount) === true) throw new Error('simulated remote read failure')
+      try {
+        return { kind: 'commit', objectId: await gitText(remote, 'rev-parse', '--verify', request.targetRef) }
+      } catch {
+        return { kind: 'absent' }
+      }
+    },
+    async pushBranch(request) {
+      pushCount += 1
+      if (controls?.failPush === true) throw new Error('simulated Push failure')
+      const repositoryUrl = `https://github.com/${request.repository.nameWithOwner}.git`
+      await run('git', [
+        `--git-dir=${request.privateGitDirectory.path}`,
+        ...gitHubPushArguments(request).map(arg => arg === repositoryUrl ? remote : arg),
+      ], { windowsHide: true })
+      await controls?.afterPush?.()
+    },
+  }
+}
+
+function pushRequest(
+  binding: ActiveHostProjectBinding,
+  commitId: string,
+  payloadDigit: string,
+  intentLastDigit = '1',
+): PushBranchHostOperationRequest {
+  return {
+    type: 'push-branch',
+    source: {
+      kind: 'control-intent',
+      intentId: `intent-11111111-1111-4111-8111-11111111111${intentLastDigit}` as SakiControlIntentId,
+      intentRevision: 2,
+      payloadDigest: payloadDigit.repeat(64),
+    },
+    expected: { binding, commitId, repository: { nameWithOwner: 'BreakfastDaPaiDang/saki' } },
+    targetRef: 'refs/heads/main',
+  }
+}
+
+function isPushOperationRecord(record: LocalHostOperationRecord): record is LocalHostPushBranchOperationRecord {
+  return record.request.type === 'push-branch'
 }
 
 async function repository(objectFormat: 'sha1' | 'sha256' = 'sha1'): Promise<string> {

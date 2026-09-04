@@ -19,6 +19,7 @@ import type { ResolvedConfig } from './index.ts'
 import { queryGraphql } from './graphql.ts'
 import { GitHubOperationSession } from './operation-session.ts'
 import type { InstallationPriorityQueue } from './priority-queue.ts'
+import { parseNextLinkTarget } from './rest-link.ts'
 
 const REPOSITORY_QUERY = `
 query SakiIssueCreateRepository($repositoryId: ID!) {
@@ -292,29 +293,11 @@ function parseNextPage(
   repository: RepositoryCoordinates,
   repositoryDatabaseId: string,
 ): number | null | 'invalid' {
-  if (link === undefined) return null
-  const nextTargets: string[] = []
-  for (const segment of link.split(/,(?=\s*<)/u)) {
-    const match = /^\s*<([^<>]+)>\s*((?:;[^;]+)*)\s*$/u.exec(segment)
-    if (match === null) return 'invalid'
-    const target = String(match[1])
-    const attributes = String(match[2])
-    let relations: readonly string[] | undefined
-    for (const attribute of attributes.split(';').slice(1)) {
-      const parsed = /^\s*([A-Za-z][A-Za-z0-9_-]*)=(?:"([^"]*)"|([^\s]+))\s*$/u.exec(attribute)
-      if (parsed === null) return 'invalid'
-      if (String(parsed[1]).toLowerCase() === 'rel') {
-        if (relations !== undefined) return 'invalid'
-        relations = String(parsed[2] ?? parsed[3]).split(/\s+/u).filter(Boolean)
-      }
-    }
-    if (relations?.includes('next') === true) nextTargets.push(target)
-  }
-  if (nextTargets.length === 0) return null
-  if (nextTargets.length !== 1) return 'invalid'
+  const nextTarget = parseNextLinkTarget(link)
+  if (nextTarget === null || nextTarget === 'invalid') return nextTarget
   let target: URL
   try {
-    target = new URL(nextTargets.join(''))
+    target = new URL(nextTarget)
   } catch {
     return 'invalid'
   }

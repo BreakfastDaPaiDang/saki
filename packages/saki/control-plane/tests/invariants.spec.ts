@@ -12,8 +12,8 @@ import type { SakiControlPlaneModule } from '../src/index.ts'
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
-  sakiControlPlaneDomainSpec,
 } from '../src/spec.ts'
+import { sakiControlPlaneDomainSpec } from '../src/domain-spec.ts'
 import { sakiStorageGenerationDomainSpec } from '../src/state-version.ts'
 import type {
   InstallationAccessRecord,

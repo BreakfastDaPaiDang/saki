@@ -147,6 +147,7 @@ export function validateGitOperationsDurableState(
     if (binding === undefined) throw new Error('Saki Binding write admission has no Resource Binding')
     if (admission.state === 'available') continue
     if (admission.state === 'agent-run') continue
+    if (admission.action === 'project-branch:push') continue
     const intent = byId.get(admission.source.intentId)
     if (intent === undefined) throw new Error('Saki manual write admission has no Git operation Intent')
     assertAdmissionMatchesIntent(admission, intent)

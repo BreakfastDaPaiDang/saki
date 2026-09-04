@@ -16,7 +16,7 @@ Saki 把 GitHub Projects v2 作为共享 Work Item Status 与手动排序的权�
 
 **只接纳稳定的完整候选结果。** Product App 会完整枚举 Project field、按顺序排列且包含 archived 与 unarchived 的 item 及其全部 field-value 页面，以及已配置 Repository 中的开放 Issue。每个页面都必须重复并校验所属 Project、Repository 或 item 身份，才能贡献事实。同一 Repository Issue number 只能对应一个 Issue 身份；同一 Issue 身份若同时出现在 Project membership 与开放 Issue 枚举中，必须携带完全相同的事实。每一遍都具有 page、item、field-value、响应、timeout、rate-observation 与并发上限，并要求稳定的前后 Project、Repository 与 connection-count 观察。Installation Repository identity 与 Project field 使用固定的 Service 接纳上限；Provider 可配置的 item 上限只适用于 Project item 与 open Issue。由于这些观察不是已记录的全局 revision，一次 operation 会执行两遍连续的完整扫描。两遍的版本化语义指纹必须一致。指纹包含外部身份与来源 revision、field 与 option 身份、Project membership、Status、archive state、Issue state、API order 与邻居，以及每遍 fence。指纹会排除 Provider timing、rate observation 与只用于展示的值；保留的 Repository、Project、Issue 与 item revision 覆盖会影响 Board 的可变展示事实。两遍不一致就是扫描失败，绝不是候选结果。
 
-Page cursor 与局部数组只存在于一次 operation 内。Service 没有局部结果类型，控制面也会在 mapping 前重新校验每个候选结果。定向 Repository、Issue、Project、tag ref、递归 peel 的 tag object、Release、Commit 与 ancestry 读取，以及 targeted mutation inspection，仍是独立 operation，不会推进 Board checkpoint。
+Page cursor 与局部数组只存在于一次 operation 内。Service 没有局部结果类型，控制面也会在 mapping 前重新校验每个候选结果。定向 Work Item mutation inspection 仍是独立 operation，不会推进 Board checkpoint。[Branch Delivery 与 Milestone Release Evidence 决策](../feature/2026-08-18-saki-branch-delivery-and-milestone-release-evidence.zh.md)拥有 delivery 专属的 PR、review、CI、Milestone、tag、Release、Commit 与 ancestry 读取，以及限定在 Provider 生命周期内的 pending-record loop；这些读取也绝不推进该 checkpoint。
 
 **通过一个持久 owner 发布配置、Board 与 checkpoint。** 控制面状态版本 4 为每个 Development Project 保存一个 `github_project_sync` aggregate，并保存幂等的 `github_sync_configuration_intents`。配置 Intent 校验 field-scoped patch、expected revision、Actor 与准确外部 id，再保存一份 pending candidate configuration。若 patch 与当前 pending 或 active 配置相同，系统会返回 `configuration-unchanged`，且不分配 revision。保存并不会使已变更配置生效。该配置的首次完整扫描会执行一次 expected-revision update，同时激活配置、发布 confirmed Board、推进本地 generation 与远端指纹、记录 freshness 与 rate evidence，并安排下一次 polling。
 
@@ -32,7 +32,7 @@ Page cursor 与局部数组只存在于一次 operation 内。Service 没有局�
 
 Host API 暴露准确的 cached 与 interactive Board query，以及 Project Settings 同步 evidence。Cached 路径是纯持久读取。Interactive 路径只在返回同一个当前状态 schema 前写入 scan request。未配置和已配置 Project 都有明确 Projection state；confirmed Projection 会交叉校验 Project、Repository、configuration revision、checkpoint、generation、Work Item source、failure、mapping、freshness 与 mutation-availability 关系。
 
-[ADR 0013](../../../../docs/adr/0013-polling-first-staged-github-synchronization.zh.md)拥有更广泛的同步协议，包括 mutation recovery 与后续 webhook 行为。已实现的[可恢复 GitHub Work Item mutation](2026-08-16-saki-recoverable-github-work-item-mutations.zh.md)拥有 Create、Move 与 targeted inspection。已实现的 [Saki 上游同步](../process/2026-08-15-saki-upstream-synchronization.zh.md)仍是独立的 repository maintenance 工作流。
+[ADR 0013](../../../../docs/adr/0013-polling-first-staged-github-synchronization.zh.md)拥有更广泛的同步协议，包括 mutation recovery 与后续 webhook 行为。已实现的[可恢复 GitHub Work Item mutation](2026-08-16-saki-recoverable-github-work-item-mutations.zh.md)拥有 Create、Move 与定向 Work Item inspection。已实现的 [Branch Delivery 与 Milestone Release Evidence](../feature/2026-08-18-saki-branch-delivery-and-milestone-release-evidence.zh.md)拥有定向 delivery read、当前限定在 Provider 生命周期内的 pending loop，以及 PR delivery mutation。已实现的 [Saki 上游同步](../process/2026-08-15-saki-upstream-synchronization.zh.md)仍是独立的 repository maintenance 工作流。
 
 ## 后果
 
@@ -42,7 +42,7 @@ Host API 暴露准确的 cached 与 interactive Board query，以及 Project Set
 
 无 key 测试通过真实 bundle、control plane、Host API、持久重启路径与 snapshot transcript 使用 fake `SakiGitHub` Provider。Transcript 先在 Provider 缺席时证明 `saved`，再 hold 首次扫描以证明 `activating`，随后放行一次完整扫描以证明 `activated`，再用同一 Board 与 checkpoint 重启，并证明类型化 transport failure 会保留两者。Provider 测试以受控 GitHub 响应覆盖真实 Octokit request 边界，包括分页、父身份不匹配、跨表面 Issue 事实分歧、两遍稳定性不匹配、权限、token scope、响应上限与 rate failure。Live Product App smoke 仍是 operator prerequisite，因为 CI 不拥有已安装 App、private key、organization Project 或外部 allowance。
 
-Service mutation declaration map 支持准确的 Issue 创建、Project membership、Status、API position 与 Issue state operation。Board 会报告逐 action availability，而 pull-request creation 以及 Contents 或 Workflows write 仍然不存在，也绝不会从 App installation grant 推断得出。
+本决策中的 Service mutation declaration map 支持准确的 Issue 创建、Project membership、Status、API position 与 Issue state operation。PR 创建归 [Branch Delivery](../feature/2026-08-18-saki-branch-delivery-and-milestone-release-evidence.zh.md)所有；Contents 与 Workflows write 仍然不存在。Board 绝不从 App installation grant 推断任何 mutation availability。
 
 ## 考虑过的方案
 

@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载定时调度、默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@8`、`saki_host_execution@3` 与 `saki_storage_generation@6`；此外还挂载 JSONL Session 持久化、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。
+Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载定时调度、默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@9`、`saki_host_execution@4` 与 `saki_storage_generation@7`；此外还挂载 JSONL Session 持久化、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。
 
 启动器把 preset 名册绑定到包内 `config/agent-presets` 的绝对路径，并禁用用户 preset 根目录。随包提供的 `development` preset 提供仓库指令、持久 `request_intervention` 工具、Windows 前台 PowerShell，以及基于 Agent 隔离沙箱文件系统的 `read`、`write` 与 `edit` 工具；Host 操作继续使用独立的本地文件系统提供方。生产组合不安装模型 adapter；创建或恢复 Agent 后会保持 idle，直至拥有该 Agent Run 的 operation 提交持久输入。
 
@@ -16,7 +16,7 @@ pnpm run saki
 
 该命令通过仓库的 ESM 钩子与路径映射启动 TypeScript 源码。执行 `pnpm run build:lib:host` 后，对应的产物平面命令是 `node packages/saki/bundle/lib/bin.js`。两者解析同一个由包声明的补丁，并持续运行至收到 `SIGINT` 或 `SIGTERM`。`SAKI_ONESHOT=1` 保留供组装冒烟测试与快照使用的“就绪后退出”模式。
 
-启动组合前，启动器会取得 Installation 全局排他 lease、调和精确具名的恢复元数据，并且只通过 `installation.json` 选择状态；没有 manifest 时才使用精确配置的 B03 数据库。无状态 Installation 会直接配置为当前 state v8。任何精确保留的 v2、v3、v4、v5、v6 或 v7 Installation 都会以 `upgrade-required` 闭合失败；启动当前 build 前需让其 Host 保持离线，并通过保留的维护迁移升级到 v8。启动器在准备、对外服务和完整 teardown（拆卸）期间始终持有 lease；畸形或不受支持的选中状态也会闭合失败。
+启动组合前，启动器会取得 Installation 全局排他 lease、调和精确具名的恢复元数据，并且只通过 `installation.json` 选择状态；没有 manifest 时才使用精确配置的 B03 数据库。无状态 Installation 会直接配置为当前 state v9。任何精确保留的 v2 至 v8 Installation 都会以 `upgrade-required` 闭合失败；启动当前 build 前需让其 Host 保持离线，并通过保留的维护迁移升级到 v9。启动器在准备、对外服务和完整 teardown（拆卸）期间始终持有 lease；畸形或不受支持的选中状态也会闭合失败。
 
 每次非一次性启动还会写出一行启动器交接 JSON，其中包含 `bootstrapPurpose`、`bootstrapSecret` 与回环基础 `url`。首次完成前用途为 `initial-bootstrap`，此后为 `local-reauthentication`。明文机密值只供立即执行本机登录使用；不得重定向、持久保存或公开这行内容。重启会保留先前尚未过期的挑战并签发新挑战；交换任一状态为 `issued` 的挑战时会消费该挑战，并撤销其余挑战。
 
@@ -36,8 +36,8 @@ pnpm run saki
 
 ## 已知限制与延后工作
 
-- **受限的 GitHub mutation**：操作者安装并配置 Product App 后，Windows 组合可以发布已确认的 Board 读取结果，并执行可恢复的 `CreateWorkItem` 与 `MoveWorkItem` saga。尚未提供 pull-request create、任意 Issue edit、Repository Contents 与 Workflow write。
-- **只支持有界 Project 生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 workspace 读取、返回有界 repository-relative 展示路径且不暴露规范 Host 路径的 Changes 读取、同样不暴露规范 Host 路径的有界 Diff 页面读取，以及浏览器请求不携带路径的直接结构化 stage、unstage 与 Commit 操作。尚未组合 Resource Binding 重绑定与退役、automated dispatch、生产模型 adapter、push 和渲染后的 Web 界面。
+- **受限的 GitHub mutation**：操作者安装并配置 Product App 后，Windows 组合可以发布已确认的 Board 读取结果、执行可恢复的 `CreateWorkItem` 与 `MoveWorkItem` saga，并通过持久 marker，根据准确 Repository、head、base 与 Commit identity 创建 Branch Delivery PR。尚未提供任意 Issue edit、Repository Contents 与 Workflow write。
+- **只支持有界 Project 生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 workspace 读取、返回有界 repository-relative 展示路径且不暴露规范 Host 路径的 Changes 读取、同样不暴露规范 Host 路径的有界 Diff 页面读取，以及浏览器请求不携带路径的直接结构化 stage、unstage 与 Commit 操作。Branch Delivery Push 已通过 Local Host 组合，但默认未设置 `pushCredentialHelper`，因此保持不可用；操作者必须选择 `git-credential-manager` 或 `git-credential-manager-core`。尚未组合 Resource Binding 重绑定与退役、automated dispatch、生产模型 adapter 和渲染后的 Web 界面。
 - **固定的 Product Agent 能力**：名册只发现由系统拥有的 `development` preset。用户自定义 preset 要等其授权规则与 Project Profile 选择语义确定后，才会进入 Saki Host。
 - **可执行入口仅供仓库本地使用**——Saki 包保持私有，不属于任何 npm 发布族。
 - **仅限回环开发 Host**：固定的本地 bootstrap 流程不会授权远程浏览器，也不替代 [Saki Host 启动器](../../../docs/saki/host-launcher.zh.md)所述的 Windows Host 包装层。

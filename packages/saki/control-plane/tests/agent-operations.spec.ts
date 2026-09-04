@@ -4965,6 +4965,10 @@ class FakeAgentExecution extends SakiHostExecution {
     return { ok: false, reason: 'unavailable' }
   }
 
+  async inspectProjectCommit(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
+    return { ok: false, reason: 'unavailable' }
+  }
+
   async inspectProject(): Promise<InspectProjectResult> {
     if (this.projectInspectionError !== undefined) throw this.projectInspectionError
     return this.project()

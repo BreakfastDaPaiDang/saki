@@ -4,11 +4,14 @@ import { z } from 'zod'
 import {
   GitHubProviderError,
   githubIssueCreateInspectionHintSchema,
+  githubPullRequestCreateInspectionHintSchema,
 } from '@breakfastdapaidang/saki-github'
 import type {
   GitHubIssueStateSetRequest,
   GitHubIssueCreateInspectionHint,
   GitHubIssueCreateRequest,
+  GitHubPullRequestCreateInspectionHint,
+  GitHubPullRequestCreateRequest,
   GitHubProjectItemAddRequest,
   GitHubProjectItemPositionSetRequest,
   GitHubProjectItemStatusSetRequest,
@@ -104,6 +107,31 @@ mutation SakiIssueCreate(
   }
 }`
 
+const PULL_REQUEST_CREATE_MUTATION = `
+mutation SakiPullRequestCreate(
+  $repositoryId: ID!
+  $headRef: String!
+  $baseRef: String!
+  $title: String!
+  $body: String!
+  $clientMutationId: String!
+) {
+  pullRequestCreate: createPullRequest(input: {
+    repositoryId: $repositoryId
+    headRefName: $headRef
+    baseRefName: $baseRef
+    title: $title
+    body: $body
+    clientMutationId: $clientMutationId
+  }) {
+    clientMutationId
+    pullRequest {
+      id number state title body headRefName headRefOid baseRefName
+      repository { id databaseId: fullDatabaseId owner { id } }
+    }
+  }
+}`
+
 const projectItemMutationTargetSchema = z.object({
   id: z.string().min(1),
   project: z.object({ id: z.string().min(1) }).loose(),
@@ -159,6 +187,18 @@ const issueCreateDataSchema = z.object({
   }).loose(),
 }).loose()
 
+const pullRequestCreateDataSchema = z.object({
+  pullRequestCreate: z.object({
+    clientMutationId: z.string().min(1),
+    pullRequest: z.object({
+      id: z.string().min(1), number: z.number().int().positive(), state: z.literal('OPEN'),
+      title: z.string(), body: z.string(), headRefName: z.string(), headRefOid: z.string(), baseRefName: z.string(),
+      repository: z.object({ id: z.string().min(1), databaseId: z.union([z.string(), z.number().int().positive()]),
+        owner: z.object({ id: z.string().min(1) }).loose() }).loose(),
+    }).loose(),
+  }).loose(),
+}).loose()
+
 /**
  * Make one deterministic Issue-create call per dispatch invocation without an internal retry.
  * @param request - immutable repository, complete text, marker, and caller-persisted operation id.
@@ -210,6 +250,42 @@ export async function createIssue(
   return githubIssueCreateInspectionHintSchema.parse({
     issueId: issue.id,
     issueNumber: issue.number,
+  })
+}
+
+/**
+ * Make one deterministic Pull Request creation call without an internal retry.
+ * @param request - marker-bound exact Repository, refs, head Commit, and complete text.
+ * @param privateKey - operation-scoped Product App private key.
+ * @param config - validated HTTP limits.
+ * @param signal - operation lifetime.
+ * @param queue - per-installation interactive request scheduler.
+ * @returns created Pull Request identity for later inspection.
+ */
+export async function createPullRequest(
+  request: GitHubPullRequestCreateRequest,
+  privateKey: string,
+  config: ResolvedConfig,
+  signal: AbortSignal,
+  queue: InstallationPriorityQueue,
+): Promise<GitHubPullRequestCreateInspectionHint> {
+  const session = await GitHubOperationSession.create(request.installation, privateKey, request.repositoryDatabaseId,
+    config, signal, queue, 'interactive', 'pull-request-create')
+  const data = pullRequestCreateDataSchema.parse(await queryGraphql(session.installation, PULL_REQUEST_CREATE_MUTATION, {
+    repositoryId: request.repositoryId, headRef: request.headRef, baseRef: request.baseRef,
+    title: request.title, body: request.body, clientMutationId: request.operationId,
+  }, signal, request.kind))
+  const pullRequest = data.pullRequestCreate.pullRequest
+  if (data.pullRequestCreate.clientMutationId !== request.operationId
+    || pullRequest.title !== request.title || pullRequest.body !== request.body
+    || pullRequest.headRefName !== request.headRef || pullRequest.headRefOid !== request.expectedHeadCommitId
+    || pullRequest.baseRefName !== request.baseRef || pullRequest.repository.id !== request.repositoryId
+    || String(pullRequest.repository.databaseId) !== request.repositoryDatabaseId
+    || pullRequest.repository.owner.id !== request.installation.accountId) {
+    throw new GitHubProviderError({ code: 'invalid-external-response', operation: request.kind })
+  }
+  return githubPullRequestCreateInspectionHintSchema.parse({
+    pullRequestId: pullRequest.id, pullRequestNumber: pullRequest.number,
   })
 }
 
