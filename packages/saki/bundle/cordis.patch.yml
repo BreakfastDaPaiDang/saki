@@ -105,6 +105,10 @@
       name: '@deepseek-ai/dsh-credentials-windows-dpapi'
       disabled: !!js process.platform !== 'win32'
 
+    - id: saki-connection-credentials
+      name: '@deepseek-ai/dsh-credentials-local'
+      disabled: !!js process.platform === 'win32'
+
     - id: saki-github-app
       name: '@breakfastdapaidang/saki-github-app'
       inject:

@@ -20,6 +20,8 @@ Persistent PowerShell uses the upstream headless terminal emulator for protocol 
 
 Saki skill scenarios live in the shared SDK session corpus, with explicit portable shell compositions and final workspace expectations. Their assertions preserve routed `ask-matt` and `handoff` invocations and the `to-tickets` missing-shell refusal. Host and credential expected output without recorded-session input remains owner-local in the expected-output tier. Real-Git fixtures use a request budget that accommodates repeated repository observations; their filesystem, operation-receipt, and restart assertions still decide success.
 
+Connection requires credential storage for its browser-session signing record even when Saki owns the mounted Host API authentication. The POSIX composition selects the existing local provider with `plaintext` protection; the Product GitHub App remains disabled. Windows selects DPAPI for both Connection records and Product App references.
+
 PowerShell snapshots retain the shipped headless profile's tools, permission events, and runtime-context message. The persistent PowerShell composition disables the ordinary `pwsh` tool on every platform to keep a single registration.
 
 Loader configuration discovery returns slash-normalized repository paths before classifying each plugin reference by its owning manifest. CLI credential fixtures declare their settings, questions, and DPAPI plugins as development dependencies, so a fresh checkout validates the same resolution graph on Windows and POSIX.

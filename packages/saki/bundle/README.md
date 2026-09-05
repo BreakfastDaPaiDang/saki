@@ -27,6 +27,8 @@ The launcher binds the preset roster to the package's absolute `config/agent-pre
 
 On Windows the composition also mounts the current-user DPAPI credential Provider and the Saki Product GitHub App Provider; both rows stay disabled on unsupported hosts instead of reporting a weaker credential source as `local-user-trust`. Startup restores every control-plane-validated running Agent from its exact succeeded Host Operation and physical Session evidence before the launcher publishes readiness or the bootstrap handoff. The readiness row provides the stable `{"product":"saki","status":"ready"}` record. The launcher writes it only after `boot()` completes its entry-activation audit; a reporting failure disposes the application and enters the launcher failure path.
 
+On POSIX, Connection stores its browser-session signing record through `dsh-credentials-local` in the harness home, with `plaintext` protection. The Product GitHub App remains disabled there; its `local-user-trust` requirement belongs to the Windows DPAPI composition.
+
 From the repository root, run:
 
 ```sh
