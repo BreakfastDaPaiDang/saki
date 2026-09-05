@@ -26,6 +26,8 @@ PowerShell 快照保留发行版 headless profile 的工具、权限事件和运
 
 标准 Web 快照页面显式选择 `Asia/Shanghai`，与保留的 `clientTimeZone` 事件载荷一致。语言环境与时区是浏览器夹具的输入；重放保留日志中的时区，不将其归一化去除。
 
+预览 Worker 在加载 VFS 模块图前安装 Proxy 身份跟踪。它的 `node:util/types` shim 无需反射即可识别已构造和已撤销的代理，保留凭据归一化在检查属性前拒绝代理的行为。该判断覆盖 Worker 内构造的代理；结构化克隆传输会拒绝外部代理。
+
 Loader 配置扫描返回以正斜杠规范化的仓库路径，再按所属 manifest 分类插件引用。CLI 凭据夹具将设置、提问与 DPAPI 插件声明为开发依赖，使全新检出在 Windows 与 POSIX 上校验同一解析关系图。
 
 Git 测试夹具先解除 junction，再等待递归删除，使暂存的 Windows 进程句柄能在有限重试期间释放。夹具迁移只重试 Windows 的访问与共享错误，其他失败仍向上传播。每个 teardown 调用方都等待删除完成。

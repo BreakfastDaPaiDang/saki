@@ -6,7 +6,7 @@
 import { types } from '../util.ts'
 
 /** The `node:util/types` predicates the harness reads, shared with the util shim. */
-export const { isPromise, isDate, isRegExp, isTypedArray } = types
+export const { isPromise, isDate, isRegExp, isTypedArray, isProxy } = types
 
 /** CommonJS interop marker: the worker loader hands `default` to default imports (see ./builtins.ts). */
 export const __esModule = true

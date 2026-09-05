@@ -23,6 +23,8 @@ The browser worker host: the whole harness plugin tree runs inside one dedicated
 <a id="use-this-package"></a>
 ## Use this package
 
+The dedicated worker installs a tracked `Proxy` constructor before evaluating image modules. Its `node:util/types.isProxy` identifies those proxies, including revoked proxies, without invoking traps, so credential normalization can reject them before reading properties. Pre-bootstrap and foreign-realm objects are outside this predicate's scope; incoming worker messages use structured clone, which rejects proxies.
+
 Three artifacts from one tsdown pipeline:
 
 - **`lib/index.js` (assembly library)** — `createWorkerHost`/`startWorkerHost` mount the base image and any ordered data overlays (`storage/`), install the module loader (`module-system/`) and the `process` shim, boot the tree through the image's own `dsh-app-boot`, and hand the tunnel its serving seams. Overlays may replace files only under `home/` and `workspace/`; they cannot replace the base manifest, configuration, or modules. The image layout contract (`image-layout.ts`: virtual root, config/manifest paths, empty directories, the `lowered` wrapper-contract gate) is shared with the packer. Boot patches force the deployment-shaped rows: frontend serving off, JSONL session logs on the plaintext path, preset roots onto the image's `config/agent-presets`.

@@ -26,6 +26,8 @@ PowerShell snapshots retain the shipped headless profile's tools, permission eve
 
 Standard Web snapshot pages explicitly select `Asia/Shanghai`, matching the retained `clientTimeZone` event payloads. Locale and timezone are browser fixture inputs; replay preserves the logged timezone rather than normalizing it away.
 
+The preview Worker installs Proxy identity tracking before loading the VFS graph. Its `node:util/types` shim recognizes constructed and revoked proxies without reflection, preserving the credential normalizer's rejection before property inspection. The predicate covers proxies constructed inside that Worker; structured-clone transport rejects foreign proxies.
+
 Loader configuration discovery returns slash-normalized repository paths before classifying each plugin reference by its owning manifest. CLI credential fixtures declare their settings, questions, and DPAPI plugins as development dependencies, so a fresh checkout validates the same resolution graph on Windows and POSIX.
 
 Git test fixtures unlink junctions before awaiting recursive removal, allowing transient Windows process handles to drain during bounded retries. Fixture relocation retries only Windows access and sharing errors; other failures remain visible. Every teardown caller awaits removal.

@@ -23,6 +23,8 @@ kind: "package-library"
 <a id="use-this-package"></a>
 ## 使用本包
 
+独立 worker 在执行镜像模块前安装会记录代理身份的 `Proxy` 构造器。它的 `node:util/types.isProxy` 无需执行 trap，即可识别这些代理，包括已撤销的代理，使凭据归一化能在读取属性前拒绝它们。启动前和其他 realm 中的对象不在该判断范围内；传入 worker 的消息使用结构化克隆，该机制会拒绝代理。
+
 一条 tsdown 管线出三个产物：
 
 - **`lib/index.js`（装配库）**——`createWorkerHost`/`startWorkerHost` 挂载基础镜像和按序排列的数据 overlays（`storage/`）、安装模块加载器（`module-system/`）与 `process` shim、经镜像自带的 `dsh-app-boot` 启动插件树，并把服务缝隙交给隧道。Overlay 只能替换 `home/` 与 `workspace/` 下的文件，不能替换基础 manifest、配置或模块。镜像布局契约（`image-layout.ts`：虚拟根、config/manifest 路径、空目录、`lowered` 包装契约门）与 packer 共享。boot patch 强制部署形态行：关前端静态服务、JSONL 会话日志走明文、preset 根指向镜像内 `config/agent-presets`。

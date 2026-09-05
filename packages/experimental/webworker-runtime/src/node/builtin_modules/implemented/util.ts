@@ -4,6 +4,7 @@
  * enough; `promisify` follows Node's error-first callback convention exactly
  * because zlib-style APIs are wrapped with it at module scope.
  */
+import { isWorkerProxy } from '../../globals/proxy.ts'
 
 /**
  * Wrap an error-first callback function as a promise-returning one.
@@ -102,6 +103,7 @@ export function isDeepStrictEqual(left: unknown, right: unknown): boolean {
 
 /** Runtime type predicates (`node:util/types`), checked against the Node module of that name. */
 export const types = {
+  isProxy: isWorkerProxy,
   isPromise: (value: unknown): value is Promise<unknown> => value instanceof Promise
     || (typeof value === 'object' && value !== null && typeof (value as { then?: unknown }).then === 'function'),
   isDate: (value: unknown): value is Date => value instanceof Date,
@@ -143,7 +145,7 @@ export const __esModule = true
  * module's own types: `promisify`, `callbackify`, and `inspect` are the plain
  * conversions the harness calls, without Node's overload ladders and the
  * `custom`/`styles`/`defaultOptions` members hung off them; `types` publishes the
- * four predicates in use rather than Node's forty; and `TextDecoder` is the DOM
+ * predicates in use rather than Node's full set; and `TextDecoder` is the DOM
  * class, whose `decode` input union the Node declaration does not accept.
  */
 type NodeFace = Partial<Omit<typeof import('node:util'), 'promisify' | 'callbackify' | 'inspect' | 'types' | 'TextDecoder'>>
