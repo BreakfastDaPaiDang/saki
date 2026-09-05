@@ -20,7 +20,7 @@ Saki 保留已交付的 DSH AppFrame、侧边栏、Conversation 和 Settings 实
 
 浏览器从非泄漏 Access response 开始，并在不保留本地一次性 secret 的情况下完成交换。服务端在发出 HttpOnly cookie 前原子消费 challenge 并插入 Browser Session；响应丢失时 client 不能推断是否送达，也不能重放 secret。已认证 Access 提供 session 过期时间，以及服务端从请求呈现的 raw cookie 派生的 request token。持久状态只保存 cookie digest 和非秘密 derivation version 与 domain metadata；系统不存在独立 verifier secret。产品 Projection 继续受服务端解析 Principal 的 scope 限制。过期、撤销、登出、Principal 或 Grant 变化，或 Installation generation 替换，会在下一次受保护读取前清除或失效受影响产品 cache。
 
-已实现的 [GUI 分层与 RPC](../../implemented/architecture/2026-07-19-gui-layering-and-rpc-protocol.zh.md)以及 [Web 客户端架构](../../implemented/architecture/2026-07-19-gui-web-client-architecture.zh.md)决定继续拥有本提案扩展的通用客户端机制。提议中的[动态客户端 package](2026-08-08-cordis-web-dynamic-packages.zh.md)继续作为独立基础设施；Saki 使用已发布 plugin 路径，但不会让自己的发布依赖尚未解决的 loader 工作。
+已实现的 [GUI 分层与 RPC](../../archived/architecture/2026-07-19-gui-layering-and-rpc-protocol.md)以及 [Web 客户端架构](../../implemented/architecture/2026-07-19-gui-web-client-architecture.zh.md)决定继续拥有本提案扩展的通用客户端机制。提议中的[动态客户端 package](2026-08-08-cordis-web-dynamic-packages.zh.md)继续作为独立基础设施；Saki 使用已发布 plugin 路径，但不会让自己的发布依赖尚未解决的 loader 工作。
 
 ## 考虑过的方案
 

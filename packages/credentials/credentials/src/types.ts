@@ -1,8 +1,7 @@
 /**
  * Client-safe type surface of the credential seam: the two key brands, the
- * stored-record union, protection metadata, and the seam's Cordis event declarations. Types only —
- * no runtime code, and nothing here reaches a Host-only symbol, so a Client
- * compilation face reads exactly the signature the Host emits.
+ * stored-record union, protection metadata, Remote reference view, and
+ * Cordis event declarations. Types only; no Host runtime imports.
  *
  * @module @deepseek-ai/dsh-credentials/types
  */
@@ -63,6 +62,25 @@ export type CredentialProtectionLevel = Branded<'CredentialProtectionLevel'>
 
 /** Safe observation of whether a credential can be used without exposing its value. */
 export type CredentialHealth = 'available' | 'missing' | 'unavailable'
+
+/** Safe observation for one reference, including its recovery trust model but never its value. */
+export interface CredentialInfo {
+  /** Reference this observation describes. */
+  ref: CredentialRef
+  /** Whether the provider has a record or effective source assigned to this reference. */
+  configured: boolean
+  /** Source layer currently supplying the value; absent while unconfigured. */
+  source?: string
+  /** Recovery trust model of the effective source, or the provider's writable source while missing. */
+  protectionLevel: CredentialProtectionLevel
+  /** Whether {@link CredentialProvider.set} would currently succeed for this reference. */
+  writable: boolean
+  /** Whether the value is available, absent, or present but unusable. */
+  health: CredentialHealth
+  /** Unix epoch milliseconds at which the provider made this observation. */
+  observedAt: number
+}
+
 
 declare module '@deepseek-ai/cordis' {
   interface Events {

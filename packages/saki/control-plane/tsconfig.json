@@ -30,9 +30,6 @@
       "path": "../github"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
-    },
-    {
       "path": "../../storage/storage-domain"
     },
     {

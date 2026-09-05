@@ -1,9 +1,34 @@
+---
+description: "Read authorized GitHub repositories and perform bounded, recoverable work-item and pull-request operations through the Saki Product App."
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-github-app`
 
 English | [中文](README.zh.md)
 
+## Summary
+
+Read authorized GitHub repositories and perform bounded, recoverable work-item and pull-request operations through the Saki Product App.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Product App identity and permissions](#product-app-identity-and-permissions)
+- [Reads and complete scans](#reads-and-complete-scans)
+- [Atomic mutations and targeted inspection](#atomic-mutations-and-targeted-inspection)
+- [Configuration](#configuration)
+- [Failures](#failures)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+<a id="use-this-package"></a>
+## Use this package
+
 This private Saki package provides `ctx.sakiGitHub` through the Saki Product GitHub App. It authenticates installation-authorized operations with operation-scoped tokens and uses credential-free requests only for an explicitly public exact-Commit read. It admits external responses into the provider-neutral facts, mutation results, and inspections defined by [`saki-github`](../github/README.md). Product Status meaning, durable GitHub Sync Checkpoints, mutation sagas, and Board projection remain Consumer responsibilities.
 
+<a id="product-app-identity-and-permissions"></a>
 ## Product App identity and permissions
 
 `product-app-manifest.json` is the source manifest for the Product App permission ceiling. The installed App uses Organization Projects and Issues write access for Work Item creation and movement and pull-request write access for marker-backed creation. It has read access to Actions, Checks, Contents, Metadata, and commit statuses. Contents write, Workflows write, OAuth user authorization, and webhook delivery are absent.
@@ -12,6 +37,7 @@ Every installation-authorized operation resolves its configured private-key `Cre
 
 The provider rejects a changed installation account, suspension, missing or excessive App grants, an overprivileged token response, an inaccessible configured Repository, an unsafe numeric id, a malformed response, or an expired token. A null exact GraphQL node produces the typed `not-found` failure instead of being treated as malformed. No operation requests Contents write or Workflows write.
 
+<a id="reads-and-complete-scans"></a>
 ## Reads and complete scans
 
 The provider implements installation, Repository, Issue revision, complete Issue detail, branch safety, exact branch head, Project v2, pull request and branch association, raw exact-Commit Actions/check/status facts, fully paginated Milestone Issue scope, exact `refs/tags/saki-v*`, recursive annotated-tag peel, Release-by-tag, installation-authorized and public Commit, and Commit-comparison reads. Every Milestone Issue must repeat both target Repository node and database identities. Branch-head reads return the exact remote Commit or absence independently of protection policy. CI reads retain stable workflow identity, run number and attempt, latest checks, and latest statuses per context without deriving a product result. Tag peeling is cycle-checked and depth-bounded. Release `target_commitish` is retained for display and is never treated as Commit evidence. Public Commit reads are limited to public repositories and share the configured request timeout and response-byte bound.
@@ -22,6 +48,7 @@ A `project-board` scan runs two complete passes over the Project fields, archive
 
 Installation-token REST rate headers from Repository-access inspection and GraphQL rate facts travel with a successful scan. The App-JWT installation-identity read is not charged to that token budget and may omit primary-rate headers. After each successful GraphQL request, a background scan stops when reported remaining points reach or fall below the request's Consumer-resolved per-project `rateLimitReserve`; it does not sleep or retry internally. One queue serializes HTTP requests per installation and gives queued interactive calls priority over background pages; a separate queue serializes credential-free public requests. `maxConcurrentScans` separately bounds complete scans across installations. Disposal cancels queued and active work and waits for owned operations to settle.
 
+<a id="atomic-mutations-and-targeted-inspection"></a>
 ## Atomic mutations and targeted inspection
 
 Each provider dispatch invocation makes one Issue-creation, pull-request-creation, Project-membership, Status, API-position, or Issue-open-state mutation call without an internal retry. Each request carries a caller-persisted `operationId`, which GitHub receives as `clientMutationId`; dispatch and targeted inspection enter the installation queue as interactive work. Create operations send complete validated marker-bearing text and return only the created external id and number; optional known-target hints are never sent. The other four dispatch operations validate GitHub's acknowledgement and return void. A transport failure or missing acknowledgement is returned to the Consumer, which must inspect before deciding whether another call is safe.
@@ -30,6 +57,7 @@ Each mutation has a read-only inspection path that returns only `{ snapshot, obs
 
 Pull-request-create inspection proves the same Repository identities, then completely traverses GitHub's `state=all` pull-request listing for the exact same-Repository `head=<owner>:<headRef>` and `base=<baseRef>` association in created order with raw bodies. It checks each marker match against the expected head Commit and optional known pull-request identity; malformed pagination, repeated entries, or configured bounds produce `incomplete` rather than absence.
 
+<a id="configuration"></a>
 ## Configuration
 
 | Field | Default | Accepted range | Effect |
@@ -47,6 +75,7 @@ Installation observations admit at most 100,000 accessible Repository identities
 
 All listed fields are validated Cordis plugin config. Their defaults are deployment choices owned here. The per-project `rateLimitReserve` instead belongs to the Consumer and is required explicitly on every scan request; neither layer applies a hidden fallback inside `scan()`.
 
+<a id="failures"></a>
 ## Failures
 
 Failures use the closed `GitHubProviderError` data from `saki-github`: cancellation, unavailable authentication, permission mismatch, attributed Status mapping mismatch, absence, invalid external response, primary or secondary rate limit, transient transport, or permanent rejection. Only sanitized operation, resource, permission, external id, HTTP status, request id, retry delay, and reset time may cross the Service Provider interface. The provider never performs an unreported retry or publishes a partial result.
@@ -74,3 +103,12 @@ Independent of model requests: Product App authentication and GitHub response ad
 - **No webhook endpoint** — version 0.1.0 uses polling; a later webhook may wake the same complete scanner but cannot apply Board state directly.
 - **Shared anonymous quota** — public upstream Commit reads consume GitHub's low unauthenticated quota shared by the source IP; a typed rate-limit failure preserves the prior confirmed observation.
 - **Most operator smokes require an installation** — keyless tests exercise the real Octokit authentication and transport boundary with controlled responses. Installation-authorized live reads require the Product App and a local-user-trust private-key credential; the public upstream Commit existence read deliberately does not.
+
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No runtime invariant companion is published because the provider retains no authoritative cross-plugin relationship.
+
+</details>

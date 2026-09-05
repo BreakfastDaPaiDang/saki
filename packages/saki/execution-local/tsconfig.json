@@ -27,9 +27,6 @@
       "path": "../../fs/fs-local"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
-    },
-    {
       "path": "../../llm/llm"
     },
     {

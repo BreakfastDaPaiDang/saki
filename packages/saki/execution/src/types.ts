@@ -1,11 +1,11 @@
 /** Public value types for Saki Host Execution. @module @breakfastdapaidang/saki-execution/types */
 
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import type { CallId, MessageId, TextBlock, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { ToolCallId, MessageId, TextBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 
-export type { CallId, MessageId } from '@deepseek-ai/dsh-llm'
+export type { ToolCallId, MessageId } from '@deepseek-ai/dsh-llm'
 export type { SessionId } from '@deepseek-ai/dsh-session'
 export type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 
@@ -650,7 +650,7 @@ export interface InterventionOpeningExpectedToolResult {
 export interface InspectInterventionOpeningRequest {
   readonly hostId: SakiHostId
   readonly sessionId: SessionId
-  readonly callId: CallId
+  readonly callId: ToolCallId
   readonly interventionId: SakiInterventionRequestId
   readonly expectedQuestion: string
   readonly expectedToolResult: InterventionOpeningExpectedToolResult

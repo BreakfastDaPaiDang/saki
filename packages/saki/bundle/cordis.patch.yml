@@ -32,6 +32,9 @@
     - id: session
       name: '@deepseek-ai/dsh-session'
 
+    - id: session-projection
+      name: '@deepseek-ai/dsh-session-projection'
+
     - id: session-persistence-jsonl
       name: '@deepseek-ai/dsh-session-persistence-jsonl'
       config:
@@ -60,6 +63,7 @@
       name: '@deepseek-ai/dsh-agent-presets'
       config:
         default: development
+        includeShippedRoot: false
         includeUserRoot: false
 
     - id: workspace

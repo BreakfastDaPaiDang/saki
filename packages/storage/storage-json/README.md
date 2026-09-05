@@ -1,24 +1,122 @@
+---
+description: "JSON storage backend for hosts and maintainers choosing, configuring, or debugging whole-unit and per-record files under a configured root."
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-storage-json
 
 English | [中文](README.zh.md)
 
-JSON backend for the [storage hub](../storage/README.md): one human-readable `<unit>.json` file per unit under a configured root, registered under a configurable name that defaults to `json`. Design: [domain KV storage Agent Note](../../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md).
+## Summary
 
-## Model
+`dsh-storage-json` stores domain data as readable JSON under a configured root and registers as backend `json`. Its default `single` layout keeps one complete `<unit>.json` file per unit; its `per-record` layout keeps one version-stamped document per record. Both layouts publish each changed file atomically, while the domain layer orders calls. Choose it when operators need inspectable files and the selected layout fits the write volume; choose SQLite for larger or highly concurrent data. The backend is host-side only and contributes no prompt, tool, or schema.
 
-- The in-memory unit state is authoritative; every write primitive republishes the whole file via temp-write + fsync + atomic `rename()` replace. A unit file is always the complete current net state — legibility is this backend's reason to exist; scale is the SQLite backend's job.
-- Every materialized file uses the exact physical-v1 fields `unit`, `global`, and `tables`; the `unit` header carries exactly the name, domain-owned version, `formatVersion: 1`, and global-slot declaration. The physical format version evolves independently from domain migration versions. Ordinary and closed reads use fatal UTF-8 decoding and one strict lossless parser: invalid byte sequences, a byte-order mark, comments, trailing commas, nested duplicate members, numeric tokens that JavaScript would round, underflow, or overflow, unversioned or unsupported files, unknown fields, layout differences, foreign headers, and other malformed data reject with `malformed-medium`; only a differing domain version rejects with `version-mismatch`.
-- A missing file opens as an empty unit and materializes on the first write. The backend resolves its configured root to an absolute path once at construction and pins the first real directory identity it creates or observes. The root and every existing unit entry must remain a real directory and regular file respectively; symbolic links, Windows junctions, dangling links, and replacements observed while reading reject with `malformed-medium`. A root replacement detected immediately before `rename()` or `link()` is a definite `malformed-medium` failure with no final publication. A mismatch detected after `rename()` or `link()` reports `commit-outcome-unknown`: a direct unit or live domain is poisoned, while closed materialization returns an `uncertain` token for evidence-preserving readback.
-- Write ordering across calls belongs to the caller (the domain layer's write chain); each call validates and clones lossless JSON before publication and is durable once resolved. A definite pre-publication failure restores the prior in-memory state. If replacement is already visible but directory durability fails, the call rejects with `durability-uncertain` and `published: true` while retaining the published state internally; that direct unit rejects every subsequent read or write until it is closed. Cross-provider recovery discards and recreates the affected backend (or restarts) before opening a fresh unit from the medium. `loadAll()` returns a detached value graph, so later mutation of write inputs or loaded snapshots cannot change in-memory or durable state; `close()` synchronously stops admission and drains reads and writes admitted earlier.
-- The optional `kv.closed.withReservedUnit` operation reserves one unit name before returning its promise. Once the scope observes callback settlement it ends lease admission; reservation release and backend close wait for the callback and every lease method admitted earlier, including methods the callback did not await. Its lease inspects and reads without opening or changing the unit, or validates and atomically materializes a complete missing unit without replacing any existing entry. Reservations fail fast with `unit-open` against live, opening, or other reserved access. Pre-publication methods observe the caller's `AbortSignal`. Create-only publication never removes a linked final entry after a directory-sync failure and returns an `uncertain` token whose same-lease `readBack()` supplies exact visibility evidence; late cancellation does not suppress that readback.
+## Table of Contents
 
-## Config
+- [Use this package](#use-this-package)
+- [Understand the implementation](#understand-the-implementation)
+- [Further Exploration](#further-exploration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `backend` | string | `json` | Storage registry and lifecycle-service name; distinct names allow multiple JSON roots in one composition |
-| `root` | string | required — no default (a cwd fallback would scatter files) | Directory holding unit files, resolved once against the construction cwd and created `0o700` on demand; the final entry is never accepted as a symbolic link or junction |
+-----
 
+<a id="use-this-package"></a>
+## Use this package
+
+Use this package when a composition needs readable, editable JSON storage. Route the relevant domains to backend `json`; each domain specification selects the `single` or `per-record` layout.
+
+### When to choose it
+
+Choose the default `single` layout for small units that benefit from one complete, pretty-printed file. Choose `per-record` when point writes should replace only one record document. Choose the SQLite backend when data is large, writes are frequent, or multiple records need transactional updates.
+
+### Configuration
+
+The only plugin field is `root`, which holds the unit files and directories. It is required because the backend does not fall back to `process.cwd()`. The backend creates the root with mode `0o700` on demand. A domain specification selects its layout; this plugin has no layout override.
+
+```yaml
+- name: '@deepseek-ai/dsh-storage'
+- name: '@deepseek-ai/dsh-storage-json'
+  config:
+    root: /var/lib/dsh/data
+- name: '@deepseek-ai/dsh-storage-domain'
+  config:
+    backend: json
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `root` | required | Directory holding `<unit>.json` files and `<unit>/` trees; created `0o700` on demand |
+
+The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-storage-json) is the exhaustive source for every accepted field and its JSDoc.
+
+### Observable behavior
+
+A missing `single` file or `per-record` directory opens as an empty unit and materializes on the first write. In `single`, malformed content rejects with `malformed-medium`, and a different stored version rejects with `version-mismatch`. In `per-record`, each malformed or unreadable document, and each document whose version is outside the descriptor's current and compatible versions, reads as an absent record, so one bad document does not reject the unit. Record keys must match `[a-zA-Z0-9_-]+`; an unsafe key rejects before any file operation. Every resolved write is durable, and operations after close reject with `closed`.
+
+An empty `per-record` tree can initialize its declared tables from a valid `<root>/<unit>.json` whole-unit document only when the source unit name matches and its version is current or declared compatible. The backend leaves that source file unchanged and stamps migrated records with the current version. A source version outside the accepted set leaves the new tree empty. Any document path in a declared table, or a declared `global.json`, suppresses this initialization for the complete unit, even if that document is unreadable or stale.
+
+-----
+
+<a id="understand-the-implementation"></a>
+## Understand the implementation
+
+<details>
+<summary>Implementation internals — click to expand</summary>
+
+The `single` layout uses strict physical format v1, independent of the domain version, and validates lossless JSON on writes and reads. It pins the configured root identity and rejects symlinks, junctions, malformed documents, and detected replacement. Its closed-unit lease supports inspection and create-only materialization using a same-directory hard link. A publication whose outcome or durability is uncertain poisons the live handle; close and recreate the backend before recovery. The [storage subsystem](../../../docs/subsystems/storage.md) owns the full failure and readback rules.
+
+The two layouts share atomic publication but assign state ownership differently. `single` owns an in-memory unit projection; `per-record` treats its directory tree as authoritative.
+
+### Design concept
+
+- **`single` keeps memory authoritative.** Each write changes the in-memory unit, serializes its complete state, and atomically replaces `<unit>.json`. A failed publish restores the prior in-memory value.
+- **`per-record` keeps the directory authoritative.** Each put or delete changes one `<unit>/<table>/<key>.json` document, and `loadAll()` rereads the tree. Each document stamps the unit version and carries one record value.
+- **Publication is durable per call.** A write uses a temporary file, fsync, atomic `rename()` replacement, and a parent-directory fsync on POSIX. The domain layer's write chain supplies ordering across calls.
+
+### File formats
+
+A `single` document carries the unit identity, global singleton, and all tables:
+
+```json
+{
+  "unit": { "name": "workspace", "version": 1, "formatVersion": 1, "hasGlobal": true },
+  "global": null,
+  "tables": { "workspaces": { "<key>": { "path": "/work/demo" } } }
+}
+```
+
+A `per-record` table document at `<root>/<unit>/<table>/<key>.json` has the form `{ "version": 1, "record": <value> }`; the optional global value uses `<root>/<unit>/global.json`. The format version comes from the domain specification.
+
+### Source map
+
+| File | Role |
+|---|---|
+| [`src/index.ts`](src/index.ts) | Plugin entry: backend registration, `root` config, unit open/close table |
+| [`src/single-unit.ts`](src/single-unit.ts) | One `single` unit: authoritative memory, write primitives, publish rollback |
+| [`src/per-record-unit.ts`](src/per-record-unit.ts) | One `per-record` unit: tree reads, path-safe records, and one-document writes |
+| [`src/format.ts`](src/format.ts) | Whole-unit and record serialization with version validation |
+| [`src/atomic.ts`](src/atomic.ts) | Atomic file replacement: temp write, fsync, rename, directory fsync |
+| — | No runtime invariant companion is published; correctness here is write-durability and publish-then-reparse equivalence, which require medium round-trip tests (the shared backend conformance suite); the backend exposes no continuously observable in-process relation. |
+
+</details>
+
+-----
+
+<a id="further-exploration"></a>
+## Further Exploration
+
+Read these pages when this backend's view is not enough: the subsystem reference is the authoritative contract, and the sibling backend shows the alternative medium.
+
+- [Storage subsystem](../../../docs/subsystems/storage.md) — the backend contract, domain semantics, and generated API.
+- [Storage package map](../README.md) — the family's packages and their repository position.
+- [SQLite storage backend](../storage-sqlite/README.md) — the point-update medium for high-frequency data.
+- [domain KV storage Agent Note](../../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md) — the design behind the backend family and its deferred work.
+
+-----
+
+<a id="model-experience"></a>
 ## Model Experience
 
 ### Stored domain records
@@ -37,7 +135,21 @@ None — the backend never touches live request prefixes.
 
 ## Known Limitations and Deferred Work
 
-- Missing-unit materialization requires same-directory hard-link support so publication can remain atomic and create-only.
-- Windows namespace durability has no explicit write-through call: ordinary replacement relies on libuv's `rename()` and missing-unit materialization publishes a synced temporary file through a no-clobber hard link. The session-log backend's stricter Win32 helper is planned to move down here when the append-log facet lands (see the Agent Note's migration section).
-- Node's path-based filesystem API cannot bind publication to an already-open directory handle on every supported platform. The backend checks the pinned root identity immediately before and after publication and rejects detected replacement, but another process can still replace the root inside that final path-resolution interval; deployments must keep the configured root under the host's exclusive administrative control.
-- No cross-process write locking: two processes writing the same root can interleave whole-file replacements (last write wins). Single-host-process deployments are the current consumer; the multi-process story is deferred per the Agent Note's out-of-scope table.
+<a id="known-limitations-and-deferred-work"></a>
+
+
+These limits define when this backend is a poor fit or needs special operational care. They are current package constraints, not a task backlog.
+
+- **`single` rewrites the whole unit** — each write republishes the complete unit file; use `per-record` or route the domain to SQLite when this cost is too high.
+- **No cross-process write locking** — two processes writing the same unit can interleave replacements; writes to the same file use last-completion wins.
+- **Windows rename without explicit write-through** — durability relies on libuv's `rename()` (`MoveFileExW` with replacement); the stricter Win32 write-through publish helper from the session-log backend is planned to move down here when the `log` facet lands.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+The Agent Note flags the whole-unit rewrite scale premise as a risk: if a second consumer lands on this backend at thousand-record scale before being routed to SQLite, rewrite cost surfaces earlier than expected. The mitigation is configuration — point `routes` at the SQLite backend — not a change to this package.
+
+</details>

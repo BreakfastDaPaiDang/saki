@@ -19,7 +19,7 @@ import {
 } from '@breakfastdapaidang/saki-execution'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import * as Connection from '@deepseek-ai/dsh-client-connection'
-import { RpcId, type ClientRequest, type ServerResponse } from '@deepseek-ai/dsh-host-apiproxy/api'
+import { RpcId, type ClientRequest, type ServerResponse } from '@deepseek-ai/dsh-client-connection'
 import SakiControlPlane from '@breakfastdapaidang/saki-control-plane'
 import {
   createStorageGenerationSeal,

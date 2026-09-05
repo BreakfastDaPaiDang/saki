@@ -10,11 +10,20 @@
     "src/wire.ts"
   ],
   "references": [
-    { "path": "../../../vendor/cordis" },
-    { "path": "../../client/connection/tsconfig.client.json" },
-    { "path": "../../host/apiproxy" },
-    { "path": "../control-plane" },
-    { "path": "../execution" },
-    { "path": "../github" }
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../client/connection/tsconfig.client.json"
+    },
+    {
+      "path": "../control-plane"
+    },
+    {
+      "path": "../execution"
+    },
+    {
+      "path": "../github"
+    }
   ]
 }

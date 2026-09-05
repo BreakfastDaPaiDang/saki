@@ -43,6 +43,7 @@ describe('Saki bundle package', () => {
       ['storage-domain', '@deepseek-ai/dsh-storage-domain'],
       ['llm', '@deepseek-ai/dsh-llm'],
       ['session', '@deepseek-ai/dsh-session'],
+      ['session-projection', '@deepseek-ai/dsh-session-projection'],
       ['session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'],
       ['system-prompt', '@deepseek-ai/dsh-system-prompt'],
       ['tools', '@deepseek-ai/dsh-tools'],
@@ -88,6 +89,7 @@ describe('Saki bundle package', () => {
     })
     expect(insert.find(entry => entry.id === 'agent-presets')?.config).toEqual({
       default: 'development',
+      includeShippedRoot: false,
       includeUserRoot: false,
     })
     expect(insert.find(entry => entry.id === 'agent-loop')?.config).toEqual({ agents: [] })

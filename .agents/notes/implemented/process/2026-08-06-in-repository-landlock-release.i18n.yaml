@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-06-in-repository-landlock-release.md
-2026-08-06-in-repository-landlock-release.md: e5f441e4a99eb35cea48d9f448f44f750337d3e1
-2026-08-06-in-repository-landlock-release.zh.md: 86d750ef4d095e3e8d30adc7c70ed5a19747a011
+2026-08-06-in-repository-landlock-release.md: df86eecbe9aa63bc88c340d0ee4bd25cf2fa357b
+2026-08-06-in-repository-landlock-release.zh.md: 8dccc2c5b22c73bb2f9bb2a67a589d29b1aa32f9

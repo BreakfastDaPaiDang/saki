@@ -77,14 +77,15 @@ async function reportAgentRunSnapshot(ctx: Context): Promise<void> {
   const interventionAnswerInputSessionIds: string[] = []
   const interventionToolLifecycle: unknown[] = []
   const inputSessionIds: string[] = []
-  for (const snapshot of await ctx.sessionPersistence.listSnapshots(signal)) {
-    const persisted = await ctx.sessionPersistence.readFrom(snapshot.header.id, 0, signal)
-    const foundInterventionCall = persisted.events.find(event =>
+  for (const snapshot of await ctx.sessionPersistence.list({ signal })) {
+    await using handle = await ctx.sessionPersistence.open(snapshot.header.id, 'read', { signal })
+    const events = await handle.read(0, undefined, { signal })
+    const foundInterventionCall = events.find(event =>
       event.type === 'tool/call' && event.data.name === 'request_intervention')
     const interventionCall = foundInterventionCall?.type === 'tool/call'
       ? foundInterventionCall
       : undefined
-    for (const event of persisted.events) {
+    for (const event of events) {
       if (event.type === 'user/message' && event.data.source.kind === 'saki-agent-run') {
         inputs.push(event.data)
         inputSessionIds.push(snapshot.header.id)

@@ -91,17 +91,43 @@ const REQUEST_TOKEN_HEADER = 'x-saki-request-token'
  * failures, and invalid outbound payloads reject the returned Promise.
  */
 export interface SakiHostClient {
-  /** @param signal - optional cancellation. @returns current display-safe Access state. */
+  /**
+   * Read the current browser access state.
+   * @param signal - optional cancellation.
+   * @returns current display-safe Access state.
+   */
   readAccess(signal?: AbortSignal): Promise<SakiWireAccessProjection>
-  /** @param secret - clear one-time launcher secret. @param signal - optional cancellation. @returns exchange outcome. */
+  /**
+   * Exchange the launcher secret for an authenticated browser session.
+   * @param secret - clear one-time launcher secret.
+   * @param signal - optional cancellation.
+   * @returns exchange outcome.
+   */
   exchangeBootstrap(secret: string, signal?: AbortSignal): Promise<SakiWireAccessExchangeResult>
-  /** @param requestToken - current session-derived request token. @param signal - optional cancellation. @returns logout outcome. */
+  /**
+   * Revoke the current browser session.
+   * @param requestToken - current session-derived request token.
+   * @param signal - optional cancellation.
+   * @returns logout outcome.
+   */
   logout(requestToken: string, signal?: AbortSignal): Promise<SakiWireAccessLogoutResult>
-  /** @param signal - optional cancellation. @returns current Principal-scoped My Work. */
+  /**
+   * Read work assigned to the current Principal.
+   * @param signal - optional cancellation.
+   * @returns current Principal-scoped My Work.
+   */
   queryMyWork(signal?: AbortSignal): Promise<SakiWireMyWorkResult>
-  /** @param signal - optional cancellation. @returns current Principal-scoped Attention. */
+  /**
+   * Read current Principal-scoped attention items.
+   * @param signal - optional cancellation.
+   * @returns current Principal-scoped Attention.
+   */
   queryAttention(signal?: AbortSignal): Promise<SakiWireAttentionResult>
-  /** @param signal - optional cancellation. @returns the revisioned Project index or `denied`/`unavailable`. */
+  /**
+   * Read the current revisioned Project index.
+   * @param signal - optional cancellation.
+   * @returns the revisioned Project index or `denied`/`unavailable`.
+   */
   queryProjectIndex(signal?: AbortSignal): Promise<SakiWireProjectIndexResult>
   /**
    * Inspect a selected local project directory.
@@ -290,6 +316,7 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireMoveWorkItemResult>
   /**
+   * Persist the exact Commit selected for Branch Delivery.
    * @param intent - exact Commit selection.
    * @param requestToken - mutation token.
    * @param signal - cancellation.
@@ -301,6 +328,7 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireBranchDeliveryIntentResult>
   /**
+   * Push the selected delivery Commit through the configured Host.
    * @param intent - exact delivery Push request.
    * @param requestToken - mutation token.
    * @param signal - cancellation.
@@ -312,6 +340,7 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireBranchDeliveryIntentResult>
   /**
+   * Create or recover the Pull Request owned by the delivery marker.
    * @param intent - marker-owned Pull Request request.
    * @param requestToken - mutation token.
    * @param signal - cancellation.
@@ -323,6 +352,7 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireBranchDeliveryIntentResult>
   /**
+   * Associate an observed Pull Request with the exact delivery.
    * @param intent - exact observed Pull Request association.
    * @param requestToken - mutation token.
    * @param signal - cancellation.
@@ -334,6 +364,7 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireBranchDeliveryIntentResult>
   /**
+   * Record the transition of a delivery to review.
    * @param intent - In-review transition.
    * @param requestToken - mutation token.
    * @param signal - cancellation.
@@ -345,6 +376,7 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireBranchDeliveryIntentResult>
   /**
+   * Record attributed acceptance of the selected delivery.
    * @param intent - attributed acceptance transition.
    * @param requestToken - mutation token.
    * @param signal - cancellation.
@@ -356,6 +388,7 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireBranchDeliveryIntentResult>
   /**
+   * Persist Milestone metadata and its release target.
    * @param intent - exact Milestone metadata and release target.
    * @param requestToken - mutation token.
    * @param signal - cancellation.
@@ -367,6 +400,7 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireMilestoneDeliveryIntentResult>
   /**
+   * Finalize the exact Milestone revision and release target.
    * @param intent - exact Milestone revision and release target to finalize.
    * @param requestToken - mutation token.
    * @param signal - cancellation.

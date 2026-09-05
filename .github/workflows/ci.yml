@@ -52,6 +52,7 @@ jobs:
           || 'dsh-ubuntu-24-04-16core' }}
     name: node 24 / static
     env:
+      DSH_GATE_FAIL_FAST: '1'
       # Saki uses GitHub-hosted standard runners, which have a much smaller
       # CPU/memory budget than upstream's dedicated 16-core pool.
       DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
@@ -64,7 +65,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -107,6 +108,7 @@ jobs:
           || 'dsh-ubuntu-24-04-16core' }}
     name: node 24 / coverage
     env:
+      DSH_GATE_FAIL_FAST: '1'
       # Saki's standard hosted runner gets two workers and one gate at a time.
       # The upstream hosted 16-core runner uses six coverage workers. The failover pool
       # shares one 64-core VM across six always-on runner instances, so each
@@ -122,7 +124,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -173,6 +175,7 @@ jobs:
           || 'dsh-ubuntu-24-04-16core' }}
     name: node 24 / snapshots and artifacts
     env:
+      DSH_GATE_FAIL_FAST: '1'
       DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '1' || '8' }}
       DSH_NODE_COMPAT_SKIP_TYPECHECK: '1'
       DSH_OXLINT_THREADS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
@@ -188,7 +191,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -274,7 +277,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -341,7 +344,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -435,7 +438,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm-js
+          dest: ${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
 
       - uses: actions/setup-node@v6
         with:
@@ -465,7 +468,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -529,7 +532,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/setup-node@v6
         with:
@@ -611,7 +614,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       # The benchmark's Windows lanes deliberately skip the store cache like
       # the independent native Windows job; an empty input disables caching.
@@ -702,7 +705,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          dest: ${{ runner.temp }}/setup-pnpm
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
 
       # Unlike the larger-runner suite, both platforms cache the store here:
       # the consolidated topology measures cache mechanics as workload.

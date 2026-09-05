@@ -1,19 +1,19 @@
 /** Pure first-run readiness projection over the shared Models join. */
 import { describe, expect, it } from 'vitest'
-import type { CredentialView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { CredentialInfo } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ModelsSettingsState, ProviderRow } from '../src/client/store.ts'
 import { onboardingReadiness, providerUsable } from '../src/client/store.ts'
 
-const PLAINTEXT_PROTECTION = 'plaintext' as CredentialView['protectionLevel']
+const PLAINTEXT_PROTECTION = 'plaintext' as CredentialInfo['protectionLevel']
 
 function credential(
   ref: string,
   configured: boolean,
   writable: boolean,
   source?: string,
-): CredentialView {
+): CredentialInfo {
   return {
-    ref: ref as CredentialView['ref'],
+    ref: ref as CredentialInfo['ref'],
     configured,
     ...source === undefined ? {} : { source },
     protectionLevel: PLAINTEXT_PROTECTION,
@@ -23,7 +23,7 @@ function credential(
   }
 }
 
-const missingCredential: CredentialView = credential('DEEPSEEK_API_KEY', false, true)
+const missingCredential: CredentialInfo = credential('DEEPSEEK_API_KEY', false, true)
 
 function row(overrides: Partial<ProviderRow> = {}): ProviderRow {
   return {

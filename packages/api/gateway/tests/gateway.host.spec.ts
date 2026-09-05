@@ -9,12 +9,13 @@ import {
   type ConnectionRpcHandler,
   type ConnectionRpcRequestMetadata,
 } from '@deepseek-ai/dsh-client-connection'
+import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import type { WebServer, WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import {
   bindTypertRemote,
   Remote,
+  RemoteError,
   RemoteScope,
-  TypertLookupFailure,
   type InvocationDescriptor,
   type TypertContext,
   type TypertLookup,
@@ -22,6 +23,7 @@ import {
 } from '@deepseek-ai/dsh-typert-protocol'
 import TypertRegistry, { type TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import TypertGatewayService, { TypertGatewayError } from '@deepseek-ai/dsh-api-gateway'
+import { provideBrowserCredentials } from './browser-credentials.ts'
 
 interface FixtureAgent {
   readonly id: string
@@ -39,6 +41,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 
   interface TypertContextMap {
     gatewayFixture: TypertContext<string>
+  }
+
+  interface RemoteErrorDetailsMap {
+    'session/agent-busy': { readonly reason: string }
   }
 }
 
@@ -110,7 +116,6 @@ const REQUEST_METADATA: ConnectionRpcRequestMetadata = {
 
 class FakeConnectionService extends Service {
   channel: string | undefined
-  authority: string | undefined
   matches: ((endpoint: string) => boolean) | undefined
   handler: FakeRpcHandler | undefined
 
@@ -125,21 +130,22 @@ class FakeConnectionService extends Service {
         channel: string,
         matches: (endpoint: string) => boolean,
         handler: FakeRpcHandler,
-        options: { readonly authority: string },
       ) =>
         owner.effect(() => {
           this.channel = channel
-          this.authority = options.authority
           this.matches = matches
           this.handler = handler
           return () => {
             this.channel = undefined
-            this.authority = undefined
             this.matches = undefined
             this.handler = undefined
           }
         }),
     }
+  }
+
+  requestRejection(): undefined {
+    return undefined
   }
 }
 
@@ -172,6 +178,22 @@ async function serveRoute(route: WebRoute): Promise<{ readonly origin: string; c
       })
     }),
   }
+}
+
+/** Exchange a Connection launch token without mounting the frontend fallback. */
+function browserCookie(connection: HostConnectionHandle, origin: string): string {
+  const target = new URL(connection.authenticatedUrl(origin))
+  let setCookie: string | undefined
+  connection.authorizeIndex({
+    method: 'GET',
+    url: `${target.pathname}${target.search}`,
+    headers: { host: target.host },
+  }, {
+    writeHead(_status, headers) { setCookie = headers?.['set-cookie'] },
+    end() {},
+  })
+  if (setCookie === undefined) throw new Error('gateway fixture did not receive an authentication cookie')
+  return setCookie.split(';', 1)[0]!
 }
 
 class FirstSharedService extends Service {
@@ -440,7 +462,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'create',
       args: { agentId: 'agent-1', request: { title: 'ship' } },
-    }), 'lookup-unavailable')
+    }), 'gateway/lookup-unavailable')
     expect(service.calls).toEqual([])
   })
 
@@ -473,7 +495,7 @@ describe('TypertGatewayService', () => {
     })).resolves.toBe('land')
     await expectCode(ctx.typertGateway.invoke({
       namespace: 'other', method: 'absent', args: {},
-    }), 'invocation-unavailable')
+    }), 'gateway/invocation-unavailable')
   })
 
   it('rejects SRC wire collisions and unavailable Context providers', async () => {
@@ -484,14 +506,14 @@ describe('TypertGatewayService', () => {
       namespace: 'colliding-wire',
       method: 'run',
       args: { agentId: 'agent-1' },
-    }), 'signature-invalid')
+    }), 'gateway/signature-invalid')
 
     const missing = await setup()
     await expectCode(missing.ctx.typertGateway.invoke({
       namespace: 'goals',
       method: 'rename',
       args: { agentId: 'agent-1', request: { title: 'land' } },
-    }), 'context-unavailable')
+    }), 'gateway/context-unavailable')
 
     const contextCollision = await setupGateway()
     await contextCollision.plugin(ContextWireService)
@@ -500,7 +522,7 @@ describe('TypertGatewayService', () => {
       namespace: 'context-wire',
       method: 'run',
       args: { agentId: 'agent-1' },
-    }), 'signature-invalid')
+    }), 'gateway/signature-invalid')
   })
 
   it('re-reads Service and providers on every strict invocation', async () => {
@@ -514,7 +536,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'create',
       args: { agentId: 'agent-1', request: { title: 'ship' } },
-    }), 'lookup-unavailable')
+    }), 'gateway/lookup-unavailable')
 
     registerAgentLookup(ctx, agent)
     await serviceFiber.dispose()
@@ -522,7 +544,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'create',
       args: { agentId: 'agent-1', request: { title: 'ship' } },
-    }), 'service-unavailable')
+    }), 'gateway/service-unavailable')
   })
 
   it('re-reads and contains Context providers', async () => {
@@ -536,7 +558,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'rename',
       args: { agentId: 'agent-1', request: { title: 'land' } },
-    }), 'context-unavailable')
+    }), 'gateway/context-unavailable')
 
     ctx.typert.contexts.registerHost('gatewayFixture', {
       ...contextProvider(scoped),
@@ -546,13 +568,13 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'rename',
       args: { agentId: 'agent-1', request: { title: 'land' } },
-    }), 'context-failed')
+    }), 'gateway/context-failed')
     expect(error.cause).toEqual(new Error('provider failed'))
   })
 
   it('preserves a Host Context policy rejection for the active RPC adapter', async () => {
     const { ctx } = await setup()
-    const rejection = new TypertLookupFailure({ code: 'agent-busy', message: 'owned', details: { reason: 'subagent' } })
+    const rejection = new RemoteError('session/agent-busy', 'owned', { reason: 'subagent' })
     ctx.typert.contexts.registerHost('gatewayFixture', {
       ...contextProvider(ctx.extend()),
       resolve: async () => { throw rejection },
@@ -578,7 +600,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'rename',
       args: { agentId: 'agent-1', request: { title: 'land' } },
-    }), 'provider-mismatch')
+    }), 'gateway/provider-mismatch')
     await mismatch()
 
     ctx.typert.contexts.registerHost('gatewayFixture', {
@@ -589,7 +611,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'rename',
       args: { agentId: 'agent-1', request: { title: 'land' } },
-    }), 'context-not-found')
+    }), 'gateway/context-not-found')
   })
 
   it('contains lookup provider failures and missing identities', async () => {
@@ -603,7 +625,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'create',
       args: { agentId: 'agent-1', request: { title: 'ship' } },
-    }), 'lookup-failed')
+    }), 'gateway/lookup-failed')
     expect(failure.cause).toEqual(new Error('lookup failed'))
     await throwing()
 
@@ -615,7 +637,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'create',
       args: { agentId: 'agent-1', request: { title: 'ship' } },
-    }), 'lookup-not-found')
+    }), 'gateway/lookup-not-found')
     await missing()
 
     ctx.typert.lookups.register('gatewayFixture', {
@@ -638,7 +660,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'passthrough',
       args: { value: 'would pass through SRC' },
-    }), 'definition-unavailable')
+    }), 'gateway/definition-unavailable')
   })
 
   it('seeds the no-downgrade guard from definitions present before Gateway startup', async () => {
@@ -653,7 +675,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'passthrough',
       args: { value: 'would pass through SRC' },
-    }), 'definition-unavailable')
+    }), 'gateway/definition-unavailable')
   })
 
   it('retains the no-downgrade guard across Gateway Service reloads', async () => {
@@ -672,7 +694,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'passthrough',
       args: { value: 'would pass through SRC' },
-    }), 'definition-unavailable')
+    }), 'gateway/definition-unavailable')
   })
 
   it('rejects ambiguous SRC endpoints independently of reflection order', async () => {
@@ -684,7 +706,7 @@ describe('TypertGatewayService', () => {
       namespace: 'shared',
       method: 'run',
       args: { value: 'ship' },
-    }), 'ambiguous-endpoint')
+    }), 'gateway/ambiguous-endpoint')
     expect(error.message).toContain('firstShared, secondShared')
   })
 
@@ -702,7 +724,7 @@ describe('TypertGatewayService', () => {
         namespace: testCase.namespace,
         method: 'run',
         args: testCase.args,
-      }), 'signature-invalid')
+      }), 'gateway/signature-invalid')
     }
   })
 
@@ -716,7 +738,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'create',
       args: { agentId: 'agent-1', request: { title: 'ship' } },
-    }), 'signature-invalid')
+    }), 'gateway/signature-invalid')
   })
 
   it('requires exact wire fields before invoking business code', async () => {
@@ -727,21 +749,21 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'create',
       args: { request: { title: 'ship' } },
-    }), 'arguments-invalid')
+    }), 'gateway/arguments-invalid')
     await expectCode(ctx.typertGateway.invoke({
       namespace: 'goals',
       method: 'create',
       args: { agentId: 'agent-1', request: { title: 'ship' }, optional: true },
-    }), 'arguments-invalid')
+    }), 'gateway/arguments-invalid')
     await expectCode(ctx.typertGateway.invoke({
       namespace: 'goals',
       method: 'create',
       args: [] as unknown as Record<string, unknown>,
-    }), 'arguments-invalid')
+    }), 'gateway/arguments-invalid')
     expect(service.calls).toEqual([])
   })
 
-  it('distinguishes strict input and result validation failures', async () => {
+  it('validates strict input without decoding the business result', async () => {
     const { ctx, service } = await setup()
     registerStrict(ctx, [strictOnlyDescriptor()])
 
@@ -749,30 +771,26 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'strictOnly',
       args: { request: { title: 1 } },
-    }), 'input-invalid')
+    }), 'gateway/input-invalid')
 
     service.nextResult = { title: 1 }
-    await expectCode(ctx.typertGateway.invoke({
+    await expect(ctx.typertGateway.invoke({
       namespace: 'goals',
       method: 'strictOnly',
       args: { request: { title: 'ship' } },
-    }), 'result-invalid')
+    })).resolves.toEqual({ title: 1 })
   })
 
-  it('rejects non-JSON values after strict codec validation', async () => {
+  it('does not inspect non-JSON business results', async () => {
     const { ctx, service } = await setup()
-    const descriptor = strictOnlyDescriptor()
-    registerStrict(ctx, [{
-      ...descriptor,
-      result: strictCodec('@fixture/gateway#UnknownResult', z.unknown()),
-    }])
+    registerStrict(ctx, [strictOnlyDescriptor()])
     service.nextResult = 1n
 
-    await expectCode(ctx.typertGateway.invoke({
+    await expect(ctx.typertGateway.invoke({
       namespace: 'goals',
       method: 'strictOnly',
       args: { request: { title: 'ship' } },
-    }), 'result-invalid')
+    })).resolves.toBe(1n)
   })
 
   it.each([
@@ -791,7 +809,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'passthrough',
       args: { value },
-    }), 'input-invalid')
+    }), 'gateway/input-invalid')
   })
 
   it('admits an omitted SRC field and hands the Host method undefined', async () => {
@@ -807,7 +825,7 @@ describe('TypertGatewayService', () => {
     expect(service.calls).toContain('passthrough')
   })
 
-  it('rejects cyclic SRC input and non-JSON SRC results', async () => {
+  it('rejects cyclic SRC input without inspecting SRC results', async () => {
     const { ctx, service } = await setup()
     const cyclic: { self?: unknown } = {}
     cyclic.self = cyclic
@@ -815,14 +833,15 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'passthrough',
       args: { value: cyclic },
-    }), 'input-invalid')
+    }), 'gateway/input-invalid')
 
-    service.nextResult = new Date(0)
-    await expectCode(ctx.typertGateway.invoke({
+    const result = new Date(0)
+    service.nextResult = result
+    await expect(ctx.typertGateway.invoke({
       namespace: 'goals',
       method: 'passthrough',
       args: { value: null },
-    }), 'result-invalid')
+    })).resolves.toBe(result)
   })
 
   it('accepts dense JSON and rejects decorated arrays and object properties', async () => {
@@ -846,7 +865,7 @@ describe('TypertGatewayService', () => {
     for (const value of [sparseWithExtra, symbolArray, symbolObject, hidden, accessor]) {
       await expectCode(ctx.typertGateway.invoke({
         namespace: 'goals', method: 'passthrough', args: { value },
-      }), 'input-invalid')
+      }), 'gateway/input-invalid')
     }
   })
 
@@ -862,7 +881,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'create',
       args: { agentId: 'agent-1', request: { title: 'ship' } },
-    }), 'provider-mismatch')
+    }), 'gateway/provider-mismatch')
   })
 
   it('validates binding identity and active method availability', async () => {
@@ -872,7 +891,7 @@ describe('TypertGatewayService', () => {
       namespace: 'wrong-binding',
       method: 'run',
       args: { value: 'ship' },
-    }), 'binding-invalid')
+    }), 'gateway/binding-invalid')
 
     await ctx.plugin(GoalService)
     registerStrict(ctx, [{ ...passthroughDescriptor(), method: 'missing' }])
@@ -880,7 +899,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'missing',
       args: { value: 'ship' },
-    }), 'method-unavailable')
+    }), 'gateway/method-unavailable')
   })
 
   it('requires a visible binding and supports explicitly provided plain Services', async () => {
@@ -895,7 +914,7 @@ describe('TypertGatewayService', () => {
     }])
     await expectCode(ctx.typertGateway.invoke({
       namespace: 'no-binding', method: 'run', args: { value: 'ship' },
-    }), 'binding-invalid')
+    }), 'gateway/binding-invalid')
 
     const plain: {
       typertRemote?: ReturnType<typeof bindTypertRemote>
@@ -932,7 +951,7 @@ describe('TypertGatewayService', () => {
     try {
       await expectCode(ctx.typertGateway.invoke({
         namespace: 'missing-method', method: 'run', args: { value: 'ship' },
-      }), 'method-unavailable')
+      }), 'gateway/method-unavailable')
     } finally {
       Object.defineProperty(MissingMethodService.prototype, 'run', descriptor)
     }
@@ -956,7 +975,7 @@ describe('TypertGatewayService', () => {
       namespace: 'goals',
       method: 'absent',
       args: {},
-    }), 'invocation-unavailable')
+    }), 'gateway/invocation-unavailable')
   })
 
   it('mounts a shared /api interceptor through an optional Connection and returns existing RPC results', async () => {
@@ -967,7 +986,7 @@ describe('TypertGatewayService', () => {
     await gatewayFiber
     await ctx.plugin(GoalService)
     const connection = rawConnection(ctx)
-    expect(connection).toMatchObject({ channel: '/api', authority: 'trusted-host' })
+    expect(connection).toMatchObject({ channel: '/api' })
 
     registerAgentLookup(ctx, { id: 'agent-1' })
     registerStrict(ctx, [createDescriptor(), maybeDescriptor()])
@@ -995,7 +1014,7 @@ describe('TypertGatewayService', () => {
     const invalid = (await handler('goals/create', { invalid: true }, signal, REQUEST_METADATA)).result
     expect(invalid).toMatchObject({
       ok: false,
-      error: { code: 'internal' },
+      error: { code: 'gateway/internal' },
     })
     if (invalid.ok) throw new Error('invalid Remote payload unexpectedly succeeded')
     expect(invalid.error.message).toMatch(/exactly one plain-object args field/)
@@ -1009,13 +1028,13 @@ describe('TypertGatewayService', () => {
 
     for (const endpoint of ['goals', '/create', 'goals/', 'goals/create/extra']) {
       const result = (await handler(endpoint, { args: {} }, signal, REQUEST_METADATA)).result
-      expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
+      expect(result).toMatchObject({ ok: false, error: { code: 'gateway/internal' } })
       if (result.ok) throw new Error('invalid Remote endpoint unexpectedly succeeded')
       expect(result.error.message).toContain('invalid Remote endpoint')
     }
     for (const payload of [null, [], { args: {}, extra: true }, { only: true }, { args: null }, { args: [] }]) {
       const result = (await handler('goals/create', payload, signal, REQUEST_METADATA)).result
-      expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
+      expect(result).toMatchObject({ ok: false, error: { code: 'gateway/internal' } })
       if (result.ok) throw new Error('invalid Remote payload unexpectedly succeeded')
       expect(result.error.message).toContain('plain-object args field')
     }
@@ -1029,7 +1048,7 @@ describe('TypertGatewayService', () => {
     )).resolves.toEqual({
       result: {
         ok: false,
-        error: { code: 'internal', message: 'non-error failure', details: {} },
+        error: { code: 'gateway/internal', message: 'non-error failure', details: {} },
       },
     })
 
@@ -1047,7 +1066,7 @@ describe('TypertGatewayService', () => {
       result: {
         ok: false,
         error: {
-          code: 'cancelled',
+          code: 'gateway/cancelled',
           message: 'Remote invocation "goals/fail" was aborted',
           details: {},
         },
@@ -1058,6 +1077,58 @@ describe('TypertGatewayService', () => {
     expect(connection.handler).toBeUndefined()
   })
 
+  it('claims and validates in-process Remote event results for the active Client generation', async () => {
+    const ctx = new Context()
+    await ctx.plugin(TypertRegistry)
+    await ctx.plugin(FakeConnectionService)
+    await ctx.plugin(TypertGatewayService)
+    const connection = rawConnection(ctx)
+    const handler = connection.handler
+    if (handler === undefined) throw new Error('fixture Connection did not retain the /api interceptor')
+    expect(connection.matches?.('$events/result')).toBe(true)
+
+    const result = {
+      args: { clientId: 'missing-client', eventId: 'missing', outcome: { kind: 'next' } },
+    }
+    const inactive = (await handler('$events/result', result, new AbortController().signal, REQUEST_METADATA)).result
+    expect(inactive).toMatchObject({ ok: false, error: { code: 'gateway/internal' } })
+    if (inactive.ok) throw new Error('inactive Remote event result unexpectedly succeeded')
+    expect(inactive.error.message).toContain('identifies no active event stream')
+
+    const unregister = ctx.typertGateway.registerRemoteEvents(signal => (async function* () {
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) resolve()
+        else signal.addEventListener('abort', () => { resolve() }, { once: true })
+      })
+    })(), { home: '/home/fixture' })
+    const carrier = new AbortController()
+    const events = rawGatewayEventHarness(ctx).openRemoteEvents({ args: {} }, carrier.signal)
+    const opening = await events.next()
+    expect(opening).toMatchObject({
+      done: false,
+      value: { type: 'ready', host: { home: '/home/fixture' } },
+    })
+    if (opening.done) throw new Error('Remote event stream ended before ready')
+    const clientId: unknown = Reflect.get(opening.value as object, 'clientId')
+    if (typeof clientId !== 'string') throw new Error('Remote event stream omitted its Client id')
+
+    for (const payload of [null, [], {}, { other: {} }]) {
+      const invalid = (await handler('$events/result', payload, carrier.signal, REQUEST_METADATA)).result
+      expect(invalid).toMatchObject({ ok: false, error: { code: 'gateway/internal' } })
+      if (invalid.ok) throw new Error('invalid Remote event result payload unexpectedly succeeded')
+      expect(invalid.error.message).toContain('requires exactly one plain-object args field')
+    }
+    await expect(handler('$events/result', {
+      args: { clientId, eventId: 'missing', outcome: { kind: 'next' } },
+    }, carrier.signal, REQUEST_METADATA)).resolves.toEqual({
+      result: { ok: true, value: undefined },
+    })
+
+    await events.return(undefined)
+    await unregister()
+    await ctx.fiber.dispose()
+  })
+
   it('preserves a lookup policy rejection through the Connection RPC result', async () => {
     const ctx = new Context()
     await ctx.plugin(TypertRegistry)
@@ -1066,13 +1137,13 @@ describe('TypertGatewayService', () => {
     await ctx.plugin(GoalService)
     registerStrict(ctx, [createDescriptor()])
     const failure = {
-      code: 'agent-busy',
+      code: 'session/agent-busy',
       message: 'session is owned by subagent routing',
       details: { reason: 'use subagent delivery for this child session' },
     }
     ctx.typert.lookups.register('gatewayFixture', {
       ...agentLookup({ id: 'agent-1' }),
-      resolve: () => { throw new TypertLookupFailure(failure) },
+      resolve: () => { throw new RemoteError('session/agent-busy', failure.message, failure.details) },
     })
     const handler = rawConnection(ctx).handler
     if (handler === undefined) throw new Error('fixture Connection did not retain the /api interceptor')
@@ -1117,6 +1188,7 @@ describe('TypertGatewayService', () => {
   it('dispatches claimed invocations through /api and leaves unclaimed endpoints to its fallback', async () => {
     const ctx = new Context().extend({ fixtureScope: 'http-caller' })
     const routes: WebRoute[] = []
+    provideBrowserCredentials(ctx)
     ctx.provide('webServer', fakeHttpServer(routes) as WebServer)
     const connectionFiber = ctx.plugin({ inject: [...connectionInject], apply: applyConnection })
     await connectionFiber
@@ -1130,11 +1202,12 @@ describe('TypertGatewayService', () => {
     let strictActive = true
     expect(routes).toHaveLength(1)
     const server = await serveRoute(routes[0]!)
+    const cookie = browserCookie(ctx.connection, server.origin)
 
     try {
       const response = await fetch(`${server.origin}/api/goals/create`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', cookie },
         body: JSON.stringify({
           type: 'client-request',
           rpcId: 'rpc-http',
@@ -1154,7 +1227,7 @@ describe('TypertGatewayService', () => {
 
       const invalid = await fetch(`${server.origin}/api/goals/create`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', cookie },
         body: JSON.stringify({
           type: 'client-request',
           rpcId: 'rpc-invalid',
@@ -1169,7 +1242,7 @@ describe('TypertGatewayService', () => {
         rpcId: 'rpc-invalid',
         result: {
           ok: false,
-          error: { code: 'internal' },
+          error: { code: 'gateway/internal' },
         },
       })
       expect(JSON.stringify(invalidBody)).toContain('plain-object args field')
@@ -1178,7 +1251,7 @@ describe('TypertGatewayService', () => {
       strictActive = false
       const withdrawn = await fetch(`${server.origin}/api/goals/create`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', cookie },
         body: JSON.stringify({
           type: 'client-request',
           rpcId: 'rpc-withdrawn',
@@ -1193,12 +1266,15 @@ describe('TypertGatewayService', () => {
         rpcId: 'rpc-withdrawn',
         result: {
           ok: false,
-          error: { code: 'internal' },
+          error: { code: 'gateway/definition-unavailable' },
         },
       })
       expect(JSON.stringify(withdrawnBody)).toContain('strict definition was withdrawn')
 
-      const unclaimed = await fetch(`${server.origin}/api/legacy/list`, { method: 'POST' })
+      const unclaimed = await fetch(`${server.origin}/api/legacy/list`, {
+        method: 'POST',
+        headers: { cookie },
+      })
       expect(unclaimed.status).toBe(404)
     } finally {
       await server.close()
@@ -1242,6 +1318,17 @@ function rawConnection(ctx: Context): FakeConnectionService {
   return receiver[symbols.original] ?? receiver
 }
 
+interface GatewayEventHarness {
+  openRemoteEvents(payload: unknown, signal: AbortSignal): AsyncGenerator
+}
+
+function rawGatewayEventHarness(ctx: Context): GatewayEventHarness {
+  const receiver = ctx.get('typertGateway') as unknown as GatewayEventHarness & {
+    [symbols.original]?: GatewayEventHarness
+  }
+  return receiver[symbols.original] ?? receiver
+}
+
 function registerStrict(ctx: Context, descriptors: readonly InvocationDescriptor[]): () => Promise<void> {
   return ctx.typert.register({
     package: '@fixture/gateway',
@@ -1270,6 +1357,7 @@ function contextProvider(context: Context) {
   return {
     wire: 'agentId',
     wireTypeSymbol: '@fixture/domain#AgentId',
+    identity: (candidate: Context) => candidate === context ? 'agent-1' : undefined,
     resolve: (id: string) => id === 'agent-1' ? context : undefined,
   }
 }

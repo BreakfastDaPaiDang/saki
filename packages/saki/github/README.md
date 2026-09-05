@@ -1,9 +1,33 @@
+---
+description: "Use typed GitHub facts and recoverable mutation results without coupling Saki product rules to one authentication or transport implementation."
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-github`
 
 English | [中文](README.zh.md)
 
+## Summary
+
+Use typed GitHub facts and recoverable mutation results without coupling Saki product rules to one authentication or transport implementation.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Capability interface](#capability-interface)
+- [Safe values and failures](#safe-values-and-failures)
+- [Scan fingerprints and mutation recovery](#scan-fingerprints-and-mutation-recovery)
+- [Service Provider contract](#service-provider-contract)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+<a id="use-this-package"></a>
+## Use this package
+
 The private Saki GitHub Service Definition registers `ctx.sakiGitHub`. It owns provider-neutral external identities, raw platform facts, strict schemas, closed failures, scan rate observations, deterministic scan fingerprints, and the reusable Service Provider contract. Authentication and GitHub transport belong to Service Providers; Saki status mapping, durable checkpoints, polling, and Intent lifecycle belong to Consumers.
 
+<a id="capability-interface"></a>
 ## Capability interface
 
 `SakiGitHub.read(request, signal)` is keyed by the declaration-merge extensible `GitHubReadMap`. It defines reads for an App installation, Repository, Issue revision, complete bounded Issue detail, branch safety, exact branch head, Project v2, pull request and branch association, raw exact-Commit CI sources, fully paginated Milestone Issue scope, exact `refs/tags/saki-v*` reference, recursive annotated-tag peeling, Release by tag, installation-authorized or public exact Commit, and Commit comparison. Branch safety describes policy, while branch-head independently returns the exact remote Commit or explicit absence. CI facts preserve workflow, run, check, and commit-status identities without deriving Saki success.
@@ -18,6 +42,7 @@ The required Status ids carry no Saki meanings such as Inbox or Ready. They let 
 
 `SakiGitHub.dispatch(request, signal)` and `inspectMutation(request, signal)` are keyed by `GitHubMutationMap`. Its concrete members create a marker-bound Issue or pull request, add an Issue to a Project, set one Project item Status or API position, and set one Issue to open or closed. Every request carries a caller-persisted `operationId`; mutation dispatch and inspection are always interactive, so only scan requests carry a queue priority. One dispatch invocation makes one external call without an internal retry; create operations return only the external id and number needed by later inspection, while the other dispatch results are void. Inspection returns only a targeted snapshot and its observation time so the Consumer can resolve acknowledged, lost-acknowledgement, or conflicting outcomes.
 
+<a id="safe-values-and-failures"></a>
 ## Safe values and failures
 
 GitHub App, installation, account, Repository, Project, field, option, item, Issue, Issue-create marker, pull request, tag-object, Release, Commit, and external-operation identities are branded. Database ids remain validated positive-decimal strings; a Provider converts an SDK number only after proving it is a safe integer. Raw facts retain platform ownership, visibility, Issue state, Project membership, Status option, archive state, API order, update observations, credential-free HTTPS URLs, safe request ids, and rate-limit timing. They exclude authorization headers, tokens, private keys, JWTs, raw errors, pagination cursors, and SDK objects.
@@ -26,6 +51,7 @@ Providers throw `GitHubProviderError`, whose `failure` is one closed arm: cancel
 
 Strict schemas reject unknown properties and cross-check scan ownership, unique field/item/Issue identities, per-Repository Issue-number identity, matching same-Issue facts across Project items and open Issues, contiguous API order, the selected Status field type, stable update fences, complete counts, open-Issue state, and the retained fingerprint. An Issue-detail read admits the complete Markdown body or rejects it; the body may be empty and is limited to 256 KiB after UTF-8 encoding. Issue-create requests require a well-formed single-line title of at most 1,024 UTF-8 bytes and a well-formed LF-normalized body of at most 60,000 UTF-8 bytes ending in exactly one persisted `<!-- saki-work-item:<markerId> -->` line. Pull-request-create callers share `githubPullRequestCreateTextPreparationSchema`; it validates a well-formed single-line title of at most 1,024 UTF-8 bytes, trims trailing whitespace from caller-owned body text, appends the exact persisted delivery marker, and admits the resulting well-formed LF-normalized complete body only when it is at most 60,000 UTF-8 bytes and contains exactly one `<!-- saki-pull-request:<markerId> -->` marker. One installation observation admits at most 100,000 accessible Repository identities; one scan candidate admits at most 10,000 Project fields, 100,000 Project items, and 100,000 open Issues.
 
+<a id="scan-fingerprints-and-mutation-recovery"></a>
 ## Scan fingerprints and mutation recovery
 
 `computeGitHubProjectBoardFingerprint()` produces fingerprint version `1`. It covers external source ids, Issue state and revisions, Project membership and Status, archive state, API order and neighboring items, and update fences. Field enumeration is canonicalized, while Project-item and open-Issue API order remain authoritative. Provider observation time, rate timing, labels, URLs, and pagination mechanics do not change semantic identity.
@@ -36,6 +62,7 @@ Issue-create inspection uses the persisted exact hidden marker and classifies a 
 
 Pull-request-create inspection applies the same recovery rule to one exact Repository, same-Repository head/base pair, expected head Commit, and hidden delivery marker. It distinguishes a unique exact pull request, complete absence, marker removal, missing known pull request, identity conflict, multiple matches, and incomplete traversal. The optional known-pull-request hint remains inspection-only.
 
+<a id="service-provider-contract"></a>
 ## Service Provider contract
 
 `tests/contract.ts` exports `runGitHubProviderContract()`. A Provider supplies a fresh deterministic harness; the suite verifies public installation reads, complete detached scans, per-invocation mutation results, targeted mutation inspections, Status node-id enforcement, pre-cancellation, closed failure data, scan rate observations, and stable semantic fingerprints. Provider-specific tests still own HTTP pagination, GraphQL partial-data rejection, authentication, SDK conversion, mutation response admission, and primary/secondary rate-limit parsing.
@@ -61,3 +88,12 @@ Independent of model requests: this Service Definition does not assemble or chan
 - **No product saga** — GitHub facts and mutation results do not choose mutation order, retry an unknown outcome, assign Saki Status, publish a GitHub Sync Checkpoint, or change durable control-plane state.
 - **No write-side branch management** — pull-request creation is supported, but branch pushes remain Host Operations; Contents and Workflows write remain outside this capability.
 - **No transport implementation** — this package defines and tests the Service Definition; each Service Provider owns its HTTP/SDK mechanism, authentication lifetime, pagination, and response admission.
+
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No runtime invariant companion is published because the Service Definition retains no mutable relationship.
+
+</details>

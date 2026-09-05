@@ -1,35 +1,143 @@
+---
+description: "Domain data form (ctx.storageDomain) for hosts and maintainers choosing, mounting, or debugging schema-validated, change-emitting KV domains over storage backends."
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-storage-domain
 
 English | [中文](README.zh.md)
 
-Domain data form for the DeepSeek Harness storage hub: exposes the injectable `ctx.storageDomain` service and the matching `ctx.storage.domain` projection after every configured backend is registered. A domain is declared once with `defineDomain` (zod record schemas, `z.infer`-derived types), opened through `DomainFacility.open`, and served from authoritative in-memory state — reads are synchronous, writes serialize on one per-domain chain, reach durability on the routed backend first, then update memory and emit `domain/changed`. A backend report that publication or durability is uncertain poisons the live domain without changing memory or emitting an event: the original caller receives the backend error, every queued or later read/write rejects with `write-outcome-uncertain`, and `close()` still drains and releases the handle. Recovery closes that handle, discards and recreates the affected backend (or restarts), and only then reopens from the medium. The opening consumer owns the handle's lifecycle and releases it with `Domain.close()` (idempotent; typically its own `ctx.effect` disposer); on plugin unmount, the facility attempts every remaining domain close to settlement before reporting failures and always removes its storage form. For maintenance, `defineDomainMigrations` declares a complete adjacent forward chain, while `DomainFacility.migrate` validates a closed retained source and create-only materializes a different missing target; `materialize` provides the same validation and publication path for fresh current-version state.
+## Summary
 
-`DomainSpec.version` must be a non-negative safe integer; negative zero is invalid.
+`dsh-storage-domain` is the typed way to use the storage family: an owning package declares a domain once — its name, format version, and zod record schemas — and host consumers open it over a routed backend and read and write records through `ctx.storageDomain`. Reads are synchronous from authoritative in-memory state; every write is durable before it resolves and emits a `domain/changed` event, so reads never diverge from the stored medium. It is the only consumer of the backend contract — product packages never touch backends directly. The layer is host-side only: it registers no tools, injects no prompts, and appends no session events, so the model and the agent loop never see it.
 
-Design rationale, open semantics, and the storage/domain layer split live in the [Agent Note](../../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md).
+## Table of Contents
 
-## Configuration
+- [Use this package](#use-this-package)
+- [Understand the implementation](#understand-the-implementation)
+- [Further Exploration](#further-exploration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
-| key | meaning |
-| --- | --- |
-| `backend` | Default backend name for every domain (required; no universally correct medium exists). |
-| `routes` | Per-domain overrides: domain name → backend name. |
+-----
 
-## Cold migration
+<a id="use-this-package"></a>
+## Use this package
 
-Migration is explicit and opt-in. Ordinary `open` retains its exact-version behavior and never discovers or rewrites an older unit. `defineDomainMigrations` is the only plan constructor: it verifies the continuous chain and captures frozen copies of the schema declaration containers, so a forged or later-mutated declaration cannot change an admitted plan. A migration reserves the domain name and both backend unit names, rejects an existing target before reading the source, validates the retained source schema and every adjacent step output, then reads the target back through the same reservation. Readback must equal the intended validated snapshot as raw JSON data (object member order is irrelevant) and independently pass the current schema; a valid but changed value is still `migration-target-invalid` with `committed: true`. The source is not changed; no live domain is opened and no `domain/changed` event is emitted. Caller cancellation applies until target publication. An uncertain materialization is classified by readback: an exact returned target reports `migration-target-durability-uncertain` with `committed: true`, confirmed absence reports `migration-target-not-committed`, and a rejected readback reports `migration-target-outcome-unknown`. A durable materialization whose readback rejects has a known commit but an unverifiable target, so it reports `migration-target-invalid` with `committed: true`; a successfully returned snapshot that is schema-invalid or divergent reports the same failure. None of these outcomes triggers blind retry or target deletion.
+Use this package when a host package keeps durable, schema-validated records — workspace records, session sidecar metadata. The owning package declares the domain once; consumers open it and get synchronous reads and durable, change-emitting writes without ever touching a backend.
 
+### When to use it
+
+Choose it for any host-side data that must survive restarts and stay valid against a schema: the domain form validates every stored record at open, and every write is durable before it resolves. Avoid it when the data belongs in a session event log — the session persistence seam owns that surface.
+
+### Declaring a domain
+
+The owning package declares the domain once with `defineDomain` — name, version, and zod record schemas — and exports it. `defineDomain` fails loud at module load on a bad name, a non-integer version, or a global schema that accepts `null`.
+
+```text
+// Owning package, once:
+const workspaceSpec = defineDomain({
+  name: 'workspace',
+  version: 1,
+  tables: { workspaces: domainTable(workspaceRecordSchema) },
+})
+```
+
+### Opening and using a domain
+
+A consumer opens the declared domain through `ctx.storageDomain` and keeps the returned handle; reads are synchronous, writes are durable:
+
+```text
+const domain = await ctx.storageDomain.open(workspaceSpec)
+await domain.table('workspaces').put(id, { path: '/work/demo' })
+const record = domain.table('workspaces').get(id) // synchronous, from memory
+domain.table('workspaces').update(id, (r) => ({ ...r, path: newPath }))
+```
+
+The caller owns the handle's lifecycle and releases it with `domain.close()` when the feature shuts down (typically its own `ctx.effect` disposer); domains still open when the plugin unmounts are closed by the facility.
+
+### Routing domains to backends
+
+The domain plugin's configuration decides which backend serves which domain — never the hub. `backend` names the default route; `routes` overrides it per domain name. A route naming an unregistered backend fails loud at open with `backend-not-found`.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `backend` | required | Default backend name for every domain without an explicit route |
+| `routes` | `{}` | Per-domain overrides: domain name → backend name |
+
+The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-storage-domain) is the exhaustive source for every accepted field and its JSDoc.
+
+### Observable behavior and failures
+
+Every write resolves only after the backend acknowledges durability, and each emits one `domain/changed` event in write order. Failures carry stable `DomainError` codes: `already-open` (the name is open or still closing), `facet-unsupported` (the routed backend serves no `kv` facet), `invalid-record` (a stored record or global fails its schema, naming the table and key), `missing-key` (an `update` on an absent record), and `closed` (any use after close). Backend failures such as `version-mismatch` pass through unchanged.
+
+-----
+
+<a id="understand-the-implementation"></a>
+## Understand the implementation
+
+<details>
+<summary>Implementation internals — click to expand</summary>
+
+Cold operations are explicit: `materialize` creates a missing target, and `defineDomainMigrations` captures a continuous, frozen schema chain for `migrate`. They reserve the domain and backend names, leave the source untouched, and validate complete target readback before publishing success. Ordinary `open` does not run a cold migration. `invalidRecords: 'backup-and-skip'` is a separate policy for disposable per-record data; authoritative records and the global slot retain loud validation failures. See the [cold migration contract](../../../docs/subsystems/storage.md).
+
+The domain layer is a single implementation, not an abstracted seam: consumers depend on this package and never touch backends directly, which concentrates all domain logic — schema validation, write serialization, change events — in one place instead of doubling it per backend.
+
+### Design concept
+
+- **The spec object is the single source of truth.** `defineDomain` pins the spec's literal types and validates its fields at the owning package's module load, before any medium is touched. Record schemas are zod so `z.infer` keeps consumer types un-duplicated; plugin `Config` stays schemastery.
+- **Memory is authoritative; the medium is the durable projection.** Reads are synchronous from validated in-memory state. Every write queues on one per-domain write chain: backend durability first, then memory mutation, then `domain/changed` — a rejected backend write leaves memory untouched, so reads never diverge from the medium.
+- **One write chain per domain.** `put`, `delete`, `update`, and `global.set` all queue on it; `update`'s transform runs at its chain slot, so concurrent updates never interleave. Records are plain immutable data — returned values are the stored objects themselves and must not be mutated in place.
+- **Writes emit after the commit point.** `domain/changed` is a notification, not a transaction participant: a throwing listener is contained with a logged warning rather than rejecting the already-durable write.
+
+### Open sequence
+
+`DomainFacility.open(spec)` runs a strict sequence, each step failing the whole call: reject a name already open or still closing (`already-open`); resolve the route (`backend-not-found`); require the `kv` facet (`facet-unsupported`); open the unit (backend `version-mismatch`/`malformed-medium` pass through); load and validate every stored record and the global against the spec's schemas (`invalid-record`); construct the domain. The caller owns the handle; the facility closes any domain left open when it unmounts, and a closed domain's name frees for reopening only after teardown completes.
+
+### Source map
+
+| File | Role |
+|---|---|
+| [`src/index.ts`](src/index.ts) | Plugin entry: `DomainFacility`, routing, `Config`, form mounting |
+| [`src/spec.ts`](src/spec.ts) | Domain declarations: `defineDomain`, `domainTable`, descriptor projection |
+| [`src/domain.ts`](src/domain.ts) | Open-domain runtime: write chain, table and global handles, close |
+| [`src/events.ts`](src/events.ts) | The `domain/changed` event vocabulary |
+| [`src/error.ts`](src/error.ts) | `DomainError` codes |
+| [`src/invariant.ts`](src/invariant.ts) | Invariant companion: every `domain/changed` agrees with in-memory state |
+
+### Invariant
+
+The `storage-domain-invariant` companion registers the owned relationship: every `domain/changed` event must agree with the emitting domain's authoritative in-memory state at emission — a divergence means a write path skipped the chain or emitted a stale value.
+
+</details>
+
+-----
+
+<a id="further-exploration"></a>
+## Further Exploration
+
+Read these pages when the domain layer's view is not enough: the subsystem reference is the authoritative contract, and the Agent Note records the design and deferred work.
+
+- [Storage subsystem](../../../docs/subsystems/storage.md) — the domain contract, backend contract, change events, and generated API.
+- [Storage package map](../README.md) — the family's packages and their repository position.
+- [domain KV storage Agent Note](../../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md) — why domains exist, the workspace consumer, and deferred work such as cross-process change push.
+- [Workspace subsystem](../../../docs/subsystems/workspace.md) — the first consumer of the domain data form.
+
+-----
+
+<a id="model-experience"></a>
 ## Model Experience
 
 ### Durable domain state
 
 #### What the model sees
 
-Nothing. The package registers no tools, injects no prompts, and appends no session events; it stores non-session data (workspace records, future session sidecars) behind `ctx.storageDomain` and emits only the in-process `domain/changed` event, which reaches a model only if a Consumer package renders it through its own documented surface.
+Nothing. The package registers no tools, injects no prompts, and appends no session events; it stores non-session data behind `ctx.storageDomain` and emits only the in-process `domain/changed` event, which reaches a model only if a consumer renders it through its own documented surface.
 
 #### Token effect
 
-Zero. No text from this package enters any model request.
+Zero: no text from this package enters any model request.
 
 #### KV Cache effect
 
@@ -37,5 +145,21 @@ Independent: domain reads and writes never touch request prefixes, so nothing he
 
 ## Known Limitations and Deferred Work
 
-- **Single-process change visibility** — `domain/changed` is an in-process event; a second host process or a reconnecting GUI observes no changes until the cross-process revision pattern deferred in the Agent Note lands.
-- **No cross-table transactions, secondary indexes, or multi-segment keys** — each write touches one record; triggers and rework points for these extensions are tabled in the Agent Note's deferred-work list.
+<a id="known-limitations-and-deferred-work"></a>
+
+
+These limits define when the domain layer is a poor fit or needs special operational care. They are current package constraints, not a task backlog.
+
+- **Single-process change visibility** — `domain/changed` is an in-process event; a second host process or a reconnecting GUI observes no changes until the cross-process revision pattern lands ([Agent Note](../../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md)).
+- **No cross-table transactions, secondary indexes, or multi-segment keys** — each write touches one record; these extensions are deferred in the Agent Note's out-of-scope list.
+- **No data migration** — a domain whose stored version differs from its spec rejects at open (`version-mismatch`); changing a schema requires migrating the stored data by hand.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>

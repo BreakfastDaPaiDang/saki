@@ -21,9 +21,6 @@
       "path": "../../credentials/credentials"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
-    },
-    {
       "path": "../../util/timeout"
     },
     {

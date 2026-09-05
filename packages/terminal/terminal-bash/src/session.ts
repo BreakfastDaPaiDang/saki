@@ -1,6 +1,8 @@
-/** Persistent PTY session over the subprocess seam's terminal primitive. */
+/** Persistent PTY session with bounded output, readiness, and terminal-protocol replies. */
 
 import { Buffer } from 'node:buffer'
+import { createRequire } from 'node:module'
+import type { IDisposable, Terminal as HeadlessTerminalType } from '@xterm/headless'
 import type {
   SubprocessOutcome,
   SubprocessTerminalForeground,
@@ -22,6 +24,9 @@ import type {
 } from '@deepseek-ai/dsh-terminal'
 import type { ResolvedConfig } from './config.ts'
 import { CONTROLLED_PROMPT, TerminalSanitizer } from './sanitize.ts'
+
+// Node exposes this package's CommonJS main as default-only, so load its named export through require.
+const { Terminal: HeadlessTerminal } = createRequire(import.meta.url)('@xterm/headless') as typeof import('@xterm/headless')
 
 function utf8Tail(text: string, maxBytes: number): { text: string; truncated: boolean } {
   if (Buffer.byteLength(text) <= maxBytes) return { text, truncated: false }
@@ -79,7 +84,6 @@ class LocalSendOperation implements TerminalSendOperation {
   private readonly promise: PromiseWithResolvers<TerminalSendResult>
   private finished = false
   private cancellationRequested = false
-  private inputWritePending: boolean
   private initialForegroundLeftWait: boolean
   private initialForegroundPgid: number | undefined
   private readinessCandidate: {
@@ -91,13 +95,11 @@ class LocalSendOperation implements TerminalSendOperation {
   constructor(
     maxBytes: number,
     readonly startedAt: number,
-    inputWritePending: boolean,
     private readonly onCancel: () => void,
   ) {
     this.output = new BoundedTextBuffer(maxBytes)
     this.promise = Promise.withResolvers<TerminalSendResult>()
     this.initialForegroundLeftWait = true
-    this.inputWritePending = inputWritePending
   }
 
   get done(): Promise<TerminalSendResult> {
@@ -112,14 +114,6 @@ class LocalSendOperation implements TerminalSendOperation {
     return this.cancellationRequested
   }
 
-  get hasPendingInputWrite(): boolean {
-    return this.inputWritePending
-  }
-
-  beginInputWrite(): void {
-    this.inputWritePending = false
-  }
-
   append(text: string): void {
     if (!this.finished) this.output.append(text)
   }
@@ -127,7 +121,6 @@ class LocalSendOperation implements TerminalSendOperation {
   settle(waitReason: TerminalWaitReason, sessionStatus: TerminalSessionStatus, inheritedTruncation: boolean): void {
     if (this.finished) return
     this.finished = true
-    this.inputWritePending = false
     const read = this.output.snapshot()
     this.promise.resolve({
       viewport: read.text,
@@ -140,7 +133,6 @@ class LocalSendOperation implements TerminalSendOperation {
   fail(error: unknown): void {
     if (this.finished) return
     this.finished = true
-    this.inputWritePending = false
     this.promise.reject(error)
   }
 
@@ -181,23 +173,9 @@ class LocalSendOperation implements TerminalSendOperation {
   cancel(): boolean {
     if (this.finished) return false
     this.cancellationRequested = true
-    this.inputWritePending = false
     this.onCancel()
     return true
   }
-}
-
-interface CursorReplyRequest {
-  column: 1 | 2
-  releaseOnWriteSettlement: boolean
-}
-
-interface CursorReplyState extends CursorReplyRequest {
-  writeStarted: boolean
-  writeSettled: boolean
-  recoveryEvidenceSeen: boolean
-  recovered: PromiseWithResolvers<void>
-  successor?: CursorReplyState
 }
 
 /** Backend session wrapping one provider-owned terminal process. */
@@ -205,6 +183,9 @@ export class LocalPtySession implements TerminalBackendSession {
   motd = ''
   readonly pid: number
   private readonly decoder = new TextDecoder()
+  /** Protocol state only; the sanitizer and bounded buffers own returned text. */
+  private readonly emulator: HeadlessTerminalType
+  private readonly emulatorData: IDisposable
   private readonly sanitizer: TerminalSanitizer
   private readonly scrollback: BoundedTextBuffer
   private readonly outputEnded = Promise.withResolvers<void>()
@@ -212,9 +193,8 @@ export class LocalPtySession implements TerminalBackendSession {
   private statusValue: TerminalSessionStatus = { kind: 'running' }
   // TODO(pty-send-state-consolidation): Fold the per-send fields below
   // (active/activeTimer/activeDeadlineTimer/activeAbort/interrupting/
-  // activeWrite/pollingReady/polling) into one send-lifecycle owner; the
-  // cancellation/readiness interplay now has enough pinned tests to carry
-  // that refactor safely.
+  // activeWrite/pollingReady/polling and terminal-protocol work) into one send-lifecycle
+  // owner; the cancellation/readiness interplay has enough pinned tests to carry that refactor safely.
   private active: LocalSendOperation | undefined
   private activeTimer: NodeJS.Timeout | undefined
   private activeDeadlineTimer: NodeJS.Timeout | undefined
@@ -223,7 +203,6 @@ export class LocalPtySession implements TerminalBackendSession {
   private activeWrite: Promise<boolean> | undefined
   private terminalActionTail: Promise<void> = Promise.resolve()
   private terminalActionsPending = 0
-  private cursorReply: CursorReplyState | undefined
   private pollingReady: LocalSendOperation | undefined
   private polling = false
   private promptSeen = false
@@ -237,12 +216,31 @@ export class LocalPtySession implements TerminalBackendSession {
   private closing = false
   private closePromise: Promise<void> | undefined
   private transportFailure: Error | undefined
+  private emulatorWrites = Promise.resolve()
+  private emulatorWriteDone: (() => void) | undefined
+  private emulatorBuffer = ''
+  private emulatorWriting = false
+  private responseWrites = Promise.resolve()
+  private pendingResponseWrites = 0
+  private emulatorClosed = false
 
   constructor(
     private readonly terminal: SubprocessTerminalHandle,
     private readonly config: ResolvedConfig,
   ) {
     this.pid = terminal.pid
+    this.emulator = new HeadlessTerminal({ cols: config.cols, rows: config.rows, scrollback: 0 })
+    this.emulatorData = this.emulator.onData((data) => {
+      this.pendingResponseWrites += 1
+      const response = this.enqueueTerminalAction(async () => { await this.terminal.write(data) })
+      this.responseWrites = response.then(
+        () => { this.finishResponseWrite() },
+        (error: unknown) => {
+          this.finishResponseWrite()
+          if (!this.emulatorClosed && !this.closing) this.onTransportFailure(error)
+        },
+      )
+    })
     this.sanitizer = new TerminalSanitizer(config.maxReadBytes)
     this.scrollback = new BoundedTextBuffer(config.scrollbackMaxBytes, config.scrollbackLines)
     terminal.output.on('data', this.onTerminalData)
@@ -278,11 +276,11 @@ export class LocalPtySession implements TerminalBackendSession {
   startSend(request: TerminalSendRequest): TerminalSendOperation {
     if (this.closing) throw new Error('PTY session is closing')
     if (this.statusValue.kind === 'exited' || this.outputFinished) throw new Error('PTY session has exited')
-    if (this.active === undefined && (this.terminalActionsPending > 0 || this.cursorReply !== undefined)) {
+    if (this.active === undefined && this.terminalActionsPending > this.pendingResponseWrites) {
       throw new TerminalError('PTY session is draining terminal input', 'SEND_ACTIVE')
     }
     if (this.active !== undefined) {
-      const draining = this.activeWrite !== undefined || this.terminalActionsPending > 0 || this.cursorReply !== undefined
+      const draining = this.activeWrite !== undefined || this.terminalActionsPending > 0 || this.protocolWorkPending()
         ? ' or draining terminal input'
         : ''
       throw new TerminalError(`PTY session already has an active send${draining}`, 'SEND_ACTIVE')
@@ -292,7 +290,6 @@ export class LocalPtySession implements TerminalBackendSession {
     const operation = new LocalSendOperation(
       this.config.maxReadBytes,
       Date.now(),
-      request.text.length > 0 || request.submit,
       () => { this.interrupt(operation) },
     )
     this.active = operation
@@ -315,8 +312,15 @@ export class LocalPtySession implements TerminalBackendSession {
   private async beginSend(operation: LocalSendOperation, request: TerminalSendRequest): Promise<void> {
     let foreground: SubprocessTerminalForeground | undefined
     try {
+      if (this.protocolWorkPending()) await this.drainTerminalProtocol()
+      const emulatorWrites = this.emulatorWrites
+      const responseWrites = this.responseWrites
       foreground = await this.terminal.inspectForeground()
+      if (this.protocolStateChanged(emulatorWrites, responseWrites)) {
+        foreground = await this.inspectForegroundAfterProtocol()
+      }
     } catch (error: unknown) {
+      if (this.protocolWorkPending()) await this.drainTerminalProtocol()
       // A pre-write inspection failure while cancellation owns the slot must not
       // release it: interruptOnce's in-flight foreground signal could land on a
       // successor's foreground group. The interrupt path's post-signal tail
@@ -336,7 +340,6 @@ export class LocalPtySession implements TerminalBackendSession {
         this.resetReadinessEvidence()
         const write = this.enqueueTerminalAction(async () => {
           if (this.active !== operation || operation.settled || operation.cancelRequested) return
-          operation.beginInputWrite()
           await this.terminal.write(input)
         })
         const activeWrite = write.then(() => true, () => false)
@@ -431,7 +434,6 @@ export class LocalPtySession implements TerminalBackendSession {
 
   close(reason: string): Promise<void> {
     this.closing = true
-    this.clearCursorReply()
     if (this.closePromise !== undefined) return this.closePromise
     const closing = this.closeOnce(reason).catch((error: unknown) => {
       this.closePromise = undefined
@@ -445,25 +447,28 @@ export class LocalPtySession implements TerminalBackendSession {
   private readonly onTerminalData = (chunk: Buffer | Uint8Array | string): void => {
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk
     this.outputRevision += 1
-    this.onData(this.decoder.decode(bytes, { stream: true }))
+    const data = this.decoder.decode(bytes, { stream: true })
+    this.queueEmulatorData(data)
+    this.onData(data)
   }
 
   private readonly onTerminalEnd = (): void => {
     this.outputFinished = true
     this.onData(this.decoder.decode())
     this.appendOutput(this.sanitizer.flush())
+    this.closeEmulator()
     this.outputEnded.resolve()
   }
 
   private readonly onTerminalError = (error: Error): void => {
     this.outputFinished = true
+    this.closeEmulator()
     this.onTransportFailure(error)
     this.outputEnded.resolve()
   }
 
   private onData(data: string): void {
     const sanitized = this.sanitizer.push(data)
-    const cursorReplyBeforeChunk = this.cursorReply
     this.appendOutput(sanitized.text)
     if (sanitized.prompt) {
       // TODO(pty-delayed-signal-prompt): With a reproducer, define a marker-generation boundary
@@ -481,97 +486,12 @@ export class LocalPtySession implements TerminalBackendSession {
       if (sanitized.promptTail.length > remaining) this.promptTail = `${CONTROLLED_PROMPT}\0`
       this.promptTextSeen = this.promptTail === CONTROLLED_PROMPT
     }
-    if (sanitized.cursorPositionRequest !== undefined) {
-      this.lastOutputAt = Date.now()
-      this.requestCursorReply({
-        column: sanitized.cursorPositionRequest.column,
-        releaseOnWriteSettlement: this.active?.hasPendingInputWrite === true || this.promptSeen,
-      })
-    } else if (cursorReplyBeforeChunk !== undefined && (sanitized.text.length > 0 || sanitized.prompt)) {
-      this.observePostReplyOutput(cursorReplyBeforeChunk)
-    }
-  }
-
-  private requestCursorReply(request: CursorReplyRequest): void {
-    if (this.config.shellDialect !== 'pwsh' || this.closing
-      || this.outputFinished || this.statusValue.kind === 'exited') return
-    const active = this.cursorReply
-    if (active !== undefined) {
-      if (active.successor === undefined && active.writeStarted) {
-        active.successor = this.createCursorReplyState(request)
-        active.recoveryEvidenceSeen = true
-        this.releaseCursorReplyWhenRecovered(active)
-      }
-      return
-    }
-    this.startCursorReply(request)
-  }
-
-  private startCursorReply(request: CursorReplyRequest): void {
-    const initial = this.createCursorReplyState(request)
-    this.cursorReply = initial
-    const write = this.enqueueTerminalAction(async () => {
-      let state: CursorReplyState | undefined = initial
-      while (state !== undefined) {
-        if (this.cursorReply !== state) return
-        state.writeStarted = true
-        // ConsoleHost only checks whether X is zero; row 1 and the tracked
-        // zero/non-zero column avoid claiming full terminal emulation.
-        await this.terminal.write(`\x1b[1;${state.column}R`)
-        if (this.cursorReply !== state) return
-        state.writeSettled = true
-        this.lastOutputAt = Date.now()
-        this.releaseCursorReplyWhenRecovered(state)
-        await state.recovered.promise
-        state = state.successor
-      }
-    })
-    void write.catch((error: unknown) => {
-      this.clearCursorReply()
-      if (!this.closing && !this.outputFinished && this.statusValue.kind !== 'exited') {
-        this.onTransportFailure(error)
-      }
-    })
-  }
-
-  private createCursorReplyState(request: CursorReplyRequest): CursorReplyState {
-    return {
-      ...request,
-      writeStarted: false,
-      writeSettled: false,
-      recoveryEvidenceSeen: false,
-      recovered: Promise.withResolvers<void>(),
-    }
-  }
-
-  private observePostReplyOutput(state: CursorReplyState): void {
-    if (!state.writeStarted) return
-    state.recoveryEvidenceSeen = true
-    this.releaseCursorReplyWhenRecovered(state)
-  }
-
-  private releaseCursorReplyWhenRecovered(state: CursorReplyState): void {
-    if (!state.writeSettled || (!state.releaseOnWriteSettlement && !state.recoveryEvidenceSeen)) return
-    const successor = state.successor
-    if (successor === undefined) {
-      this.clearCursorReply(state)
-      return
-    }
-    this.cursorReply = successor
-    state.recovered.resolve()
-  }
-
-  private clearCursorReply(state = this.cursorReply): void {
-    if (state === undefined || this.cursorReply !== state) return
-    this.cursorReply = undefined
-    state.recovered.resolve()
   }
 
   private async onExit(outcome: SubprocessOutcome): Promise<void> {
     await this.outputEnded.promise
     if (this.transportFailure !== undefined) return
     this.statusValue = { kind: 'exited', exitCode: outcome.exitCode, signal: outcome.signal }
-    this.clearCursorReply()
     this.settleActive('session_exit')
   }
 
@@ -579,7 +499,7 @@ export class LocalPtySession implements TerminalBackendSession {
     const failure = error instanceof Error ? error : new Error(String(error))
     this.transportFailure ??= failure
     this.statusValue = { kind: 'exited', exitCode: null, signal: null }
-    this.clearCursorReply()
+    this.closeEmulator()
     this.failActive(failure)
     void this.terminal.terminate().catch(() => {})
   }
@@ -608,10 +528,14 @@ export class LocalPtySession implements TerminalBackendSession {
         this.settleActive('session_exit')
         return
       }
-      if (this.cursorReplyBlocksReadiness()) return
-      const foreground = await this.terminal.inspectForeground()
+      if (this.protocolWorkPending()) await this.drainTerminalProtocol()
+      const emulatorWrites = this.emulatorWrites
+      const responseWrites = this.responseWrites
+      let foreground = await this.terminal.inspectForeground()
+      if (this.protocolStateChanged(emulatorWrites, responseWrites)) {
+        foreground = await this.inspectForegroundAfterProtocol()
+      }
       if (this.active !== operation || this.closing || this.interrupting === operation) return
-      if (this.cursorReplyBlocksReadiness()) return
       const idleFor = Date.now() - this.lastOutputAt
       if (this.promptSeen && foreground !== undefined && this.shellPgid === undefined) {
         this.shellPgid = foreground.processGroupId
@@ -643,6 +567,7 @@ export class LocalPtySession implements TerminalBackendSession {
         this.settleActive(waitReason, this.shouldRetainOwnership(operation))
       }
     } catch (error: unknown) {
+      if (this.protocolWorkPending()) await this.drainTerminalProtocol()
       if (this.active === operation && !this.closing && !this.outputFinished
         && this.interrupting !== operation) this.failActive(error)
     } finally {
@@ -654,13 +579,97 @@ export class LocalPtySession implements TerminalBackendSession {
     }
   }
 
-  private cursorReplyBlocksReadiness(): boolean {
-    return this.cursorReply !== undefined
+  /** Wait until generated replies reach the provider before another send can publish. */
+  private async drainTerminalProtocol(): Promise<void> {
+    for (;;) {
+      const emulatorWrites = this.emulatorWrites
+      await emulatorWrites
+      const responseWrites = this.responseWrites
+      await responseWrites
+      if (emulatorWrites === this.emulatorWrites && responseWrites === this.responseWrites
+        && !this.protocolWorkPending()) return
+    }
+  }
+
+  /** Sample foreground state only after protocol replies are quiet for the entire inspection. */
+  private async inspectForegroundAfterProtocol(): Promise<SubprocessTerminalForeground | undefined> {
+    for (;;) {
+      if (this.protocolWorkPending()) await this.drainTerminalProtocol()
+      const emulatorWrites = this.emulatorWrites
+      const responseWrites = this.responseWrites
+      const foreground = await this.terminal.inspectForeground()
+      if (!this.protocolStateChanged(emulatorWrites, responseWrites)) return foreground
+    }
+  }
+
+  private protocolStateChanged(emulatorWrites: Promise<void>, responseWrites: Promise<void>): boolean {
+    return emulatorWrites !== this.emulatorWrites || responseWrites !== this.responseWrites
+      || this.protocolWorkPending()
+  }
+
+  private protocolWorkPending(): boolean {
+    return this.emulatorWriteDone !== undefined || this.pendingResponseWrites > 0
+  }
+
+  private queueEmulatorData(data: string): void {
+    if (this.emulatorClosed) return
+    this.emulatorBuffer += data
+    if (this.emulatorWriteDone === undefined) {
+      const idle = Promise.withResolvers<undefined>()
+      this.emulatorWrites = idle.promise
+      this.emulatorWriteDone = () => { idle.resolve(undefined) }
+    }
+    this.pumpEmulator()
+  }
+
+  private pumpEmulator(): void {
+    if (this.emulatorWriting || this.emulatorClosed) return
+    if (this.emulatorBuffer.length === 0) {
+      const done = this.emulatorWriteDone
+      this.emulatorWriteDone = undefined
+      done?.()
+      this.releaseSettledActive()
+      return
+    }
+    const data = this.emulatorBuffer
+    this.emulatorBuffer = ''
+    this.emulatorWriting = true
+    try {
+      this.emulator.write(data, () => {
+        this.emulatorWriting = false
+        this.pumpEmulator()
+      })
+    } catch (error: unknown) {
+      this.emulatorWriting = false
+      this.emulatorBuffer = ''
+      const done = this.emulatorWriteDone
+      this.emulatorWriteDone = undefined
+      done?.()
+      this.releaseSettledActive()
+      if (!this.closing) this.onTransportFailure(error)
+    }
+  }
+
+  private finishResponseWrite(): void {
+    this.pendingResponseWrites -= 1
+    this.releaseSettledActive()
   }
 
   private shouldRetainOwnership(operation: LocalSendOperation): boolean {
     return this.activeWrite !== undefined || this.interrupting === operation
-      || this.terminalActionsPending > 0 || this.cursorReply !== undefined
+      || this.terminalActionsPending > 0 || this.protocolWorkPending()
+  }
+
+  private closeEmulator(): void {
+    if (this.emulatorClosed) return
+    this.emulatorClosed = true
+    this.emulatorBuffer = ''
+    this.emulatorWriting = false
+    const done = this.emulatorWriteDone
+    this.emulatorWriteDone = undefined
+    done?.()
+    this.emulatorData.dispose()
+    this.emulator.dispose()
   }
 
   private settleActive(waitReason: TerminalWaitReason, retainOwnership = false): void {
@@ -677,8 +686,8 @@ export class LocalPtySession implements TerminalBackendSession {
     operation.settle(waitReason, this.statusValue, scrollbackTruncated)
   }
 
-  private releaseSettledActive(operation: LocalSendOperation): void {
-    if (this.active !== operation || !operation.settled || this.shouldRetainOwnership(operation)) return
+  private releaseSettledActive(operation = this.active): void {
+    if (operation === undefined || this.active !== operation || !operation.settled || this.shouldRetainOwnership(operation)) return
     this.clearActive()
   }
 
@@ -741,6 +750,7 @@ export class LocalPtySession implements TerminalBackendSession {
     // it as session_exit below, so an in-flight send is never mis-settled as
     // stdin_read/inferred_idle/timeout during the grace period.
     this.stopPolling()
+    this.closeEmulator()
     let cleanupFailure: unknown
     try {
       await this.terminal.terminate()

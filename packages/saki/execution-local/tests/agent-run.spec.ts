@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -14,6 +14,9 @@ import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LlmRuntime, { freezeMessage, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SESSION_FORMAT_VERSION, Session } from '@deepseek-ai/dsh-session'
+import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import { logPath } from '@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts'
 import * as SessionCheckpointPolicy from '@deepseek-ai/dsh-session-checkpoint-policy'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import Storage from '@deepseek-ai/dsh-storage'
@@ -100,6 +103,9 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
+// Each recovery case performs several complete Git observations against a real repository.
+const REAL_GIT_AGENT_RUN_TIMEOUT_MS = 90_000
+
 describe('LocalSakiHostExecution StartAgentRun', () => {
   it('starts one exact preallocated Agent Run without exposing its wake message to the model', async () => {
     const harness = await agentRunHarness([stopResponse('done')])
@@ -137,9 +143,9 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(harness.adapter.requests[0]?.messages.filter(message => message.role === 'user')).toEqual([
       expect.objectContaining({ id: MESSAGE_ID, content: [{ type: 'text', text: 'Implement the issue exactly once.' }] }),
     ])
-    expect(agent.session.events.filter(event => event.type === 'user/message').map(event => event.data.id))
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message').map(event => event.data.id))
       .toEqual([MESSAGE_ID])
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('delivers one attributed answer through a second Dispatch to the same Run and Session', async () => {
     const harness = await agentRunHarness([stopResponse('initial done'), stopResponse('answer received')])
@@ -199,9 +205,9 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(harness.adapter.requests[1]?.messages.filter(message => message.role === 'user').map(message => message.id))
       .toEqual([MESSAGE_ID, ANSWER_MESSAGE_ID])
     expect(harness.adapter.requests[1]?.messages.find(message => message.id === ANSWER_MESSAGE_ID)).toEqual(input)
-    expect(agent.session.events.filter(event => event.type === 'user/message').map(event => event.data.id))
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message').map(event => event.data.id))
       .toEqual([MESSAGE_ID, ANSWER_MESSAGE_ID])
-    expect(agent.session.events.filter(event => event.type === 'agent/inbox/spliced')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/inbox/spliced')
       .flatMap(event => event.data.inserted)
       .filter(message => message.id === ANSWER_MESSAGE_ID)).toEqual([input])
   }, 90_000)
@@ -261,8 +267,8 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     })
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
-    await expect(harness.context.sessionPersistence.listSnapshots(signal)).resolves.toEqual([])
-  }, 30_000)
+    await expect(harness.context.sessionPersistence.list({ signal })).resolves.toEqual([])
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('keeps the Agent Run retryable when the frozen world is temporarily unavailable', async () => {
     const harness = await agentRunHarness([])
@@ -284,7 +290,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
     git.restore()
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('rechecks the frozen repository after Agent creation before sending exact input', async () => {
     const harness = await agentRunHarness([])
@@ -313,13 +319,13 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     })
     expect(harness.adapter.requests).toHaveLength(0)
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-    const snapshots = await harness.context.sessionPersistence.listSnapshots(signal)
+    const snapshots = await harness.context.sessionPersistence.list({ signal })
     const durable = snapshots.some(snapshot => snapshot.header.id === SESSION_ID)
-      ? await harness.context.sessionPersistence.readFrom(SESSION_ID, 0, signal)
+      ? await readPersistedSession(harness.context.sessionPersistence, signal)
       : undefined
     expect(durable?.events.some(event => event.type === 'user/message' && event.data.id === MESSAGE_ID) ?? false)
       .toBe(false)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('does not publish stale-world failure until the acquired Agent is disposed', async () => {
     const harness = await agentRunHarness([])
@@ -365,7 +371,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(handles.has(SESSION_ID)).toBe(false)
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('rechecks a stale repository after restarting an attempting operation with no Session evidence', async () => {
     const harness = await agentRunHarness([])
@@ -408,8 +414,8 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     })
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
-    await expect(harness.context.sessionPersistence.listSnapshots(signal)).resolves.toEqual([])
-  }, 30_000)
+    await expect(harness.context.sessionPersistence.list({ signal })).resolves.toEqual([])
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('resumes one pending exact input after its durable flush acknowledgement is lost', async () => {
     const harness = await agentRunHarness([stopResponse('done')])
@@ -442,13 +448,13 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     if (agent === undefined) return
     await agent.whenIdle()
     expect(harness.adapter.requests).toHaveLength(1)
-    expect(agent.session.events.filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
       .toHaveLength(1)
-    const exactInsertions = agent.session.events.filter(event => event.type === 'agent/inbox/spliced')
+    const exactInsertions = agent.session.snapshotEvents().filter(event => event.type === 'agent/inbox/spliced')
       .flatMap(event => event.data.inserted)
       .filter(message => message.id === MESSAGE_ID)
     expect(exactInsertions).toEqual([request.run.input])
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('observes an abort that races with installation of the input-record listener', async () => {
     const controller = new AbortController()
@@ -463,7 +469,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       },
     })
     const agent = {
-      session: { events: [] },
+      session: { snapshotEvents: () => [] },
       ctx: { on: () => () => {} },
     } as unknown as Agent
     const expected = freezeMessage({
@@ -486,7 +492,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
   it('does not wake an Agent whose exact input is already model-visible', async () => {
     const expected = agentRunInput('Already recorded input.')
     const agent = {
-      session: { events: [{ type: 'user/message', data: expected }] },
+      session: { snapshotEvents: () => [{ type: 'user/message', data: expected }] },
       ctx: { on: () => () => {} },
     } as unknown as Agent
     let wakeCount = 0
@@ -505,7 +511,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     let sessionListener: ((session: unknown, event: { readonly type: 'user/message'; readonly data: StartAgentRunInputMessage }) => void)
       | undefined
     const agent = {
-      session: { events: [] },
+      session: { snapshotEvents: () => [] },
       ctx: {
         on: (event: string, listener: unknown) => {
           if (event === 'session/event') {
@@ -525,7 +531,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     const expected = agentRunInput('Input that must be recorded.')
     let statusListener: ((event: { readonly agent: Agent; readonly status: 'idle' }) => void) | undefined
     const agent = {
-      session: { events: [] },
+      session: { snapshotEvents: () => [] },
       ctx: {
         on: (event: string, listener: unknown) => {
           if (event === 'agent/status') statusListener = listener as typeof statusListener
@@ -573,13 +579,13 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       signal,
     )).rejects.toThrow()
     expect(flush.failures()).toBeGreaterThan(0)
-    const liveSnapshot = await harness.context.sessionPersistence.inspect(SESSION_ID, signal)
+    const liveSnapshot = { events: harness.context.agents.get(SESSION_ID)!.session.snapshotEvents() }
     expect(liveSnapshot.events.some(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
       .toBe(true)
-    const physicalLog = await harness.context.sessionPersistence.readFrom(SESSION_ID, 0, signal)
+    const physicalLog = await readPersistedSession(harness.context.sessionPersistence, signal)
     expect(physicalLog.events.some(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
       .toBe(false)
-    expect(await rawSessionHasRecordedInput(harness.context, signal)).toBe(false)
+    expect(await rawSessionHasRecordedInput(harness, signal)).toBe(false)
     await expect(harness.execution.inspectOperation(prepared.preparation.operation, signal))
       .rejects.toThrow('recorded Agent Run flush failed before writing')
     flush.restore()
@@ -591,12 +597,12 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     )
 
     expect(replayed).toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
-    expect(await rawSessionHasRecordedInput(harness.context, signal)).toBe(true)
+    expect(await rawSessionHasRecordedInput(harness, signal)).toBe(true)
     const agent = harness.context.agents.get(SESSION_ID)
-    expect(agent?.session.events.filter(event => event.type === 'agent/inbox/spliced')
+    expect(agent?.session.snapshotEvents().filter(event => event.type === 'agent/inbox/spliced')
       .flatMap(event => event.data.inserted)
       .filter(message => message.id === MESSAGE_ID)).toEqual([request.run.input])
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('durably cancels a pending exact input and never resends it', async () => {
     const harness = await agentRunHarness([])
@@ -628,7 +634,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       prepared.acceptance,
       signal,
     )).resolves.toEqual({ ok: true, snapshot: canceled })
-    const durable = await harness.context.sessionPersistence.inspect(SESSION_ID, signal)
+    const durable = await readPersistedSession(harness.context.sessionPersistence, signal)
     expect(durable.events.filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
       .toHaveLength(0)
     expect(durable.events.filter(event => event.type === 'agent/inbox/spliced')
@@ -636,7 +642,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       .filter(message => message.id === MESSAGE_ID)).toEqual([request.run.input])
     expect(durable.events.some(event => event.type === 'agent/inbox/spliced'
       && event.data.outcome === 'canceled' && event.data.removedCount === 1)).toBe(true)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('keeps a publishing operation retryable until its live Agent is fully disposed', async () => {
     const harness = await agentRunHarness([])
@@ -681,7 +687,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(canceled).toMatchObject({ state: 'canceled', reason: 'authority-revoked', effect: 'none' })
     expect(handles.has(SESSION_ID)).toBe(false)
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('cancels a durable not-started plan without inspecting or creating a Session', async () => {
     const harness = await agentRunHarness([])
@@ -717,8 +723,8 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(canceled).toMatchObject({ state: 'canceled', reason: 'authority-revoked', effect: 'none' })
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
-    await expect(harness.context.sessionPersistence.listSnapshots(signal)).resolves.toEqual([])
-  }, 30_000)
+    await expect(harness.context.sessionPersistence.list({ signal })).resolves.toEqual([])
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('drops stale Agent Run ownership without disposing an unregistered Agent', async () => {
     const harness = await agentRunHarness([])
@@ -739,7 +745,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(canceled).toMatchObject({ state: 'canceled', effect: 'none' })
     expect(dispose).not.toHaveBeenCalled()
     expect(handles.has(SESSION_ID)).toBe(false)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('refuses to cancel while a retained handle disagrees with the live Agent registry', async () => {
     const harness = await agentRunHarness([])
@@ -763,7 +769,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(retained.dispose).not.toHaveBeenCalled()
     handles.delete(SESSION_ID)
     await foreign.dispose()
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('refuses to cancel when Agent disposal returns before registry quiescence', async () => {
     const harness = await agentRunHarness([])
@@ -787,7 +793,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     dispose.mockRestore()
     await handle.dispose()
     handles.delete(SESSION_ID)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('cancels an attempting Agent Run when no physical Session exists', async () => {
     const harness = await agentRunHarness([])
@@ -804,8 +810,8 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
 
     expect(canceled).toMatchObject({ state: 'canceled', reason: 'source-canceled', effect: 'none' })
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-    await expect(harness.context.sessionPersistence.listSnapshots(signal)).resolves.toEqual([])
-  }, 30_000)
+    await expect(harness.context.sessionPersistence.list({ signal })).resolves.toEqual([])
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('reports success when cancellation finds the exact input already recorded', async () => {
     const harness = await agentRunHarness([])
@@ -826,7 +832,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(canceled).toMatchObject({ state: 'succeeded', result: { inputMessageId: MESSAGE_ID } })
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it.each([
     ['conflicting input', 'evidence-conflict'],
@@ -892,7 +898,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(canceled).toMatchObject({ state: 'publishing' })
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('reports success when pending input becomes recorded during cancellation drain', async () => {
     const harness = await agentRunHarness([])
@@ -927,10 +933,10 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
 
     expect(canceled).toMatchObject({ state: 'succeeded', result: { inputMessageId: MESSAGE_ID } })
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-    const durable = await harness.context.sessionPersistence.readFrom(SESSION_ID, 0, signal)
+    const durable = await readPersistedSession(harness.context.sessionPersistence, signal)
     expect(durable.events.filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
       .toHaveLength(1)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('retains a stale Agent Handle until replacement disposal succeeds', async () => {
     const harness = await agentRunHarness([stopResponse('done')])
@@ -1031,13 +1037,13 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       snapshot: { state: 'reconciliation-required', reason: 'evidence-conflict' },
     })
     expect(harness.adapter.requests).toHaveLength(0)
-    const durable = await harness.context.sessionPersistence.inspect(SESSION_ID, signal)
+    const durable = await readPersistedSession(harness.context.sessionPersistence, signal)
     expect(durable.events.filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
       .toHaveLength(0)
     expect(durable.events.filter(event => event.type === 'agent/inbox/spliced')
       .flatMap(event => event.data.inserted)).toContainEqual(conflictingInput)
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it.each([
     ['working directory', { cwd: join(tmpdir(), 'saki-conflicting-worktree') }],
@@ -1104,7 +1110,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     const handles = (harness.execution as unknown as { liveAgentRuns: Map<typeof SESSION_ID, unknown> }).liveAgentRuns
     expect(handles.has(SESSION_ID)).toBe(false)
     expect(harness.adapter.requests).toHaveLength(0)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('does not publish reconciliation while a conflicting live Agent still owns the Session', async () => {
     const harness = await agentRunHarness([])
@@ -1145,7 +1151,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(harness.adapter.requests).toHaveLength(0)
     persistence.restore()
     await foreign.dispose()
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('resumes an exact durable pending input after a host restart', async () => {
     const harness = await agentRunHarness([stopResponse('done')])
@@ -1171,12 +1177,12 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(harness.adapter.requests).toHaveLength(1)
     expect(harness.adapter.requests[0]?.messages.filter(message => message.role === 'user'))
       .toEqual([request.run.input])
-    expect(agent.session.events.filter(event => event.type === 'agent/inbox/spliced')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/inbox/spliced')
       .flatMap(event => event.data.inserted)
       .filter(message => message.id === MESSAGE_ID)).toEqual([request.run.input])
-    expect(agent.session.events.filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
       .toHaveLength(1)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('does not wake a durable pending input after its frozen repository becomes stale', async () => {
     const harness = await agentRunHarness([])
@@ -1213,7 +1219,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     })
     expect(harness.adapter.requests).toHaveLength(0)
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('rechecks the frozen repository after Agent resume before waking pending input', async () => {
     const harness = await agentRunHarness([])
@@ -1243,10 +1249,10 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     })
     expect(harness.adapter.requests).toHaveLength(0)
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-    const durable = await harness.context.sessionPersistence.readFrom(SESSION_ID, 0, signal)
+    const durable = await readPersistedSession(harness.context.sessionPersistence, signal)
     expect(durable.events.filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
       .toHaveLength(0)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('reconciles duplicate exact recorded inputs as conflicting evidence', async () => {
     const harness = await agentRunHarness([])
@@ -1272,7 +1278,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       snapshot: { state: 'reconciliation-required', reason: 'evidence-conflict' },
     })
     expect(harness.adapter.requests).toHaveLength(0)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('rejects an Agent Run plan whose result identities disagree with its request', async () => {
     const harness = await agentRunHarness([])
@@ -1308,7 +1314,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     )).rejects.toThrow('captured Agent Run plan')
     persistence.restore()
     expect(rejected).toBe(true)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('drains a retained live Agent when replaying a non-running terminal Host record', async () => {
     const harness = await agentRunHarness([stopResponse('done')])
@@ -1351,7 +1357,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     const handles = (harness.execution as unknown as { liveAgentRuns: Map<typeof SESSION_ID, unknown> }).liveAgentRuns
     expect(handles.has(SESSION_ID)).toBe(false)
     expect(harness.adapter.requests).toHaveLength(1)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it.each(['replaced', 'claimed-without-record'] as const)(
     'never resends an exact input whose durable inbox history is %s',
@@ -1401,7 +1407,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       })
       expect(harness.adapter.requests).toHaveLength(0)
       expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-      const durable = await harness.context.sessionPersistence.inspect(SESSION_ID, signal)
+      const durable = await readPersistedSession(harness.context.sessionPersistence, signal)
       expect(durable.events.filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
         .toHaveLength(0)
       expect(durable.events.filter(event => event.type === 'agent/inbox/spliced')
@@ -1422,7 +1428,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
 
     await expect(harness.execution.inspectOperation(prepared.preparation.operation, signal))
       .resolves.toEqual(prepared.snapshot)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it.each([
     ['mismatched Session identity', 'mismatch', 'evidence-conflict'],
@@ -1521,12 +1527,12 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       prepared.acceptance,
       signal,
     )).resolves.toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
-    vi.spyOn(harness.context.sessionPersistence, 'listSnapshots').mockResolvedValueOnce([])
+    vi.spyOn(harness.context.sessionPersistence, 'stat').mockResolvedValueOnce(undefined)
 
     await expect(harness.execution.inspectOperation(prepared.preparation.operation, signal))
       .resolves.toMatchObject({ state: 'reconciliation-required', reason: 'effect-unknown' })
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it.each([
     ['a mismatched physical Session', 'mismatch', 'evidence-conflict'],
@@ -1724,25 +1730,23 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       expect(prepared.ok).toBe(true)
       if (!prepared.ok) return
       let inputFlushed = false
-      const sessions = harness.context.sessions as unknown as {
-        flush: (session: { readonly id: typeof SESSION_ID; readonly events: readonly { readonly type: string }[] }) => Promise<boolean>
-      }
+      const sessions = harness.context.sessions
       const flush = sessions.flush.bind(sessions)
       sessions.flush = async (session) => {
         const result = await flush(session)
-        if (session.id === SESSION_ID && session.events.some(event => event.type === 'agent/inbox/spliced')) {
+        if (session.id === SESSION_ID && session.snapshotEvents().some(event => event.type === 'agent/inbox/spliced')) {
           inputFlushed = true
         }
         return result
       }
-      const listSnapshots = harness.context.sessionPersistence.listSnapshots.bind(harness.context.sessionPersistence)
-      vi.spyOn(harness.context.sessionPersistence, 'listSnapshots').mockImplementation(async inspectionSignal =>
-        failure === 'absent' && inputFlushed ? [] : await listSnapshots(inspectionSignal))
-      const readFrom = harness.context.sessionPersistence.readFrom.bind(harness.context.sessionPersistence)
-      vi.spyOn(harness.context.sessionPersistence, 'readFrom').mockImplementation(async (...args) => {
-        const persisted = await readFrom(...args)
+      const stat = harness.context.sessionPersistence.stat.bind(harness.context.sessionPersistence)
+      vi.spyOn(harness.context.sessionPersistence, 'stat').mockImplementation(async (...args) =>
+        failure === 'absent' && inputFlushed ? undefined : await stat(...args))
+      const open = harness.context.sessionPersistence.open.bind(harness.context.sessionPersistence)
+      vi.spyOn(harness.context.sessionPersistence, 'open').mockImplementation(async (...args) => {
+        const persisted = await open(...args)
         return failure === 'mismatch' && inputFlushed
-          ? { ...persisted, meta: { ...persisted.meta, cwd: join(tmpdir(), 'saki-changed-after-flush') } }
+          ? withSessionCwd(persisted, join(tmpdir(), 'saki-changed-after-flush'))
           : persisted
       })
       const getAgent = harness.context.agents.get.bind(harness.context.agents)
@@ -1798,7 +1802,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(handles.get(SESSION_ID)).toBe(replacement)
     expect(replacement.dispose).not.toHaveBeenCalled()
     handles.delete(SESSION_ID)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('rechecks replacement ownership after a stale retained handle is disposed', async () => {
     const harness = await agentRunHarness([])
@@ -1830,15 +1834,15 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(stale.dispose).toHaveBeenCalledOnce()
     expect(replacement.dispose).toHaveBeenCalledOnce()
     expect(handles.has(SESSION_ID)).toBe(false)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('rejects succeeded recovery when physical evidence disappears after inspection', async () => {
     const { operation, request, restarted, signal } = await restartedSucceededAgentRun()
-    const listSnapshots = restarted.context.sessionPersistence.listSnapshots.bind(restarted.context.sessionPersistence)
+    const stat = restarted.context.sessionPersistence.stat.bind(restarted.context.sessionPersistence)
     let inspections = 0
-    vi.spyOn(restarted.context.sessionPersistence, 'listSnapshots').mockImplementation(async (inspectionSignal) => {
+    vi.spyOn(restarted.context.sessionPersistence, 'stat').mockImplementation(async (...args) => {
       inspections += 1
-      return inspections === 2 ? [] : await listSnapshots(inspectionSignal)
+      return inspections === 2 ? undefined : await stat(...args)
     })
 
     await expect(restarted.execution.resumeAgentRun(operation, request, signal))
@@ -1881,9 +1885,9 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       resumed = true
       return handle
     })
-    const listSnapshots = restarted.context.sessionPersistence.listSnapshots.bind(restarted.context.sessionPersistence)
-    vi.spyOn(restarted.context.sessionPersistence, 'listSnapshots').mockImplementation(async inspectionSignal =>
-      resumed ? [] : await listSnapshots(inspectionSignal))
+    const stat = restarted.context.sessionPersistence.stat.bind(restarted.context.sessionPersistence)
+    vi.spyOn(restarted.context.sessionPersistence, 'stat').mockImplementation(async (...args) =>
+      resumed ? undefined : await stat(...args))
 
     await expect(restarted.execution.resumeAgentRun(operation, request, signal))
       .rejects.toThrow('lost exact physical Session evidence during recovery')
@@ -2020,13 +2024,10 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     'revalidates physical Session identity before terminal Agent Run %s',
     async (entry) => {
       const { operation, request, restarted, signal } = await restartedSucceededAgentRun()
-      const readFrom = restarted.context.sessionPersistence.readFrom.bind(restarted.context.sessionPersistence)
-      vi.spyOn(restarted.context.sessionPersistence, 'readFrom').mockImplementation(async (...args) => {
-        const persisted = await readFrom(...args)
-        return {
-          ...persisted,
-          meta: { ...persisted.meta, cwd: join(tmpdir(), 'saki-terminal-session-drift') },
-        }
+      const open = restarted.context.sessionPersistence.open.bind(restarted.context.sessionPersistence)
+      vi.spyOn(restarted.context.sessionPersistence, 'open').mockImplementation(async (...args) => {
+        const persisted = await open(...args)
+        return withSessionCwd(persisted, join(tmpdir(), 'saki-terminal-session-drift'))
       })
 
       if (entry === 'resume') {
@@ -2105,10 +2106,10 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       },
     })
     expect(restarted.adapter.requests).toHaveLength(0)
-    const durable = await restarted.context.sessionPersistence.inspect(SESSION_ID, signal)
+    const durable = await readPersistedSession(restarted.context.sessionPersistence, signal)
     expect(durable.events.filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
       .toHaveLength(1)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
   it('rejects recovery request drift before resuming the physical Session', async () => {
     const world = await createAgentRunWorld()
@@ -2151,7 +2152,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     )).rejects.toThrow('disagrees with its exact recovery request')
     expect(restarted.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(restarted.adapter.requests).toHaveLength(0)
-  }, 30_000)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 })
 
 class ScriptedAdapter extends LlmAdapter {
@@ -2264,6 +2265,7 @@ interface AgentRunWorld {
 }
 
 interface AgentRunHarness {
+  readonly sessionRoot: string
   readonly context: Context
   readonly execution: LocalSakiHostExecution
   readonly adapter: ScriptedAdapter
@@ -2326,16 +2328,18 @@ async function mountAgentRunHarness(
   context.loader.builtins.include = Include
   await context.plugin(LlmRuntime)
   await context.plugin(SessionStore)
+  await context.plugin(SessionProjectionRegistry)
   await context.plugin(SystemPrompt, { persona: '' })
   await context.plugin(ToolRuntime)
   await context.plugin(AgentRegistry)
   await context.plugin(AgentLoop, { agents: [] })
-  await context.plugin(JsonlSessionPersistence, { root: sessionRoot })
+  await context.plugin(JsonlSessionPersistence, { root: sessionRoot, compression: 'none' })
   await context.plugin(SessionCheckpointPolicy)
   await context.plugin(AgentPresets, {
     default: 'development',
     roots: [{ path: presetRoot, trust: 'system' }],
     includeUserRoot: false,
+    includeShippedRoot: false,
   })
   await context.plugin(Storage)
   await context.plugin(StorageSqlite, { path: join(storageRoot, 'saki.db'), journalMode: 'delete' })
@@ -2349,6 +2353,7 @@ async function mountAgentRunHarness(
   return {
     context,
     execution: context.sakiHostExecution as LocalSakiHostExecution,
+    sessionRoot,
     adapter,
     repository,
   }
@@ -2384,14 +2389,16 @@ async function persistInputHistory(
 ): Promise<void> {
   const persisted = Session.create(SESSION_ID, undefined, {
     version: SESSION_FORMAT_VERSION,
+    isSeeded: false,
     id: SESSION_ID,
     createdAt: Date.now(),
     cwd: meta.cwd ?? binding.expectedInspection.trusted.canonicalWorktreePath,
     agentPreset: meta.agentPreset ?? request.run.profile.agentPresetId,
   })
   append(persisted)
-  await harness.context.sessionPersistence.create(persisted.header)
-  await harness.context.sessionPersistence.append(SESSION_ID, persisted.events)
+  await using handle = await harness.context.sessionPersistence.create(persisted.header)
+  await handle.append(persisted.snapshotEvents())
+  await handle.flush()
 }
 
 async function activeBinding(
@@ -2472,9 +2479,7 @@ function failNextSessionFlush(context: Context, sessionId: typeof SESSION_ID): {
   readonly didFail: () => boolean
   readonly restore: () => void
 } {
-  const sessions = context.sessions as unknown as {
-    flush: (session: { readonly id: typeof SESSION_ID }) => Promise<boolean>
-  }
+  const sessions = context.sessions
   const original = sessions.flush.bind(sessions)
   let failed = false
   sessions.flush = async (session) => {
@@ -2495,13 +2500,11 @@ function failRecordedSessionFlushBeforeWrite(context: Context, sessionId: typeof
   readonly failures: () => number
   readonly restore: () => void
 } {
-  const sessions = context.sessions as unknown as {
-    flush: (session: { readonly id: typeof SESSION_ID; readonly events: readonly { readonly type: string }[] }) => Promise<boolean>
-  }
+  const sessions = context.sessions
   const original = sessions.flush.bind(sessions)
   let failures = 0
   sessions.flush = async (session) => {
-    if (session.id === sessionId && session.events.some(event => event.type === 'user/message')) {
+    if (session.id === sessionId && session.snapshotEvents().some(event => event.type === 'user/message')) {
       failures += 1
       throw new Error('recorded Agent Run flush failed before writing')
     }
@@ -2513,9 +2516,15 @@ function failRecordedSessionFlushBeforeWrite(context: Context, sessionId: typeof
   }
 }
 
-async function rawSessionHasRecordedInput(context: Context, signal: AbortSignal): Promise<boolean> {
-  const raw = await context.sessionPersistence.readRaw(SESSION_ID, signal)
-  return raw?.content.includes('"type":"user/message"') === true
+async function rawSessionHasRecordedInput(harness: AgentRunHarness, signal: AbortSignal): Promise<boolean> {
+  let raw: string
+  try {
+    raw = await readFile(logPath(harness.sessionRoot, harness.repository, SESSION_ID, 'none'), { encoding: 'utf8', signal })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+  return raw.includes('"type":"user/message"')
 }
 
 function operationPersistence(execution: LocalSakiHostExecution): {
@@ -2598,13 +2607,13 @@ function scriptAgentRegistryReads(harness: AgentRunHarness, reads: readonly (Age
 }
 
 function changeSessionIdentityOnRead(harness: AgentRunHarness, targetRead: number): void {
-  const readFrom = harness.context.sessionPersistence.readFrom.bind(harness.context.sessionPersistence)
+  const open = harness.context.sessionPersistence.open.bind(harness.context.sessionPersistence)
   let reads = 0
-  vi.spyOn(harness.context.sessionPersistence, 'readFrom').mockImplementation(async (...args) => {
-    const persisted = await readFrom(...args)
+  vi.spyOn(harness.context.sessionPersistence, 'open').mockImplementation(async (...args) => {
+    const persisted = await open(...args)
     reads += 1
     return reads === targetRead
-      ? { ...persisted, meta: { ...persisted.meta, cwd: join(tmpdir(), 'saki-changed-between-inspections') } }
+      ? withSessionCwd(persisted, join(tmpdir(), 'saki-changed-between-inspections'))
       : persisted
   })
 }
@@ -2632,4 +2641,24 @@ async function createRepository(): Promise<string> {
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
   await run('git', args, { cwd, windowsHide: true })
+}
+
+async function readPersistedSession(persistence: SessionPersistence, signal: AbortSignal) {
+  await using handle = await persistence.open(SESSION_ID, 'read', { signal })
+  return { meta: handle.header, events: await handle.read(0, undefined, { signal }) }
+}
+
+/** Override one read handle's detached identity while retaining its real lifetime and I/O. */
+function withSessionCwd(handle: SessionHandle, cwd: string): SessionHandle {
+  return {
+    id: handle.id,
+    header: { ...handle.header, cwd },
+    inheritedEventCount: handle.inheritedEventCount,
+    access: handle.access,
+    read: handle.read.bind(handle),
+    append: handle.append.bind(handle),
+    flush: handle.flush.bind(handle),
+    close: handle.close.bind(handle),
+    [Symbol.asyncDispose]: handle[Symbol.asyncDispose].bind(handle),
+  }
 }

@@ -1,0 +1,11 @@
+version: 1
+scenario: saki-skill-pack-handoff
+profile: sdk
+composition: saki-skill
+recording: authored
+header:
+  class: saki-skill
+  pin: true
+workspace:
+  setup: saki-skill-pack
+  final: true

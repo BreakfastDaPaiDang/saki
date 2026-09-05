@@ -1,6 +1,27 @@
+---
+description: "Find the private packages that assemble Saki, from local project operations and GitHub synchronization to Agent Runs and operator interventions."
+kind: "package-group"
+---
+
 # saki/ — private product packages
 
 English | [中文](README.zh.md)
+
+## Summary
+
+Find the private packages that assemble Saki, from local project operations and GitHub synchronization to Agent Runs and operator interventions.
+
+The [Saki subsystem](../../docs/subsystems/saki.md) describes the services and their ownership.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Dev Note](#dev-note)
+
+<a id="use-this-package"></a>
+## Use this package
+
+## Packages
 
 Saki-specific product semantics live under `packages/saki/<pkg>` and use the `@breakfastdapaidang/saki-<pkg>` namespace. These packages remain private and follow the same TypeScript, Cordis, invariant, documentation, graph, catalog, and license gates as DSH packages. The [governance reference](../../docs/saki/package-governance.md) owns the namespace and release rules.
 
@@ -16,3 +37,13 @@ Saki-specific product semantics live under `packages/saki/<pkg>` and use the `@b
 | [`bundle/`](bundle/README.md) | Saki composition root and repository-local Host launcher | mounts the control plane, transport, and `saki-readiness` |
 
 Add a package only when a product slice has an independently testable role. Generic Harness capabilities stay in an existing DSH group; planned Saki packages are not placeholders to create in advance.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>

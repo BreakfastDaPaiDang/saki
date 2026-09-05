@@ -1,9 +1,34 @@
+---
+description: "通过提供方无关的 Host 接口请求项目检查、有界 diff、结构化 Git 变更和持久 Agent 启动。"
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-execution`
 
 [English](README.md) | 中文
 
+## 概述
+
+通过提供方无关的 Host 接口请求项目检查、有界 diff、结构化 Git 变更和持久 Agent 启动。
+
+## 目录
+
+- [使用本包](#use-this-package)
+- [项目选择检查](#project-selection-inspection)
+- [已绑定 Project 状态](#bound-project-status)
+- [已绑定 Project Diff](#bound-project-diff)
+- [持久结构化 mutation](#durable-structured-mutations)
+- [持久 Agent 启动](#durable-agent-starts)
+- [模型体验](#model-experience)
+- [已知限制与暂缓事项](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
+
+<a id="use-this-package"></a>
+## 使用本包
+
 Saki 私有 Host Execution Service Definition 注册 `ctx.sakiHostExecution`。它定义提供方无关的 Project 检查与 Diff 值，以及结构化 StageFiles、UnstageFiles、Commit、PushBranch 和 Agent Run 启动副作用所使用的持久 Host Operation 生命周期。[Saki 控制面](../control-plane/README.zh.md)拥有授权、Project 策略、写入准入和持久 Control Intent。[Saki 后端架构](../../../docs/saki/architecture/0.1.0-backend.zh.md)定义更完整的控制面与执行面划分。
 
+<a id="project-selection-inspection"></a>
 ## 项目选择检查
 
 请求包含所选 Saki Host id 与调用方提供的目录定位值。该定位值是不可信输入：Service Provider 每次调用都会独立解析并检查它，该拼写或先前的 Projection 都不能授权后续操作。必填的 `AbortSignal` 把检查工作绑定到调用方生命周期。
@@ -12,6 +37,7 @@ Saki 私有 Host Execution Service Definition 注册 `ctx.sakiHostExecution`。�
 
 baseline schema 区分完整捕获与不可用捕获；前者包括干净的零条目结果，后者只携带有界原因与已观察限制。Consumer 不得把不可用证据当作部分完整 baseline。
 
+<a id="bound-project-status"></a>
 ## 已绑定 Project 状态
 
 `inspectProject` 接受 `ActiveHostProjectBinding`，其中包含稳定 id 与 revision、字面量 active health、Host 与 Workspace 身份、已接受的登记检查和登记时继承变更 baseline。严格 schema 要求 Host 和 baseline 身份与该登记证据一致。登记检查可能早于 Workspace 创建，因此 Service Provider 会重新验证当前 repository 与 Workspace 关系后再返回状态；保留的路径和指纹绝不授权读取。
@@ -20,10 +46,12 @@ baseline schema 区分完整捕获与不可用捕获；前者包括干净的零�
 
 `inspectProjectCommit` 会重新验证 active Binding，并只接受宽度匹配 repository format 的精确 object id。它确认该 local object 是 Commit 并返回同一个 id；否则，它会区分陈旧 Binding、缺失 Commit 和不可用 Host evidence，并且不接受任意 revision、ref 或 path。
 
+<a id="bound-project-diff"></a>
 ## 已绑定 Project Diff
 
 `readDiff` 接受 active Binding、精确 status fingerprint、不透明 change id、staged、unstaged 或 conflict layer，以及可选 continuation cursor。Service Provider 会在内部解析文件并返回一个有界 `ProjectGitDiffPage`；patch fingerprint 把每页绑定到同一份完整 patch，而 line 与 byte range 会明确表达截断。请求不包含调用方选择的路径或 Git command。陈旧 observation 或 cursor、缺失或含糊 row、不支持的 untracked、conflict 或 binary 内容、无效 UTF-8 及资源限制都会返回闭合且不含路径的原因，而不是局部输出。
 
+<a id="durable-structured-mutations"></a>
 ## 持久结构化 mutation
 
 `prepareOperation` 会在任何副作用前把一个不可变 Host request 持久绑定到其 Control Intent source，并返回无法跨越 JSON 的 provider-owned acceptance。`startOperation` 会在 planning 或 publication 前检查该 acceptance 与当前同进程 Binding Write Admission。`inspectOperation` 根据持久 evidence 推进恢复，而不会重复含糊副作用；`cancelOperation` 只记录闭合的持久 cancellation reason；`onChanged` 提供 post-commit 唤醒，而 snapshot 保持权威。调用方 `AbortSignal` 只限制单次调用，并非持久取消。
@@ -34,6 +62,7 @@ PushBranch 将一个精确 local Commit 和 active Resource Binding 绑定到一
 
 Service Definition 没有配置。每个 Service Provider 拥有其执行环境机制与必需的资源限制。
 
+<a id="durable-agent-starts"></a>
 ## 持久 Agent 启动
 
 `StartAgentRun` 携带 `execution-dispatch` source、精确可写 Git precondition、预分配的 Agent Run、Work Session、DSH Session 与输入 MessageId、固定 Agent Profile 与 Model Route，以及一条完整的纯文本 `UserMessage`。其 payload digest 覆盖该 message，以及初始 `saki-agent-run` source 或带归因的 `saki-intervention-answer` source。Preparation 保持 inert；start 要求已接受的 Dispatch mapping 和当前 `agent-run` Binding Write Admission。稳定结果会重复 Run、Work Session、Session 与输入这四项 identity。
@@ -44,6 +73,7 @@ Intervention answer 使用新的 Dispatch 与稳定 MessageId，但保留所属 
 
 `resumeAgentRun` 是仅供启动恢复使用的 operation，目标是已经过控制面校验的 running Run，以及与其精确匹配的 succeeded `StartAgentRun` operation 和 request。只有物理 Session header 与原始输入匹配该 request 时，Provider 才会恢复 live Agent handle。它不会增加输入、wake 或模型请求；Host、Session 或 Agent evidence 缺失、不可用或冲突时，启动流程会失败。
 
+<a id="model-experience"></a>
 ## 模型体验
 
 ### Host execution 值与 Agent Run 输入
@@ -60,6 +90,17 @@ Inspection、Diff、preparation 与结构化 Git operation 直接增加零个 to
 
 每条初始输入或 Intervention answer 都是新的 user turn，不属于可复用 prefix。仅用于恢复的 wake message 会在模型组装前排除。
 
+<a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与暂缓事项
 
 - **受约束的 Git 操作集合**：per-hunk staging、stash、conflict editing、一般 branch management、worktree management、repair 与 retirement 仍不属于该服务。Commit 不运行 hook 且不签名；需要 hook、签名或不受支持 external filter 的仓库必须使用另一项显式受信提供方。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+不发布 runtime invariant companion，因为Service Definition 只包含 schema 与规范值辅助函数，没有可变关系。
+
+</details>

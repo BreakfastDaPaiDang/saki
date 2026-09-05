@@ -1,0 +1,11 @@
+- id: bash-sandbox
+  disabled: false
+
+- id: pwsh-sandbox
+  disabled: true
+
+- id: tool-bash
+  disabled: false
+
+- id: tool-pwsh
+  disabled: true

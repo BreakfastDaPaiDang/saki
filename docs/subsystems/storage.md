@@ -46,9 +46,9 @@ interface StorageBackend {
 }
 ```
 
-A backend owns one medium (a file-tree root, a database file) and exposes optional operation groups; `kv` is the only group today. `KvFacet.open(descriptor)` opens one named unit — `KvUnitDescriptor` carries the name, format version, table names, and whether a global singleton slot exists — and returns a `KvUnit` with `loadAll`, `putRecord`, `deleteRecord`, `setGlobal`, and `close`. Unit and table names must match `UNIT_NAME_RE` (safe as a file name and as a SQL identifier segment); record keys are arbitrary strings that never reach file paths. `KvUnitDescriptor.version` must be a non-negative safe integer; negative zero is invalid. Values are exact JSON data: a backend rejects any value whose JSON encoding would omit or coerce data, including `undefined`, non-finite numbers, negative zero, sparse arrays, cycles, accessors, and exotic objects. Text-backed providers also reject invalid UTF-8, byte-order marks, comments, trailing commas, duplicate object members, and numeric tokens that JavaScript would round, underflow, or overflow. A unit does not serialize concurrent writes — ordering belongs to the caller — but each call is atomic on the medium and durable once resolved. Backend close synchronously ends admission for new opens, cold reservations, and methods on existing live units before it drains admitted work. `durability-uncertain` with `published: true` means the requested value is visible but durability is not confirmed; `commit-outcome-unknown` with `publicationPossible: true` means publication itself cannot be decided. Either result requires closing the live handle, discarding and recreating the affected backend (or restarting), and only then reopening from the medium. A medium stamped with a different version rejects `version-mismatch`; one that cannot be parsed as the unit rejects `malformed-medium`. Ordinary open never migrates an old medium.
+A backend owns one medium (a file-tree root, a database file) and exposes optional operation groups; `kv` is the only group today. `KvFacet.open(descriptor)` opens one named unit — `KvUnitDescriptor` carries the name, format version, table names, and whether a global singleton slot exists — and returns a `KvUnit` with `loadAll`, `putRecord`, `deleteRecord`, `setGlobal`, and `close`. Unit and table names must match `UNIT_NAME_RE` (safe as a file name and as a SQL identifier segment); `single` record keys are arbitrary strings; `per-record` keys become path components and reject empty, dot-only, slash, backslash, or NUL-containing values. `KvUnitDescriptor.version` must be a non-negative safe integer; negative zero is invalid. Values are exact JSON data: a backend rejects any value whose JSON encoding would omit or coerce data, including `undefined`, non-finite numbers, negative zero, sparse arrays, cycles, accessors, and exotic objects. Text-backed providers also reject invalid UTF-8, byte-order marks, comments, trailing commas, duplicate object members, and numeric tokens that JavaScript would round, underflow, or overflow. A unit does not serialize concurrent writes — ordering belongs to the caller — but each call is atomic on the medium and durable once resolved. Backend close synchronously ends admission for new opens, cold reservations, and methods on existing live units before it drains admitted work. `durability-uncertain` with `published: true` means the requested value is visible but durability is not confirmed; `commit-outcome-unknown` with `publicationPossible: true` means publication itself cannot be decided. Either result requires closing the live handle, discarding and recreating the affected backend (or restarting), and only then reopening from the medium. The `single` layout requires the exact version and rejects `version-mismatch`; `per-record` accepts the current version plus `compatibleVersions` and discards unaccepted records. Unparseable unit media reject `malformed-medium`. Ordinary `single` open never migrates an old medium.
 
-Backends may expose the optional `kv.closed` operation group for maintenance that must not create or open the source. `withReservedUnit(name, signal, callback)` synchronously reserves one unit name; a live handle or competing reservation rejects `unit-open` immediately. Once the scope observes callback settlement it ends admission to that lease, and escaped leases and commit tokens reject with `closed`. The name remains reserved until every lease method admitted earlier drains, including methods the callback did not await; backend close waits for the callback and the same admitted work. The lease can inspect stored identity, read through an exact descriptor, or create-only materialize a complete missing unit. Materialization returns a lease-scoped `KvClosedUnitMaterialization`: `durable` confirms commit durability and reads the target back; `uncertain` carries the backend cause and reads either the visible target or `undefined` after confirmed absence. Only definite non-publication rejects. Caller cancellation applies before publication; afterward, readback and cleanup preserve commit evidence despite a late abort. [`backend.ts`](../../packages/storage/storage/src/backend.ts) is the normative clause-by-clause contract, and the shared conformance suites in [`tests/contract.ts`](../../packages/storage/storage/tests/contract.ts) check ordinary and cold operations against each supporting backend. The [json backend](../../packages/storage/storage-json/README.md) republishes one whole human-readable file per unit atomically; the [sqlite backend](../../packages/storage/storage-sqlite/README.md) stores one document per row in one database for frequently updated data.
+Backends may expose the optional `kv.closed` operation group for maintenance that must not create or open the source. `withReservedUnit(name, signal, callback)` synchronously reserves one unit name; a live handle or competing reservation rejects `unit-open` immediately. Once the scope observes callback settlement it ends admission to that lease, and escaped leases and commit tokens reject with `closed`. The name remains reserved until every lease method admitted earlier drains, including methods the callback did not await; backend close waits for the callback and the same admitted work. The lease can inspect stored identity, read through an exact descriptor, or create-only materialize a complete missing unit. Materialization returns a lease-scoped `KvClosedUnitMaterialization`: `durable` confirms commit durability and reads the target back; `uncertain` carries the backend cause and reads either the visible target or `undefined` after confirmed absence. Only definite non-publication rejects. Caller cancellation applies before publication; afterward, readback and cleanup preserve commit evidence despite a late abort. [`backend.ts`](../../packages/storage/storage/src/backend.ts) is the normative clause-by-clause contract, and the shared conformance suites in [`tests/contract.ts`](../../packages/storage/storage/tests/contract.ts) check ordinary and cold operations against each supporting backend. The [json backend](../../packages/storage/storage-json/README.md) publishes one whole human-readable file per `single` unit, or independent files for `per-record` records; the [sqlite backend](../../packages/storage/storage-sqlite/README.md) stores one document per row in one database for frequently updated data.
 
 ## Declaring a domain
 
@@ -59,8 +59,36 @@ A domain is declared once by its owning package as a spec object — the single 
 interface DomainSpec {
   /** Domain name; must match `UNIT_NAME_RE` (doubles as the backend unit name). */
   readonly name: string
-  /** Domain format version; a medium stamped with a different version rejects at open. */
+  /** Current domain format version; reads enforce it according to the selected layout. */
   readonly version: number
+  /**
+   * Medium layout for the backend unit: `single` (the default) stores the
+   * whole unit as one document; `per-record` stores each record as its own
+   * document, for units whose records are large, sparse, or individually
+   * disposable — the projection cache — and scopes version checks per record
+   * (an unaccepted record document is discarded, never migrated).
+   */
+  readonly layout?: 'single' | 'per-record'
+  /**
+   * Older domain versions whose stored records the current record schemas
+   * also accept (the declaring owner vouches for that, typically by
+   * declaring the fields older records lack as optional). `per-record` backends
+   * read documents stamped with a listed version instead of discarding them,
+   * and accept a legacy whole-unit file so stamped for the one-time
+   * bootstrap; writes always stamp {@link version}.
+   */
+  readonly compatibleVersions?: readonly number[]
+  /**
+   * What `open` does with a stored table record that fails its zod schema.
+   * Absent (the default), the whole open rejects with `invalid-record` —
+   * right for authoritative data. `'backup-and-skip'` is for domains whose
+   * records are disposable derived data: the backend moves the record's
+   * document aside (`KvUnit.backupRecord`), the failure is logged with
+   * its cause, and the open continues with the record absent. A backend
+   * without `backupRecord` (no per-record document to move) falls back
+   * to the rejecting default. The global slot always rejects.
+   */
+  readonly invalidRecords?: 'backup-and-skip'
   /** Optional global singleton slot. */
   readonly global?: DomainGlobalSpec<unknown>
   /** Table declarations keyed by table name; each name must match `UNIT_NAME_RE`. */
@@ -182,7 +210,10 @@ The mounted domain facility. Opens declared domains over routed backends; one fa
  * (`facet-unsupported`); open the unit projected from the spec (backend
  * `version-mismatch`/`malformed-medium` pass through); load and validate
  * every stored record against the spec's zod schemas (`invalid-record`
- * with the offending table and key); construct the domain.
+ * with the offending table and key — unless the spec declares
+ * `invalidRecords: 'backup-and-skip'` and the unit can move documents aside, in
+ * which case the failing record is backed up, logged, and skipped);
+ * construct the domain.
  *
  * Lifecycle: the CALLER owns the returned handle and closes it via
  * `Domain.close()` (typically as its own `ctx.effect` disposer) — the

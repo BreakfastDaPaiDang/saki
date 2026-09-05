@@ -1,9 +1,33 @@
+---
+description: "Inspect local repositories, perform structured Git operations, and create or recover exact Agent Runs on the same Host."
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-execution-local`
 
 English | [中文](README.zh.md)
 
+## Summary
+
+Inspect local repositories, perform structured Git operations, and create or recover exact Agent Runs on the same Host.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Inspection behavior](#inspection-behavior)
+- [Structured Git operations](#structured-git-operations)
+- [Agent Run operations](#agent-run-operations)
+- [Configuration](#configuration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+<a id="use-this-package"></a>
+## Use this package
+
 The private Local Host Service Provider implements [`ctx.sakiHostExecution`](../execution/README.md) over `ctx.fs`, `ctx.subprocess`, `ctx.workspaceRegistry`, `ctx.storageDomain`, DSH Agent and Session services, and same-host filesystem metadata. It inspects untrusted local directory selections and revisioned bound-project status, reads bounded diffs, executes structured Git mutations and exact-lease GitHub Push operations, and creates or resumes exact Agent Runs. It owns provider-private durable Host Operation records but no Project policy, Resource Binding, Workspace creation, or control-plane intent.
 
+<a id="inspection-behavior"></a>
 ## Inspection behavior
 
 - **Filesystem identity** — filesystem-only discovery walks from the selected directory to an ordinary `.git` directory or gitfile, validates linked-worktree reciprocity or a local separate-Git-directory layout, and resolves the selected top level, per-worktree Git directory, and common Git directory through `realpath`. Ordinary, linked, detached, and local separate-Git-directory worktrees are supported. A selection below the Git top level is accepted only when its canonical target is contained by that top level; returned worktree, Workspace, and display evidence use the top level. The provider captures an opaque same-Host filesystem identity for each Git administrative directory in both observation rounds, compares paths without lowercasing them, and rejects missing, non-directory, bare, prunable, malformed, escaping, or ambiguous selections. A direct reparse locator, `.git` marker, resolved administrative directory, object directory, or configured worktree is rejected instead of canonicalized as an alias.
@@ -16,6 +40,7 @@ The private Local Host Service Provider implements [`ctx.sakiHostExecution`](../
 - **Bound project status** — `inspectProject` treats the retained canonical worktree path only as a locator, repeats the stable two-round inspection, and requires the fresh Host, Workspace, worktree, Git-directory, and filesystem identities to match the revisioned Resource Binding. The same inventory comparison used by registration projects sorted valid UTF-8 paths as tracked, untracked, or conflicted with staged, unstaged, and inherited-change provenance, plus complete index, worktree, and status digests. Public gitlink rows expose only the parent repository's proven commit relation as `changed`, `unchanged`, or `unknown`; they never claim nested tracked or untracked dirtiness. A changed gitlink whose nested current state cannot be admitted carries unavailable current evidence only after directory-mode proof, which blocks structured mutation; a changed gitlink with completely unknown current mode rejects the status. An exact assume-unchanged ordinary path may reconstruct a Git-omitted status row from the same-round raw inventory, but its flag still blocks mutation. A visible skip-worktree change rejects the complete status instead of relabeling captured current evidence as unavailable; other unsupported index flags keep status readable while blocking mutation. Conversion ambiguity, unresolved status membership, invalid path text, or protocol limits reject the complete status instead of fabricating Boolean change facts or returning a partial list.
 - **Exact Commit inspection** — `inspectProjectCommit` revalidates the active Resource Binding and accepts only one exact object id, not a ref or revision expression. It confirms that the object is a Commit through the private repository view and returns the same id; stale identity, missing object, and unavailable Host evidence remain distinct closed results.
 
+<a id="structured-git-operations"></a>
 ## Structured Git operations
 
 - **Durable lifecycle** — `prepareOperation` durably records an inert request under the source Intent identity; exact replay returns the same operation and a different request from that source is rejected. `startOperation` obtains fresh admission and repeats the complete binding, status, HEAD, index, worktree, baseline, and mutation-availability checks before planning an effect. Every effect plan freezes the resolved `operationMaxIndexBytes` as `indexReadLimit`, and a Commit plan also freezes `operationMaxReflogBytes` as `reflogReadLimit`; resume, recovery, and cleanup use the applicable durable values even if later provider configuration changes. A durable index plan admits only a nonempty bounded list of repository-relative paths. Raw validation rejects row-count and aggregate UTF-8 or canonical Base64 decoded-byte overflow before structural element parsing or Base64 allocation; canonical Base64 and repository-relative path validation precede every decode and Git use. Busy locks and temporary unavailable evidence leave the operation retryable. `inspectOperation` may advance a publishing lifecycle only from read-only Git and filesystem evidence and never creates a new Git effect.
@@ -28,6 +53,7 @@ The private Local Host Service Provider implements [`ctx.sakiHostExecution`](../
 
 The application bootstrap environment is the authority for the Git executable and ordinary inherited process variables. The provider removes repository- and browser-controllable Git execution variables; it is not a child-process sandbox for a compromised parent environment. Filesystem metadata cancellation follows the FileSystem provider's cooperative pre/post-probe contract, while regular-file content streams are destroyed by cancellation and provider disposal waits for every call to settle.
 
+<a id="agent-run-operations"></a>
 ## Agent Run operations
 
 A `start-agent-run` Host Operation stores a schema-version-four record with an `agent-run` effect plan before touching DSH. Its exact replay mounts the frozen Agent Preset, applies the frozen Model Route, and creates or resumes the preallocated Session at the Binding's canonical worktree cwd. Version three remains an exact cold-migration schema, while version two accepts only the original `saki-agent-run` source. The physical Session header must prove that cwd and preset, and live Agent options must match the route. A mismatch, another live Agent under the same Session id, or conflicting message-source evidence becomes a conflict rather than another Run.
@@ -36,6 +62,7 @@ The Provider reads detached physical Session persistence through complete snapsh
 
 Inspection never creates, resumes, or wakes an Agent. `inspectInterventionOpening` reads detached physical Session history and confirms only one exact `request_intervention` call whose non-error model-facing result is followed by the matching final step end and a completed turn end; it returns closed evidence without exposing the Session. Startup resume is a separate operation that requires an exact succeeded Host result, matching physical Session header and input, and a matching available live Agent; it restores that Agent model-idle before the Host serves requests. A durable `not-started` plan can prove cancellation without attributing an unrelated Session; a publishing or terminal replay rechecks the exact durable input and ids. Cancellation stops and drains any owned live Agent before terminal persistence. If disposal fails, the Host keeps the handle tracked and the operation retryable. Host success reports only durable Run and input existence, not model completion.
 
+<a id="configuration"></a>
 ## Configuration
 
 Numeric fields resolve to positive integers. The optional credential adapter enables Push without transferring credential authority into a request; the remaining limits govern observation and provider-private mutation evidence. Product policy remains in the control plane.
@@ -85,3 +112,12 @@ Inspection is independent of model requests. Each Agent input adds a user turn o
 - **Live data plane** — the admitted worktree and source object database remain live while Git reads them. Independent observation rounds and source-control manifests reject changes they observe, but they do not prevent every transient same-user race or make the provider an operating-system sandbox. Exact-owner artifact checks likewise do not isolate a malicious same-user process that can replace pathnames in writable directories between checks: portable Node APIs provide no cross-platform handle-relative or `openat` path use and removal across Windows and POSIX.
 - **Reparse scope** — the provider rejects direct locator aliases and final Git marker, administrative, control-file, object-directory, and configured-worktree reparse entries. The current FileSystem capability does not prove that every ancestor component was opened without following a reparse point.
 - **Unsupported control layouts** — non-files ref storage such as reftable and an ordinary `.git` directory that redirects through `commondir` are unavailable. A split index whose `sharedindex.*` file is absent from the private control directory also becomes unavailable. A source repository that already uses object alternates is rejected rather than reproduced inside the snapshot.
+
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No runtime invariant companion is published because domain parsers validate Host Operation records at open and before writes; live acceptance callbacks are not durable state.
+
+</details>

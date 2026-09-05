@@ -23,6 +23,7 @@ interface StorageForms {}
 
 `mount(form, facility)` 是一个 effect，其 disposer 负责卸载；对同一键的第二次挂载抛出 `duplicate-mount`。`form(form)` 解析已挂载的 facility，在拥有插件加载之前抛出 `form-not-mounted`——组合方应据此安排插件顺序，而不是静默推迟。领域层合并 `domain: DomainFacility`，因此 `ctx.storage.domain` 与 `ctx.storageDomain` 是同一个对象。
 
+<a id="the-backend-contract"></a>
 ## 后端约定
 
 ```ts type-equiv
@@ -46,9 +47,9 @@ interface StorageBackend {
 }
 ```
 
-一个后端拥有一个介质（一棵文件树的根目录、一个数据库文件），并提供可选的操作组；目前 `kv` 是唯一一组。`KvFacet.open(descriptor)` 打开一个具名 unit——`KvUnitDescriptor` 携带名称、格式版本、表名清单，以及是否存在全局单例 slot——并返回提供 `loadAll`、`putRecord`、`deleteRecord`、`setGlobal` 和 `close` 的 `KvUnit`。unit 名与表名必须匹配 `UNIT_NAME_RE`（既可安全用作文件名，也可安全用作 SQL 标识符片段）；记录键是任意字符串，绝不进入文件路径。`KvUnitDescriptor.version` 必须是非负安全整数；负零无效。值必须是精确的 JSON 数据：如果 JSON 编码会省略或强制转换数据，后端就会拒绝，包括 `undefined`、非有限数、负零、稀疏数组、循环引用、访问器和特殊对象。文本型 provider 还会拒绝非法 UTF-8、字节序标记、注释、尾随逗号、重复对象成员，以及会被 JavaScript 舍入、下溢或上溢的数字词法。unit 不对并发写入做串行化——顺序由调用方负责——但每次调用在介质上都是原子的，且只有达到持久状态后才会 resolve。后端关闭会同步停止接纳新的打开、冷预留以及现有实时 unit 上的新方法，然后再排空已接纳工作。带 `published: true` 的 `durability-uncertain` 表示请求值已经可见但无法确认持久性；带 `publicationPossible: true` 的 `commit-outcome-unknown` 表示无法判断是否已经发布。两者都要求关闭实时句柄、丢弃并重建受影响的后端（或重启），然后才能从介质重新打开。介质上记录的版本与之不同时拒绝 `version-mismatch`；无法按该 unit 解析的介质拒绝 `malformed-medium`。普通打开绝不迁移旧介质。
+一个后端拥有一个介质（一棵文件树的根目录、一个数据库文件），并提供可选的操作组；目前 `kv` 是唯一一组。`KvFacet.open(descriptor)` 打开一个具名 unit——`KvUnitDescriptor` 携带名称、格式版本、表名清单，以及是否存在全局单例 slot——并返回提供 `loadAll`、`putRecord`、`deleteRecord`、`setGlobal` 和 `close` 的 `KvUnit`。unit 名与表名必须匹配 `UNIT_NAME_RE`（既可安全用作文件名，也可安全用作 SQL 标识符片段）；`single` 记录键是任意字符串；`per-record` 键成为路径组件，会拒绝空值、仅含点的值、斜杠、反斜杠或 NUL。`KvUnitDescriptor.version` 必须是非负安全整数；负零无效。值必须是精确的 JSON 数据：如果 JSON 编码会省略或强制转换数据，后端就会拒绝，包括 `undefined`、非有限数、负零、稀疏数组、循环引用、访问器和特殊对象。文本型 provider 还会拒绝非法 UTF-8、字节序标记、注释、尾随逗号、重复对象成员，以及会被 JavaScript 舍入、下溢或上溢的数字词法。unit 不对并发写入做串行化——顺序由调用方负责——但每次调用在介质上都是原子的，且只有达到持久状态后才会 resolve。后端关闭会同步停止接纳新的打开、冷预留以及现有实时 unit 上的新方法，然后再排空已接纳工作。带 `published: true` 的 `durability-uncertain` 表示请求值已经可见但无法确认持久性；带 `publicationPossible: true` 的 `commit-outcome-unknown` 表示无法判断是否已经发布。两者都要求关闭实时句柄、丢弃并重建受影响的后端（或重启），然后才能从介质重新打开。`single` 布局要求精确版本，否则拒绝 `version-mismatch`；`per-record` 接受当前版本及 `compatibleVersions`，并丢弃不被接受的记录。无法按该 unit 解析的介质拒绝 `malformed-medium`。普通 `single` 打开绝不迁移旧介质。
 
-后端可以公开可选的 `kv.closed` 操作组，供不能创建或打开源的维护流程使用。`withReservedUnit(name, signal, callback)` 会同步预留一个 unit 名；实时句柄或竞争预留会立即以 `unit-open` 拒绝。作用域一旦观察到 callback 已结算，就会停止向该 lease 接纳新方法，逃逸出去的 lease 与 commit token 都以 `closed` 拒绝。名称会继续保持预留，直到此前已经接纳的每个 lease 方法都排空，包括 callback 未等待的方法；后端关闭会等待 callback 及相同的已接纳工作。lease 可以检查已存储身份、通过严格描述符读取，或者以仅创建方式物化一个完整的缺失 unit。物化返回 lease 作用域的 `KvClosedUnitMaterialization`：`durable` 确认提交持久性并读回目标；`uncertain` 携带后端原因，并读回可见目标，或在确认缺失后返回 `undefined`。只有确定没有发布时才会拒绝。调用方取消在发布前有效；发布之后，读回与清理会在迟到的取消下继续保留提交证据。[`backend.ts`](../../packages/storage/storage/src/backend.ts) 是逐条款的规范性约定，[`tests/contract.ts`](../../packages/storage/storage/tests/contract.ts) 中的共享一致性套件会针对每个支持的后端检查普通操作与冷操作。[json 后端](../../packages/storage/storage-json/README.zh.md)以原子方式为每个 unit 整文件重新发布一份人类可读文件；[sqlite 后端](../../packages/storage/storage-sqlite/README.zh.md)在单个数据库中每行存储一份文档，用于频繁更新的数据。
+后端可以公开可选的 `kv.closed` 操作组，供不能创建或打开源的维护流程使用。`withReservedUnit(name, signal, callback)` 会同步预留一个 unit 名；实时句柄或竞争预留会立即以 `unit-open` 拒绝。作用域一旦观察到 callback 已结算，就会停止向该 lease 接纳新方法，逃逸出去的 lease 与 commit token 都以 `closed` 拒绝。名称会继续保持预留，直到此前已经接纳的每个 lease 方法都排空，包括 callback 未等待的方法；后端关闭会等待 callback 及相同的已接纳工作。lease 可以检查已存储身份、通过严格描述符读取，或者以仅创建方式物化一个完整的缺失 unit。物化返回 lease 作用域的 `KvClosedUnitMaterialization`：`durable` 确认提交持久性并读回目标；`uncertain` 携带后端原因，并读回可见目标，或在确认缺失后返回 `undefined`。只有确定没有发布时才会拒绝。调用方取消在发布前有效；发布之后，读回与清理会在迟到的取消下继续保留提交证据。[`backend.ts`](../../packages/storage/storage/src/backend.ts) 是逐条款的规范性约定，[`tests/contract.ts`](../../packages/storage/storage/tests/contract.ts) 中的共享一致性套件会针对每个支持的后端检查普通操作与冷操作。[json 后端](../../packages/storage/storage-json/README.zh.md)为每个 `single` unit 发布一份完整的人类可读文件，或为 `per-record` 的记录发布独立文件；[sqlite 后端](../../packages/storage/storage-sqlite/README.zh.md)在单个数据库中每行存储一份文档，用于频繁更新的数据。
 
 ## 声明领域
 
@@ -59,8 +60,36 @@ interface StorageBackend {
 interface DomainSpec {
   /** Domain name; must match `UNIT_NAME_RE` (doubles as the backend unit name). */
   readonly name: string
-  /** Domain format version; a medium stamped with a different version rejects at open. */
+  /** Current domain format version; reads enforce it according to the selected layout. */
   readonly version: number
+  /**
+   * Medium layout for the backend unit: `single` (the default) stores the
+   * whole unit as one document; `per-record` stores each record as its own
+   * document, for units whose records are large, sparse, or individually
+   * disposable — the projection cache — and scopes version checks per record
+   * (an unaccepted record document is discarded, never migrated).
+   */
+  readonly layout?: 'single' | 'per-record'
+  /**
+   * Older domain versions whose stored records the current record schemas
+   * also accept (the declaring owner vouches for that, typically by
+   * declaring the fields older records lack as optional). `per-record` backends
+   * read documents stamped with a listed version instead of discarding them,
+   * and accept a legacy whole-unit file so stamped for the one-time
+   * bootstrap; writes always stamp {@link version}.
+   */
+  readonly compatibleVersions?: readonly number[]
+  /**
+   * What `open` does with a stored table record that fails its zod schema.
+   * Absent (the default), the whole open rejects with `invalid-record` —
+   * right for authoritative data. `'backup-and-skip'` is for domains whose
+   * records are disposable derived data: the backend moves the record's
+   * document aside (`KvUnit.backupRecord`), the failure is logged with
+   * its cause, and the open continues with the record absent. A backend
+   * without `backupRecord` (no per-record document to move) falls back
+   * to the rejecting default. The global slot always rejects.
+   */
+  readonly invalidRecords?: 'backup-and-skip'
   /** Optional global singleton slot. */
   readonly global?: DomainGlobalSpec<unknown>
   /** Table declarations keyed by table name; each name must match `UNIT_NAME_RE`. */
@@ -182,7 +211,10 @@ The mounted domain facility. Opens declared domains over routed backends; one fa
  * (`facet-unsupported`); open the unit projected from the spec (backend
  * `version-mismatch`/`malformed-medium` pass through); load and validate
  * every stored record against the spec's zod schemas (`invalid-record`
- * with the offending table and key); construct the domain.
+ * with the offending table and key — unless the spec declares
+ * `invalidRecords: 'backup-and-skip'` and the unit can move documents aside, in
+ * which case the failing record is backed up, logged, and skipped);
+ * construct the domain.
  *
  * Lifecycle: the CALLER owns the returned handle and closes it via
  * `Domain.close()` (typically as its own `ctx.effect` disposer) — the

@@ -61,6 +61,7 @@ export function sakiAgentPresetsPatch(): PatchOptions {
     config: {
       default: 'development',
       roots: [{ path: SHIPPED_AGENT_PRESET_ROOT, trust: 'system' }],
+      includeShippedRoot: false,
       includeUserRoot: false,
     },
   }

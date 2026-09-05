@@ -1,7 +1,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import Timer from '@deepseek-ai/cordis-plugin-timer'
-import { CallId } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId, type Session } from '@deepseek-ai/dsh-session'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import SessionStore, { SessionId, SessionSeq, type Session } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { describe, expect, it, vi } from 'vitest'
@@ -92,7 +92,7 @@ describe('request_intervention tool', () => {
 
     const result = await ctx.tools.execute({
       signal: new AbortController().signal,
-      callId: CallId('call-request-intervention'),
+      callId: ToolCallId('call-request-intervention'),
       name: 'request_intervention',
       arguments: { question: 'Which migration should I use?' },
       agent: caller(session),
@@ -118,7 +118,7 @@ describe('request_intervention tool', () => {
 
     const result = await ctx.tools.execute({
       signal: new AbortController().signal,
-      callId: CallId('call-rejected-intervention'),
+      callId: ToolCallId('call-rejected-intervention'),
       name: 'request_intervention',
       arguments: { question: 'Should I continue?' },
       agent: caller(session),
@@ -133,7 +133,7 @@ describe('request_intervention tool', () => {
 
     const result = await ctx.tools.execute({
       signal: new AbortController().signal,
-      callId: CallId('call-without-agent'),
+      callId: ToolCallId('call-without-agent'),
       name: 'request_intervention',
       arguments: { question: 'Can a non-Agent caller open this?' },
     })
@@ -148,7 +148,7 @@ describe('request_intervention tool', () => {
 
     ctx.emit('session/event', session, {
       type: 'turn/start',
-      seq: 0,
+      seq: SessionSeq(0),
       time: 1,
       data: { turn: 1 },
     })
@@ -169,7 +169,7 @@ describe('request_intervention tool', () => {
     const session = ctx.sessions.create(SessionId('session-finalize-intervention'))
     await ctx.tools.execute({
       signal: new AbortController().signal,
-      callId: CallId('call-finalize-intervention'),
+      callId: ToolCallId('call-finalize-intervention'),
       name: 'request_intervention',
       arguments: { question: 'Which route should I take?' },
       agent: caller(session),
@@ -177,7 +177,7 @@ describe('request_intervention tool', () => {
 
     ctx.emit('session/event', session, {
       type: 'turn/end',
-      seq: 0,
+      seq: SessionSeq(0),
       time: 1,
       data: { turn: 1, reason: { kind: 'completed' } },
     })
@@ -197,7 +197,7 @@ describe('request_intervention tool', () => {
       const session = ctx.sessions.create(SessionId('session-pending-intervention'))
       await ctx.tools.execute({
         signal: new AbortController().signal,
-        callId: CallId('call-pending-intervention'),
+        callId: ToolCallId('call-pending-intervention'),
         name: 'request_intervention',
         arguments: { question: 'Should the durable owner finish this opening?' },
         agent: caller(session),
@@ -228,7 +228,7 @@ describe('request_intervention tool', () => {
       const session = ctx.sessions.create(SessionId('session-retry-intervention'))
       await ctx.tools.execute({
         signal: new AbortController().signal,
-        callId: CallId('call-retry-intervention'),
+        callId: ToolCallId('call-retry-intervention'),
         name: 'request_intervention',
         arguments: { question: 'Can local recovery retry this opening?' },
         agent: caller(session),
@@ -255,7 +255,7 @@ describe('request_intervention tool', () => {
       const session = ctx.sessions.create(SessionId('session-shared-intervention-retry'))
       await ctx.tools.execute({
         signal: new AbortController().signal,
-        callId: CallId('call-shared-retry-first'),
+        callId: ToolCallId('call-shared-retry-first'),
         name: 'request_intervention',
         arguments: { question: 'Should the first opening retry?' },
         agent: caller(session),
@@ -263,7 +263,7 @@ describe('request_intervention tool', () => {
       controlPlane.requestResult = { ok: true, interventionId: SECOND_INTERVENTION_ID }
       await ctx.tools.execute({
         signal: new AbortController().signal,
-        callId: CallId('call-shared-retry-second'),
+        callId: ToolCallId('call-shared-retry-second'),
         name: 'request_intervention',
         arguments: { question: 'Should the second opening share that retry?' },
         agent: caller(session),
@@ -294,7 +294,7 @@ describe('request_intervention tool', () => {
     const session = ctx.sessions.create(SessionId('session-disposed-intervention'))
     await ctx.tools.execute({
       signal: new AbortController().signal,
-      callId: CallId('call-disposed-intervention'),
+      callId: ToolCallId('call-disposed-intervention'),
       name: 'request_intervention',
       arguments: { question: 'Can disposal settle this recovery?' },
       agent: caller(session),
@@ -321,7 +321,7 @@ describe('request_intervention tool', () => {
 function turnEndEvent() {
   return {
     type: 'turn/end' as const,
-    seq: 0,
+    seq: SessionSeq(0),
     time: 1,
     data: { turn: 1, reason: { kind: 'completed' as const } },
   }

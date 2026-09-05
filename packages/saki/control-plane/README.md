@@ -1,11 +1,34 @@
+---
+description: "Provision local access, register development projects, synchronize work, and coordinate recoverable Agent dispatch and delivery."
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-control-plane`
 
 English | [中文](README.zh.md)
+
+## Summary
+
+Provision local access, register development projects, synchronize work, and coordinate recoverable Agent dispatch and delivery.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Durable records](#durable-records)
+- [Access and control operations](#access-and-control-operations)
+- [Browser-session security](#browser-session-security)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+<a id="use-this-package"></a>
+## Use this package
 
 The private Saki control-plane module owns local Installation provisioning, Installation Access, the Development Project Registry, recoverable Project-registration and structured Git Intents, recoverable GitHub-backed `CreateWorkItem` and `MoveWorkItem` sagas, manual Give-to-Agent dispatch, durable Intervention answers, Principal-scoped My Work and Attention, durable GitHub Board synchronization, Branch Delivery and its targeted evidence, and Milestone Delivery with immutable Release Evidence. It requires maintenance to publish a fixed, verified `ctx.sakiInstallationState` containing the active Installation and storage-generation identities, then registers `ctx.sakiControlPlane`; callers use the narrow `SakiAccess` and `SakiControlPlaneModule` interfaces rather than storage tables. The Host-only `./host` entry resolves transport credentials into a trusted in-process `SakiAuthenticationContext`, while the browser-safe `./fixtures` entry publishes redacted access, inspection, registration, Project-index, Development-Workspace, Changes, bounded Diff, structured Git operation, Board, Project Settings, Work Item detail, and Agent Run states.
 
 `SAKI_GIT_CHANGES_PROJECTION_FIXTURES` covers clean, staged, unstaged, untracked, inherited, unattributed, and conflicted status facts. `SAKI_GIT_DIFF_PROJECTION_FIXTURES` provides bounded success and stale-observation examples; `SAKI_GIT_OPERATION_RESULT_FIXTURES` provides typed success, conflict, failure, cancellation, and unknown-effect receipts. `SAKI_BOARD_PROJECTION_FIXTURES` covers unconfigured, awaiting-first-checkpoint, mapping-revalidation, and confirmed views with stale freshness and a current failure; `SAKI_BOARD_MUTATION_OVERLAY_FIXTURES` covers optimistic, targeted-confirmed, conflict, partial-failure, reconciliation, and repair states; `SAKI_WORK_ITEM_RESULT_FIXTURES` covers success and recoverable receipts. `SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES` covers saved, activating, and activated views. Configured fixtures preserve their synchronization and configuration revisions, confirmed Board generation, checkpoint, mapping evidence, failure and freshness evidence, scan state, effective mutation availability, and mutation overlays as one relational example.
 
+<a id="durable-records"></a>
 ## Durable records
 
 The versioned `control_state` provisioning owner records only stable child references and a `provisioning` or `ready` phase. Its Installation id must equal the maintenance-verified active Installation, including before interrupted provisioning resumes. Independently revisioned `installations`, `hosts`, `principals`, and `grants` tables retain entity lifecycle and history under branded ids. Every current identity uses its kind-specific prefix plus canonical UUID text; physical storage generations use `storage-generation-`. The exact v2 migration input alone retains historical `installation-generation-` fields. Principal kind is the closed `human | automation` discriminant. Provisioning creates one human Host Operator and validates that referenced kind on every startup; unrelated automation Principals are valid records, but provisioning creates no automation Grant. The Installation selects its current Local Host without owning storage-generation selection. Startup first validates every retained provisioning, access, Project, Binding, and Intent record without writes or external effects; only a wholly valid inventory may be reconciled or resumed.
@@ -40,6 +63,7 @@ Board mapping uses only configured GitHub node ids. Matching Issue items from th
 
 Only domain-separated bootstrap and cookie digests are durable. Raw bootstrap secrets, raw cookie credentials, derived request tokens, and independent request-forgery secrets are absent from storage. Terminal challenge and session entries remain monotonic and are removed only after `terminalRetentionMs`.
 
+<a id="access-and-control-operations"></a>
 ## Access and control operations
 
 `SakiAccess` reads the closed Access Projection, exchanges the launcher secret, and logs out the current session. Bootstrap and logout can modify only Installation Access. The main module exposes stable Installation and Host identities; read-only project-selection inspection, Project-index, Development-Workspace, Changes, Diff, Board, Project Settings, My Work, Attention, `branch-delivery`, and `milestone-view` queries; durable `register-development-project`, `configure-github-synchronization`, StageFiles, UnstageFiles, CreateCommit, `CreateWorkItem`, `MoveWorkItem`, `save-branch-delivery`, `push-branch-delivery`, `create-branch-delivery-pull-request`, `associate-branch-delivery-pull-request`, `mark-branch-delivery-in-review`, `accept-branch-delivery`, `save-milestone-delivery`, `finalize-milestone-delivery`, `give-work-item-to-agent`, and `answer-intervention` Intents; and post-commit Projection invalidation. Changes publishes repository-level eligibility and closed reasons, never a server-selected file set; each StageFiles or UnstageFiles submission carries its own selection and revalidates it against a fresh observation. A cached Board query and both Principal-scoped work queries are pure durable reads. An interactive Board query durably requests a priority scan and returns the current Projection without waiting on GitHub. Intent-only phase writes do not invalidate Project views; committed Registry, write-admission, Host Operation, Work Item, Agent operation, Intervention, or synchronization updates invalidate their affected views. One failing invalidation listener emits only a fixed credential-free diagnostic and does not prevent later listeners from running; each registration remains disposable.
@@ -52,6 +76,7 @@ A Browser Session authorizes only the initial structured Git submission. Durable
 
 Every privileged launcher startup issues a fresh challenge. Its purpose is `initial-bootstrap` until the first exchange completes and `local-reauthentication` thereafter. Older unexpired issued challenges remain usable until one exchange atomically consumes its selected challenge and revokes the rest. Initial completion never reopens; after cookie expiry, logout, or a lost `Set-Cookie` response, the operator signs in with a fresh challenge from a later launcher startup. Existing valid sessions remain active when local reauthentication creates another session, and logout revokes only the presented session.
 
+<a id="browser-session-security"></a>
 ## Browser-session security
 
 The bootstrap exchange requires the exact configured loopback Origin. Configuration accepts only a canonical HTTP(S) origin whose hostname passes Connection's shared loopback classifier. A successful commit permits one `HttpOnly; SameSite=Strict; Path=/saki` cookie header through an opaque, one-shot Host handoff; HTTPS origins also add `Secure`. Authentication hashes the presented raw cookie and compares its digest in constant time. It then derives the request token from that raw cookie with a versioned, domain-separated HMAC. Every later mutation requires the exact Origin and a constant-time request-token match.
@@ -83,3 +108,12 @@ The control plane does not assemble a provider request or reusable prefix; it fr
 - **Launcher recovery only** — Local access recovery requires a newly started privileged launcher; there is no browser-only credential recovery flow.
 - **Detail projections remain fixture-only** — My Work and Attention are queryable, but Work Item detail and current/recent Agent Run contracts still have only browser-safe fixtures and no control-plane query or view builder.
 - **Exact route resolution only** — manual Give-to-Agent validates the current LLM runtime, registered provider adapter, and exact model metadata without starting generation. It does not establish production provider authorization, credential availability, quota, or account health.
+
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No runtime invariant companion is published because queries read authoritative domain records directly; parsers validate persisted relationships at open and writes are serialized.
+
+</details>

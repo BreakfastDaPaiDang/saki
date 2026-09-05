@@ -1,9 +1,31 @@
+---
+description: "将浏览器连接到本地 Saki Host，执行经过认证的项目、Work Item、Agent Run 和交付操作。"
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-host-api`
 
 [English](README.md) | 中文
 
+## 概述
+
+将浏览器连接到本地 Saki Host，执行经过认证的项目、Work Item、Agent Run 和交付操作。
+
+## 目录
+
+- [使用本包](#use-this-package)
+- [端点](#endpoints)
+- [传输职责](#transport-responsibilities)
+- [模型体验](#model-experience)
+- [已知限制与暂缓事项](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
+
+<a id="use-this-package"></a>
+## 使用本包
+
 Saki 私有双侧 Host API 把控制面适配到共享 Connection 载体。Host 入口注册由 Saki 拥有的 `/saki` 逻辑通道；`./client` 入口在浏览器上下文注册 `ctx.sakiHostClient`。`./wire` 包含两侧共用、适用于浏览器的严格 schema。
 
+<a id="endpoints"></a>
 ## 端点
 
 | 端点 | 请求 | 结果 |
@@ -40,12 +62,14 @@ Branch Delivery CI 会携带根据 last-confirmed 准确 Commit fact 派生的 `
 
 Branch Delivery review 携带完整的精确 pull-request fact，并具有独立的当前 source health。Host wire 接纳用于展示的原始 review state，但不接纳验收权限、credential material 或部分 provider page。
 
+<a id="transport-responsibilities"></a>
 ## 传输职责
 
 Connection 负责路由信任校验、有界 JSON 封装、请求关联、取消、dispose（资源释放）和 JSON Content-Type。`/saki` 注册要求 Connection 通道应用 `Cache-Control: no-store` 与固定的不透明错误，因此这些策略也覆盖 Host 适配器运行前的故障。Host 适配器只从 Connection 提供的可信请求元数据读取 Cookie、Origin 与 `x-saki-request-token`。它通过控制面仅供 Host 使用的解析器取得 AuthenticationContext，并消费持久提交后不透明的 Cookie 交接值。AuthenticationContext 与原始 Cookie 材料都不会进入浏览器 JSON。
 
 浏览器客户端的每次调用都使用同源凭据。登出与每次 Intent 提交都需要当前请求令牌。客户端提供选择检查、Project-index、Development-Workspace、Changes、文件级 Diff、Project Settings、Board、`queryMyWork`、`queryAttention`、Branch Delivery 与 Milestone View 查询、首次登记、字段级 GitHub 同步配置、结构化 Git 与 Work Item mutation、全部六种 Branch Delivery transition、两种 Milestone Delivery transition、`giveWorkItemToAgent` 与 `answerIntervention` 的准确方法；每个方法只解析与自身对应的结果 schema。`queryMyWork()`、`queryAttention()`、`queryBoard(projectId, 'cached')`、`queryBranchDelivery(projectId, workItemId, 'cached')` 与 `queryMilestoneView(projectId, milestoneId, 'cached')` 都只读取持久状态。三项可刷新的 query 的 `interactive` 策略请求有界刷新，但仍只返回通过校验的 Projection。业务拒绝仍作为类型化的 RPC 成功值返回；取消、载体故障与 schema 校验不匹配则通过 Connection 固定且不透明的 RPC 错误信封拒绝 Promise。
 
+<a id="model-experience"></a>
 ## 模型体验
 
 无。Host 与浏览器适配器传递 Saki 访问和 Projection 值，但不注册模型可见输入。
@@ -54,6 +78,7 @@ Connection 负责路由信任校验、有界 JSON 封装、请求关联、取消
 
 无；该包既不组装也不发送模型提供方请求。
 
+<a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与暂缓事项
 
 - **仅支持回环通道**：`/saki` 使用 Connection 的回环信任策略；远程认证与网络公开需要另一套部署设计。
@@ -61,3 +86,15 @@ Connection 负责路由信任校验、有界 JSON 封装、请求关联、取消
 - **受限的结构化 Git 写入**：CreateCommit 不运行钩子且不签名；要求钩子、签名或不受支持的外部过滤器的仓库需使用 Terminal 或之后明确受信任的提供方。
 - **不包含前端组合**：该包提供客户端服务与 schema，不拥有路由或渲染后的 UI。
 - **仅提供 Projection schema**：Work Item detail 与 Agent Run schema 会校验前端 fixture，但本切片不会把它们接入 `control/query`、Host route 或浏览器 client。
+
+<a id="dev-note"></a>
+### 开发备注
+
+私有 Host 组合保留 peer dependencies：认证检查共享控制面的服务构造器，Cookie 交接消费其模块持有的 WeakMap。因此它不适用已发布 Client 的依赖扁平化策略。
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+不发布 runtime invariant companion，因为适配器校验并转发每个请求，不保留第二份状态投影。
+
+</details>

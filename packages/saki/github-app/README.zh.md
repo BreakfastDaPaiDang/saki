@@ -1,9 +1,34 @@
+---
+description: "通过 Saki Product App 读取已授权的 GitHub 仓库，并执行有界、可恢复的 Work Item 和拉取请求操作。"
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-github-app`
 
 [English](README.md) | 中文
 
+## 概述
+
+通过 Saki Product App 读取已授权的 GitHub 仓库，并执行有界、可恢复的 Work Item 和拉取请求操作。
+
+## 目录
+
+- [使用本包](#use-this-package)
+- [Product App 身份与权限](#product-app-identity-and-permissions)
+- [Read 与完整 scan](#reads-and-complete-scans)
+- [原子 mutation 与 targeted inspection](#atomic-mutations-and-targeted-inspection)
+- [配置](#configuration)
+- [失败](#failures)
+- [模型体验](#model-experience)
+- [已知限制与暂缓事项](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
+
+<a id="use-this-package"></a>
+## 使用本包
+
 这个 Saki 私有包通过 Saki Product GitHub App 提供 `ctx.sakiGitHub`。它使用 operation 作用域的 token 认证需要 installation 授权的 operation，并且只有显式公开的精确 Commit read 使用不含凭据的 request。它把外部响应准入为 [`saki-github`](../github/README.zh.md) 定义的提供方无关 fact、mutation result 和 inspection。产品 Status 语义、持久 GitHub Sync Checkpoint、mutation saga 和 Board Projection 仍属于 Consumer。
 
+<a id="product-app-identity-and-permissions"></a>
 ## Product App 身份与权限
 
 `product-app-manifest.json` 是 Product App 权限上限的源 manifest。已安装 App 使用 Organization Projects 与 Issue 写权限创建和移动 Work Item，并使用 pull request 写权限执行 marker-backed create。它对 Actions、Checks、Contents、Metadata 和 commit status 具有读权限。Contents write、Workflows write、OAuth user authorization 和 webhook delivery 均不存在。
@@ -12,6 +37,7 @@
 
 配置的 installation account 改变、installation suspension、App grant 缺失或超出上限、token 响应升权、配置的 Repository 不可访问、不安全的数字 id、畸形响应或 token 过期都会被拒绝。精确 GraphQL node 为 null 时会产生类型化 `not-found` failure，而不会被视为畸形响应。任何 operation 都不请求 Contents write 或 Workflows write。
 
+<a id="reads-and-complete-scans"></a>
 ## Read 与完整 scan
 
 提供方实现 installation、Repository、Issue revision、完整 Issue detail、branch safety、精确 branch head、Project v2、pull request 与 branch association、精确 Commit 的原始 Actions/check/status fact、完整分页的 Milestone Issue scope、精确 `refs/tags/saki-v*`、递归 annotated-tag peel、按 tag 查找 Release、经 installation 授权与公开的 Commit，以及 Commit comparison read。每个 Milestone Issue 都必须同时重复目标 Repository 的 node identity 与 database identity。Branch-head read 独立于保护策略返回精确 remote Commit 或缺失。CI read 保留稳定 workflow identity、run number 与 attempt、latest check，以及每个 context 的 latest status，不派生产品结果。tag peel 会检查循环并限制深度。Release `target_commitish` 只为展示保留，绝不作为 Commit 证据。公开 Commit read 仅适用于 public Repository，并共用已配置的 request timeout 与 response-byte bound。
@@ -22,6 +48,7 @@
 
 Repository access 检查的 installation-token REST rate header 和 GraphQL rate fact 会随成功 scan 返回。App-JWT installation identity 读取不消耗该 token 的预算，也可能省略 primary-rate header。每次 GraphQL request 成功后，如果报告的剩余点数达到或低于 request 中由 Consumer 从每项目配置解析的 `rateLimitReserve`，background scan 就会停止；内部不会 sleep 或 retry。每个 installation 使用一个队列串行化 HTTP request，并让已排队的 interactive call 优先于 background page；一个独立队列串行化不含凭据的 public request。`maxConcurrentScans` 另行限制跨 installation 的完整 scan。dispose 会取消已排队和活动中的工作，并等待自有 operation 结算。
 
+<a id="atomic-mutations-and-targeted-inspection"></a>
 ## 原子 mutation 与 targeted inspection
 
 Provider 每次 dispatch 调用执行一次 Issue create、pull-request create、Project membership、Status、API-position 或 Issue open-state mutation call，不会在内部 retry。每个 request 都携带调用方已持久化的 `operationId`，GitHub 以 `clientMutationId` 接收它；dispatch 与 targeted inspection 以 interactive work 进入 installation 队列。Create operation 发送完整且已验证的 marker-bearing 文本，并且只返回创建后的外部 id 与 number；可选的已知 target hint 绝不会被发送。其余四种 dispatch operation 验证 GitHub acknowledgement 后返回 void。传输失败或 acknowledgement 缺失会返回给 Consumer，由其先执行 inspection，再决定另一次调用是否安全。
@@ -30,6 +57,7 @@ Provider 每次 dispatch 调用执行一次 Issue create、pull-request create�
 
 Pull-request-create inspection 证明相同的 Repository identity，然后以 created 顺序完整遍历 GitHub `state=all` 列表中与同一 Repository 的精确 `head=<owner>:<headRef>` 和 `base=<baseRef>` association 匹配的 pull request 及其 raw body。它把每个 marker match 与预期 head Commit 及可选的已知 pull-request identity 对照；畸形分页、重复 entry 或达到配置边界会产生 `incomplete`，而不是 absence。
 
+<a id="configuration"></a>
 ## 配置
 
 | 字段 | 默认值 | 接受范围 | 作用 |
@@ -47,10 +75,12 @@ Installation observation 最多接纳 100,000 个可访问 Repository identity�
 
 以上字段都是经过验证的 Cordis 插件配置，其默认值是本包拥有的部署选择。每项目 `rateLimitReserve` 则属于 Consumer，并且必须在每个 scan request 中显式提供；任何一层都不会在 `scan()` 内应用隐藏 fallback。
 
+<a id="failures"></a>
 ## 失败
 
 失败使用 `saki-github` 的闭合 `GitHubProviderError` 数据：取消、认证不可用、权限不匹配、可归因的 Status 映射不匹配、缺失、外部响应无效、primary 或 secondary rate limit、临时传输故障或永久拒绝。只有经过清理的 operation、resource、permission、外部 id、HTTP status、request id、retry delay 和 reset time 可以穿过 Service Provider 接口。提供方绝不执行未报告的 retry，也不发布部分结果。
 
+<a id="model-experience"></a>
 ## 模型体验
 
 ### Product App 事实
@@ -67,6 +97,7 @@ Installation observation 最多接纳 100,000 个可访问 Repository identity�
 
 与 model request 相互独立：Product App 认证和 GitHub 响应准入不组装或改变 request prefix。
 
+<a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与暂缓事项
 
 - **没有 branch push**：已支持 pull-request create，但 branch push 仍属于 Host Operation，且任何 Contents 或 Workflows write 仍不存在。
@@ -74,3 +105,13 @@ Installation observation 最多接纳 100,000 个可访问 Repository identity�
 - **没有 webhook endpoint**：0.1.0 使用轮询；后续 webhook 可以唤醒同一个完整 scanner，但不能直接应用 Board state。
 - **共享匿名配额**：public upstream Commit read 会消耗 GitHub 按源 IP 共享的低额未认证配额；类型化 rate-limit failure 会保留此前已确认的 observation。
 - **大多数 operator smoke 需要 installation**：无密钥测试使用受控响应覆盖真实 Octokit 认证与传输边界。需要 installation 授权的实时 read 要求安装 Product App，并通过 local-user-trust credential provider 配置 private key；公开 upstream Commit existence read 刻意不使用它。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+不发布 runtime invariant companion，因为提供方不保留跨插件的权威关系。
+
+</details>

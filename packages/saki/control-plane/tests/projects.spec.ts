@@ -16,7 +16,7 @@ import WorkspaceRegistry, {
 } from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import LlmRuntime, { CallId } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { ToolCallId } from '@deepseek-ai/dsh-llm'
 import LocalSakiHostExecution from '@breakfastdapaidang/saki-execution-local'
 import {
   computeGitHubProjectBoardFingerprint,
@@ -2762,7 +2762,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       const openIntervention = async (toolCallId: string) => {
         const requested = await harness.control.agentInterventions.request({
           sessionId,
-          toolCallId: CallId(toolCallId),
+          toolCallId: ToolCallId(toolCallId),
           prompt: 'Which exact path should this assembled Agent Run take?',
         }, new AbortController().signal)
         if (!requested.ok) throw new Error('assembled Intervention was not created')
@@ -2855,7 +2855,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
 
       const opening = await harness.control.agentInterventions.request({
         sessionId,
-        toolCallId: CallId('call_service_intervention_opening'),
+        toolCallId: ToolCallId('call_service_intervention_opening'),
         prompt: 'Leave this exact Intervention opening for recovery.',
       }, new AbortController().signal)
       if (!opening.ok) throw new Error('recovery Intervention was not created')

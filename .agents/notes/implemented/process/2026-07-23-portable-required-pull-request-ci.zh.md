@@ -12,7 +12,7 @@ Status: implemented
 
 ## 决策
 
-[CI](../../../../.github/workflows/ci.yml) 在 Saki 设置 `SAKI_CI_RUNNERS=standard` 时，将必需的主 Node 24 作业与稳定的 `all checks passed` 聚合流程运行在 GitHub 标准托管 Linux 上。继承的企业级与自托管选择器仍可供上游部署使用，但不定义 Saki 当前使用的运行器池。必需的 Windows 作业在标准 `ubuntu-latest` 上通过 Wine 运行 Windows Node，覆盖阻断性检查范围；完整的原生 Windows 清单作为 `windows-native` 手动套件运行在 `windows-latest` 上，且不参与聚合流程（[双 Windows 决策](2026-08-08-native-windows-pull-request-ci.zh.md)）。标准 `ubuntu-latest` 作业保留 Node 22.19、Node 26、Python SDK 单元测试套件与[发布形态的 Linux x64 Python 运行时验证](../testing/2026-08-12-required-python-runtime-pull-request-ci.zh.md)。这些作业让可移植执行边界保持可观测，而不必在每个拉取请求中重复原生 Windows 清单。
+[CI](../../../../.github/workflows/ci.yml) 在 Saki 设置 `SAKI_CI_RUNNERS=standard` 时，将必需的主 Node 24 作业与稳定的 `all checks passed` 聚合流程运行在 GitHub 标准托管 Linux 上。继承的企业级与自托管选择器仍可供上游部署使用，但不定义 Saki 当前使用的运行器池。必需的 Windows 作业在标准 `ubuntu-latest` 上通过 Wine 运行 Windows Node，覆盖阻断性检查范围；完整的原生 Windows 清单作为 `windows-native` 手动套件运行在 `windows-latest` 上，且不参与聚合流程（[双 Windows 决策](2026-08-08-native-windows-pull-request-ci.zh.md)）。标准 `ubuntu-latest` 作业保留 Node 22.19、Node 26、Python SDK 单元测试套件与[发布形态的 Linux x64 Python 运行时验证](../../archived/testing/2026-08-12-required-python-runtime-pull-request-ci.md)。这些作业让可移植执行边界保持可观测，而不必在每个拉取请求中重复原生 Windows 清单。
 
 三项 Linux 主作业、Node 兼容性、Python SDK 单元测试套件、Python 运行时验证和 `windows node 24 / wine blocking` 继续作为 `all checks passed` 的依赖项；手动原生 Windows 套件被刻意排除。分支保护采用 `all checks passed`，真实 API e2e 则依据 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.zh.md)仅支持手动运行。设置 `SAKI_CI_RUNNERS=standard` 后，聚合流程与主 Linux 作业不依赖企业级或自托管运行器池。
 

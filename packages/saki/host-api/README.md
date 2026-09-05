@@ -1,9 +1,31 @@
+---
+description: "Connect a browser to a local Saki Host for authenticated project, work-item, Agent Run, and delivery operations."
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-host-api`
 
 English | [中文](README.zh.md)
 
+## Summary
+
+Connect a browser to a local Saki Host for authenticated project, work-item, Agent Run, and delivery operations.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Endpoints](#endpoints)
+- [Transport responsibilities](#transport-responsibilities)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+<a id="use-this-package"></a>
+## Use this package
+
 The private dual-face Saki Host API adapts the control plane to the shared Connection carrier. The Host entry registers the Saki-owned `/saki` logical channel; the `./client` entry registers `ctx.sakiHostClient` in a browser context. `./wire` contains strict browser-safe schemas shared by both faces.
 
+<a id="endpoints"></a>
 ## Endpoints
 
 | Endpoint | Request | Result |
@@ -40,6 +62,7 @@ Branch Delivery CI carries a `confirmedSummary` derived from the last-confirmed 
 
 Branch Delivery reviews carry a complete exact-pull-request fact with independent current source health. The Host wire admits raw review state for display but no acceptance authority, credential material, or partial provider page.
 
+<a id="transport-responsibilities"></a>
 ## Transport responsibilities
 
 Connection owns route trust, bounded JSON framing, correlation, cancellation, disposal, and JSON Content-Type. The `/saki` registration requires `Cache-Control: no-store` and the fixed opaque error on the Connection channel, so those policies also cover failures before the Host adapter runs. The Host adapter reads Cookie, Origin, and `x-saki-request-token` only from Connection's trusted request metadata. It asks the control plane's Host-only resolver for an AuthenticationContext and consumes the opaque post-commit cookie handoff. Neither AuthenticationContext nor raw cookie material enters browser JSON.
@@ -61,3 +84,14 @@ None; the package neither assembles nor sends a provider request.
 - **Constrained structured Git writes** — CreateCommit is hook-free and unsigned; repositories that require hooks, signing, or unsupported external filters use Terminal or a later explicitly trusted provider.
 - **No frontend composition** — this package supplies the client service and schemas, not routes or rendered UI.
 - **Projection schema only** — Work Item detail and Agent Run schemas validate frontend fixtures but are not connected to `control/query`, the Host route, or the browser client in this slice.
+
+### Dev Note
+
+The private Host composition retains peer dependencies: authentication checks share the control-plane service constructor, and cookie handoff consumes its module-owned WeakMap. It is excluded from the published Client dependency-flattening policy.
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No runtime invariant companion is published because the adapter validates and forwards each request without a second state projection.
+
+</details>

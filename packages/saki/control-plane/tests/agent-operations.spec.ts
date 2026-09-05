@@ -1,5 +1,5 @@
 import { Context } from '@deepseek-ai/cordis'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { describe, expect, it, vi } from 'vitest'
 import { githubIssueId, githubRepositoryDatabaseId, githubRepositoryId } from '@breakfastdapaidang/saki-github'
@@ -135,7 +135,7 @@ describe('manual Give-to-Agent operations', () => {
 
     const requested = await test.operations.requestIntervention({
       sessionId: initialRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_need_operator'),
+      toolCallId: ToolCallId('call_need_operator'),
       prompt: 'Which migration path should I use?',
     }, AbortSignal.timeout(5_000))
     if (!requested.ok) throw new Error('test Intervention was not created')
@@ -219,7 +219,7 @@ describe('manual Give-to-Agent operations', () => {
     expect(startingRun).toMatchObject({ state: 'starting' })
     const requested = await test.operations.requestIntervention({
       sessionId: startingRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_during_initial_publication'),
+      toolCallId: ToolCallId('call_during_initial_publication'),
       prompt: 'Which path should this accepted Agent Run take?',
     }, AbortSignal.timeout(5_000))
     if (!requested.ok) throw new Error('test Intervention was not created')
@@ -282,7 +282,7 @@ describe('manual Give-to-Agent operations', () => {
     expect(only(test.intents)).toMatchObject({ phase: 'dispatching' })
     const requested = await test.operations.requestIntervention({
       sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_during_intent_completion'),
+      toolCallId: ToolCallId('call_during_intent_completion'),
       prompt: 'Which path should this delivered Agent Run take?',
     }, AbortSignal.timeout(5_000))
     if (!requested.ok) throw new Error('test Intervention was not created')
@@ -329,7 +329,7 @@ describe('manual Give-to-Agent operations', () => {
     })
     const successor = await test.operations.requestIntervention({
       sessionId: resumingRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_successor_question'),
+      toolCallId: ToolCallId('call_successor_question'),
       prompt: 'Which remaining choice should I use?',
     }, AbortSignal.timeout(5_000))
     if (!successor.ok) throw new Error('successor Intervention was not created')
@@ -409,7 +409,7 @@ describe('manual Give-to-Agent operations', () => {
       .toMatchObject({ state: 'answered' })
     const successor = await test.operations.requestIntervention({
       sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_after_answer_delivery'),
+      toolCallId: ToolCallId('call_after_answer_delivery'),
       prompt: 'Which exact follow-up should I use?',
     }, AbortSignal.timeout(5_000))
     if (!successor.ok) throw new Error('successor Intervention was not created')
@@ -436,12 +436,12 @@ describe('manual Give-to-Agent operations', () => {
     const results = await Promise.all([
       test.operations.requestIntervention({
         sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-        toolCallId: CallId('call_concurrent_a'),
+        toolCallId: ToolCallId('call_concurrent_a'),
         prompt: 'Should this Run take path A?',
       }, AbortSignal.timeout(5_000)),
       test.operations.requestIntervention({
         sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-        toolCallId: CallId('call_concurrent_b'),
+        toolCallId: ToolCallId('call_concurrent_b'),
         prompt: 'Should this Run take path B?',
       }, AbortSignal.timeout(5_000)),
     ])
@@ -460,7 +460,7 @@ describe('manual Give-to-Agent operations', () => {
       const run = only(test.runs)
       const result = await test.operations.requestIntervention({
         sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-        toolCallId: CallId('call_initial_reconciliation'),
+        toolCallId: ToolCallId('call_initial_reconciliation'),
         prompt: 'Can this ambiguous initial delivery continue?',
       }, AbortSignal.timeout(5_000))
       if (!result.ok) throw new Error('test Intervention was not created')
@@ -491,7 +491,7 @@ describe('manual Give-to-Agent operations', () => {
       const run = only(test.runs)
       const result = await test.operations.requestIntervention({
         sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-        toolCallId: CallId('call_answer_reconciliation_successor'),
+        toolCallId: ToolCallId('call_answer_reconciliation_successor'),
         prompt: 'Can this ambiguous answer delivery continue?',
       }, AbortSignal.timeout(5_000))
       if (!result.ok) throw new Error('successor Intervention was not created')
@@ -564,7 +564,7 @@ describe('manual Give-to-Agent operations', () => {
       const run = only(test.runs)
       const result = await test.operations.requestIntervention({
         sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-        toolCallId: CallId('call_restart_successor'),
+        toolCallId: ToolCallId('call_restart_successor'),
         prompt: 'Which follow-up survives this restart?',
       }, AbortSignal.timeout(5_000))
       if (!result.ok) throw new Error('successor Intervention was not created')
@@ -604,7 +604,7 @@ describe('manual Give-to-Agent operations', () => {
     const run = only(test.runs)
     const requested = await test.operations.requestIntervention({
       sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_restart_inventory'),
+      toolCallId: ToolCallId('call_restart_inventory'),
       prompt: 'Which path survives restart?',
     }, AbortSignal.timeout(5_000))
     if (!requested.ok) throw new Error('test Intervention was not created')
@@ -653,7 +653,7 @@ describe('manual Give-to-Agent operations', () => {
     const test = harness()
     expect(await test.operations.requestIntervention({
       sessionId: 'session-11111111-1111-4111-8111-111111111111' as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_unknown'),
+      toolCallId: ToolCallId('call_unknown'),
       prompt: 'This Run does not exist.',
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'unavailable' })
 
@@ -661,17 +661,17 @@ describe('manual Give-to-Agent operations', () => {
     const run = only(test.runs)
     const request = {
       sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_stable_opening'),
+      toolCallId: ToolCallId('call_stable_opening'),
       prompt: 'Should this wait for operator evidence?',
     }
     expect(await test.operations.requestIntervention({
       ...request,
-      toolCallId: CallId('call_oversized'),
+      toolCallId: ToolCallId('call_oversized'),
       prompt: 'p'.repeat(MAX_INTERVENTION_PROMPT_CHARS + 1),
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
     expect(await test.operations.requestIntervention({
       ...request,
-      toolCallId: CallId('call_unsafe_display'),
+      toolCallId: ToolCallId('call_unsafe_display'),
       prompt: 'Unsafe\u007fquestion',
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
     const first = await test.operations.requestIntervention(request, AbortSignal.timeout(5_000))
@@ -683,7 +683,7 @@ describe('manual Give-to-Agent operations', () => {
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
     expect(await test.operations.requestIntervention({
       ...request,
-      toolCallId: CallId('call_second_active'),
+      toolCallId: ToolCallId('call_second_active'),
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
 
     test.execution.interventionOpeningEvidence = { kind: 'pending' }
@@ -742,7 +742,7 @@ describe('manual Give-to-Agent operations', () => {
       const run = only(test.runs)
       const requested = await test.operations.requestIntervention({
         sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-        toolCallId: CallId(`call_capacity_${index}`),
+        toolCallId: ToolCallId(`call_capacity_${index}`),
         prompt: `Choose exact capacity path ${index}.`,
       }, AbortSignal.timeout(5_000))
       if (!requested.ok) throw new Error('capacity Intervention was not created')
@@ -769,7 +769,7 @@ describe('manual Give-to-Agent operations', () => {
 
     expect(await test.operations.requestIntervention({
       sessionId: fullRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_capacity_overflow'),
+      toolCallId: ToolCallId('call_capacity_overflow'),
       prompt: 'This answer would require a thirty-third Dispatch.',
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
     expect(test.interventions.size).toBe(retainedCount)
@@ -812,7 +812,7 @@ describe('manual Give-to-Agent operations', () => {
     const run = only(waiting.runs)
     expect(await waiting.operations.requestIntervention({
       sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_while_waiting'),
+      toolCallId: ToolCallId('call_while_waiting'),
       prompt: 'Can another request bypass the blocker?',
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
     expect(await waiting.operations.finalizeInterventionOpening(open.id, AbortSignal.timeout(5_000))).toBe('open')
@@ -827,7 +827,7 @@ describe('manual Give-to-Agent operations', () => {
     const unavailableRun = only(unavailable.runs)
     expect(await unavailable.operations.requestIntervention({
       sessionId: unavailableRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_unavailable_assignment'),
+      toolCallId: ToolCallId('call_unavailable_assignment'),
       prompt: 'This request has no active Assignment.',
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'unavailable' })
     expect(unavailable.interventions.size).toBe(0)
@@ -1536,7 +1536,7 @@ describe('manual Give-to-Agent operations', () => {
     requesting.admissions.records.delete(requestingRun.bindingId)
     expect(await requesting.operations.requestIntervention({
       sessionId: requestingRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: CallId('call_missing_request_admission'),
+      toolCallId: ToolCallId('call_missing_request_admission'),
       prompt: 'This request has lost its write admission.',
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'unavailable' })
 
@@ -1812,7 +1812,7 @@ describe('manual Give-to-Agent operations', () => {
     multipleOpenings.interventions.records.set(secondOpeningId, interventionRequestRecordSchema.parse({
       ...firstOpening,
       id: secondOpeningId,
-      cause: { ...firstOpening.cause, toolCallId: CallId('call_second_opening') },
+      cause: { ...firstOpening.cause, toolCallId: ToolCallId('call_second_opening') },
     }))
     expect(() => multipleOpenings.operations.validateDurableState(new Set(), multipleOpenings.registry))
       .toThrow('multiple active Intervention Requests')
@@ -5731,7 +5731,7 @@ async function createOpenIntervention(
   const run = only(test.runs)
   const requested = await test.operations.requestIntervention({
     sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-    toolCallId: CallId(toolCallId),
+    toolCallId: ToolCallId(toolCallId),
     prompt: 'Which exact path should this Agent Run take?',
   }, AbortSignal.timeout(5_000))
   if (!requested.ok) throw new Error('test Intervention was not created')

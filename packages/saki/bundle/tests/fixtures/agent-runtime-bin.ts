@@ -17,6 +17,7 @@ const AGENT_RUNTIME_ROWS = new Set([
   'timer',
   'llm',
   'session',
+  'session-projection',
   'session-persistence-jsonl',
   'system-prompt',
   'tools',
@@ -86,7 +87,7 @@ async function run(): Promise<void> {
         preset: { id: preset.id, trust: preset.trust },
         sessionStarts,
         status: handle.agent.status,
-        events: handle.agent.session.events.map(event => event.type),
+        events: handle.agent.session.snapshotEvents().map(event => event.type),
         modelRequests: ctx.sakiTestLlm.requests,
         tools: ctx.tools.schemas(handle.agent).map(schema => schema.name).sort(),
       })}\n`)

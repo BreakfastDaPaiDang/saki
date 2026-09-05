@@ -1,7 +1,0 @@
-{
-  "steps": [
-    { "op": "initialize" },
-    { "op": "newSession" },
-    { "op": "prompt", "text": "/to-tickets Split docs/saki/versions/0.1.0.md into Work Items. Perform the required compatibility preflight before any mutation." }
-  ]
-}

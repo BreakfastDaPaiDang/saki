@@ -1,11 +1,34 @@
+---
+description: "配置本地访问、注册开发项目、同步工作，并协调可恢复的 Agent 分派和交付。"
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-control-plane`
 
 [English](README.md) | 中文
+
+## 概述
+
+配置本地访问、注册开发项目、同步工作，并协调可恢复的 Agent 分派和交付。
+
+## 目录
+
+- [使用本包](#use-this-package)
+- [持久记录](#durable-records)
+- [访问与控制操作](#access-and-control-operations)
+- [浏览器会话安全](#browser-session-security)
+- [模型体验](#model-experience)
+- [已知限制与暂缓事项](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
+
+<a id="use-this-package"></a>
+## 使用本包
 
 Saki 私有控制面模块拥有本地 Installation 置备、Installation Access、Development Project Registry、可恢复的项目登记与结构化 Git Intent、可恢复且由 GitHub 支持的 `CreateWorkItem` 与 `MoveWorkItem` saga、手动 Give-to-Agent dispatch、持久 Intervention 回答、Principal-scoped My Work 与 Attention、持久 GitHub Board 同步、Branch Delivery 及其定向 evidence，以及带有不可变 Release Evidence 的 Milestone Delivery。它要求维护层先发布固定且已经验证的 `ctx.sakiInstallationState`，其中包含活跃 Installation 与 storage generation 标识，再注册 `ctx.sakiControlPlane`；调用方使用收窄的 `SakiAccess` 与 `SakiControlPlaneModule` 接口，而不访问存储表。仅供 Host 使用的 `./host` 入口把传输凭据解析为可信的进程内 `SakiAuthenticationContext`，面向浏览器的 `./fixtures` 入口则发布经过脱敏的访问、检查、登记、Project-index、Development-Workspace、Changes、有界 Diff、结构化 Git 操作、Board、Project Settings、Work Item detail 与 Agent Run 状态。
 
 `SAKI_GIT_CHANGES_PROJECTION_FIXTURES` 覆盖干净、已暂存、未暂存、未跟踪、继承、无法归因与冲突状态事实。`SAKI_GIT_DIFF_PROJECTION_FIXTURES` 提供有界成功与观察已陈旧示例；`SAKI_GIT_OPERATION_RESULT_FIXTURES` 提供类型化的成功、冲突、失败、取消与 effect 未知回执。`SAKI_BOARD_PROJECTION_FIXTURES` 覆盖未配置、等待首个 checkpoint、mapping 重验，以及 freshness 已陈旧且带有当前失败证据的已确认视图；`SAKI_BOARD_MUTATION_OVERLAY_FIXTURES` 覆盖 optimistic、targeted-confirmed、conflict、partial-failure、reconciliation 与 repair 状态；`SAKI_WORK_ITEM_RESULT_FIXTURES` 覆盖成功与可恢复回执。`SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES` 覆盖已保存、激活中与已激活视图。已配置 fixture 把同步与配置 revision、已确认 Board generation、checkpoint、mapping evidence、失败与 freshness evidence、扫描状态、实际 mutation availability 与 mutation overlay 作为一组具有明确关系的示例予以保留。
 
+<a id="durable-records"></a>
 ## 持久记录
 
 版本化的 `control_state` 置备所有者只记录稳定的子记录引用，以及 `provisioning` 或 `ready` 阶段。其 Installation id 必须与维护层验证的活跃 Installation 相同；被中断的置备恢复前也会执行这项校验。`installations`、`hosts`、`principals` 与 `grants` 表按品牌类型 id 保留各自带修订号的实体生命周期和历史。每个当前标识均由类型专属前缀与规范 UUID 文本组成；物理 storage generation 使用 `storage-generation-`。只有精确的 v2 迁移输入会保留历史 `installation-generation-` 字段。Principal 类型采用封闭的 `human | automation` 判别字段。置备流程会创建一名人类 Host Operator，并在每次启动时校验所引用 Principal 的类型；无关的自动化 Principal 是合法记录，但置备流程不会创建自动化 Grant。Installation 只选择当前本地 Saki Host，不拥有 storage generation 的选择权。启动时会先以纯读取方式校验全部置备、访问、Project、Binding 与 Intent 记录；只有完整库存均有效，系统才会协调或恢复任何状态。
@@ -40,6 +63,7 @@ Board mapping 只使用已配置的 GitHub node id。已配置 Repository 中匹
 
 只有经过域分离的 bootstrap 哈希摘要与 Cookie 哈希摘要会持久化。原始 bootstrap 机密值、原始 Cookie 凭据、派生请求令牌和独立的请求防伪机密值都不会进入存储。Bootstrap Challenge 与 Browser Session 条目的终态转换保持单调，且只有经过 `terminalRetentionMs` 后才会删除。
 
+<a id="access-and-control-operations"></a>
 ## 访问与控制操作
 
 `SakiAccess` 读取封闭的 Access Projection、交换启动器机密值，并登出当前 Browser Session。Bootstrap 与登出只能修改 Installation Access。主模块暴露稳定的 Installation 与 Host 身份标识；只读的项目选择检查、Project-index、Development-Workspace、Changes、Diff、Board、Project Settings、My Work、Attention、`branch-delivery` 与 `milestone-view` 查询；持久化的 `register-development-project`、`configure-github-synchronization`、StageFiles、UnstageFiles、CreateCommit、`CreateWorkItem`、`MoveWorkItem`、`save-branch-delivery`、`push-branch-delivery`、`create-branch-delivery-pull-request`、`associate-branch-delivery-pull-request`、`mark-branch-delivery-in-review`、`accept-branch-delivery`、`save-milestone-delivery`、`finalize-milestone-delivery`、`give-work-item-to-agent` 与 `answer-intervention` Intent；以及提交后的 Projection 失效通知。Changes 只发布仓库级 eligibility 与封闭原因，不替浏览器选择文件；每次 StageFiles 或 UnstageFiles 提交都携带自己的 selection，并用新鲜观察重新校验。Cached Board query 与两项 Principal-scoped work query 都是纯持久读取。Interactive Board query 会持久请求一条高优先级扫描，并在不等待 GitHub 的情况下返回当前 Projection。仅写入 Intent 阶段不会使 Project 视图失效；Registry、write admission、Host Operation、Work Item、Agent operation、Intervention 或同步更新提交后会使受影响视图失效。一个失效通知 listener 失败时，系统只发出固定且不含凭据的诊断，不会阻止后续 listener 运行；每项注册仍可独立 dispose（资源释放）。
@@ -52,6 +76,7 @@ Browser Session 只授权结构化 Git Intent 的首次提交。持久恢复与 
 
 每次启动具备权限的启动器都会签发新挑战。首次交换完成前，其用途为 `initial-bootstrap`；此后为 `local-reauthentication`。先前尚未过期且状态为 `issued` 的挑战继续有效，直到一次交换以原子方式消费选中的挑战并撤销其余挑战。首次 bootstrap 完成后不会重新开放；Cookie 过期、登出或 `Set-Cookie` 响应丢失后，操作员使用后续启动器提供的新挑战重新登录。本机重新认证建立新会话时不会撤销其他仍然有效的会话，登出也只撤销当前提交的会话。
 
+<a id="browser-session-security"></a>
 ## 浏览器会话安全
 
 Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机名通过 Connection 共用回环判定函数的规范 HTTP(S) Origin。持久提交成功后，系统只允许通过不透明的一次性 Host 交接发送一条 `HttpOnly; SameSite=Strict; Path=/saki` Cookie 响应头；HTTPS Origin 还会加入 `Secure`。认证会计算浏览器所提供原始 Cookie 的哈希摘要并执行固定时间比较，随后使用带版本且经过域分离的 HMAC，从同一个原始 Cookie 派生请求令牌。此后的每个状态变更请求都要求准确匹配 Origin，并对请求令牌执行固定时间比较。
@@ -68,6 +93,7 @@ Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机
 | `milestoneDeliveryObservationFreshForMs` | 300000 ms（5 分钟） | Milestone View 与不可变 Release Evidence 的新鲜度窗口 |
 | `targetedPendingPollIntervalMs` | 300000 ms（5 分钟） | 限定在 Provider 生命周期内的 targeted pending pass 间隔 |
 
+<a id="model-experience"></a>
 ## 模型体验
 
 无，因为该模块只会固定由 Host 拥有的 payload，不注册模型侧工具、prompt section 或 Session event。
@@ -76,6 +102,7 @@ Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机
 
 控制面不会组装 provider request 或可复用 prefix；它会固定 Give-to-Agent 输入与后续 Intervention 回答以供 Local Host 交付，而独立的 Saki Intervention 工具拥有其模型侧投影。Route 预检只解析 adapter metadata，不会发送生成请求；Local Host 会在模型组装前过滤恢复 wake，而已接受的 Intervention 回答是既有 Session prefix 之后仅追加的输入。
 
+<a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与暂缓事项
 
 - **只支持一个本地 Host Operator**：尚未实现 GitHub 登录、组织成员关系、多用户、远程 Host 或非回环部署。
@@ -83,3 +110,13 @@ Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机
 - **只支持启动器恢复**：本地访问恢复需要重新启动具备权限的启动器，不提供只依赖浏览器的凭据恢复流程。
 - **Detail Projection 仍只提供 fixture**：My Work 与 Attention 可以查询，但 Work Item detail 与当前/最近 Agent Run contract 仍只有面向浏览器的 fixture，没有控制面 query 或 view builder。
 - **只解析精确 route**：手动 Give-to-Agent 会验证当前 LLM runtime、已登记的 provider adapter 与精确 model metadata，但不会启动生成。它不会建立生产 provider authorization，也不会验证 credential availability、quota 或 account health。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+不发布 runtime invariant companion，因为查询直接读取权威领域记录；解析器在打开时校验持久关系，写入经过串行化。
+
+</details>

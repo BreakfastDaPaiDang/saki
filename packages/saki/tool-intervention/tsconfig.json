@@ -9,6 +9,9 @@
   ],
   "references": [
     {
+      "path": "../../../vendor/timer"
+    },
+    {
       "path": "../../../vendor/cordis"
     },
     {
@@ -22,9 +25,6 @@
     },
     {
       "path": "../../llm/llm"
-    },
-    {
-      "path": "../../runtime-diagnostics/invariants"
     },
     {
       "path": "../control-plane"

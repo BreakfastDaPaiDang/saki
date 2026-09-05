@@ -1,11 +1,10 @@
 import { defineConfig } from 'tsdown'
 
-/** Build the public root, browser-safe constants, and invariant entries. */
+/** Build the public root and browser-safe constants entries. */
 export default defineConfig({
   entry: [
     'lib/types/index.js',
     'lib/types/constants.js',
-    'lib/types/invariant.js',
   ],
   outDir: 'lib',
   format: ['esm'],

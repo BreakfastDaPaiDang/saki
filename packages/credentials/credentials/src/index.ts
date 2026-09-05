@@ -9,8 +9,9 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import type {
-  CredentialHealth,
+  CredentialInfo,
   CredentialKey,
   CredentialProtectionLevel,
   CredentialRecord,
@@ -22,6 +23,7 @@ export { credentialRef, isCredentialRefName } from './credential-ref.ts'
 export type {
   ApiKeyRecord,
   CredentialHealth,
+  CredentialInfo,
   CredentialKey,
   CredentialProtectionLevel,
   CredentialRecord,
@@ -60,7 +62,7 @@ export function credentialKey(scope: string, id: string): CredentialKey {
       throw new TypeError(`credential key segment "${segment}" must match ${String(KEY_SEGMENT_PATTERN)}`)
     }
   }
-  return `${scope}/${id}` as CredentialKey
+  return brandString<CredentialKey>(`${scope}/${id}`)
 }
 
 /**
@@ -129,24 +131,6 @@ export interface ResolvedCredential {
   source: string
   /** Provider-defined recovery trust model for this exact resolved value. */
   protectionLevel: CredentialProtectionLevel
-}
-
-/** Safe observation for one reference, including its recovery trust model but never its value. */
-export interface CredentialInfo {
-  /** Reference this observation describes. */
-  ref: CredentialRef
-  /** Whether the provider has a record or effective source assigned to this reference. */
-  configured: boolean
-  /** Source layer currently supplying the value; absent while unconfigured. */
-  source?: string
-  /** Recovery trust model of the effective source, or the provider's writable source while missing. */
-  protectionLevel: CredentialProtectionLevel
-  /** Whether {@link CredentialProvider.set} would currently succeed for this reference. */
-  writable: boolean
-  /** Whether the value is available, absent, or present but unusable. */
-  health: CredentialHealth
-  /** Unix epoch milliseconds at which the provider made this observation. */
-  observedAt: number
 }
 
 /** Presence and writability facts for one record, safe for configuration UIs — never the value. */

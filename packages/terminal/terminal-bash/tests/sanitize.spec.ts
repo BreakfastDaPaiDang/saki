@@ -10,32 +10,28 @@ describe('TerminalSanitizer', () => {
     expect(sanitizer.push('D;0\x07dsh> ')).toEqual({ text: 'dsh> ', prompt: true, promptTail: 'dsh> ' })
   })
 
-  it('reports exact cursor-position requests across chunk boundaries', () => {
+  it('removes cursor-position requests across chunk boundaries', () => {
     const sanitizer = new TerminalSanitizer(64)
     expect(sanitizer.push('before\x1b[6')).toEqual({ text: 'before', prompt: false })
     expect(sanitizer.push('nafter\n\x1b[5n\x1b[6n')).toEqual({
       text: 'after\n',
       prompt: false,
-      cursorPositionRequest: { column: 2 },
     })
     expect(sanitizer.push('\x1b[31m\x1b[?1h\x1b]0;title\x07\x1b[6n')).toEqual({
       text: '',
       prompt: false,
-      cursorPositionRequest: { column: 1 },
     })
     expect(sanitizer.push('\x1b[2C\x1b[?6n\x1b[6n')).toEqual({
       text: '',
       prompt: false,
-      cursorPositionRequest: { column: 2 },
     })
   })
 
-  it('reports at most one cursor-position request per output chunk', () => {
+  it('removes repeated cursor-position requests from visible output', () => {
     const sanitizer = new TerminalSanitizer(64)
     expect(sanitizer.push('\x1b[6n'.repeat(1_000))).toEqual({
       text: '',
       prompt: false,
-      cursorPositionRequest: { column: 1 },
     })
   })
 

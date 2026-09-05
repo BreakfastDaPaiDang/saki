@@ -1,9 +1,0 @@
-{
-  "steps": [
-    { "op": "initialize" },
-    { "op": "newSession" },
-    { "op": "prompt", "text": "/ask-matt An approved implementation plan is stored in plan.md and must move to a fresh Session. Reply with exactly the next user-invocable /skill command and do not use tools." },
-    { "op": "prompt", "text": "/handoff Read plan.md and write the implementation handoff to .scratch/handoffs/saki-skill-pack-smoke.md. Use only the read and write tools, then reply with exactly HANDOFF_READY." },
-    { "op": "waitForFile", "path": ".scratch/handoffs/saki-skill-pack-smoke.md" }
-  ]
-}
