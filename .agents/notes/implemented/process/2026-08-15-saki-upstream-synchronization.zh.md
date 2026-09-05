@@ -12,11 +12,11 @@ Saki 必须持续吸收 DeepSeek Harness 开发成果，同时不能把 Git 文�
 
 [`upstream-sync.yml`](../../../../.github/workflows/upstream-sync.yml) 把官方上游 head 镜像到一个受 lease 保护的分支，并用 Pull Request 表示每次等待纳入的更新。专用 GitHub App 创建分支和 Pull Request，使普通 Saki CI 事件能够运行；它的 token 仅限本仓库的 Contents、Workflows、Pull requests 和 Issues 权限。
 
-`master` 要求汇总状态 `all checks passed`。没有文本冲突的合并候选会被标为 Ready 并启用 merge commit 自动合并，因此 GitHub 只在必需 CI 成功后合并。文本冲突或 CI 未成功时，工作流创建或更新一个 `ready-for-agent` 兼容性 Issue，其中包含上游 commit、Pull Request、证据和验收条件。CI 成功时关闭现有兼容性 Issue。
+`master` 要求汇总状态 `all checks passed`。没有文本冲突的合并候选会被标为 Ready 并启用 merge commit 自动合并，因此 GitHub 只在必需 CI 成功后合并。文本冲突或 CI 未成功时，工作流创建或更新兼容性 Issue，其中包含上游 commit、Pull Request、证据和验收条件。[维护归属决策](2026-09-05-saki-maintenance-work-ownership.zh.md)负责固定目标、已认领 Issue 的身份和确认合并后的完成条件。
 
 CI 结果路由只在专用作业中修改 Issue。该作业仅在 `workflow_run` 的分支与 head 仓库都指向本仓库的同步分支、打开的 Pull Request 仍具有该次运行的 head SHA，且 Pull Request 已不再是 draft 时接受结果。因此，fork 运行、已被取代的结果及冲突 draft 被刻意跳过的 CI 都不能覆盖文本冲突诊断；工作流默认的 Issues 权限保持只读。
 
-同步分支镜像上游 commit，而不包含预先解决的合并。GitHub 因此会测试并合并 Pull Request 所展示的同一棵组合树，而 merge commit 同时记录 Saki 和官方上游历史。工作流在执行不提交的探测合并前设置仓库级自动化身份，使全新 runner 无需全局 Git 配置也能报告文本冲突。
+同步分支从上游 commit 开始，在目标保持打开期间可以接收兼容修复。GitHub 测试并合并 Pull Request 所展示的组合树，而 merge commit 同时记录 Saki 和官方上游历史。工作流使用 `git merge-tree` 探测文本兼容性，不修改检出内容，也不要求 commit 身份。
 
 ## Alternatives considered
 

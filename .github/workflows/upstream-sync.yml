@@ -7,6 +7,8 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  pull_request:
+    types: [closed]
 
 concurrency:
   group: saki-upstream-sync
@@ -18,11 +20,6 @@ permissions:
   issues: read
   pull-requests: read
 
-env:
-  SYNC_BRANCH: automation/upstream-sync
-  UPSTREAM_URL: https://github.com/deepseek-ai/deepseek-harness.git
-  COMPATIBILITY_MARKER: '<!-- saki-upstream-compatibility -->'
-
 jobs:
   configuration-required:
     if: github.event_name == 'workflow_dispatch' && vars.SAKI_AUTOMATION_CLIENT_ID == ''
@@ -33,7 +30,7 @@ jobs:
           exit 1
 
   sync:
-    if: github.event_name != 'workflow_run' && vars.SAKI_AUTOMATION_CLIENT_ID != ''
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && vars.SAKI_AUTOMATION_CLIENT_ID != ''
     runs-on: ubuntu-latest
     steps:
       - name: Create Saki automation token
@@ -53,253 +50,43 @@ jobs:
           ref: master
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Prepare upstream pull request
-        id: prepare
+      - name: Prepare or retain the upstream target
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git config --local user.name 'Saki upstream automation'
-          git config --local user.email 'saki-upstream-automation@users.noreply.github.com'
-          git remote add upstream "$UPSTREAM_URL" 2>/dev/null || git remote set-url upstream "$UPSTREAM_URL"
-          git fetch --no-tags upstream master
-
-          base_sha=$(git rev-parse HEAD)
-          upstream_sha=$(git rev-parse upstream/master)
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
-
-          if git merge-base --is-ancestor "$upstream_sha" "$base_sha"; then
-            echo 'updated=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo 'updated=true' >> "$GITHUB_OUTPUT"
-          set +e
-          git merge --no-commit --no-ff "$upstream_sha" >/tmp/saki-upstream-merge.log 2>&1
-          merge_status=$?
-          set -e
-
-          if (( merge_status == 0 )); then
-            echo 'conflict=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'conflict=true' >> "$GITHUB_OUTPUT"
-            conflict_files=$(git diff --name-only --diff-filter=U)
-            if [[ -z "$conflict_files" ]]; then
-              conflict_files="merge command failed before reporting conflicted paths: $(tail -n 20 /tmp/saki-upstream-merge.log)"
-            fi
-            {
-              echo 'conflicts<<EOF'
-              printf '%s\n' "$conflict_files"
-              echo 'EOF'
-            } >> "$GITHUB_OUTPUT"
-          fi
-
-          if git rev-parse --verify -q MERGE_HEAD >/dev/null; then
-            git merge --abort
-          fi
-
-          remote_oid=$(git ls-remote --heads origin "refs/heads/$SYNC_BRANCH" | awk '{print $1}')
-          if [[ -n "$remote_oid" ]]; then
-            git push --force-with-lease="refs/heads/$SYNC_BRANCH:$remote_oid" origin \
-              "$upstream_sha:refs/heads/$SYNC_BRANCH"
-          else
-            git push origin "$upstream_sha:refs/heads/$SYNC_BRANCH"
-          fi
-
-          owner=${GITHUB_REPOSITORY%%/*}
-          pulls=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
-            -f state=open -f base=master -f head="$owner:$SYNC_BRANCH" -f per_page=10)
-          pr_number=$(jq -r '.[0].number // empty' <<<"$pulls")
-          short_sha=${upstream_sha:0:12}
-          title="sync upstream DeepSeek Harness $short_sha"
-          body=$(cat <<EOF
-          ## Upstream
-
-          - repository: \`deepseek-ai/deepseek-harness\`
-          - base: \`$base_sha\`
-          - upstream: \`$upstream_sha\`
-
-          This pull request mirrors the official upstream head. Saki's required CI checks the GitHub merge candidate; a clean result enables automatic merge, while conflicts or failed checks create a \`ready-for-agent\` compatibility Work Item.
-          EOF
-          )
-
-          if [[ -z "$pr_number" ]]; then
-            draft=false
-            if (( merge_status != 0 )); then draft=true; fi
-            pr=$(jq -n \
-              --arg title "$title" \
-              --arg head "$SYNC_BRANCH" \
-              --arg base master \
-              --arg body "$body" \
-              --argjson draft "$draft" \
-              '{title:$title,head:$head,base:$base,body:$body,draft:$draft}' |
-              gh api --method POST "repos/$GITHUB_REPOSITORY/pulls" --input -)
-            pr_number=$(jq -r '.number' <<<"$pr")
-          else
-            jq -n --arg title "$title" --arg body "$body" '{title:$title,body:$body}' |
-              gh api --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$pr_number" --input - >/dev/null
-          fi
-
-          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$pr_number/labels" \
-            -f 'labels[]=kind/dependency' -f 'labels[]=area/infra' >/dev/null
-
-          pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")
-          pr_node_id=$(jq -r '.node_id' <<<"$pr")
-          is_draft=$(jq -r '.draft' <<<"$pr")
-
-          if (( merge_status == 0 )) && [[ "$is_draft" == 'true' ]]; then
-            gh api graphql \
-              -f query='mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }' \
-              -F id="$pr_node_id" >/dev/null
-          elif (( merge_status != 0 )) && [[ "$is_draft" == 'false' ]]; then
-            gh api graphql \
-              -f query='mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { id } } }' \
-              -F id="$pr_node_id" >/dev/null
-          fi
-
-          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-          echo "pr_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pull/$pr_number" >> "$GITHUB_OUTPUT"
-
-      - name: Route merge conflicts to an Agent
-        if: steps.prepare.outputs.updated == 'true' && steps.prepare.outputs.conflict == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_URL: ${{ steps.prepare.outputs.pr_url }}
-          UPSTREAM_SHA: ${{ steps.prepare.outputs.upstream_sha }}
-          CONFLICTS: ${{ steps.prepare.outputs.conflicts }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          issues=$(gh api --method GET "repos/$GITHUB_REPOSITORY/issues" \
-            -f state=open -f labels=ready-for-agent -f per_page=100)
-          issue_number=$(jq -r --arg marker "$COMPATIBILITY_MARKER" \
-            '[.[] | select(.pull_request == null) | select((.body // "") | contains($marker))][0].number // empty' \
-            <<<"$issues")
-          title="兼容上游 DeepSeek Harness ${UPSTREAM_SHA:0:12}"
-          body=$(cat <<EOF
-          $COMPATIBILITY_MARKER
-
-          ## 问题
-
-          Saki 与官方 DeepSeek Harness 更新存在文本冲突。
-
-          - upstream: \`$UPSTREAM_SHA\`
-          - sync PR: $PR_URL
-
-          ## 冲突文件
-
-          \`\`\`text
-          $CONFLICTS
-          \`\`\`
-
-          ## 验收条件
-
-          - 保留 Saki 的产品行为并纳入上游更新。
-          - 解决同步 PR 的全部冲突。
-          - 让必需 CI 检查通过；通过后恢复自动合并。
-          EOF
-          )
-          payload=$(jq -n --arg title "$title" --arg body "$body" \
-            '{title:$title,body:$body,labels:["ready-for-agent","area/infra"]}')
-          if [[ -n "$issue_number" ]]; then
-            jq -n --arg title "$title" --arg body "$body" '{title:$title,body:$body}' |
-              gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue_number" --input - >/dev/null
-            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue_number/labels" \
-              -f 'labels[]=ready-for-agent' -f 'labels[]=area/infra' >/dev/null
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/issues" --input - <<<"$payload" >/dev/null
-          fi
-
-      - name: Enable automatic merge after required CI
-        if: steps.prepare.outputs.updated == 'true' && steps.prepare.outputs.conflict == 'false'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_NUMBER: ${{ steps.prepare.outputs.pr_number }}
-          UPSTREAM_SHA: ${{ steps.prepare.outputs.upstream_sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
-          if [[ $(jq -r '.auto_merge == null' <<<"$pr") == 'true' ]]; then
-            pr_node_id=$(jq -r '.node_id' <<<"$pr")
-            gh api graphql \
-              -f query='mutation($id: ID!, $oid: GitObjectID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: MERGE, expectedHeadOid: $oid}) { pullRequest { id } } }' \
-              -F id="$pr_node_id" -F oid="$UPSTREAM_SHA" >/dev/null
-          fi
+        run: node .github/maintenance/upstream.mjs prepare
 
   route-ci:
     if: github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'automation/upstream-sync' && github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
       issues: write
       pull-requests: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      RUN_URL: ${{ github.event.workflow_run.html_url }}
-      CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - name: Route compatibility result
-        shell: bash
-        run: |
-          set -euo pipefail
-          owner=${GITHUB_REPOSITORY%%/*}
-          pulls=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
-            -f state=open -f base=master -f head="$owner:$SYNC_BRANCH" -f per_page=10)
-          pr_number=$(jq -r '.[0].number // empty' <<<"$pulls")
-          [[ -n "$pr_number" ]] || exit 0
-          pr_head_sha=$(jq -r '.[0].head.sha // empty' <<<"$pulls")
-          [[ "$pr_head_sha" == "$HEAD_SHA" ]] || exit 0
-          pr_is_draft=$(jq -r '.[0].draft // true' <<<"$pulls")
-          [[ "$pr_is_draft" == 'false' ]] || exit 0
-          pr_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pull/$pr_number"
-          issues=$(gh api --method GET "repos/$GITHUB_REPOSITORY/issues" \
-            -f state=open -f labels=ready-for-agent -f per_page=100)
-          issue_number=$(jq -r --arg marker "$COMPATIBILITY_MARKER" \
-            '[.[] | select(.pull_request == null) | select((.body // "") | contains($marker))][0].number // empty' \
-            <<<"$issues")
+      - name: Check out trusted maintenance code
+        uses: actions/checkout@v6
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Route current compatibility result
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/maintenance/upstream.mjs route-ci
 
-          if [[ "$CONCLUSION" == 'success' ]]; then
-            if [[ -n "$issue_number" ]]; then
-              gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue_number/comments" \
-                -f body="兼容性检查已通过：$RUN_URL" >/dev/null
-              gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue_number" \
-                -f state=closed -f state_reason=completed >/dev/null
-            fi
-            exit 0
-          fi
-
-          title="兼容上游 DeepSeek Harness ${HEAD_SHA:0:12}"
-          body=$(cat <<EOF
-          $COMPATIBILITY_MARKER
-
-          ## 问题
-
-          上游同步没有文本冲突，但 Saki 必需 CI 未通过。
-
-          - sync PR: $pr_url
-          - CI: $RUN_URL
-          - conclusion: \`$CONCLUSION\`
-
-          ## 验收条件
-
-          - 诊断并修复失败的兼容性检查。
-          - 保留 Saki 的产品行为并纳入上游更新。
-          - 让必需 CI 检查通过；通过后恢复自动合并。
-          EOF
-          )
-          payload=$(jq -n --arg title "$title" --arg body "$body" \
-            '{title:$title,body:$body,labels:["ready-for-agent","area/infra"]}')
-          if [[ -n "$issue_number" ]]; then
-            jq -n --arg title "$title" --arg body "$body" '{title:$title,body:$body}' |
-              gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue_number" --input - >/dev/null
-            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue_number/labels" \
-              -f 'labels[]=ready-for-agent' -f 'labels[]=area/infra' >/dev/null
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/issues" --input - <<<"$payload" >/dev/null
-          fi
+  route-closed:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'automation/upstream-sync' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.base.ref == 'master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Check out trusted maintenance code
+        uses: actions/checkout@v6
+        with:
+          ref: master
+          persist-credentials: false
+      - name: Complete or cancel the closed target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/maintenance/upstream.mjs route-closed
