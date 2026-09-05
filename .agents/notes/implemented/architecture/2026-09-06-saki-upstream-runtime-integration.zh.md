@@ -20,6 +20,8 @@ POSIX Session 写锁只在其执行路径加载 `fs-ext`。该依赖在安装时
 
 Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 组合及最终工作区预期。断言保留路由后的 `ask-matt`、`handoff` 调用，以及 `to-tickets` 缺少 shell 时的拒绝。不以录制会话为输入的 Host 和凭据预期输出保留在所属方的 expected-output 层。真实 Git 夹具采用能容纳多次仓库观察的请求预算；文件系统、操作回执与重启断言仍决定是否成功。
 
+PowerShell 快照保留发行版 headless profile 的工具、权限事件和运行时上下文消息。持久 PowerShell 组合在所有平台禁用普通 `pwsh` 工具，确保只有一个注册。
+
 Loader 配置扫描返回以正斜杠规范化的仓库路径，再按所属 manifest 分类插件引用。CLI 凭据夹具将设置、提问与 DPAPI 插件声明为开发依赖，使全新检出在 Windows 与 POSIX 上校验同一解析关系图。
 
 Git 测试夹具先解除 junction，再等待递归删除，使暂存的 Windows 进程句柄能在有限重试期间释放。夹具迁移只重试 Windows 的访问与共享错误，其他失败仍向上传播。每个 teardown 调用方都等待删除完成。
