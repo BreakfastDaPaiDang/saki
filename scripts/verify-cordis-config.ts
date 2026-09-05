@@ -34,7 +34,7 @@ const root = resolve(import.meta.dirname, '..')
 // These overlays are consumed by the built dsh app, so their bare specifiers
 // resolve from apps/cli.
 const appOverlayFiles = new Set([
-  ...globSync('apps/cli/config/examples/**/*.yml', { cwd: root }),
+  ...globSync('apps/cli/config/examples/**/*.yml', { cwd: root }).map(path => path.replaceAll('\\', '/')),
 ])
 const metadataFields = ['id', 'name', 'group', 'inject', 'intercept', 'isolate'] as const
 

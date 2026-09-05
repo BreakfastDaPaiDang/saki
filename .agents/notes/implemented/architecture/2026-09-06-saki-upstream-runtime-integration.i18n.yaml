@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-06-saki-upstream-runtime-integration.md
-2026-09-06-saki-upstream-runtime-integration.md: 9cea45f3e328f873c76eff403dd62f01a35d809e
-2026-09-06-saki-upstream-runtime-integration.zh.md: d89a6941b4b69b274b5d4f651dcddb4d171479eb
+2026-09-06-saki-upstream-runtime-integration.md: 0e2b3bd07edbafc337ef9abc6b581a2cba696e21
+2026-09-06-saki-upstream-runtime-integration.zh.md: a9fc817c1fe9257768e688c049b19d7be8118838

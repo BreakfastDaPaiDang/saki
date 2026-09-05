@@ -29,8 +29,8 @@ describe('cordisConfigFiles', () => {
     }
 
     expect(cordisConfigFiles(root)).toEqual([
-      join('apps', 'cli', 'config', 'examples', 'agent.cordis.yaml'),
-      join('apps', 'cli', 'config', 'examples', 'headless.cordis.yml'),
+      'apps/cli/config/examples/agent.cordis.yaml',
+      'apps/cli/config/examples/headless.cordis.yml',
     ])
   })
 })
