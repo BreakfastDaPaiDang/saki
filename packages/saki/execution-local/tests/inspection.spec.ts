@@ -54,7 +54,7 @@ const run = promisify(execFile)
 const roots: string[] = []
 const contexts: Context[] = []
 const HOST_ID = 'host-11111111-1111-4111-8111-111111111111' as SakiHostId
-const CONFIG: Required<Config> = {
+const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
   gitCommandTimeoutMs: 10_000,
   gitTerminationGraceMs: 100,
   maxGitStdoutBytes: 1024 * 1024,
@@ -355,6 +355,18 @@ describe('LocalSakiHostExecution', () => {
     ] as const) {
       expect(() => LocalSakiHostExecution.Config({ [field]: Number.MAX_SAFE_INTEGER + 1 })).toThrow()
     }
+  })
+
+  it('accepts only closed non-interactive Git credential helper adapters', () => {
+    expect(LocalSakiHostExecution.Config({ pushCredentialHelper: 'git-credential-manager' }))
+      .toMatchObject({ pushCredentialHelper: 'git-credential-manager' })
+    expect(LocalSakiHostExecution.Config({ pushCredentialHelper: 'git-credential-manager-core' }))
+      .toMatchObject({ pushCredentialHelper: 'git-credential-manager-core' })
+    expect(LocalSakiHostExecution.Config({})).not.toHaveProperty('pushCredentialHelper')
+    // @ts-expect-error -- the runtime parser must reject untyped configuration sources too.
+    expect(() => LocalSakiHostExecution.Config({ pushCredentialHelper: '!steal credentials' })).toThrow()
+    // @ts-expect-error -- generic Git helpers are intentionally outside the closed adapter set.
+    expect(() => LocalSakiHostExecution.Config({ pushCredentialHelper: 'store' })).toThrow()
   })
 
   it('rejects the smallest index bound that cannot retain a Commit lock marker', () => {

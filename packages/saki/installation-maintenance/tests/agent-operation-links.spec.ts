@@ -226,7 +226,7 @@ function preparedOperation(
     admission: { kind: 'not-accepted' },
   })
   const record = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 3,
+    schemaVersion: 4,
     request,
     preparationRevision: 0,
     snapshot,

@@ -19,6 +19,14 @@ import type {
   GitHubScanMap,
 } from '@breakfastdapaidang/saki-github'
 import { translateGitHubError } from './errors.ts'
+import {
+  readBranchHead,
+  readCommitCi,
+  readMilestone,
+  readPullRequest,
+  readPullRequestAssociation,
+  readPullRequestReviews,
+} from './delivery-reads.ts'
 import { readInstallation } from './installation.ts'
 import {
   readBranchSafety,
@@ -33,12 +41,14 @@ import {
   readTagReference,
 } from './reads.ts'
 import { InstallationPriorityQueue } from './priority-queue.ts'
+import { readPublicCommit } from './public-commit.ts'
 import { inspectProjectItemStatus } from './project-item-status-inspection.ts'
 import { inspectProjectItemAdd } from './project-item-add-inspection.ts'
 import { inspectIssueState } from './issue-state-inspection.ts'
 import { inspectIssueCreate } from './issue-create-inspection.ts'
+import { inspectPullRequestCreate } from './pull-request-create-inspection.ts'
 import { inspectProjectItemPosition } from './project-item-position-inspection.ts'
-import { addProjectItem, createIssue, setIssueState, setProjectItemPosition, setProjectItemStatus } from './mutations.ts'
+import { addProjectItem, createIssue, createPullRequest, setIssueState, setProjectItemPosition, setProjectItemStatus } from './mutations.ts'
 import { scanProjectBoard } from './scan.ts'
 import { ScanConcurrencyGate } from './scan-gate.ts'
 
@@ -82,6 +92,7 @@ export class SakiGitHubApp extends SakiGitHub {
   private readonly lifetime = new AbortController()
   private readonly active = new Set<Promise<unknown>>()
   private readonly installationQueues = new Map<string, InstallationPriorityQueue>()
+  private readonly publicQueue = new InstallationPriorityQueue()
   private readonly scanGate: ScanConcurrencyGate
 
   /** @param ctx - Host context carrying the credential-reference provider. @param config - resolved limits. */
@@ -103,6 +114,9 @@ export class SakiGitHubApp extends SakiGitHub {
       const admitted = request
       try {
         operationSignal.throwIfAborted()
+        if (admitted.kind === 'public-commit') {
+          return await readPublicCommit(admitted, this.config, operationSignal, this.publicQueue)
+        }
         const privateKey = await this.resolvePrivateKey(admitted.installation.privateKeyRef)
         const queue = this.queueFor(admitted.installation.installationId)
         if (admitted.kind === 'installation') {
@@ -135,7 +149,25 @@ export class SakiGitHubApp extends SakiGitHub {
         if (admitted.kind === 'commit') {
           return await readCommit(admitted, privateKey, this.config, operationSignal, queue)
         }
-        return await readCompareCommits(admitted, privateKey, this.config, operationSignal, queue)
+        if (admitted.kind === 'compare-commits') {
+          return await readCompareCommits(admitted, privateKey, this.config, operationSignal, queue)
+        }
+        if (admitted.kind === 'branch-head') {
+          return await readBranchHead(admitted, privateKey, this.config, operationSignal, queue)
+        }
+        if (admitted.kind === 'pull-request') {
+          return await readPullRequest(admitted, privateKey, this.config, operationSignal, queue)
+        }
+        if (admitted.kind === 'pull-request-reviews') {
+          return await readPullRequestReviews(admitted, privateKey, this.config, operationSignal, queue)
+        }
+        if (admitted.kind === 'pull-request-association') {
+          return await readPullRequestAssociation(admitted, privateKey, this.config, operationSignal, queue)
+        }
+        if (admitted.kind === 'commit-ci') {
+          return await readCommitCi(admitted, privateKey, this.config, operationSignal, queue)
+        }
+        return await readMilestone(admitted, privateKey, this.config, operationSignal, queue)
       } catch (error) {
         throw translateGitHubError(error, admitted.kind, operationSignal)
       }
@@ -174,6 +206,9 @@ export class SakiGitHubApp extends SakiGitHub {
         if (request.kind === 'issue-create') {
           return await createIssue(request, privateKey, this.config, operationSignal, queue)
         }
+        if (request.kind === 'pull-request-create') {
+          return await createPullRequest(request, privateKey, this.config, operationSignal, queue)
+        }
         if (request.kind === 'project-item-add') {
           await addProjectItem(request, privateKey, this.config, operationSignal, queue)
           return
@@ -208,6 +243,9 @@ export class SakiGitHubApp extends SakiGitHub {
         /* jscpd:ignore-end */
         if (request.kind === 'issue-create') {
           return await inspectIssueCreate(request, privateKey, this.config, operationSignal, queue)
+        }
+        if (request.kind === 'pull-request-create') {
+          return await inspectPullRequestCreate(request, privateKey, this.config, operationSignal, queue)
         }
         if (request.kind === 'project-item-add') {
           return await inspectProjectItemAdd(request, privateKey, this.config, operationSignal, queue)

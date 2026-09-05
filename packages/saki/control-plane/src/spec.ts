@@ -5,7 +5,6 @@ import { z } from 'zod'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { CallId } from '@deepseek-ai/dsh-llm'
-import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { workspaceIdSchema } from '@deepseek-ai/dsh-workspace'
 import {
   githubAccountIdSchema,
@@ -100,17 +99,9 @@ import {
   renderGitHubWorkItemIssueBody,
 } from './work-item-issue.ts'
 import type {
-  SakiGrantId,
-  SakiInterventionRequestId,
-  SakiWorkAssignmentId,
-  SakiHostId,
-  SakiInstallationAccessId,
-  SakiInstallationId,
-  SakiPrincipalId,
   SakiControlIntentId,
   SakiBoardWorkItemId,
   SakiDevelopmentProjectId,
-  SakiResourceBindingId,
   SakiGitHubScanFailure,
   AnswerInterventionIntent,
   CreateCommitIntent,
@@ -120,11 +111,6 @@ import type {
   SakiWorkItemRecoveryId,
   UnstageFilesIntent,
 } from './types.ts'
-import type {
-  SakiAgentRunId,
-  SakiExecutionDispatchId,
-  SakiWorkSessionId,
-} from '@breakfastdapaidang/saki-execution'
 
 const revision = z.number().int().nonnegative()
 const positiveRevision = z.number().int().positive()
@@ -258,12 +244,25 @@ export const V7_HOST_OPERATOR_ACTIONS = [
   'work-item:give-to-agent',
 ] as const
 
-/** Current Host Operator actions, including Principal-scoped work and Intervention answers. */
-export const HOST_OPERATOR_ACTIONS = [
+/** Exact Host Operator actions retained for v8 product state. */
+export const V8_HOST_OPERATOR_ACTIONS = [
   ...V7_HOST_OPERATOR_ACTIONS,
   'my-work:read',
   'attention:read',
   'intervention:answer',
+] as const
+
+/** Current Host Operator actions, including Branch and Milestone Delivery. */
+export const HOST_OPERATOR_ACTIONS = [
+  ...V8_HOST_OPERATOR_ACTIONS,
+  'branch-delivery:save',
+  'branch-delivery:push',
+  'branch-delivery:pull-request:create',
+  'branch-delivery:pull-request:associate',
+  'branch-delivery:review',
+  'branch-delivery:accept',
+  'milestone-delivery:save',
+  'milestone-delivery:finalize',
 ] as const
 
 const grantRecordSharedShape = {
@@ -306,6 +305,12 @@ export const v6GrantRecordSchema = z.object({
 export const v7GrantRecordSchema = z.object({
   ...grantRecordSharedShape,
   actions: z.array(z.enum(V7_HOST_OPERATOR_ACTIONS)),
+}).strict()
+
+/** Exact independently revisioned v8 Host Operator Grant entity. */
+export const v8GrantRecordSchema = z.object({
+  ...grantRecordSharedShape,
+  actions: z.array(z.enum(V8_HOST_OPERATOR_ACTIONS)),
 }).strict()
 
 /** Independently revisioned current Host Operator Grant entity. */
@@ -2982,6 +2987,20 @@ const agentRunWriteAdmissionBase = {
   reservedAt: timestamp,
 } as const
 
+const pushWriteAdmissionBase = {
+  ...bindingWriteAdmissionBase,
+  state: z.literal('manual-host-operation'),
+  bindingRevision: revision,
+  source: z.object({
+    kind: z.literal('control-intent'),
+    intentId: controlIntentId,
+    intentRevision: revision,
+    payloadDigest: digest,
+  }).strict(),
+  action: z.literal('project-branch:push'),
+  reservedAt: timestamp,
+} as const
+
 const historicalBindingWriteAdmissionVariants = [
   z.object({ ...bindingWriteAdmissionBase, state: z.literal('available') }).strict(),
   z.object({
@@ -2990,6 +3009,31 @@ const historicalBindingWriteAdmissionVariants = [
   }).strict(),
   z.object({
     ...manualWriteAdmissionBase,
+    phase: z.literal('accepted'),
+    preparation: hostOperationPreparationSchema,
+    acceptedAt: timestamp,
+  }).strict(),
+] as const
+
+const agentRunBindingWriteAdmissionVariants = [
+  z.object({
+    ...agentRunWriteAdmissionBase,
+    phase: z.literal('reserved'),
+  }).strict(),
+  z.object({
+    ...agentRunWriteAdmissionBase,
+    phase: z.literal('accepted'),
+    acceptedAt: timestamp,
+  }).strict(),
+] as const
+
+const pushBindingWriteAdmissionVariants = [
+  z.object({
+    ...pushWriteAdmissionBase,
+    phase: z.literal('reserved'),
+  }).strict(),
+  z.object({
+    ...pushWriteAdmissionBase,
     phase: z.literal('accepted'),
     preparation: hostOperationPreparationSchema,
     acceptedAt: timestamp,
@@ -3017,18 +3061,10 @@ function refineHistoricalBindingWriteAdmission(
 export const bindingWriteAdmissionV1RecordSchema = z.union(historicalBindingWriteAdmissionVariants)
   .superRefine(refineHistoricalBindingWriteAdmission)
 
-/** Single local write owner for one Resource Binding; unknown variants fail closed. */
-export const bindingWriteAdmissionRecordSchema = z.union([
+/** Exact v7 and v8 Binding write-admission vocabulary. */
+export const bindingWriteAdmissionV2RecordSchema = z.union([
   ...historicalBindingWriteAdmissionVariants,
-  z.object({
-    ...agentRunWriteAdmissionBase,
-    phase: z.literal('reserved'),
-  }).strict(),
-  z.object({
-    ...agentRunWriteAdmissionBase,
-    phase: z.literal('accepted'),
-    acceptedAt: timestamp,
-  }).strict(),
+  ...agentRunBindingWriteAdmissionVariants,
 ]).superRefine((value, context) => {
   if (value.state !== 'agent-run') refineHistoricalBindingWriteAdmission(value, context)
   if (value.state === 'agent-run'
@@ -3039,52 +3075,37 @@ export const bindingWriteAdmissionRecordSchema = z.union([
   }
 })
 
+/** Parsed exact v7 and v8 Binding write-admission row. */
+export type BindingWriteAdmissionV2Record = z.infer<typeof bindingWriteAdmissionV2RecordSchema>
+
+/** Single current local write owner for one Resource Binding; unknown variants fail closed. */
+export const bindingWriteAdmissionRecordSchema = z.union([
+  ...historicalBindingWriteAdmissionVariants,
+  ...agentRunBindingWriteAdmissionVariants,
+  ...pushBindingWriteAdmissionVariants,
+]).superRefine((value, context) => {
+  if (value.state === 'available') return
+  if (value.state === 'agent-run') {
+    if (value.updatedAt < value.reservedAt
+      || (value.phase === 'accepted'
+        && (value.acceptedAt < value.reservedAt || value.acceptedAt > value.updatedAt))) {
+      context.addIssue({ code: 'custom', message: 'Agent Run admission timestamps are not monotonic' })
+    }
+    return
+  }
+  if (value.action !== 'project-branch:push') {
+    refineHistoricalBindingWriteAdmission(value, context)
+    return
+  }
+  if (value.updatedAt < value.reservedAt
+    || (value.phase === 'accepted'
+      && (value.acceptedAt < value.reservedAt || value.acceptedAt > value.updatedAt))) {
+    context.addIssue({ code: 'custom', message: 'Push write admission timestamps are not monotonic' })
+  }
+  if (value.phase === 'accepted' && value.preparation.operation.type !== 'push-branch') {
+    context.addIssue({ code: 'custom', message: 'Push write admission disagrees with Host preparation' })
+  }
+})
+
 /** Parsed single-writer admission row. */
 export type BindingWriteAdmissionRecord = z.infer<typeof bindingWriteAdmissionRecordSchema>
-
-/** Exact Saki control-plane domain declaration. */
-export const sakiControlPlaneDomainSpec = defineDomain({
-  name: 'saki_control_plane',
-  version: 8,
-  tables: {
-    control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
-    installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
-    hosts: domainTable<SakiHostId, HostRecord>(hostRecordSchema),
-    principals: domainTable<SakiPrincipalId, PrincipalRecord>(principalRecordSchema),
-    grants: domainTable<SakiGrantId, GrantRecord>(grantRecordSchema),
-    installation_access: domainTable<SakiInstallationAccessId, InstallationAccessRecord>(installationAccessRecordSchema),
-    development_project_registry: domainTable<
-      typeof DEVELOPMENT_PROJECT_REGISTRY_KEY,
-      DevelopmentProjectRegistryRecord
-    >(developmentProjectRegistryRecordSchema),
-    registration_intents: domainTable<SakiControlIntentId, RegistrationIntentRecord>(registrationIntentRecordSchema),
-    github_project_sync: domainTable<SakiDevelopmentProjectId, GitHubProjectSyncRecord>(githubProjectSyncRecordSchema),
-    github_sync_configuration_intents: domainTable<
-      SakiControlIntentId,
-      GitHubSynchronizationConfigurationIntentRecord
-    >(githubSynchronizationConfigurationIntentRecordSchema),
-    git_operation_intents: domainTable<SakiControlIntentId, GitOperationIntentRecord>(gitOperationIntentRecordSchema),
-    binding_write_admissions: domainTable<
-      SakiResourceBindingId,
-      BindingWriteAdmissionRecord
-    >(bindingWriteAdmissionRecordSchema),
-    github_work_item_intents: domainTable<SakiControlIntentId, GitHubWorkItemIntentRecord>(
-      githubWorkItemIntentRecordSchema,
-    ),
-    github_work_item_recovery: domainTable<SakiWorkItemRecoveryId, GitHubWorkItemRecoveryRecord>(
-      githubWorkItemRecoveryRecordSchema,
-    ),
-    agent_operation_intents: domainTable<SakiControlIntentId, AgentOperationIntentRecord>(
-      agentOperationIntentRecordSchema,
-    ),
-    work_assignments: domainTable<SakiWorkAssignmentId, WorkAssignmentRecord>(workAssignmentRecordSchema),
-    work_sessions: domainTable<SakiWorkSessionId, WorkSessionRecord>(workSessionRecordSchema),
-    agent_runs: domainTable<SakiAgentRunId, AgentRunRecord>(agentRunRecordSchema),
-    execution_dispatches: domainTable<SakiExecutionDispatchId, ExecutionDispatchRecord>(
-      executionDispatchRecordSchema,
-    ),
-    intervention_requests: domainTable<SakiInterventionRequestId, InterventionRequestRecord>(
-      interventionRequestRecordSchema,
-    ),
-  },
-})

@@ -45,6 +45,7 @@ import {
   readClosedSakiV5State,
   readClosedSakiV6State,
   readClosedSakiV7State,
+  readClosedSakiV8State,
 } from './closed-state.ts'
 import { selectSakiInstallationSource } from './layout.ts'
 import { validateClosedSakiV2Source } from './legacy-state.ts'
@@ -96,9 +97,9 @@ export interface SakiUpgradeResult {
   /** Manifest-selected current generation after publication and readback. */
   readonly selected: SelectedGeneration
   /** Exact adjacent source version. */
-  readonly sourceVersion: 2 | 3 | 4 | 5 | 6 | 7
+  readonly sourceVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8
   /** Sole writable target version. */
-  readonly targetVersion: 8
+  readonly targetVersion: 9
 }
 
 /** Bound offline maintenance operations with optional crash hooks. */
@@ -111,7 +112,7 @@ export interface SakiMaintenanceOperations {
     backupId: SakiRecoveryBackupId,
     signal: AbortSignal,
   ): Promise<VerifiedRecoveryBackup>
-  /** Upgrade exact retained v2-v7 state into a fresh validated v8 generation. */
+  /** Upgrade exact retained v2-v8 state into a fresh validated v9 generation. */
   upgrade(options: SakiMaintenanceOptions, signal: AbortSignal): Promise<SakiUpgradeResult>
 }
 
@@ -154,6 +155,11 @@ interface ValidatedV7Source extends ValidatedSourceBase {
 
 interface ValidatedV8Source extends ValidatedSourceBase {
   readonly stateVersion: 8
+  readonly hostExecutionSnapshot: Awaited<ReturnType<typeof readClosedSakiV8State>>['hostExecutionSnapshot']
+}
+
+interface ValidatedV9Source extends ValidatedSourceBase {
+  readonly stateVersion: 9
 }
 
 type ValidatedSource =
@@ -164,6 +170,7 @@ type ValidatedSource =
   | ValidatedV6Source
   | ValidatedV7Source
   | ValidatedV8Source
+  | ValidatedV9Source
 
 function requireAbsolutePath(path: string, subject: string): string {
   const absolute = resolve(path)
@@ -293,7 +300,7 @@ async function loadValidatedSource(
       authority,
     }
   }
-  if (version?.version === 5 || version?.version === 6 || version?.version === 7) {
+  if (version?.version === 5 || version?.version === 6 || version?.version === 7 || version?.version === 8) {
     const identity = {
       installationId: source.selected.installation.installationId,
       storageGenerationId: source.selected.installation.storageGenerationId,
@@ -303,7 +310,9 @@ async function loadValidatedSource(
       ? await readClosedSakiV5State(source.selected.databasePath, identity, signal)
       : version.version === 6
         ? await readClosedSakiV6State(source.selected.databasePath, identity, signal)
-        : await readClosedSakiV7State(source.selected.databasePath, identity, signal)
+        : version.version === 7
+          ? await readClosedSakiV7State(source.selected.databasePath, identity, signal)
+          : await readClosedSakiV8State(source.selected.databasePath, identity, signal)
     return {
       stateVersion: version.version,
       databasePath: source.selected.databasePath,
@@ -315,7 +324,7 @@ async function loadValidatedSource(
       authority,
     }
   }
-  if (version?.version === 8) {
+  if (version?.version === 9) {
     const current = await readClosedCurrentSakiState(
       source.selected.databasePath,
       {
@@ -326,7 +335,7 @@ async function loadValidatedSource(
       signal,
     )
     return {
-      stateVersion: 8,
+      stateVersion: 9,
       databasePath: source.selected.databasePath,
       installationId: source.selected.installation.installationId,
       storageGenerationId: source.selected.installation.storageGenerationId,
@@ -462,7 +471,7 @@ export function createSakiMaintenanceOperations(
           signal,
         )
         const selectedSource = await loadValidatedSource(options, signal)
-        if (selectedSource.stateVersion === 8) {
+        if (selectedSource.stateVersion === 9) {
           throw new SakiMaintenanceError('state-unsupported', 'selected Saki state is already current')
         }
         const source = selectedSource
@@ -508,6 +517,7 @@ export function createSakiMaintenanceOperations(
               identity,
               signal,
               source.stateVersion === 5 || source.stateVersion === 6 || source.stateVersion === 7
+                || source.stateVersion === 8
                 ? source.hostExecutionSnapshot
                 : undefined,
             )
@@ -594,10 +604,10 @@ export async function verifySakiInstallationBackup(
 }
 
 /**
- * Upgrade exact retained state through a verified backup into a fresh v8 generation.
+ * Upgrade exact retained state through a verified backup into a fresh v9 generation.
  * @param options - Installation paths and fixed build provenance.
  * @param signal - cancellation retained through lease release.
- * @returns the published v8 generation and its verified backup.
+ * @returns the published v9 generation and its verified backup.
  */
 export async function upgradeSakiInstallation(
   options: SakiMaintenanceOptions,

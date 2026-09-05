@@ -525,6 +525,23 @@ describe('complete Project-board candidate', () => {
 })
 
 describe('closed failures, mutation vocabulary, and invariant companion', () => {
+  it('omits undefined optional failure evidence at the shared admission seam', () => {
+    const failure = {
+      code: 'transient-transport',
+      retryAfterMs: undefined,
+      requestId: undefined,
+    } satisfies GitHubFailure
+
+    const admitted = githubFailureSchema.parse(failure)
+    expect(Object.hasOwn(admitted, 'retryAfterMs')).toBe(false)
+    expect(Object.hasOwn(admitted, 'requestId')).toBe(false)
+    expect(JSON.parse(JSON.stringify(admitted))).toStrictEqual(admitted)
+
+    const error = new GitHubProviderError(failure)
+    expect(Object.hasOwn(error.failure, 'retryAfterMs')).toBe(false)
+    expect(Object.hasOwn(error.failure, 'requestId')).toBe(false)
+  })
+
   it('admits every closed safe failure and exposes only admitted data on the typed error', () => {
     const failures: readonly GitHubFailure[] = [
       { code: 'cancelled' },

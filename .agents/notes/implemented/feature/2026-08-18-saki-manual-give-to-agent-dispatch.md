@@ -28,7 +28,7 @@ Cancellation before Dispatch acceptance records a canceled Dispatch; cancellatio
 
 `SakiWorkItemDetailProjection` and `SakiAgentRunProjection` freeze the frontend handoff without adding a query in this slice. Their strict wire schemas expose the bounded parsed Issue definition, Assignment and primary Work Session references, opaque Run source, display-safe Profile and Model facts, timestamps, and explicit resumable, terminal, or reconciliation recovery state; canonical paths, credentials, and Host snapshots are absent.
 
-Current state version 8 carries the manual-Agent records in `saki_control_plane@8`, the `StartAgentRun` Host records in `saki_host_execution@3`, and `saki_storage_generation@6`. Frozen v7/v2/v5 schemas retain the original manual start format. Adjacent migration adds explicit Assignment ownership, Run waiting and resume-pending states, the Intervention table, and the current answer message source without changing retained original-start requests or evidence.
+Manual Give-to-Agent first lands in state version 7 through `saki_control_plane@7`, `saki_host_execution@2`, and `saki_storage_generation@5`. Current state version 9 carries those records in `saki_control_plane@9`, `saki_host_execution@4`, and `saki_storage_generation@7`; the frozen version 7 domain schemas retain the original manual start format. The v7-to-v8 migration adds explicit Assignment ownership, Run waiting and resume-pending states, the Intervention table, and the answer message source. The v8-to-v9 migration adds Delivery records, actions, and the Push Host operation format without changing retained original-start requests or evidence.
 
 ## Alternatives considered
 

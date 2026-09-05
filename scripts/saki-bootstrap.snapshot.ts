@@ -7,7 +7,6 @@ import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type {
   CreateCommitIntent,
-  GitMutationExpectation,
   SakiGitOperationIntent,
   SakiGitOperationIntentReceipt,
   SakiProjectChangesProjection,
@@ -29,6 +28,7 @@ import {
   fixtureGitEnvironment,
   freePort,
   inspectSnapshotRepositoryGitState,
+  mutationExpectation,
   rawRequest,
   registerSnapshotProject,
   rpc,
@@ -137,21 +137,6 @@ async function queryProjectDiff(
   expect(value.projection.result.ok).toBe(true)
   if (!value.projection.result.ok) throw new Error('Saki snapshot Project Diff observation failed')
   return value.projection as SuccessfulProjectDiffProjection
-}
-
-function mutationExpectation(projection: SuccessfulProjectChangesProjection): GitMutationExpectation {
-  const observation = projection.result.observation
-  if (observation.index.kind !== 'tree') throw new Error('Saki snapshot Project Changes returned an unmerged index')
-  return {
-    projectId: projection.projectId,
-    expectedRegistryRevision: projection.registryRevision,
-    expectedProjectRevision: projection.projectRevision,
-    expectedBinding: { id: observation.bindingId, revision: observation.bindingRevision },
-    expectedStatus: observation.fingerprint,
-    expectedHead: observation.head,
-    expectedIndex: observation.index,
-    expectedWorktree: observation.worktree,
-  }
 }
 
 function selectChanges(

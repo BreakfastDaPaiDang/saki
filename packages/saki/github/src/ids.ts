@@ -5,20 +5,27 @@ import type {
   GitHubAccountId,
   GitHubAppId,
   GitHubCommitId,
+  GitHubCommitStatusId,
+  GitHubCheckRunId,
   GitHubExternalOperationId,
   GitHubInstallationId,
   GitHubIssueId,
   GitHubIssueCreateMarkerId,
+  GitHubMilestoneId,
   GitHubProjectFieldId,
   GitHubProjectId,
   GitHubProjectItemId,
   GitHubProjectOptionId,
   GitHubPullRequestId,
+  GitHubPullRequestReviewId,
+  GitHubPullRequestCreateMarkerId,
   GitHubReleaseId,
   GitHubReleaseTagName,
   GitHubRepositoryDatabaseId,
   GitHubRepositoryId,
   GitHubTagObjectId,
+  GitHubWorkflowRunId,
+  GitHubWorkflowId,
 } from './types.ts'
 
 const nodeId = <T extends string>() => z.string().min(1).max(1_024).regex(/^[^\u0000-\u001f\u007f]+$/).transform(value => value as T)
@@ -50,6 +57,22 @@ export const githubIssueCreateMarkerIdSchema = z.string()
   .transform(value => value as GitHubIssueCreateMarkerId)
 /** Strict GitHub pull-request node-id schema. */
 export const githubPullRequestIdSchema = nodeId<GitHubPullRequestId>()
+/** Strict GitHub pull-request review node-id schema. */
+export const githubPullRequestReviewIdSchema = nodeId<GitHubPullRequestReviewId>()
+/** Strict persisted Pull Request creation marker schema. */
+export const githubPullRequestCreateMarkerIdSchema = z.string()
+  .regex(/^pull-request-marker-[0-9a-f]{64}$/)
+  .transform(value => value as GitHubPullRequestCreateMarkerId)
+/** Strict GitHub Milestone node-id schema. */
+export const githubMilestoneIdSchema = nodeId<GitHubMilestoneId>()
+/** Strict GitHub Actions workflow-run-id schema. */
+export const githubWorkflowRunIdSchema = positiveDecimalId<GitHubWorkflowRunId>()
+/** Strict GitHub Actions workflow-id schema. */
+export const githubWorkflowIdSchema = positiveDecimalId<GitHubWorkflowId>()
+/** Strict GitHub check-run-id schema. */
+export const githubCheckRunIdSchema = positiveDecimalId<GitHubCheckRunId>()
+/** Strict GitHub commit-status-id schema. */
+export const githubCommitStatusIdSchema = positiveDecimalId<GitHubCommitStatusId>()
 /** Strict annotated-tag object-id schema. */
 export const githubTagObjectIdSchema = nodeId<GitHubTagObjectId>()
 /** Strict GitHub Release node-id schema. */
@@ -131,6 +154,45 @@ export const githubIssueCreateMarkerId = (value: string): GitHubIssueCreateMarke
  * @returns validated branded id.
  */
 export const githubPullRequestId = (value: string): GitHubPullRequestId => githubPullRequestIdSchema.parse(value)
+/** Brand one validated pull-request review node id.
+ * @param value - raw pull-request review node id.
+ * @returns validated branded id.
+ */
+export const githubPullRequestReviewId = (value: string): GitHubPullRequestReviewId => (
+  githubPullRequestReviewIdSchema.parse(value)
+)
+/** Brand one validated Pull Request creation marker id.
+ * @param value - raw marker id.
+ * @returns validated branded marker id.
+ */
+export const githubPullRequestCreateMarkerId = (value: string): GitHubPullRequestCreateMarkerId => (
+  githubPullRequestCreateMarkerIdSchema.parse(value)
+)
+/** Brand one validated Milestone node id.
+ * @param value - raw Milestone node id.
+ * @returns validated branded id.
+ */
+export const githubMilestoneId = (value: string): GitHubMilestoneId => githubMilestoneIdSchema.parse(value)
+/** Brand one validated workflow-run id.
+ * @param value - raw positive-decimal workflow-run id.
+ * @returns validated branded id.
+ */
+export const githubWorkflowRunId = (value: string): GitHubWorkflowRunId => githubWorkflowRunIdSchema.parse(value)
+/** Brand one validated workflow id.
+ * @param value - raw positive-decimal workflow id.
+ * @returns validated branded id.
+ */
+export const githubWorkflowId = (value: string): GitHubWorkflowId => githubWorkflowIdSchema.parse(value)
+/** Brand one validated check-run id.
+ * @param value - raw positive-decimal check-run id.
+ * @returns validated branded id.
+ */
+export const githubCheckRunId = (value: string): GitHubCheckRunId => githubCheckRunIdSchema.parse(value)
+/** Brand one validated commit-status id.
+ * @param value - raw positive-decimal commit-status id.
+ * @returns validated branded id.
+ */
+export const githubCommitStatusId = (value: string): GitHubCommitStatusId => githubCommitStatusIdSchema.parse(value)
 /** Brand one validated annotated-tag object id.
  * @param value - raw annotated-tag object id.
  * @returns validated branded id.

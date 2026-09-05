@@ -757,7 +757,7 @@ describe('Saki GitHub Host wire schemas', () => {
               statusOptionId,
             }))
           : undefined
-      expect(sakiBoardResultSchema.safeParse({
+      const parsed = sakiBoardResultSchema.parse({
         ...CONFIRMED_BOARD_RESULT,
         projection: {
           ...CONFIRMED_BOARD_RESULT.projection,
@@ -770,7 +770,8 @@ describe('Saki GitHub Host wire schemas', () => {
           }),
           failure: { attemptId: ATTEMPT, configurationRevision: 1, failedAt: 200, failure },
         },
-      }).success).toBe(true)
+      })
+      expect(JSON.stringify(parsed)).not.toContain('SAKI_GITHUB_APP_PRIVATE_KEY')
     }
     const parseRepairEvidence = (
       mappingIssues: readonly unknown[],

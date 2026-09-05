@@ -449,6 +449,17 @@ export type InspectProjectResult =
   }
   | { readonly ok: false; readonly reason: InspectProjectFailureReason }
 
+/** Exact local Commit lookup scoped to one active Resource Binding. */
+export interface InspectProjectCommitRequest {
+  readonly binding: ActiveHostProjectBinding
+  readonly commitId: string
+}
+
+/** Exact Commit presence evidence or one bounded local-boundary failure. */
+export type InspectProjectCommitResult =
+  | { readonly ok: true; readonly commitId: string }
+  | { readonly ok: false; readonly reason: 'binding-stale' | 'commit-missing' | 'unavailable' }
+
 /** Index side compared by one file-scoped Diff request. */
 export type ProjectGitDiffLayer = 'staged' | 'unstaged' | 'conflict'
 
@@ -581,6 +592,23 @@ export interface CommitHostOperationRequest {
   readonly source: ControlIntentHostOperationSource
   readonly expected: HostGitMutationPrecondition
   readonly message: string
+}
+
+/** Canonical public-GitHub repository coordinates retained without transport authority. */
+export interface GitHubRepositoryCoordinates {
+  readonly nameWithOwner: string
+}
+
+/** Prepare one exact local Commit for one canonical GitHub branch ref. */
+export interface PushBranchHostOperationRequest {
+  readonly type: 'push-branch'
+  readonly source: ControlIntentHostOperationSource
+  readonly expected: {
+    readonly binding: ActiveHostProjectBinding
+    readonly commitId: string
+    readonly repository: GitHubRepositoryCoordinates
+  }
+  readonly targetRef: string
 }
 
 /** Provenance of the exact initial input for one Saki Agent Run. */
@@ -741,6 +769,29 @@ export interface CommitHostOperationResult {
   readonly committer: ProjectGitCommitSignature
 }
 
+/** Remote branch state observed before one successful Push publication. */
+export type GitRemoteBranchState =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'commit'; readonly objectId: string }
+
+/** Closed non-interactive credential adapters supported by Local Host Push. */
+export type GitCredentialHelperId =
+  | 'git-credential-manager'
+  | 'git-credential-manager-core'
+
+/** Stable evidence of one successful exact-lease Push publication. */
+export interface PushBranchHostOperationResult {
+  readonly type: 'push-branch'
+  readonly repository: GitHubRepositoryCoordinates
+  readonly targetRef: string
+  readonly commitId: string
+  readonly previous: GitRemoteBranchState
+  readonly credential: {
+    /** Safe Host-configured helper identity; never a helper command or credential byte. */
+    readonly helperId: GitCredentialHelperId
+  }
+}
+
 /** Stable evidence that one intended Agent Run and its exact dispatched input exist. */
 export interface StartAgentRunHostOperationResult {
   readonly type: 'start-agent-run'
@@ -764,6 +815,10 @@ export interface HostOperationRequestMap {
     readonly request: CommitHostOperationRequest
     readonly result: CommitHostOperationResult
   }
+  readonly 'push-branch': {
+    readonly request: PushBranchHostOperationRequest
+    readonly result: PushBranchHostOperationResult
+  }
   readonly 'start-agent-run': {
     readonly request: StartAgentRunHostOperationRequest
     readonly result: StartAgentRunHostOperationResult
@@ -779,7 +834,9 @@ export type HostOperationRequest<K extends HostOperationKind = HostOperationKind
 
 /** Exact Host Operation request union retained by `saki_host_execution@2`. */
 export type HostOperationRequestV2 =
-  | Exclude<HostOperationRequest, StartAgentRunHostOperationRequest>
+  | StageFilesHostOperationRequest
+  | UnstageFilesHostOperationRequest
+  | CommitHostOperationRequest
   | StartAgentRunHostOperationRequestV2
 
 /** Successful Host Operation result correlated to one operation kind. */
@@ -966,6 +1023,10 @@ export interface SakiHostExecutionOperationMap {
   readonly 'inspect-project': {
     readonly request: InspectProjectRequest
     readonly result: InspectProjectResult
+  }
+  readonly 'inspect-project-commit': {
+    readonly request: InspectProjectCommitRequest
+    readonly result: InspectProjectCommitResult
   }
   readonly 'read-project-diff': {
     readonly request: ReadProjectDiffOperationRequest

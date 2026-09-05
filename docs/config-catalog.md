@@ -16,10 +16,13 @@ A `Requires:` line lists the service keys the plugin `inject`s: its `cordis.yml`
 Requires: `agentPresets` · `agents` · `fs` · `sessionPersistence` · `sessions` · `storageDomain` · `subprocess` · `workspaceRegistry`
 
 ```ts config-catalog
-type ResolvedConfig = Required<Config>
+type ResolvedConfig = Required<Omit<Config, 'pushCredentialHelper'>>
+  & Pick<Config, 'pushCredentialHelper'>
 
 /** Local Git observation, baseline, and operation resource limits. */
 export interface Config {
+  /** Closed non-interactive system credential adapter available to Push operations. */
+  pushCredentialHelper?: GitCredentialHelperId
   /** Wall-clock bound for each Git process. */
   gitCommandTimeoutMs?: number
   /** TERM-to-KILL grace for each Git process tree. */
@@ -59,7 +62,9 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/execution-local/src/index.ts:115`](../packages/saki/execution-local/src/index.ts)
+Depends on: [`GitCredentialHelperId`](../packages/saki/execution/src/index.ts)
+
+Source: [`packages/saki/execution-local/src/index.ts:130`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 
@@ -92,7 +97,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/github-app/src/index.ts:66`](../packages/saki/github-app/src/index.ts)
+Source: [`packages/saki/github-app/src/index.ts:76`](../packages/saki/github-app/src/index.ts)
 
 <a id="breakfastdapaidangsaki-tool-intervention"></a>
 

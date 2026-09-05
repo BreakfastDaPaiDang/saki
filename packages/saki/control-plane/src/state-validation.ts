@@ -2,9 +2,12 @@
 
 import type { Domain, KvTable, TableValueOf } from '@deepseek-ai/dsh-storage-domain'
 import { validateAgentOperationsDurableState } from './agent-operations.ts'
+import { validateBranchDeliveryOperationsDurableState } from './branch-delivery.ts'
 import { recoverBootstrapCompletion } from './bootstrap-completion.ts'
+import { sakiControlPlaneDomainSpec } from './domain-spec.ts'
 import { validateGitHubSynchronizationDurableState } from './github-sync.ts'
 import { validateGitOperationsDurableState } from './git-operations.ts'
+import { validateMilestoneDeliveryOperationsDurableState } from './milestone-delivery.ts'
 import {
   sakiControlPlaneV2DomainSpec,
   sakiControlPlaneV3DomainSpec,
@@ -15,7 +18,6 @@ import {
 } from './projects.ts'
 import {
   CONTROL_STATE_KEY,
-  sakiControlPlaneDomainSpec,
 } from './spec.ts'
 import type {
   ControlStateRecord,
@@ -26,6 +28,7 @@ import type {
   PrincipalRecord,
   RegistrationActor,
 } from './spec.ts'
+import { validateGitHubWorkItemOperationsDurableState } from './work-item-operations.ts'
 import {
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
@@ -36,6 +39,8 @@ import {
 import type {
   SakiBrowserSessionId,
   SakiBuildId,
+  SakiControlIntentId,
+  SakiDevelopmentProjectId,
   SakiGrantId,
   SakiHostId,
   SakiInstallationAccessId,
@@ -92,12 +97,30 @@ interface HistoricalFoundationSnapshot {
 }
 
 /**
+ * Reject a Control Intent identity retained by more than one durable family.
+ * @param collections - complete Intent families plus projected answer-Intent identities.
+ */
+export function validateDisjointControlIntentIds(
+  ...collections: readonly (readonly { readonly id: SakiControlIntentId }[])[]
+): void {
+  const ids = new Set<SakiControlIntentId>()
+  for (const collection of collections) {
+    for (const intent of collection) {
+      if (ids.has(intent.id)) {
+        throw new Error(`Saki Control Intent '${intent.id}' is retained by multiple Intent kinds`)
+      }
+      ids.add(intent.id)
+    }
+  }
+}
+
+/**
  * Validate every product relationship in one already-opened current Saki state generation.
  * The operation performs synchronous reads only: it never writes, invokes Host or Workspace
  * capabilities, or changes the active Installation. The caller must exclusively own both
  * domains with no concurrent writers because cross-table reads are not internally serialized.
- * @param controlPlane - opened `saki_control_plane@8` candidate domain.
- * @param storageGeneration - opened `saki_storage_generation@6` candidate domain.
+ * @param controlPlane - opened `saki_control_plane@9` candidate domain.
+ * @param storageGeneration - opened `saki_storage_generation@7` candidate domain.
  * @param expectedInstallationId - Installation identity selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation identity selected by maintenance metadata.
  * @param expectedCreatedByBuildId - generation.json provenance that the seal must repeat.
@@ -669,36 +692,80 @@ function validateBootstrapCompletion<
 }
 
 function validateProjects(domain: ControlPlaneDomain, foundation: FoundationSnapshot): void {
-  const state = validateDevelopmentProjectsDurableState(
+  const projects = validateDevelopmentProjectsDurableState(
     domain.table('development_project_registry'),
     domain.table('registration_intents'),
     value => value,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
+  const projectExists = (projectId: SakiDevelopmentProjectId): boolean => (
+    projects.registry?.projects.some(project => project.id === projectId) ?? false
+  )
+  const projectRevision = (projectId: SakiDevelopmentProjectId): number | 'not-found' => (
+    projects.registry?.projects.find(project => project.id === projectId)?.revision ?? 'not-found'
+  )
   const github = validateGitHubSynchronizationDurableState(
     domain.table('github_project_sync'),
     domain.table('github_sync_configuration_intents'),
     foundation.control.installationId,
-    projectId => state.registry?.projects.some(project => project.id === projectId) ?? false,
+    projectExists,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
-  const otherIntentIds = new Set([
-    ...state.intents.map(intent => intent.id),
+  const workItemOtherIntentIds = new Set([
+    ...projects.intents.map(intent => intent.id),
     ...github.intents.map(intent => intent.id),
   ])
+  const workItems = validateGitHubWorkItemOperationsDurableState(
+    domain.table('github_work_item_intents'),
+    domain.table('github_work_item_recovery'),
+    projectRevision,
+    workItemOtherIntentIds,
+    (actor) => { validateRegistrationActorReference(actor, foundation) },
+  )
+  const gitOtherIntentIds = new Set([
+    ...workItemOtherIntentIds,
+    ...workItems.intents.map(intent => intent.id),
+  ])
   const recoverableMissingBindingIds = recoverableRegistrationAdmissionBindingIds(
-    state.registry,
-    state.intents,
+    projects.registry,
+    projects.intents,
   )
   const git = validateGitOperationsDurableState(
     domain.table('git_operation_intents'),
     domain.table('binding_write_admissions'),
-    state.registry,
-    otherIntentIds,
+    projects.registry,
+    gitOtherIntentIds,
     recoverableMissingBindingIds,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
-  validateAgentOperationsDurableState(
+  const branchOtherIntentIds = new Set([
+    ...gitOtherIntentIds,
+    ...git.intents.map(intent => intent.id),
+  ])
+  const branch = validateBranchDeliveryOperationsDurableState(
+    domain.table('branch_deliveries'),
+    domain.table('branch_delivery_intents'),
+    domain.table('binding_write_admissions'),
+    projectExists,
+    branchOtherIntentIds,
+    (actor) => { validateRegistrationActorReference(actor, foundation) },
+  )
+  const milestoneOtherIntentIds = new Set([
+    ...branchOtherIntentIds,
+    ...branch.intents.map(intent => intent.id),
+  ])
+  const milestone = validateMilestoneDeliveryOperationsDurableState(
+    domain.table('milestone_deliveries'),
+    domain.table('milestone_delivery_intents'),
+    projectExists,
+    milestoneOtherIntentIds,
+    (actor) => { validateRegistrationActorReference(actor, foundation) },
+  )
+  const agentOtherIntentIds = new Set([
+    ...milestoneOtherIntentIds,
+    ...milestone.intents.map(intent => intent.id),
+  ])
+  const agent = validateAgentOperationsDurableState(
     domain.table('agent_operation_intents'),
     domain.table('work_assignments'),
     domain.table('work_sessions'),
@@ -706,9 +773,23 @@ function validateProjects(domain: ControlPlaneDomain, foundation: FoundationSnap
     domain.table('execution_dispatches'),
     domain.table('intervention_requests'),
     domain.table('binding_write_admissions'),
-    state.registry,
-    new Set([...otherIntentIds, ...git.intents.map(intent => intent.id)]),
+    projects.registry,
+    agentOtherIntentIds,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
+  )
+  validateDisjointControlIntentIds(
+    projects.intents,
+    github.intents,
+    workItems.intents,
+    git.intents,
+    branch.intents,
+    milestone.intents,
+    agent.intents,
+    agent.interventions.flatMap(intervention => (
+      'answer' in intervention && intervention.answer !== undefined
+        ? [{ id: intervention.answer.payload.intent.intentId }]
+        : []
+    )),
   )
 }
 

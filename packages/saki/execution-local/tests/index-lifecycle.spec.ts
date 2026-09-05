@@ -30,7 +30,7 @@ const contexts: Context[] = []
 const HOST_ID = 'host-11111111-1111-4111-8111-111111111111' as SakiHostId
 const BINDING_ID = 'binding-11111111-1111-4111-8111-111111111111' as SakiResourceBindingId
 const WORKSPACE_ID = WorkspaceId('workspace-index-lifecycle')
-const CONFIG: Required<Config> = {
+const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
   gitCommandTimeoutMs: 10_000,
   gitTerminationGraceMs: 100,
   maxGitStdoutBytes: 1024 * 1024,
@@ -83,6 +83,8 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
     await expect(execution.inspectProjectSelection({ hostId: HOST_ID, directoryLocator: root }, signal))
       .rejects.toThrow(disposed)
     await expect(execution.inspectProject({ binding }, signal)).rejects.toThrow(disposed)
+    await expect(execution.inspectProjectCommit({ binding, commitId: 'a'.repeat(40) }, signal))
+      .rejects.toThrow(disposed)
     const change = request.changes[0]
     if (change === undefined) throw new Error('stage request has no change')
     await expect(execution.readDiff(binding, {

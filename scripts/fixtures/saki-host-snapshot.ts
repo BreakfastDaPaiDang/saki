@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { expect } from 'vitest'
 import type { ProjectGitHead } from '@breakfastdapaidang/saki-execution'
+import type { GitMutationExpectation, SakiProjectChangesProjection } from '@breakfastdapaidang/saki-control-plane'
 import { sakiSnapshotEnvironment } from '../saki-snapshot-environment.ts'
 
 const SNAPSHOT_RPC_TIMEOUT_MS = 30_000
@@ -17,6 +18,28 @@ const root = resolve(import.meta.dirname, '../..')
 const tsxLoader = import.meta.resolve('tsx/esm')
 const run = promisify(execFile)
 const nullConfig = process.platform === 'win32' ? 'NUL' : '/dev/null'
+
+/**
+ * Derive the exact mutation fence from a successful Project Changes observation.
+ * @param projection - observed Project revisions and Git status.
+ * @returns mutation expectations for that observation; rejects an unmerged index.
+ */
+export function mutationExpectation(projection: Omit<SakiProjectChangesProjection, 'result'> & {
+  readonly result: Extract<SakiProjectChangesProjection['result'], { readonly ok: true }>
+}): GitMutationExpectation {
+  const observation = projection.result.observation
+  if (observation.index.kind !== 'tree') throw new Error('Saki snapshot Project Changes returned an unmerged index')
+  return {
+    projectId: projection.projectId,
+    expectedRegistryRevision: projection.registryRevision,
+    expectedProjectRevision: projection.projectRevision,
+    expectedBinding: { id: observation.bindingId, revision: observation.bindingRevision },
+    expectedStatus: observation.fingerprint,
+    expectedHead: observation.head,
+    expectedIndex: observation.index,
+    expectedWorktree: observation.worktree,
+  }
+}
 
 /** Running Saki child and the safe launcher handoff captured from stdout. */
 export interface StartedSaki {
@@ -32,6 +55,7 @@ export interface SakiSnapshotStartOptions {
   readonly agentRunSnapshot?: boolean
   readonly boardProviderEnabled?: boolean
   readonly boardProviderStatePath?: string
+  readonly deliverySnapshot?: boolean
 }
 
 /** Raw response retained for pre-dispatch HTTP rejection snapshots. */
@@ -183,7 +207,11 @@ export function serializeSnapshotRecords(
 ): string {
   const output = `${records.map(record => JSON.stringify(record)).join('\n')}\n`
   for (const sensitive of sensitiveValues) {
-    if (sensitive !== undefined) expect(output).not.toContain(sensitive)
+    if (sensitive === undefined) continue
+    const jsonStringContent = JSON.stringify(sensitive).slice(1, -1)
+    for (const representation of new Set([sensitive, jsonStringContent])) {
+      expect(output).not.toContain(representation)
+    }
   }
   return output
 }
@@ -237,6 +265,7 @@ export async function startSaki(
     environment.SAKI_BOARD_SNAPSHOT_PROVIDER_ENABLED = options.boardProviderEnabled ? '1' : '0'
   }
   if (options.agentRunSnapshot === true) environment.SAKI_AGENT_RUN_SNAPSHOT = '1'
+  if (options.deliverySnapshot === true) environment.SAKI_DELIVERY_SNAPSHOT = '1'
   if (source) environment.TSX_TSCONFIG_PATH = join(root, 'tsconfig.json')
   const child = spawn(process.execPath, [
     ...(source ? ['--import', tsxLoader] : []),

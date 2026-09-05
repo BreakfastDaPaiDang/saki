@@ -11,11 +11,18 @@ import { isLoopbackHostname } from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-llm'
 import type { Domain, DomainChanged, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
+import {
+  githubCommitIdSchema,
+  type GitHubCommitId,
+  type SakiGitHub,
+} from '@breakfastdapaidang/saki-github'
+import type { ActiveHostProjectBinding } from '@breakfastdapaidang/saki-execution'
 import { SakiAuthenticationContext } from './authentication.ts'
 import type {
   SakiAuthenticationRequest,
   SakiAuthenticationResolution,
 } from './authentication.ts'
+import { sakiControlPlaneDomainSpec } from './domain-spec.ts'
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
@@ -29,7 +36,6 @@ import {
   HOST_OPERATOR_ACTIONS,
   moveWorkItemIntentSchema,
   registerDevelopmentProjectIntentSchema,
-  sakiControlPlaneDomainSpec,
   stageFilesIntentSchema,
   unstageFilesIntentSchema,
 } from './spec.ts'
@@ -43,6 +49,7 @@ import type {
   InstallationAccessRecord,
   InstallationRecord,
   PrincipalRecord,
+  DevelopmentProjectRecord,
   DevelopmentProjectRegistryRecord,
   RegistrationActor,
   RegistrationIntentRecord,
@@ -68,6 +75,39 @@ import {
   type GitHubWorkItemIntentTable,
   type GitHubWorkItemRecoveryTable,
 } from './work-item-operations.ts'
+import {
+  BranchDeliveryOperations,
+  branchDeliveryId,
+  branchDeliveryIntentSchema,
+  branchDeliveryRecordSchema,
+  type BranchDeliveryIntent,
+  type BranchDeliveryIntentResult,
+  type BranchDeliveryContextResult,
+  type BranchDeliveryAction,
+  type BranchDeliveryIntentTable,
+  type BranchDeliveryTable,
+} from './branch-delivery.ts'
+import {
+  MilestoneDeliveryOperations,
+  milestoneDeliveryId,
+  milestoneDeliveryIntentSchema,
+  milestoneDeliveryRecordSchema,
+  type MilestoneDeliveryAction,
+  type MilestoneDeliveryContextResult,
+  type MilestoneDeliveryIntent,
+  type MilestoneDeliveryIntentResult,
+  type MilestoneDeliveryIntentTable,
+  type MilestoneDeliveryTable,
+} from './milestone-delivery.ts'
+import {
+  milestoneBoardEvidence,
+  projectMilestoneView,
+} from './milestone-view.ts'
+import { readReleaseSnapshotV1 } from './release-snapshot-reader.ts'
+import type {
+  ReleaseEvidencePolicyV1Expectation,
+  ReleaseEvidencePolicyV1Snapshot,
+} from './release-evidence-policy.ts'
 import {
   AgentOperations,
   type SakiAgentInterventionRequest,
@@ -108,6 +148,7 @@ import type {
   SakiBootstrapTransportContext,
   SakiBrowserSessionId,
   SakiBoardWorkItemId,
+  SakiBoardProjection,
   SakiChangedDisposer,
   SakiDevelopmentProjectId,
   SakiGrantId,
@@ -143,6 +184,7 @@ import { enqueueKeyedOperation } from './keyed-operation.ts'
 import type { SakiInstallationState } from './installation-state.ts'
 import {
   assertRegistrationActorReference,
+  validateDisjointControlIntentIds,
   validateCurrentSakiState,
   validateInstallationAccessRecord,
 } from './state-validation.ts'
@@ -166,18 +208,23 @@ async function closeOpenedDomains(
   if (failures.length > 1) throw new AggregateError(failures, message)
 }
 
-function validateDisjointControlIntentIds(
-  ...collections: readonly (readonly { readonly id: SakiControlIntentId }[])[]
-): void {
-  const ids = new Set<SakiControlIntentId>()
-  for (const collection of collections) {
-    for (const intent of collection) {
-      if (ids.has(intent.id)) {
-        throw new Error(`Saki Control Intent '${intent.id}' is retained by multiple Intent kinds`)
-      }
-      ids.add(intent.id)
-    }
+function branchDeliveryAction(type: BranchDeliveryIntent['type']): BranchDeliveryAction {
+  switch (type) {
+    case 'save-branch-delivery': return 'branch-delivery:save'
+    case 'push-branch-delivery': return 'branch-delivery:push'
+    case 'create-branch-delivery-pull-request': return 'branch-delivery:pull-request:create'
+    case 'associate-branch-delivery-pull-request': return 'branch-delivery:pull-request:associate'
+    case 'mark-branch-delivery-in-review': return 'branch-delivery:review'
+    case 'accept-branch-delivery': return 'branch-delivery:accept'
+    /* v8 ignore next -- BranchDeliveryIntent is a closed union validated before dispatch. */
+    default: return assertNever(type)
   }
+}
+
+function milestoneDeliveryAction(type: MilestoneDeliveryIntent['type']): MilestoneDeliveryAction {
+  return type === 'save-milestone-delivery'
+    ? 'milestone-delivery:save'
+    : 'milestone-delivery:finalize'
 }
 
 /** Composition configuration for local Saki access. */
@@ -194,6 +241,12 @@ export interface Config {
   cookieName?: string
   /** Maximum lifetime of one durable GitHub complete-scan lease. */
   githubScanAttemptTtlMs?: number
+  /** Maximum age before confirmed targeted Branch Delivery evidence projects as stale. */
+  branchDeliveryObservationFreshForMs?: number
+  /** Maximum age accepted for Milestone View and immutable release evidence. */
+  milestoneDeliveryObservationFreshForMs?: number
+  /** Interval for polling only durable pending Branch and Milestone Delivery work. */
+  targetedPendingPollIntervalMs?: number
   /** Lifetime of one recoverable Execution Dispatch claim before its fencing token advances. */
   agentDispatchClaimTtlMs?: number
   /** Template copied into the first immutable Agent Profile of each new Project. */
@@ -349,6 +402,7 @@ interface CurrentFoundation {
 
 class AccessUnavailable extends Error {}
 class AccessCasConflict extends Error {}
+class MilestoneReleaseReadUnavailable extends Error {}
 
 const BOOTSTRAP_REQUIRED: AccessProjection = Object.freeze({
   kind: 'bootstrap-required',
@@ -369,6 +423,9 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     terminalRetentionMs: z.natural().min(1).default(7 * 24 * 60 * 60 * 1_000),
     cookieName: z.string().pattern(/^[A-Za-z0-9_]+$/).default('saki_session'),
     githubScanAttemptTtlMs: z.natural().min(1_000).max(86_400_000).default(5 * 60 * 1_000),
+    branchDeliveryObservationFreshForMs: z.natural().min(1_000).max(86_400_000).default(5 * 60 * 1_000),
+    milestoneDeliveryObservationFreshForMs: z.natural().min(1_000).max(86_400_000).default(5 * 60 * 1_000),
+    targetedPendingPollIntervalMs: z.natural().min(1_000).max(86_400_000).default(5 * 60 * 1_000),
     agentDispatchClaimTtlMs: z.natural().min(1_000).max(5 * 60 * 1_000).default(30_000),
     defaultAgentProfile: z.object({
       agentPresetId: z.string().min(1).max(200).pattern(/^[a-z0-9][a-z0-9-]*$/).default('standard'),
@@ -402,12 +459,19 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private agentRunTable!: AgentRunTable
   private executionDispatchTable!: ExecutionDispatchTable
   private interventionRequestTable!: InterventionRequestTable
+  private branchDeliveryTable!: BranchDeliveryTable
+  private branchDeliveryIntentTable!: BranchDeliveryIntentTable
+  private milestoneDeliveryTable!: MilestoneDeliveryTable
+  private milestoneDeliveryIntentTable!: MilestoneDeliveryIntentTable
   private projects!: DevelopmentProjects
   private gitOperations!: GitOperations
   private agentOperations!: AgentOperations
   private githubSynchronization!: GitHubProjectSynchronization
   private githubWorkItemOperations!: GitHubWorkItemOperations
+  private branchDeliveryOperations!: BranchDeliveryOperations
+  private milestoneDeliveryOperations!: MilestoneDeliveryOperations
   private githubSynchronizationConsumer: GitHubSynchronizationConsumer | undefined
+  private githubProvider: SakiGitHub | undefined
   private pendingBootstrap: SakiBootstrapHandoff | undefined
   private readonly listeners = new Set<(keys: readonly SakiProjectionKey[]) => void>()
   private readonly intentOperationTails = new Map<SakiControlIntentId, Promise<void>>()
@@ -480,11 +544,20 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       if (change.domain !== sakiControlPlaneDomainSpec.name) return
       if (change.table === 'registration_intents' || change.table === 'github_sync_configuration_intents'
         || change.table === 'git_operation_intents' || change.table === 'agent_operation_intents'
+        || change.table === 'branch_delivery_intents' || change.table === 'milestone_delivery_intents'
         || change.table === 'work_assignments' || change.table === 'work_sessions'
         || change.table === 'agent_runs' || change.table === 'execution_dispatches'
         || change.table === 'intervention_requests') return
       if (change.table === 'github_work_item_intents' || change.table === 'github_work_item_recovery') {
         this.notify(['my-work', 'board'])
+        return
+      }
+      if (change.table === 'branch_deliveries') {
+        this.notify(['branch-delivery', 'milestone-view'])
+        return
+      }
+      if (change.table === 'milestone_deliveries') {
+        this.notify(['milestone-view'])
         return
       }
       if (change.table === 'binding_write_admissions') {
@@ -493,11 +566,18 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       }
       if (change.table === 'github_project_sync') {
         this.githubSynchronizationConsumer?.wake()
-        this.notify(['my-work', 'project-settings', 'board'])
+        this.notify(['my-work', 'project-settings', 'board', 'milestone-view'])
         return
       }
       if (change.table === 'development_project_registry') {
-        this.notify(['my-work', 'attention', 'project-index', 'development-workspace', 'project-changes'])
+        this.notify([
+          'my-work',
+          'attention',
+          'project-index',
+          'development-workspace',
+          'project-changes',
+          'milestone-view',
+        ])
         return
       }
       this.notify(['access', 'my-work', 'attention', 'project-index', 'development-workspace', 'project-changes'])
@@ -529,6 +609,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     }
     let gitOperationsForDisposal: GitOperations | undefined
     let workItemOperationsForDisposal: GitHubWorkItemOperations | undefined
+    let branchDeliveryOperationsForDisposal: BranchDeliveryOperations | undefined
     let agentOperationsForDisposal: AgentOperations | undefined
     this.ctx.effect(() => async () => {
       this.operationAdmissionOpen = false
@@ -539,6 +620,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ...this.intentOperationTails.values(),
         gitOperationsForDisposal?.dispose() ?? Promise.resolve(),
         workItemOperationsForDisposal?.dispose() ?? Promise.resolve(),
+        branchDeliveryOperationsForDisposal?.dispose() ?? Promise.resolve(),
         agentOperationsForDisposal?.dispose() ?? Promise.resolve(),
       ])
       await closeOpenedDomains(
@@ -566,6 +648,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     this.agentRunTable = domain.table('agent_runs')
     this.executionDispatchTable = domain.table('execution_dispatches')
     this.interventionRequestTable = domain.table('intervention_requests')
+    this.branchDeliveryTable = domain.table('branch_deliveries')
+    this.branchDeliveryIntentTable = domain.table('branch_delivery_intents')
+    this.milestoneDeliveryTable = domain.table('milestone_deliveries')
+    this.milestoneDeliveryIntentTable = domain.table('milestone_delivery_intents')
 
     let settleStartup!: () => void
     this.startupSettled = new Promise((resolve) => { settleStartup = resolve })
@@ -688,6 +774,69 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         projects.registry,
         recoverableMissingBindingIds,
       )
+      this.branchDeliveryOperations = new BranchDeliveryOperations({
+        deliveryTable: this.branchDeliveryTable,
+        intentTable: this.branchDeliveryIntentTable,
+        admissionTable: this.bindingWriteAdmissionTable,
+        execution: this.ctx.sakiHostExecution,
+        projectExists: projectId => this.projects.registry().projects.some(project => project.id === projectId),
+        resolveContext: (projectId, workItemId) => this.resolveBranchDeliveryContext(projectId, workItemId),
+        currentLocalHead: (binding, signal) => this.currentBranchDeliveryLocalHead(binding, signal),
+        authorityCurrent: (actor, action) => this.intentAuthorityCurrent(actor, action),
+        validateActorReference: (actor) => { this.validateRegistrationActorReference(actor) },
+        moveWorkItem: async (request, actor, signal) => {
+          if (this.hasControlIntentConflict(request.intentId, 'work-item')) return { state: 'conflict' }
+          const result = await this.githubWorkItemOperations.submit({
+            type: 'move-work-item',
+            intentId: request.intentId,
+            projectId: request.projectId,
+            workItemId: request.workItemId,
+            expectedRemoteFingerprint: request.expectedRemoteFingerprint,
+            targetStatus: request.targetStatus,
+          }, actor, signal)
+          if (result.ok) {
+            return { state: 'succeeded', remoteFingerprint: result.receipt.remoteFingerprint }
+          }
+          switch (result.reason) {
+            case 'unavailable': return { state: 'unavailable' }
+            case 'reconciliation-required': return { state: 'reconciliation-required' }
+            case 'denied':
+            case 'conflict':
+            case 'canceled': return { state: 'conflict' }
+            /* v8 ignore next -- every GitHubWorkItemIntentResult failure reason is handled above. */
+            default: return assertNever(result)
+          }
+        },
+        observationFreshForMs: this.config.branchDeliveryObservationFreshForMs,
+        notifyChanged: () => { this.notify(['branch-delivery', 'milestone-view']) },
+        reportUnexpectedFailure: (error) => {
+          this.ctx.logger.error(`Saki Branch Delivery recovery failed: ${String(error)}`)
+        },
+        lifetime: this.lifetime.signal,
+      })
+      branchDeliveryOperationsForDisposal = this.branchDeliveryOperations
+      const branchDeliveries = this.branchDeliveryOperations.validateDurableState(new Set([
+        ...otherIntentIds,
+        ...gitOperations.intents.map(intent => intent.id),
+      ]))
+      this.milestoneDeliveryOperations = new MilestoneDeliveryOperations({
+        deliveryTable: this.milestoneDeliveryTable,
+        intentTable: this.milestoneDeliveryIntentTable,
+        projectExists: projectId => this.projects.registry().projects.some(project => project.id === projectId),
+        resolveContext: projectId => this.resolveMilestoneDeliveryContext(projectId),
+        readReleaseSnapshot: (projectId, expectation, pass, signal) => (
+          this.readMilestoneReleaseSnapshot(projectId, expectation, pass, signal)
+        ),
+        authorityCurrent: (actor, action) => this.intentAuthorityCurrent(actor, action),
+        validateActorReference: (actor) => { this.validateRegistrationActorReference(actor) },
+        maxObservationAgeMs: this.config.milestoneDeliveryObservationFreshForMs,
+        notifyChanged: () => { this.notify(['milestone-view']) },
+      })
+      const milestoneDeliveries = this.milestoneDeliveryOperations.validateDurableState(new Set([
+        ...otherIntentIds,
+        ...gitOperations.intents.map(intent => intent.id),
+        ...branchDeliveries.intents.map(intent => intent.id),
+      ]))
       this.agentOperations = new AgentOperations({
         intentTable: this.agentOperationIntentTable,
         assignmentTable: this.workAssignmentTable,
@@ -721,6 +870,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         new Set([
           ...otherIntentIds,
           ...gitOperations.intents.map(intent => intent.id),
+          ...branchDeliveries.intents.map(intent => intent.id),
+          ...milestoneDeliveries.intents.map(intent => intent.id),
         ]),
         projects.registry,
       )
@@ -729,6 +880,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         githubSynchronization.intents,
         workItems.intents,
         gitOperations.intents,
+        branchDeliveries.intents,
+        milestoneDeliveries.intents,
         agentOperations.intents,
         agentOperations.interventions.flatMap(intervention => (
           'answer' in intervention && intervention.answer !== undefined
@@ -748,6 +901,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       const disposeHostOperationChanges = this.ctx.sakiHostExecution.onChanged(
         (change) => {
           this.gitOperations.hostChanged(change)
+          this.branchDeliveryOperations.hostChanged(change)
           this.agentOperations.hostChanged(change)
         },
       )
@@ -756,6 +910,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       await this.agentOperations.initializeValidated(agentOperations)
       await this.githubSynchronization.initializeValidated(githubSynchronization, this.lifetime.signal)
       await this.githubWorkItemOperations.initializeValidated(workItems)
+      await this.branchDeliveryOperations.initializeValidated(branchDeliveries)
+      await this.milestoneDeliveryOperations.initializeValidated(milestoneDeliveries, this.lifetime.signal)
       this.lifetime.signal.throwIfAborted()
       await this.issueStartupChallenge()
       await this.installationState.activateAfterValidation(this.lifetime.signal)
@@ -978,6 +1134,86 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           },
         }
       }
+      case 'branch-delivery': {
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        const deliveryId = branchDeliveryId(query.projectId, query.workItemId)
+        let refreshState: 'cached' | 'confirmed' | 'unavailable' | 'immutable' = 'cached'
+        if (query.refresh === 'interactive') {
+          try {
+            const refreshed = await this.branchDeliveryOperations.refresh(deliveryId, signal)
+            signal.throwIfAborted()
+            if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+            if (refreshed.ok) {
+              refreshState = 'confirmed'
+            } else {
+              if (refreshed.reason === 'not-found') return { ok: false, reason: 'not-found' }
+              refreshState = refreshed.reason
+            }
+          } catch (error) {
+            signal.throwIfAborted()
+            if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+            this.ctx.logger.error(`Saki Branch Delivery refresh failed: ${String(error)}`)
+            refreshState = 'unavailable'
+          }
+        }
+        const branchDelivery = this.branchDeliveryOperations.project(deliveryId, Date.now())
+        if (branchDelivery === undefined) return { ok: false, reason: 'not-found' }
+        return {
+          ok: true,
+          projection: {
+            type: 'branch-delivery',
+            refresh: { requested: query.refresh, state: refreshState },
+            branchDelivery,
+          },
+        }
+      }
+      case 'milestone-view': {
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        const deliveryId = milestoneDeliveryId(query.projectId, query.milestoneId)
+        const initialValue = this.milestoneDeliveryTable.get(deliveryId)
+        if (initialValue === undefined) return { ok: false, reason: 'not-found' }
+        const initial = milestoneDeliveryRecordSchema.parse(initialValue)
+        let refreshState: 'cached' | 'confirmed' | 'unavailable' | 'immutable' = 'cached'
+        if (query.refresh === 'interactive') {
+          if (initial.releaseEvidence !== undefined) {
+            refreshState = 'immutable'
+          } else if (this.githubSynchronizationConsumer === undefined || this.githubProvider === undefined) {
+            refreshState = 'unavailable'
+          } else {
+            try {
+              // The Delivery exists, cannot be deleted, and refresh holds its sole writer queue.
+              await this.milestoneDeliveryOperations.refresh(deliveryId, signal)
+              signal.throwIfAborted()
+              if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+              refreshState = 'confirmed'
+            } catch (error) {
+              signal.throwIfAborted()
+              if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+              if (!(error instanceof MilestoneReleaseReadUnavailable)) {
+                this.ctx.logger.error(`Saki Milestone Delivery refresh failed: ${String(error)}`)
+              }
+              refreshState = 'unavailable'
+            }
+          }
+        }
+        const current = milestoneDeliveryRecordSchema.parse(this.milestoneDeliveryTable.get(deliveryId))
+        // Validated Milestone Deliveries retain their Project; neither aggregate has a deletion operation.
+        const board = this.githubSynchronization.board(query.projectId) as SakiBoardProjection
+        const now = Date.now()
+        return {
+          ok: true,
+          projection: {
+            type: 'milestone-view',
+            refresh: { requested: query.refresh, state: refreshState },
+            milestoneView: projectMilestoneView(
+              current,
+              milestoneBoardEvidence(board, now),
+              now,
+              this.config.milestoneDeliveryObservationFreshForMs,
+            ),
+          },
+        }
+      }
       /* v8 ignore next 2 -- SakiQuery is closed and Host wire parsing rejects unknown tags before dispatch. */
       default: return assertNever(query)
     }
@@ -1019,6 +1255,136 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       interventions: [...this.interventionRequestTable.entries()].map(([, value]) => value),
       giveToAgentAvailability,
     }
+  }
+
+  private resolveBranchDeliveryContext(
+    projectId: SakiDevelopmentProjectId,
+    workItemId: SakiBoardWorkItemId,
+  ): BranchDeliveryContextResult {
+    const project = this.projects.currentActiveBinding(projectId)
+    if (project === 'not-found') return { ok: false, reason: 'not-found' }
+    if (project === 'binding-unavailable') return { ok: false, reason: 'unavailable' }
+    const synchronization = this.githubSynchronization.mutationContext(projectId)
+    if (!synchronization.ok) {
+      return { ok: false, reason: 'unavailable' }
+    }
+    const { configuration, confirmedBoard } = synchronization.context
+    const workItem = confirmedBoard.items.find(candidate => candidate.id === workItemId)
+    if (workItem === undefined) return { ok: false, reason: 'not-found' }
+    return {
+      ok: true,
+      context: {
+        registryRevision: project.registryRevision,
+        projectRevision: project.projectRevision,
+        binding: project.binding,
+        synchronizationRevision: synchronization.context.synchronizationRevision,
+        mappingRevision: synchronization.context.mappingRevision,
+        installation: {
+          appId: configuration.appId,
+          installationId: configuration.githubInstallationId,
+          accountId: configuration.accountNodeId,
+          privateKeyRef: configuration.credentialRef,
+        },
+        repository: {
+          id: confirmedBoard.repository.id,
+          databaseId: configuration.repositoryDatabaseId,
+          nameWithOwner: confirmedBoard.repository.nameWithOwner,
+        },
+        workItem: {
+          id: workItem.id,
+          remoteFingerprint: workItem.remoteFingerprint,
+          issueId: workItem.source.issueId,
+        },
+      },
+    }
+  }
+
+  private async currentBranchDeliveryLocalHead(
+    binding: ActiveHostProjectBinding,
+    signal: AbortSignal,
+  ): Promise<
+    | { readonly ok: true; readonly commitId: GitHubCommitId; readonly observedAt: number }
+    | { readonly ok: false; readonly reason: 'unavailable' | 'conflict' }
+  > {
+    const inspected = await this.ctx.sakiHostExecution.inspectProject({ binding }, signal)
+    signal.throwIfAborted()
+    if (!inspected.ok) {
+      return { ok: false, reason: inspected.reason === 'binding-stale' ? 'conflict' : 'unavailable' }
+    }
+    if (inspected.observation.head.kind !== 'commit') return { ok: false, reason: 'conflict' }
+    return {
+      ok: true,
+      commitId: githubCommitIdSchema.parse(inspected.observation.head.objectId),
+      observedAt: inspected.observation.observedAt,
+    }
+  }
+
+  private resolveMilestoneDeliveryContext(
+    projectId: SakiDevelopmentProjectId,
+  ): MilestoneDeliveryContextResult {
+    const registry = this.projects.registry()
+    const project = registry.projects.find(candidate => candidate.id === projectId)
+    if (project === undefined) return { ok: false, reason: 'not-found' }
+    const synchronization = this.githubSynchronization.mutationContext(projectId)
+    if (!synchronization.ok) {
+      return { ok: false, reason: 'unavailable' }
+    }
+    return {
+      ok: true,
+      context: {
+        registryRevision: registry.revision,
+        projectRevision: project.revision,
+        repositoryId: synchronization.context.confirmedBoard.repository.id,
+        projectId: synchronization.context.confirmedBoard.project.id,
+      },
+    }
+  }
+
+  private async readMilestoneReleaseSnapshot(
+    projectId: SakiDevelopmentProjectId,
+    expectation: ReleaseEvidencePolicyV1Expectation,
+    pass: 'view' | 'evaluation' | 'final-reread',
+    signal: AbortSignal,
+  ): Promise<ReleaseEvidencePolicyV1Snapshot> {
+    const consumer = this.githubSynchronizationConsumer
+    const github = this.githubProvider
+    if (consumer === undefined || github === undefined) throw new MilestoneReleaseReadUnavailable()
+    if (pass !== 'view') {
+      const scan = await consumer.requestFreshBoardScan(projectId, signal)
+      signal.throwIfAborted()
+      if (scan.state !== 'published' && scan.state !== 'failed') {
+        throw new MilestoneReleaseReadUnavailable(`fresh Board scan ended in ${scan.state}`)
+      }
+    }
+    if (this.githubSynchronizationConsumer !== consumer || this.githubProvider !== github) {
+      throw new MilestoneReleaseReadUnavailable('GitHub Product App Provider changed during release read')
+    }
+    const registry = this.projects.registry()
+    // The caller owns a retained Milestone Delivery, and Projects and Deliveries cannot be deleted.
+    const project = registry.projects.find(candidate => candidate.id === projectId) as DevelopmentProjectRecord
+    const synchronization = this.githubSynchronization.mutationContext(projectId)
+    const deliveryValue = this.milestoneDeliveryTable.get(milestoneDeliveryId(projectId, expectation.milestoneId))
+    const boardProjection = this.githubSynchronization.board(projectId) as SakiBoardProjection
+    if (!synchronization.ok) {
+      throw new MilestoneReleaseReadUnavailable('release target is no longer available')
+    }
+    const delivery = milestoneDeliveryRecordSchema.parse(deliveryValue)
+    const snapshot = await readReleaseSnapshotV1({
+      project,
+      github,
+      configuration: synchronization.context.configuration,
+      expected: expectation,
+      milestoneSources: delivery.sources,
+      branchDeliveries: [...this.branchDeliveryTable.entries()]
+        .map(([, value]) => branchDeliveryRecordSchema.parse(value))
+        .filter(record => record.projectId === projectId),
+      board: milestoneBoardEvidence(boardProjection, Date.now()),
+    }, signal)
+    signal.throwIfAborted()
+    if (this.githubSynchronizationConsumer !== consumer || this.githubProvider !== github) {
+      throw new MilestoneReleaseReadUnavailable('GitHub Product App Provider changed during release read')
+    }
+    return snapshot
   }
 
   private projectGiveToAgentAvailability(
@@ -1132,6 +1498,28 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ))
         break
       }
+      case 'save-branch-delivery':
+      case 'push-branch-delivery':
+      case 'create-branch-delivery-pull-request':
+      case 'associate-branch-delivery-pull-request':
+      case 'mark-branch-delivery-in-review':
+      case 'accept-branch-delivery': {
+        const parsed = branchDeliveryIntentSchema.parse(intent)
+        result = this.runOwnedOperation(signal, operationSignal => this.enqueueIntentOperation(
+          parsed.intentId,
+          () => this.submitBranchDelivery(authentication, parsed, operationSignal),
+        ))
+        break
+      }
+      case 'save-milestone-delivery':
+      case 'finalize-milestone-delivery': {
+        const parsed = milestoneDeliveryIntentSchema.parse(intent)
+        result = this.runOwnedOperation(signal, operationSignal => this.enqueueIntentOperation(
+          parsed.intentId,
+          () => this.submitMilestoneDelivery(authentication, parsed, operationSignal),
+        ))
+        break
+      }
       case 'give-work-item-to-agent': {
         const parsed = giveWorkItemToAgentIntentSchema.parse(intent) as GiveWorkItemToAgentIntent
         result = this.runOwnedOperation(signal, operationSignal => this.enqueueIntentOperation(
@@ -1199,6 +1587,44 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     return await this.agentOperations.submit(intent, this.currentControlIntentActor(), signal)
   }
 
+  private async submitBranchDelivery(
+    authentication: SakiAuthenticationContext,
+    intent: BranchDeliveryIntent,
+    signal: AbortSignal,
+  ): Promise<BranchDeliveryIntentResult> {
+    signal.throwIfAborted()
+    const action = branchDeliveryAction(intent.type)
+    if (!this.authorized(authentication, action)) return { ok: false, reason: 'denied' }
+    if (this.hasControlIntentConflict(intent.intentId, 'branch-delivery')) {
+      return { ok: false, reason: 'conflict' }
+    }
+    return await this.branchDeliveryOperations.submit(intent, this.currentControlIntentActor(), signal)
+  }
+
+  private async submitMilestoneDelivery(
+    authentication: SakiAuthenticationContext,
+    intent: MilestoneDeliveryIntent,
+    signal: AbortSignal,
+  ): Promise<MilestoneDeliveryIntentResult> {
+    signal.throwIfAborted()
+    const action = milestoneDeliveryAction(intent.type)
+    if (!this.authorized(authentication, action)) return { ok: false, reason: 'denied' }
+    if (this.hasControlIntentConflict(intent.intentId, 'milestone-delivery')) {
+      return { ok: false, reason: 'conflict' }
+    }
+    if (intent.type === 'finalize-milestone-delivery'
+      && (this.githubSynchronizationConsumer === undefined || this.githubProvider === undefined)
+      && this.milestoneDeliveryIntentTable.get(intent.intentId) === undefined) {
+      return { ok: false, reason: 'unavailable' }
+    }
+    try {
+      return await this.milestoneDeliveryOperations.submit(intent, this.currentControlIntentActor(), signal)
+    } catch (error) {
+      if (error instanceof MilestoneReleaseReadUnavailable) return { ok: false, reason: 'unavailable' }
+      throw error
+    }
+  }
+
   private async submitInterventionAnswer(
     authentication: SakiAuthenticationContext,
     intent: AnswerInterventionIntent,
@@ -1220,6 +1646,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       | 'github-synchronization'
       | 'git-operation'
       | 'work-item'
+      | 'branch-delivery'
+      | 'milestone-delivery'
       | 'agent-operation'
       | 'intervention',
   ): boolean {
@@ -1228,6 +1656,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         && this.requireGitHubSynchronizationConfigurationIntentTable().get(intentId) !== undefined)
       || (owner !== 'git-operation' && this.requireGitOperationIntentTable().get(intentId) !== undefined)
       || (owner !== 'work-item' && this.requireGitHubWorkItemIntentTable().get(intentId) !== undefined)
+      || (owner !== 'branch-delivery' && this.requireBranchDeliveryIntentTable().get(intentId) !== undefined)
+      || (owner !== 'milestone-delivery' && this.requireMilestoneDeliveryIntentTable().get(intentId) !== undefined)
       || (owner !== 'agent-operation' && this.requireAgentOperationIntentTable().get(intentId) !== undefined)
       || (owner !== 'intervention' && this.interventionAnswerIntentExists(intentId))
   }
@@ -1965,6 +2395,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       || this.requireGitHubSynchronizationConfigurationIntentTable().size !== 0
       || this.requireGitHubWorkItemIntentTable().size !== 0
       || this.requireGitHubWorkItemRecoveryTable().size !== 0
+      || this.requireBranchDeliveryTable().size !== 0
+      || this.requireBranchDeliveryIntentTable().size !== 0
+      || this.requireMilestoneDeliveryTable().size !== 0
+      || this.requireMilestoneDeliveryIntentTable().size !== 0
       || this.requireGitOperationIntentTable().size !== 0
       || this.requireBindingWriteAdmissionTable().size !== 0
       || this.requireAgentOperationIntentTable().size !== 0
@@ -2011,26 +2445,58 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private installGitHubSynchronizationConsumer(): void {
     const providerFiber = this.ctx.inject(['sakiGitHub'], (providerContext: Context) => {
-      const detachWorkItemOperations = this.githubWorkItemOperations.attach(providerContext.sakiGitHub)
-      const detachAgentOperations = this.agentOperations.attachGitHub(providerContext.sakiGitHub)
+      const provider = providerContext.sakiGitHub
+      const providerLifetime = new AbortController()
+      const detachWorkItemOperations = this.githubWorkItemOperations.attach(provider)
+      const detachBranchDeliveryOperations = this.branchDeliveryOperations.attach(provider)
+      const detachAgentOperations = this.agentOperations.attachGitHub(provider)
       const consumer = new GitHubSynchronizationConsumer({
         synchronization: this.githubSynchronization,
-        github: providerContext.sakiGitHub,
+        github: provider,
         attemptTtlMs: this.config.githubScanAttemptTtlMs,
         reportUnexpectedFailure: (scope) => {
           this.ctx.logger.error(`Saki GitHub synchronization ${scope} failed outside its typed failure interface`)
         },
       })
+      this.githubProvider = provider
       this.githubSynchronizationConsumer = consumer
       consumer.wake()
+      const pendingPolling = this.runOwnedOperation(
+        providerLifetime.signal,
+        signal => this.pollGitHubProviderPending(signal),
+      ).catch(() => {
+        // The loop reports each failed pass and continues; only Provider or control-plane shutdown rejects it.
+      })
       providerContext.effect(() => async () => {
+        providerLifetime.abort(new Error('Saki GitHub Product App Provider is detaching'))
         detachWorkItemOperations()
+        const branchDeliveryRecovery = detachBranchDeliveryOperations()
         detachAgentOperations()
+        // Cordis drains the injected fiber before loading its replacement.
         this.githubSynchronizationConsumer = undefined
-        await consumer.dispose()
+        this.githubProvider = undefined
+        await Promise.all([consumer.dispose(), pendingPolling, branchDeliveryRecovery])
       }, 'saki-control-plane.githubSynchronizationConsumer')
     })
     this.ctx.effect(() => () => providerFiber.dispose(), 'saki-control-plane.optionalGitHubProvider')
+  }
+
+  private async pollGitHubProviderPending(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      try {
+        await this.branchDeliveryOperations.pollPending(signal)
+      } catch (error) {
+        signal.throwIfAborted()
+        this.ctx.logger.error(`Saki Branch Delivery polling failed: ${String(error)}`)
+      }
+      try {
+        await this.milestoneDeliveryOperations.pollPending(signal)
+      } catch (error) {
+        signal.throwIfAborted()
+        this.ctx.logger.error(`Saki Milestone Delivery polling failed: ${String(error)}`)
+      }
+      await waitForPendingPoll(signal, this.config.targetedPendingPollIntervalMs)
+    }
   }
 
   private requireControlStateTable(): ControlStateTable {
@@ -2079,6 +2545,22 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private requireGitHubWorkItemRecoveryTable(): GitHubWorkItemRecoveryTable {
     return this.githubWorkItemRecoveryTable
+  }
+
+  private requireBranchDeliveryTable(): BranchDeliveryTable {
+    return this.branchDeliveryTable
+  }
+
+  private requireBranchDeliveryIntentTable(): BranchDeliveryIntentTable {
+    return this.branchDeliveryIntentTable
+  }
+
+  private requireMilestoneDeliveryTable(): MilestoneDeliveryTable {
+    return this.milestoneDeliveryTable
+  }
+
+  private requireMilestoneDeliveryIntentTable(): MilestoneDeliveryIntentTable {
+    return this.milestoneDeliveryIntentTable
   }
 
   private requireGitOperationIntentTable(): GitOperationIntentTable {
@@ -2167,6 +2649,19 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     `${accessId}:challenge:${String(value)}` as SakiBootstrapChallengeId
   private browserSessionId = (accessId: SakiInstallationAccessId, value: number): SakiBrowserSessionId =>
     `${accessId}:session:${String(value)}` as SakiBrowserSessionId
+}
+
+async function waitForPendingPoll(signal: AbortSignal, intervalMs: number): Promise<void> {
+  if (signal.aborted) return
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(settle, intervalMs)
+    signal.addEventListener('abort', settle, { once: true })
+    function settle(): void {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', settle)
+      resolve()
+    }
+  })
 }
 
 /* v8 ignore start -- the closed SakiQuery switch above exhausts every same-process variant. */

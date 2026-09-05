@@ -10,6 +10,7 @@ import {
 } from '../src/fixtures.ts'
 import {
   bindingWriteAdmissionRecordSchema,
+  bindingWriteAdmissionV2RecordSchema,
   createCommitIntentSchema,
   gitOperationIntentRecordSchema,
   stageFilesIntentSchema,
@@ -638,5 +639,40 @@ describe('structured Git durable schemas', () => {
     }).success).toBe(true)
     expectAdmissionIssue({ ...accepted, action: 'project-commit:create' },
       'write admission action disagrees with Host preparation')
+
+    const pushReserved = { ...reserved, action: 'project-branch:push' }
+    const pushAccepted = {
+      ...accepted, action: 'project-branch:push',
+      preparation: { ...preparation, operation: { ...operation, type: 'push-branch' } },
+    }
+    expect(bindingWriteAdmissionRecordSchema.safeParse(pushReserved).success).toBe(true)
+    expect(bindingWriteAdmissionRecordSchema.safeParse(pushAccepted).success).toBe(true)
+    for (const invalid of [
+      { ...pushReserved, updatedAt: 1 },
+      { ...pushAccepted, acceptedAt: 1 },
+      { ...pushAccepted, acceptedAt: 5 },
+    ]) expectAdmissionIssue(invalid, 'Push write admission timestamps are not monotonic')
+    expectAdmissionIssue({ ...pushAccepted, preparation }, 'Push write admission disagrees with Host preparation')
+  })
+
+  it('rejects non-monotonic Agent admission timestamps in the frozen v7/v8 schema', () => {
+    const reserved = {
+      id: project.binding.id, schemaVersion: 1, revision: 1, state: 'agent-run', phase: 'reserved',
+      bindingRevision: 0, originIntentId: intent.intentId,
+      agentRunId: 'agent-run-00000000-0000-4000-8000-000000000001',
+      payloadDigest: 'a'.repeat(64), reservedAt: 2, updatedAt: 4,
+    }
+    const accepted = { ...reserved, phase: 'accepted', acceptedAt: 3 }
+    expect(bindingWriteAdmissionV2RecordSchema.safeParse(reserved).success).toBe(true)
+    expect(bindingWriteAdmissionV2RecordSchema.safeParse(accepted).success).toBe(true)
+    for (const invalid of [
+      { ...reserved, updatedAt: 1 }, { ...accepted, acceptedAt: 1 }, { ...accepted, acceptedAt: 5 },
+    ]) {
+      const parsed = bindingWriteAdmissionV2RecordSchema.safeParse(invalid)
+      expect(parsed.success).toBe(false)
+      if (!parsed.success) expect(parsed.error.issues).toContainEqual(expect.objectContaining({
+        message: 'Agent Run admission timestamps are not monotonic',
+      }))
+    }
   })
 })

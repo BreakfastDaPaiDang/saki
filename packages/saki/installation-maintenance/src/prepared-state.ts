@@ -22,7 +22,7 @@ interface PreparedStateBase {
   /** Physical generation identity verified against metadata and its seal. */
   readonly storageGenerationId: SakiStorageGenerationId
   /** Sole writable state version. */
-  readonly stateVersion: 8
+  readonly stateVersion: 9
   /** Artifact creator provenance; it does not decide compatibility. */
   readonly createdByBuildId: SakiBuildId
 }
@@ -60,7 +60,7 @@ class PreparedSakiInstallationState extends SakiInstallationState {
   readonly phase: PreparedSakiState['phase']
   readonly installationId: SakiInstallationId
   readonly storageGenerationId: SakiStorageGenerationId
-  readonly stateVersion = 8 as const
+  readonly stateVersion = 9 as const
   readonly createdByBuildId: SakiBuildId
   private readonly promoteToReady: ((signal: AbortSignal) => Promise<void>) | undefined
   private activation: Promise<void> | undefined

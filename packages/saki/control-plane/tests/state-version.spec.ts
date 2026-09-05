@@ -18,7 +18,9 @@ import {
 } from '../src/index.ts'
 import {
   sakiStorageGenerationV5DomainSpec,
+  sakiStorageGenerationV6DomainSpec,
   storageGenerationV5SealRecordSchema,
+  storageGenerationV6SealRecordSchema,
 } from '../src/state-version.ts'
 
 const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId
@@ -26,13 +28,13 @@ const STORAGE_GENERATION_ID = 'storage-generation-00000000-0000-4000-8000-000000
 const BUILD_ID = 'saki-build-0.1.0-test' as SakiBuildId
 
 describe('Saki product state versions', () => {
-  it('seals one v8 storage generation without widening the historical v3 through v7 seals', () => {
+  it('seals one v9 storage generation without widening the historical v3 through v8 seals', () => {
     const seal = createStorageGenerationSeal(INSTALLATION_ID, STORAGE_GENERATION_ID, BUILD_ID)
     expect(seal).toEqual({
-      schemaVersion: 6,
+      schemaVersion: 7,
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
       createdByBuildId: BUILD_ID,
     })
     expect(sakiStorageGenerationDomainSpec.tables.storage_generation.valueSchema.parse(seal)).toEqual(seal)
@@ -41,6 +43,7 @@ describe('Saki product state versions', () => {
     expect(sakiStorageGenerationV3DomainSpec.tables.storage_generation.valueSchema.safeParse(seal).success).toBe(false)
     expect(sakiStorageGenerationV4DomainSpec.tables.storage_generation.valueSchema.safeParse(seal).success).toBe(false)
     expect(sakiStorageGenerationV5DomainSpec.tables.storage_generation.valueSchema.safeParse(seal).success).toBe(false)
+    expect(sakiStorageGenerationV6DomainSpec.tables.storage_generation.valueSchema.safeParse(seal).success).toBe(false)
     const historicalV3Seal = storageGenerationV1SealRecordSchema.parse({
       schemaVersion: 1,
       installationId: INSTALLATION_ID,
@@ -76,6 +79,13 @@ describe('Saki product state versions', () => {
       stateVersion: 7,
       createdByBuildId: BUILD_ID,
     })
+    const historicalV8Seal = storageGenerationV6SealRecordSchema.parse({
+      schemaVersion: 6,
+      installationId: INSTALLATION_ID,
+      storageGenerationId: STORAGE_GENERATION_ID,
+      stateVersion: 8,
+      createdByBuildId: BUILD_ID,
+    })
     expect(sakiStorageGenerationDomainSpec.tables.storage_generation.valueSchema.safeParse(historicalV3Seal).success)
       .toBe(false)
     expect(sakiStorageGenerationDomainSpec.tables.storage_generation.valueSchema.safeParse(historicalV4Seal).success)
@@ -86,6 +96,10 @@ describe('Saki product state versions', () => {
       .toBe(false)
     expect(sakiStorageGenerationDomainSpec.tables.storage_generation.valueSchema.safeParse(historicalV7Seal).success)
       .toBe(false)
+    expect(sakiStorageGenerationDomainSpec.tables.storage_generation.valueSchema.safeParse(historicalV8Seal).success)
+      .toBe(false)
+    expect(sakiStorageGenerationV6DomainSpec.tables.storage_generation.valueSchema.parse(historicalV8Seal))
+      .toEqual(historicalV8Seal)
     expect(STORAGE_GENERATION_KEY).toBe('storage-generation')
   })
 

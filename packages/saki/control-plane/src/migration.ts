@@ -19,15 +19,18 @@ import {
 } from './migration-v4-github.ts'
 import { v4Source } from './migration-v4-source.ts'
 import { sakiAgentProfileIdSchema, sakiStorageGenerationIdSchema } from './ids.ts'
+import { sakiControlPlaneDomainSpec } from './domain-spec.ts'
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
   agentOperationIntentRecordSchema,
+  agentRunRecordSchema,
   agentRunV1RecordSchema,
-  bindingWriteAdmissionRecordSchema,
   bindingWriteAdmissionV1RecordSchema,
+  bindingWriteAdmissionV2RecordSchema,
   controlStateRecordSchema,
   developmentProjectRegistryRecordSchema,
+  executionDispatchRecordSchema,
   executionDispatchV1RecordSchema,
   developmentProjectRegistryV1RecordSchema,
   gitOperationIntentRecordSchema,
@@ -44,22 +47,26 @@ import {
   hostRecordSchema,
   installationAccessRecordSchema,
   installationRecordSchema,
+  interventionRequestRecordSchema,
   principalRecordSchema,
   registrationIntentRecordSchema,
-  sakiControlPlaneDomainSpec,
+  V8_HOST_OPERATOR_ACTIONS,
   V7_HOST_OPERATOR_ACTIONS,
   V5_HOST_OPERATOR_ACTIONS,
   V6_HOST_OPERATOR_ACTIONS,
   v7GrantRecordSchema,
+  v8GrantRecordSchema,
   v5GrantRecordSchema,
   v6GrantRecordSchema,
+  workAssignmentRecordSchema,
   workAssignmentV1RecordSchema,
   workSessionRecordSchema,
 } from './spec.ts'
 import type {
   ControlStateRecord,
   AgentOperationIntentRecord,
-  BindingWriteAdmissionRecord,
+  AgentRunRecord,
+  BindingWriteAdmissionV2Record,
   DevelopmentProjectRegistryRecord,
   DevelopmentProjectRegistryV1Record,
   GitOperationIntentRecord,
@@ -67,12 +74,15 @@ import type {
   GitHubSynchronizationConfigurationIntentRecord,
   GitHubWorkItemIntentRecord,
   GitHubWorkItemRecoveryRecord,
+  ExecutionDispatchRecord,
   GrantRecord,
   HostRecord,
   InstallationAccessRecord,
   InstallationRecord,
+  InterventionRequestRecord,
   PrincipalRecord,
   RegistrationIntentRecord,
+  WorkAssignmentRecord,
   WorkSessionRecord,
 } from './spec.ts'
 import type {
@@ -84,6 +94,7 @@ import type {
   SakiInstallationAccessId,
   SakiInstallationGenerationId,
   SakiInstallationId,
+  SakiInterventionRequestId,
   SakiPrincipalId,
   SakiResourceBindingId,
   SakiStorageGenerationId,
@@ -736,8 +747,8 @@ export const sakiControlPlaneV7DomainSpec = defineDomain({
       GitHubSynchronizationConfigurationIntentRecord
     >(githubSynchronizationConfigurationIntentRecordSchema),
     git_operation_intents: domainTable<SakiControlIntentId, GitOperationIntentRecord>(gitOperationIntentRecordSchema),
-    binding_write_admissions: domainTable<SakiResourceBindingId, BindingWriteAdmissionRecord>(
-      bindingWriteAdmissionRecordSchema,
+    binding_write_admissions: domainTable<SakiResourceBindingId, BindingWriteAdmissionV2Record>(
+      bindingWriteAdmissionV2RecordSchema,
     ),
     github_work_item_intents: domainTable<SakiControlIntentId, GitHubWorkItemIntentRecord>(
       githubWorkItemIntentRecordSchema,
@@ -755,6 +766,54 @@ export const sakiControlPlaneV7DomainSpec = defineDomain({
     agent_runs: domainTable<SakiAgentRunId, z.infer<typeof agentRunV1RecordSchema>>(agentRunV1RecordSchema),
     execution_dispatches: domainTable<SakiExecutionDispatchId, z.infer<typeof executionDispatchV1RecordSchema>>(
       executionDispatchV1RecordSchema,
+    ),
+  },
+})
+
+/** Exact v8 control-plane schema retained as the adjacent v9 migration source. */
+export const sakiControlPlaneV8DomainSpec = defineDomain({
+  name: 'saki_control_plane',
+  version: 8,
+  tables: {
+    control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
+    installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
+    hosts: domainTable<SakiHostId, HostRecord>(hostRecordSchema),
+    principals: domainTable<SakiPrincipalId, PrincipalRecord>(principalRecordSchema),
+    grants: domainTable<SakiGrantId, z.infer<typeof v8GrantRecordSchema>>(v8GrantRecordSchema),
+    installation_access: domainTable<SakiInstallationAccessId, InstallationAccessRecord>(
+      installationAccessRecordSchema,
+    ),
+    development_project_registry: domainTable<
+      typeof DEVELOPMENT_PROJECT_REGISTRY_KEY,
+      DevelopmentProjectRegistryRecord
+    >(developmentProjectRegistryRecordSchema),
+    registration_intents: domainTable<SakiControlIntentId, RegistrationIntentRecord>(registrationIntentRecordSchema),
+    github_project_sync: domainTable<SakiDevelopmentProjectId, GitHubProjectSyncRecord>(githubProjectSyncRecordSchema),
+    github_sync_configuration_intents: domainTable<
+      SakiControlIntentId,
+      GitHubSynchronizationConfigurationIntentRecord
+    >(githubSynchronizationConfigurationIntentRecordSchema),
+    git_operation_intents: domainTable<SakiControlIntentId, GitOperationIntentRecord>(gitOperationIntentRecordSchema),
+    binding_write_admissions: domainTable<SakiResourceBindingId, BindingWriteAdmissionV2Record>(
+      bindingWriteAdmissionV2RecordSchema,
+    ),
+    github_work_item_intents: domainTable<SakiControlIntentId, GitHubWorkItemIntentRecord>(
+      githubWorkItemIntentRecordSchema,
+    ),
+    github_work_item_recovery: domainTable<SakiWorkItemRecoveryId, GitHubWorkItemRecoveryRecord>(
+      githubWorkItemRecoveryRecordSchema,
+    ),
+    agent_operation_intents: domainTable<SakiControlIntentId, AgentOperationIntentRecord>(
+      agentOperationIntentRecordSchema,
+    ),
+    work_assignments: domainTable<SakiWorkAssignmentId, WorkAssignmentRecord>(workAssignmentRecordSchema),
+    work_sessions: domainTable<SakiWorkSessionId, WorkSessionRecord>(workSessionRecordSchema),
+    agent_runs: domainTable<SakiAgentRunId, AgentRunRecord>(agentRunRecordSchema),
+    execution_dispatches: domainTable<SakiExecutionDispatchId, ExecutionDispatchRecord>(
+      executionDispatchRecordSchema,
+    ),
+    intervention_requests: domainTable<SakiInterventionRequestId, InterventionRequestRecord>(
+      interventionRequestRecordSchema,
     ),
   },
 })
@@ -878,10 +937,22 @@ function migrateGrantsToV7(
   }))
 }
 
-function migrateGrantsToV8(snapshot: DomainMigrationSnapshot): Record<string, GrantRecord> {
+function migrateGrantsToV8(
+  snapshot: DomainMigrationSnapshot,
+): Record<string, z.infer<typeof v8GrantRecordSchema>> {
   const control = sourceTable<ControlStateRecord>(snapshot, 'control_state')[CONTROL_STATE_KEY]
   return Object.fromEntries(Object.entries(
     sourceTable<z.infer<typeof v7GrantRecordSchema>>(snapshot, 'grants'),
+  ).map(([key, value]) => {
+    if (key !== control?.hostOperatorGrantId) return [key, value]
+    return [key, { ...value, revision: value.revision + 1, actions: [...V8_HOST_OPERATOR_ACTIONS] }]
+  }))
+}
+
+function migrateGrantsToV9(snapshot: DomainMigrationSnapshot): Record<string, GrantRecord> {
+  const control = sourceTable<ControlStateRecord>(snapshot, 'control_state')[CONTROL_STATE_KEY]
+  return Object.fromEntries(Object.entries(
+    sourceTable<z.infer<typeof v8GrantRecordSchema>>(snapshot, 'grants'),
   ).map(([key, value]) => {
     if (key !== control?.hostOperatorGrantId) return [key, value]
     return [key, { ...value, revision: value.revision + 1, actions: [...HOST_OPERATOR_ACTIONS] }]
@@ -1040,7 +1111,7 @@ function migrateGitHubProjectSyncToV6(
   )
 }
 
-/** Pure retained migration chain from exact B03 v2 media through frozen adjacent formats to current v8 records. */
+/** Pure retained migration chain from exact B03 v2 media through frozen adjacent formats to current v9 records. */
 export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
   current: sakiControlPlaneDomainSpec,
   steps: [
@@ -1153,7 +1224,7 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
     },
     {
       from: sakiControlPlaneV7DomainSpec,
-      to: sakiControlPlaneDomainSpec,
+      to: sakiControlPlaneV8DomainSpec,
       migrate: snapshot => ({
         global: snapshot.global,
         tables: {
@@ -1162,6 +1233,21 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
           work_assignments: migrateWorkAssignmentsToV8(snapshot),
           agent_runs: migrateAgentRunsToV8(snapshot),
           intervention_requests: {},
+        },
+      }),
+    },
+    {
+      from: sakiControlPlaneV8DomainSpec,
+      to: sakiControlPlaneDomainSpec,
+      migrate: snapshot => ({
+        global: snapshot.global,
+        tables: {
+          ...snapshot.tables,
+          grants: migrateGrantsToV9(snapshot),
+          branch_deliveries: {},
+          branch_delivery_intents: {},
+          milestone_deliveries: {},
+          milestone_delivery_intents: {},
         },
       }),
     },

@@ -53,8 +53,8 @@ function verifiedBackup(): VerifiedRecoveryBackup {
 }
 
 describe('Saki maintenance CLI', () => {
-  it('pins B09 creator provenance and the retained manifest-less B03 source provenance', () => {
-    expect(CURRENT_SAKI_BUILD_ID).toBe('saki-build-0.1.0-b09')
+  it('pins B10 creator provenance and the retained manifest-less B03 source provenance', () => {
+    expect(CURRENT_SAKI_BUILD_ID).toBe('saki-build-0.1.0-b10')
     expect(LEGACY_B03_BUILD_ID).toBe('saki-build-0.1.0-b03')
   })
 
@@ -117,7 +117,7 @@ describe('Saki maintenance CLI', () => {
       phase: 'ready',
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
       generationJson: {
         leaf: `generations/${STORAGE_GENERATION_ID}/generation.json`,
         byteLength: 1,
@@ -128,7 +128,7 @@ describe('Saki maintenance CLI', () => {
       formatVersion: 1,
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
       createdByBuildId: CURRENT_SAKI_BUILD_ID,
       databaseLeaf: 'state.sqlite',
     })
@@ -144,7 +144,7 @@ describe('Saki maintenance CLI', () => {
           databasePath: resolve('hidden-generation.sqlite'),
         },
         sourceVersion: 2 as const,
-        targetVersion: 8 as const,
+        targetVersion: 9 as const,
       })),
     } satisfies SakiMaintenanceOperations
     const signal = new AbortController().signal
@@ -171,7 +171,7 @@ describe('Saki maintenance CLI', () => {
       backupId: BACKUP_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
       sourceVersion: 2,
-      targetVersion: 8,
+      targetVersion: 9,
     })
     expect(operations.backup).toHaveBeenCalledWith(backupCommand.options, signal)
     expect(operations.verify).toHaveBeenCalledWith(verifyCommand.options, BACKUP_ID, signal)

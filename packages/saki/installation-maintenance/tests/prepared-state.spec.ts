@@ -16,7 +16,7 @@ const base = {
   databasePath: resolve('saki-test', 'state.sqlite'),
   installationId: INSTALLATION_ID,
   storageGenerationId: GENERATION_ID,
-  stateVersion: 8,
+  stateVersion: 9,
   createdByBuildId: BUILD_ID,
 } as const
 
@@ -29,7 +29,7 @@ describe('prepared Saki Installation state', () => {
       phase: 'ready',
       installationId: INSTALLATION_ID,
       storageGenerationId: GENERATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
       createdByBuildId: BUILD_ID,
     })
     await expect(state.activateAfterValidation(AbortSignal.timeout(2_000))).resolves.toBeUndefined()

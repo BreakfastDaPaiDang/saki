@@ -100,6 +100,16 @@ export const expectedIssueReadPermissions = {
   metadata: 'read',
 } as const
 
+export const expectedPullRequestWritePermissions = {
+  metadata: 'read',
+  pull_requests: 'write',
+} as const
+
+export const expectedPullRequestReadPermissions = {
+  metadata: 'read',
+  pull_requests: 'read',
+} as const
+
 export const expectedProjectReadPermissions = {
   issues: 'read',
   metadata: 'read',

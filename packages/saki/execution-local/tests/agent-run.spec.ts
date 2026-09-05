@@ -74,7 +74,7 @@ const STORAGE_GENERATION_ID =
 const PRINCIPAL_ID = 'principal-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' as SakiPrincipalId
 const GRANT_ID = 'grant-ffffffff-ffff-4fff-8fff-ffffffffffff' as SakiGrantId
 
-const CONFIG: Required<Config> = {
+const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
   gitCommandTimeoutMs: 10_000,
   gitTerminationGraceMs: 100,
   maxGitStdoutBytes: 1024 * 1024,
@@ -182,7 +182,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     })
     if (!started.ok || started.snapshot.state !== 'succeeded') return
     const currentRecord = {
-      schemaVersion: 3 as const,
+      schemaVersion: 4 as const,
       request: answer,
       preparationRevision: preparedAnswer.preparation.preparationRevision,
       snapshot: started.snapshot,
@@ -1331,7 +1331,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     const persistence = operationPersistence(harness.execution)
     const { completedAt: _completedAt, result: _result, ...base } = started.snapshot
     await persistence.original({
-      schemaVersion: 3,
+      schemaVersion: 4,
       request,
       preparationRevision: prepared.preparation.preparationRevision,
       effectPlan: { kind: 'agent-run', publication: 'applied-recorded', result: started.snapshot.result },

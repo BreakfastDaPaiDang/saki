@@ -26,11 +26,14 @@ import {
   activeHostProjectBindingSchema,
   inspectProjectRequestSchema,
   inspectProjectResultSchema,
+  inspectProjectCommitRequestSchema,
+  inspectProjectCommitResultSchema,
   commitHostOperationResultSchema,
   inspectInterventionOpeningRequestSchema,
   interventionOpeningEvidenceSchema,
   hostOperationPreparationSchema,
   hostOperationRequestSchema,
+  hostOperationRequestV2Schema,
   hostOperationSnapshotSchema,
   hostOperationStartResultSchema,
   MAX_HOST_OPERATION_COMMIT_MESSAGE_UTF8_BYTES,
@@ -60,6 +63,8 @@ import {
   readProjectDiffResultSchema,
   projectSelectionProjectionSchema,
   projectSelectionInspectionSchema,
+  pushBranchHostOperationRequestSchema,
+  pushBranchHostOperationResultSchema,
   safeGitRemoteObservationSchema,
   safeGitRemoteObservationKey,
   sakiInterventionAnswerMessageSourceSchema,
@@ -669,6 +674,13 @@ describe('InheritedChangeBaseline schemas', () => {
 
     expect(activeHostProjectBindingSchema.parse(binding)).toEqual(binding)
     expect(inspectProjectRequestSchema.parse({ binding })).toEqual({ binding })
+    const commitId = 'a'.repeat(40)
+    expect(inspectProjectCommitRequestSchema.parse({ binding, commitId })).toEqual({ binding, commitId })
+    expect(inspectProjectCommitRequestSchema.safeParse({ binding, commitId: 'a'.repeat(64) }).success).toBe(false)
+    expect(inspectProjectCommitRequestSchema.safeParse({ binding, commitId: 'HEAD' }).success).toBe(false)
+    expect(inspectProjectCommitResultSchema.parse({ ok: true, commitId })).toEqual({ ok: true, commitId })
+    expect(inspectProjectCommitResultSchema.parse({ ok: false, reason: 'commit-missing' }))
+      .toEqual({ ok: false, reason: 'commit-missing' })
     expect(projectGitStatusObservationSchema.parse(observation)).toEqual(observation)
     expect(inspectProjectResultSchema.parse({ ok: true, observation, preEffectBaseline: baseline }))
       .toEqual({ ok: true, observation, preEffectBaseline: baseline })
@@ -1358,6 +1370,118 @@ describe('InheritedChangeBaseline schemas', () => {
     expect(startAgentRunHostOperationResultSchema.parse(result)).toEqual(result)
   })
 
+  it('admits one exact PushBranch request and result while keeping the v2 request union frozen', () => {
+    const { request, result } = pushBranchFixture()
+
+    expect(pushBranchHostOperationRequestSchema.parse(request)).toEqual(request)
+    expect(hostOperationRequestSchema.parse(request)).toEqual(request)
+    expect(hostOperationRequestV2Schema.safeParse(request).success).toBe(false)
+    expect(pushBranchHostOperationResultSchema.parse(result)).toEqual(result)
+  })
+
+  it('rejects non-canonical GitHub repository coordinates in a PushBranch request', () => {
+    const { request } = pushBranchFixture()
+
+    expect(pushBranchHostOperationRequestSchema.safeParse({
+      ...request,
+      expected: { ...request.expected, repository: { nameWithOwner: 'owner/.' } },
+    }).success).toBe(false)
+  })
+
+  it('requires SHA-256 commit identities for Push and lookup in a SHA-256 Binding', () => {
+    const { binding, request } = pushBranchFixture()
+    const head = binding.expectedInspection.projection.head
+    if (head.kind !== 'commit') throw new Error('expected a committed Binding HEAD')
+    const sha256Binding = {
+      ...binding,
+      expectedInspection: {
+        ...binding.expectedInspection,
+        projection: signedInspection({
+          ...binding.expectedInspection.projection,
+          objectFormat: 'sha256',
+          head: { ...head, objectId: 'a'.repeat(64) },
+        }, binding.expectedInspection.trusted),
+      },
+    }
+    for (const width of [40, 64]) {
+      const commitId = 'a'.repeat(width)
+      expect(pushBranchHostOperationRequestSchema.safeParse({
+        ...request,
+        expected: { ...request.expected, binding: sha256Binding, commitId },
+      }).success).toBe(width === 64)
+      expect(inspectProjectCommitRequestSchema.safeParse({ binding: sha256Binding, commitId }).success)
+        .toBe(width === 64)
+    }
+  })
+
+  it('keeps PushBranch transport and credential authority Host-owned', () => {
+    const { request } = pushBranchFixture()
+
+    expect(pushBranchHostOperationRequestSchema.safeParse({
+      ...request,
+      url: 'https://github.com/BreakfastDaPaiDang/saki.git',
+    }).success).toBe(false)
+    expect(pushBranchHostOperationRequestSchema.safeParse({
+      ...request,
+      credential: { helperId: 'caller-helper' },
+    }).success).toBe(false)
+  })
+
+  it('requires PushBranch refs and object ids to match their closed Git identities', () => {
+    const { request, result } = pushBranchFixture()
+
+    expect(pushBranchHostOperationRequestSchema.safeParse({ ...request, targetRef: 'refs/tags/v1' }).success)
+      .toBe(false)
+    expect(pushBranchHostOperationRequestSchema.safeParse({
+      ...request,
+      expected: { ...request.expected, commitId: '1'.repeat(64) },
+    }).success).toBe(false)
+    expect(pushBranchHostOperationResultSchema.safeParse({
+      ...result,
+      previous: { kind: 'commit', objectId: '2'.repeat(64) },
+    }).success).toBe(false)
+    expect(pushBranchHostOperationResultSchema.safeParse({
+      ...result,
+      credential: { helperId: 'manager', password: 'secret' },
+    }).success).toBe(false)
+    expect(pushBranchHostOperationResultSchema.safeParse({
+      ...result,
+      credential: { helperId: 'git credential manager' },
+    }).success).toBe(false)
+    expect(pushBranchHostOperationResultSchema.safeParse({
+      ...result,
+      credential: { helperId: 'caller-helper' },
+    }).success).toBe(false)
+  })
+
+  it('correlates a succeeded PushBranch snapshot with its reference and result', () => {
+    const { binding, request, result } = pushBranchFixture()
+    const snapshot = {
+      operation: {
+        id: 'host-operation-33333333-3333-4333-8333-333333333333',
+        hostId: binding.hostId,
+        type: 'push-branch',
+      },
+      revision: 1,
+      source: request.source,
+      requestFingerprint: { version: 1, digest: '8'.repeat(64) },
+      bindingId: binding.id,
+      bindingRevision: binding.revision,
+      preparedAt: 10,
+      updatedAt: 12,
+      state: 'succeeded',
+      admission: { kind: 'accepted', revision: 1, acceptedAt: 11 },
+      completedAt: 12,
+      result: { ...result, previous: { kind: 'absent' } },
+    } as const
+
+    expect(hostOperationSnapshotSchema.parse(snapshot)).toEqual(snapshot)
+    expect(hostOperationSnapshotSchema.safeParse({
+      ...snapshot,
+      operation: { ...snapshot.operation, type: 'commit' },
+    }).success).toBe(false)
+  })
+
   it('admits one attributed Intervention answer through StartAgentRun while preserving the exact v2 request schema', () => {
     const { request } = startAgentRunFixture()
     const sourceInput = {
@@ -1835,6 +1959,10 @@ describe('InheritedChangeBaseline schemas', () => {
         return { ok: false, reason: 'unavailable' }
       }
 
+      async inspectProjectCommit(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
+        return { ok: false, reason: 'unavailable' }
+      }
+
       async readDiff(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
         return { ok: false, reason: 'unavailable' }
       }
@@ -1858,12 +1986,44 @@ describe('InheritedChangeBaseline schemas', () => {
 
     await expect(execution.inspectProjectSelection()).resolves.toEqual({ ok: false, reason: 'unavailable' })
     await expect(execution.inspectProject()).resolves.toEqual({ ok: false, reason: 'unavailable' })
+    await expect(execution.inspectProjectCommit()).resolves.toEqual({ ok: false, reason: 'unavailable' })
     await expect(execution.readDiff()).resolves.toEqual({ ok: false, reason: 'unavailable' })
     await expect(execution.inspectInterventionOpening()).resolves.toEqual({ kind: 'absent' })
     await expect(execution.prepareOperation()).resolves.toEqual({ ok: false, reason: 'unavailable' })
     await ctx.fiber.dispose()
   })
 })
+
+function pushBranchFixture() {
+  const { binding } = boundStatusFixture()
+  const request = {
+    type: 'push-branch',
+    source: {
+      kind: 'control-intent',
+      intentId: 'intent-22222222-2222-4222-8222-222222222222',
+      intentRevision: 0,
+      payloadDigest: '7'.repeat(64),
+    },
+    expected: {
+      binding,
+      commitId: '1'.repeat(40),
+      repository: { nameWithOwner: 'BreakfastDaPaiDang/saki' },
+    },
+    targetRef: 'refs/heads/main',
+  } as const
+  return {
+    binding,
+    request,
+    result: {
+      type: 'push-branch',
+      repository: request.expected.repository,
+      targetRef: request.targetRef,
+      commitId: request.expected.commitId,
+      previous: { kind: 'commit', objectId: '2'.repeat(40) },
+      credential: { helperId: 'git-credential-manager' },
+    } as const,
+  }
+}
 
 function boundStatusFixture() {
   const baseline = signedBaseline({

@@ -8,6 +8,8 @@ import {
   sakiAccessProjectionSchema,
   sakiAnswerInterventionResultSchema,
   sakiAttentionResultSchema,
+  sakiBranchDeliveryIntentResultSchema,
+  sakiBranchDeliveryResultSchema,
   sakiBoardResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiCreateCommitResultSchema,
@@ -15,6 +17,8 @@ import {
   sakiGiveWorkItemToAgentResultSchema,
   sakiDevelopmentWorkspaceResultSchema,
   sakiInspectProjectSelectionResultSchema,
+  sakiMilestoneDeliveryIntentResultSchema,
+  sakiMilestoneViewResultSchema,
   sakiProjectDiffResultSchema,
   sakiProjectChangesResultSchema,
   sakiRegisterDevelopmentProjectResultSchema,
@@ -32,12 +36,19 @@ import type {
   SakiWireAnswerInterventionIntent,
   SakiWireAnswerInterventionResult,
   SakiWireAttentionResult,
+  SakiWireAcceptBranchDeliveryIntent,
+  SakiWireAssociateBranchDeliveryPullRequestIntent,
+  SakiWireBranchDeliveryIntent,
+  SakiWireBranchDeliveryIntentResult,
+  SakiWireBranchDeliveryRefresh,
+  SakiWireBranchDeliveryResult,
   SakiWireBoardRefresh,
   SakiWireBoardResult,
   SakiWireConfigureGitHubSynchronizationIntent,
   SakiWireConfigureGitHubSynchronizationResult,
   SakiWireCreateCommitIntent,
   SakiWireCreateCommitResult,
+  SakiWireCreateBranchDeliveryPullRequestIntent,
   SakiWireCreateWorkItemIntent,
   SakiWireCreateWorkItemResult,
   SakiWireGiveWorkItemToAgentIntent,
@@ -53,9 +64,18 @@ import type {
   SakiWireProjectSettingsResult,
   SakiWireMoveWorkItemIntent,
   SakiWireMoveWorkItemResult,
+  SakiWireMarkBranchDeliveryInReviewIntent,
+  SakiWireMilestoneDeliveryIntent,
+  SakiWireMilestoneDeliveryIntentResult,
+  SakiWireMilestoneViewRefresh,
+  SakiWireMilestoneViewResult,
   SakiWireMyWorkResult,
   SakiWireRegisterDevelopmentProjectIntent,
   SakiWireRegisterDevelopmentProjectResult,
+  SakiWirePushBranchDeliveryIntent,
+  SakiWireFinalizeMilestoneDeliveryIntent,
+  SakiWireSaveBranchDeliveryIntent,
+  SakiWireSaveMilestoneDeliveryIntent,
   SakiWireStageFilesIntent,
   SakiWireStageFilesResult,
   SakiWireUnstageFilesIntent,
@@ -157,6 +177,34 @@ export interface SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireBoardResult>
   /**
+   * Read one Work Item's Branch Delivery projection.
+   * @param projectId - stable Project id.
+   * @param workItemId - stable Work Item id from the Board projection.
+   * @param refresh - cached-only or interactive targeted evidence refresh.
+   * @param signal - optional cancellation.
+   * @returns the browser-safe delivery projection or `denied`/`not-found`.
+   */
+  queryBranchDelivery(
+    projectId: SakiWireProjectId,
+    workItemId: SakiWireSaveBranchDeliveryIntent['workItemId'],
+    refresh: SakiWireBranchDeliveryRefresh,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryResult>
+  /**
+   * Read one Project Milestone joined to current Board and release sources.
+   * @param projectId - stable Project id.
+   * @param milestoneId - exact GitHub Milestone node id.
+   * @param refresh - cached-only or interactive targeted evidence refresh.
+   * @param signal - optional cancellation.
+   * @returns the browser-safe Milestone View or `denied`/`not-found`.
+   */
+  queryMilestoneView(
+    projectId: SakiWireProjectId,
+    milestoneId: SakiWireSaveMilestoneDeliveryIntent['release']['milestoneId'],
+    refresh: SakiWireMilestoneViewRefresh,
+    signal?: AbortSignal,
+  ): Promise<SakiWireMilestoneViewResult>
+  /**
    * Submit a confirmed Project-registration Intent.
    * @param intent - complete confirmed registration Intent.
    * @param requestToken - current session-derived request token.
@@ -241,6 +289,94 @@ export interface SakiHostClient {
     requestToken: string,
     signal?: AbortSignal,
   ): Promise<SakiWireMoveWorkItemResult>
+  /**
+   * @param intent - exact Commit selection.
+   * @param requestToken - mutation token.
+   * @param signal - cancellation.
+   * @returns durable delivery outcome.
+   */
+  saveBranchDelivery(
+    intent: SakiWireSaveBranchDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult>
+  /**
+   * @param intent - exact delivery Push request.
+   * @param requestToken - mutation token.
+   * @param signal - cancellation.
+   * @returns durable delivery outcome.
+   */
+  pushBranchDelivery(
+    intent: SakiWirePushBranchDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult>
+  /**
+   * @param intent - marker-owned Pull Request request.
+   * @param requestToken - mutation token.
+   * @param signal - cancellation.
+   * @returns durable delivery outcome.
+   */
+  createBranchDeliveryPullRequest(
+    intent: SakiWireCreateBranchDeliveryPullRequestIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult>
+  /**
+   * @param intent - exact observed Pull Request association.
+   * @param requestToken - mutation token.
+   * @param signal - cancellation.
+   * @returns durable delivery outcome.
+   */
+  associateBranchDeliveryPullRequest(
+    intent: SakiWireAssociateBranchDeliveryPullRequestIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult>
+  /**
+   * @param intent - In-review transition.
+   * @param requestToken - mutation token.
+   * @param signal - cancellation.
+   * @returns durable delivery outcome.
+   */
+  markBranchDeliveryInReview(
+    intent: SakiWireMarkBranchDeliveryInReviewIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult>
+  /**
+   * @param intent - attributed acceptance transition.
+   * @param requestToken - mutation token.
+   * @param signal - cancellation.
+   * @returns durable delivery outcome.
+   */
+  acceptBranchDelivery(
+    intent: SakiWireAcceptBranchDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult>
+  /**
+   * @param intent - exact Milestone metadata and release target.
+   * @param requestToken - mutation token.
+   * @param signal - cancellation.
+   * @returns durable Milestone Delivery outcome.
+   */
+  saveMilestoneDelivery(
+    intent: SakiWireSaveMilestoneDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireMilestoneDeliveryIntentResult>
+  /**
+   * @param intent - exact Milestone revision and release target to finalize.
+   * @param requestToken - mutation token.
+   * @param signal - cancellation.
+   * @returns durable Milestone Delivery outcome.
+   */
+  finalizeMilestoneDelivery(
+    intent: SakiWireFinalizeMilestoneDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireMilestoneDeliveryIntentResult>
   /**
    * Start or resume one manual Agent Run for an exact Ready Work Item.
    * @param intent - revision-fenced Work Item command without execution authority.
@@ -403,6 +539,34 @@ export class SakiHostClientService extends Service implements SakiHostClient {
   }
 
   /** @inheritdoc */
+  async queryBranchDelivery(
+    projectId: SakiWireProjectId,
+    workItemId: SakiWireSaveBranchDeliveryIntent['workItemId'],
+    refresh: SakiWireBranchDeliveryRefresh,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryResult> {
+    return sakiBranchDeliveryResultSchema.parse(await this.call(
+      'control/query',
+      { type: 'branch-delivery', projectId, workItemId, refresh },
+      signal,
+    ))
+  }
+
+  /** @inheritdoc */
+  async queryMilestoneView(
+    projectId: SakiWireProjectId,
+    milestoneId: SakiWireSaveMilestoneDeliveryIntent['release']['milestoneId'],
+    refresh: SakiWireMilestoneViewRefresh,
+    signal?: AbortSignal,
+  ): Promise<SakiWireMilestoneViewResult> {
+    return sakiMilestoneViewResultSchema.parse(await this.call(
+      'control/query',
+      { type: 'milestone-view', projectId, milestoneId, refresh },
+      signal,
+    ))
+  }
+
+  /** @inheritdoc */
   async registerDevelopmentProject(
     intent: SakiWireRegisterDevelopmentProjectIntent,
     requestToken: string,
@@ -501,6 +665,78 @@ export class SakiHostClientService extends Service implements SakiHostClient {
   }
 
   /** @inheritdoc */
+  async saveBranchDelivery(
+    intent: SakiWireSaveBranchDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult> {
+    return await this.submitBranchDelivery(intent, requestToken, signal)
+  }
+
+  /** @inheritdoc */
+  async pushBranchDelivery(
+    intent: SakiWirePushBranchDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult> {
+    return await this.submitBranchDelivery(intent, requestToken, signal)
+  }
+
+  /** @inheritdoc */
+  async createBranchDeliveryPullRequest(
+    intent: SakiWireCreateBranchDeliveryPullRequestIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult> {
+    return await this.submitBranchDelivery(intent, requestToken, signal)
+  }
+
+  /** @inheritdoc */
+  async associateBranchDeliveryPullRequest(
+    intent: SakiWireAssociateBranchDeliveryPullRequestIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult> {
+    return await this.submitBranchDelivery(intent, requestToken, signal)
+  }
+
+  /** @inheritdoc */
+  async markBranchDeliveryInReview(
+    intent: SakiWireMarkBranchDeliveryInReviewIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult> {
+    return await this.submitBranchDelivery(intent, requestToken, signal)
+  }
+
+  /** @inheritdoc */
+  async acceptBranchDelivery(
+    intent: SakiWireAcceptBranchDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult> {
+    return await this.submitBranchDelivery(intent, requestToken, signal)
+  }
+
+  /** @inheritdoc */
+  async saveMilestoneDelivery(
+    intent: SakiWireSaveMilestoneDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireMilestoneDeliveryIntentResult> {
+    return await this.submitMilestoneDelivery(intent, requestToken, signal)
+  }
+
+  /** @inheritdoc */
+  async finalizeMilestoneDelivery(
+    intent: SakiWireFinalizeMilestoneDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireMilestoneDeliveryIntentResult> {
+    return await this.submitMilestoneDelivery(intent, requestToken, signal)
+  }
+
+  /** @inheritdoc */
   async giveWorkItemToAgent(
     intent: SakiWireGiveWorkItemToAgentIntent,
     requestToken: string,
@@ -521,6 +757,32 @@ export class SakiHostClientService extends Service implements SakiHostClient {
     signal?: AbortSignal,
   ): Promise<SakiWireAnswerInterventionResult> {
     return sakiAnswerInterventionResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  private async submitBranchDelivery(
+    intent: SakiWireBranchDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireBranchDeliveryIntentResult> {
+    return sakiBranchDeliveryIntentResultSchema.parse(await this.call(
+      'control/submit',
+      intent,
+      signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken },
+    ))
+  }
+
+  private async submitMilestoneDelivery(
+    intent: SakiWireMilestoneDeliveryIntent,
+    requestToken: string,
+    signal?: AbortSignal,
+  ): Promise<SakiWireMilestoneDeliveryIntentResult> {
+    return sakiMilestoneDeliveryIntentResultSchema.parse(await this.call(
       'control/submit',
       intent,
       signal,

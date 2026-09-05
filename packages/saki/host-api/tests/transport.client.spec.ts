@@ -4,15 +4,23 @@ import type { ProjectGitChangeId } from '@breakfastdapaidang/saki-execution'
 import { describe, expect, it, vi } from 'vitest'
 import SakiHostClientService from '../src/client/index.ts'
 import {
+  sakiAcceptBranchDeliveryIntentSchema,
   sakiAnswerInterventionIntentSchema,
+  sakiAssociateBranchDeliveryPullRequestIntentSchema,
   sakiConfigureGitHubSynchronizationIntentSchema,
   sakiCreateCommitIntentSchema,
+  sakiCreateBranchDeliveryPullRequestIntentSchema,
   sakiCreateWorkItemIntentSchema,
   sakiGiveWorkItemToAgentIntentSchema,
   sakiMoveWorkItemIntentSchema,
+  sakiMarkBranchDeliveryInReviewIntentSchema,
+  sakiFinalizeMilestoneDeliveryIntentSchema,
+  sakiSaveMilestoneDeliveryIntentSchema,
+  sakiPushBranchDeliveryIntentSchema,
   sakiQueryRequestSchema,
   sakiRegisterDevelopmentProjectIntentSchema,
   sakiStageFilesIntentSchema,
+  sakiSaveBranchDeliveryIntentSchema,
   sakiUnstageFilesIntentSchema,
 } from '../src/wire.ts'
 
@@ -29,6 +37,155 @@ const PROJECT_ID = parsedProjectQuery.projectId
 describe('Saki browser Host client', () => {
   it('requires an active Connection carrier', () => {
     expect(() => new SakiHostClientService(new Context())).toThrow('active Connection carrier')
+  })
+
+  it('queries and submits every Branch Delivery operation through the safe wire', async () => {
+    const call = vi.fn(async (_channel: string, endpoint: string) => ({
+      ok: true as const,
+      value: endpoint === 'control/query'
+        ? { ok: false, reason: 'not-found' }
+        : { ok: false, reason: 'unavailable' },
+    }))
+    const ctx = new Context()
+    ctx.provide('connection', { rpc: { call } } as unknown as ConnectionHandle)
+    const fiber = await ctx.plugin(SakiHostClientService)
+    const workItemId = `work-item-${'3'.repeat(64)}`
+    const deliveryId = `branch-delivery-${'4'.repeat(64)}`
+    const fingerprint = `remote-fingerprint-${'5'.repeat(64)}`
+    const save = sakiSaveBranchDeliveryIntentSchema.parse({
+      type: 'save-branch-delivery',
+      intentId: 'intent-11111111-1111-4111-8111-111111111111',
+      projectId: PROJECT_ID,
+      workItemId,
+      expected: {
+        deliveryRevision: null,
+        registryRevision: 1,
+        projectRevision: 2,
+        binding: { id: 'binding-66666666-6666-4666-8666-666666666666', revision: 3 },
+        synchronizationRevision: 4,
+        mappingRevision: 4,
+        workItemRemoteFingerprint: fingerprint,
+      },
+      commitId: '7'.repeat(40),
+      headRef: 'refs/heads/saki/issue-32',
+      baseRef: 'refs/heads/master',
+    })
+    const intents = [
+      save,
+      sakiPushBranchDeliveryIntentSchema.parse({
+        type: 'push-branch-delivery',
+        intentId: 'intent-22222222-2222-4222-8222-222222222222',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+      }),
+      sakiCreateBranchDeliveryPullRequestIntentSchema.parse({
+        type: 'create-branch-delivery-pull-request',
+        intentId: 'intent-33333333-3333-4333-8333-333333333333',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+        title: 'Deliver issue 32',
+        body: 'Exact delivery evidence.',
+      }),
+      sakiAssociateBranchDeliveryPullRequestIntentSchema.parse({
+        type: 'associate-branch-delivery-pull-request',
+        intentId: 'intent-44444444-4444-4444-8444-444444444444',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+        pullRequestId: 'PR_issue_32',
+        pullRequestNumber: 32,
+      }),
+      sakiMarkBranchDeliveryInReviewIntentSchema.parse({
+        type: 'mark-branch-delivery-in-review',
+        intentId: 'intent-55555555-5555-4555-8555-555555555555',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+        expectedWorkItemRemoteFingerprint: fingerprint,
+      }),
+      sakiAcceptBranchDeliveryIntentSchema.parse({
+        type: 'accept-branch-delivery',
+        intentId: 'intent-66666666-6666-4666-8666-666666666666',
+        deliveryId,
+        expectedDeliveryRevision: 0,
+        expectedWorkItemRemoteFingerprint: fingerprint,
+      }),
+    ] as const
+
+    await ctx.sakiHostClient.queryBranchDelivery(PROJECT_ID, save.workItemId, 'interactive')
+    await ctx.sakiHostClient.saveBranchDelivery(intents[0], 'delivery-token')
+    await ctx.sakiHostClient.pushBranchDelivery(intents[1], 'delivery-token')
+    await ctx.sakiHostClient.createBranchDeliveryPullRequest(intents[2], 'delivery-token')
+    await ctx.sakiHostClient.associateBranchDeliveryPullRequest(intents[3], 'delivery-token')
+    await ctx.sakiHostClient.markBranchDeliveryInReview(intents[4], 'delivery-token')
+    await ctx.sakiHostClient.acceptBranchDelivery(intents[5], 'delivery-token')
+
+    expect(call.mock.calls[0]).toEqual(['/saki', 'control/query', {
+      type: 'branch-delivery', projectId: PROJECT_ID, workItemId: save.workItemId, refresh: 'interactive',
+    }, { credentials: 'same-origin' }])
+    for (const [index, intent] of intents.entries()) {
+      expect(call.mock.calls[index + 1]).toEqual(['/saki', 'control/submit', intent, {
+        credentials: 'same-origin',
+        headers: { 'x-saki-request-token': 'delivery-token' },
+      }])
+    }
+    await fiber.dispose()
+  })
+
+  it('queries and submits Milestone Delivery operations through the safe wire', async () => {
+    const call = vi.fn(async (_channel: string, endpoint: string) => ({
+      ok: true as const,
+      value: endpoint === 'control/query'
+        ? { ok: false, reason: 'not-found' }
+        : { ok: false, reason: 'unavailable' },
+    }))
+    const ctx = new Context()
+    ctx.provide('connection', { rpc: { call } } as unknown as ConnectionHandle)
+    const fiber = await ctx.plugin(SakiHostClientService)
+    const release = {
+      repositoryId: 'R_saki',
+      projectId: 'P_saki',
+      milestoneId: 'M_release_010',
+      milestoneNumber: 1,
+      tagName: 'saki-v0.1.0',
+      releaseCommitId: '3'.repeat(40),
+      upstreamRepositoryId: 'R_upstream',
+      upstreamRepositoryDatabaseId: '321',
+      upstreamRepositoryNameWithOwner: 'deepseek-ai/deepseek-harness',
+      upstreamCommitId: '4'.repeat(40),
+    }
+    const save = sakiSaveMilestoneDeliveryIntentSchema.parse({
+      type: 'save-milestone-delivery',
+      intentId: 'intent-77777777-7777-4777-8777-777777777777',
+      projectId: PROJECT_ID,
+      expectedDeliveryRevision: null,
+      expectedRegistryRevision: 5,
+      expectedProjectRevision: 3,
+      phase: 'planned',
+      release,
+    })
+    const finalize = sakiFinalizeMilestoneDeliveryIntentSchema.parse({
+      type: 'finalize-milestone-delivery',
+      intentId: 'intent-88888888-8888-4888-8888-888888888888',
+      deliveryId: `milestone-delivery-${'2'.repeat(64)}`,
+      expectedDeliveryRevision: 2,
+      release,
+    })
+
+    await ctx.sakiHostClient.queryMilestoneView(PROJECT_ID, save.release.milestoneId, 'interactive')
+    await ctx.sakiHostClient.saveMilestoneDelivery(save, 'milestone-token')
+    await ctx.sakiHostClient.finalizeMilestoneDelivery(finalize, 'milestone-token')
+
+    expect(call.mock.calls).toEqual([
+      ['/saki', 'control/query', {
+        type: 'milestone-view', projectId: PROJECT_ID, milestoneId: save.release.milestoneId, refresh: 'interactive',
+      }, { credentials: 'same-origin' }],
+      ['/saki', 'control/submit', save, {
+        credentials: 'same-origin', headers: { 'x-saki-request-token': 'milestone-token' },
+      }],
+      ['/saki', 'control/submit', finalize, {
+        credentials: 'same-origin', headers: { 'x-saki-request-token': 'milestone-token' },
+      }],
+    ])
+    await fiber.dispose()
   })
 
   it('submits Work Item and manual Agent Intents with the mutation request token', async () => {

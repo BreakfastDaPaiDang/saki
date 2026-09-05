@@ -17,11 +17,13 @@ import {
   sakiControlPlaneV5DomainSpec,
   sakiControlPlaneV6DomainSpec,
   sakiControlPlaneV7DomainSpec,
+  sakiControlPlaneV8DomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
   sakiStorageGenerationV5DomainSpec,
+  sakiStorageGenerationV6DomainSpec,
   sakiWorkAssignmentIdSchema,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
@@ -29,6 +31,7 @@ import {
   storageGenerationV3SealRecordSchema,
   storageGenerationV4SealRecordSchema,
   storageGenerationV5SealRecordSchema,
+  storageGenerationV6SealRecordSchema,
   workSessionRecordSchema,
   type SakiBuildId,
 } from '@breakfastdapaidang/saki-control-plane'
@@ -50,12 +53,14 @@ import {
 import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
+  sakiHostExecutionV3DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import {
   readActiveOperation,
   readClosedCurrentSakiState,
   readClosedSakiV2State,
   readClosedSakiV7State,
+  readClosedSakiV8State,
   readInstallationManifest,
   backupSakiInstallation,
   createSakiMaintenanceOperations,
@@ -83,6 +88,7 @@ const V4_SOURCE_BUILD_ID = 'saki-build-0.1.0-b29-test' as SakiBuildId
 const V5_SOURCE_BUILD_ID = 'saki-build-0.1.0-b05-test' as SakiBuildId
 const V6_SOURCE_BUILD_ID = 'saki-build-0.1.0-b30-test' as SakiBuildId
 const V7_SOURCE_BUILD_ID = 'saki-build-0.1.0-b07-test' as SakiBuildId
+const V8_SOURCE_BUILD_ID = 'saki-build-0.1.0-b09-test' as SakiBuildId
 const AGENT_INTENT_ID = sakiControlIntentIdSchema.parse('intent-11111111-1111-4111-8111-111111111111')
 const ASSIGNMENT_ID = sakiWorkAssignmentIdSchema.parse('assignment-22222222-2222-4222-8222-222222222222')
 const WORK_SESSION_ID = 'work-session-33333333-3333-4333-8333-333333333333'
@@ -116,7 +122,7 @@ async function fixture(): Promise<{ readonly options: SakiMaintenanceOptions; re
 
 async function publishSelectedHistorical(
   options: SakiMaintenanceOptions,
-  stateVersion: 3 | 4 | 5 | 6 | 7,
+  stateVersion: 3 | 4 | 5 | 6 | 7 | 8,
   customizeV7?: (controlPlane: KvUnitSnapshot) => {
     readonly controlPlane: KvUnitSnapshot
     readonly hostExecution: KvUnitSnapshot
@@ -129,7 +135,9 @@ async function publishSelectedHistorical(
       ? V4_SOURCE_BUILD_ID
       : stateVersion === 5
         ? V5_SOURCE_BUILD_ID
-        : stateVersion === 6 ? V6_SOURCE_BUILD_ID : V7_SOURCE_BUILD_ID
+        : stateVersion === 6
+          ? V6_SOURCE_BUILD_ID
+          : stateVersion === 7 ? V7_SOURCE_BUILD_ID : V8_SOURCE_BUILD_ID
   const historical = await readClosedSakiV2State(options.legacyDatabasePath, signal)
   const v3Snapshot = sakiControlPlaneMigrationPlan.steps[0]!.migrate(
     historical.controlPlaneSnapshot,
@@ -257,7 +265,7 @@ async function publishSelectedHistorical(
         },
         { targetBackend: sourceBackend, signal },
       )
-    } else {
+    } else if (stateVersion === 7) {
       const v4Snapshot = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3Snapshot)
       const v5Snapshot = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4Snapshot)
       const v6Snapshot = sakiControlPlaneMigrationPlan.steps[3]!.migrate(v5Snapshot)
@@ -280,6 +288,39 @@ async function publishSelectedHistorical(
             storage_generation: {
               [STORAGE_GENERATION_KEY]: storageGenerationV5SealRecordSchema.parse({
                 schemaVersion: 5,
+                installationId: B03_INSTALLATION_ID,
+                storageGenerationId: B03_STORAGE_GENERATION_ID,
+                stateVersion,
+                createdByBuildId: sourceBuildId,
+              }),
+            },
+          },
+          global: null,
+        },
+        { targetBackend: sourceBackend, signal },
+      )
+    } else {
+      const v4Snapshot = sakiControlPlaneMigrationPlan.steps[1]!.migrate(v3Snapshot)
+      const v5Snapshot = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4Snapshot)
+      const v6Snapshot = sakiControlPlaneMigrationPlan.steps[3]!.migrate(v5Snapshot)
+      const v7Snapshot = sakiControlPlaneMigrationPlan.steps[4]!.migrate(v6Snapshot)
+      await facility.materialize(
+        sakiControlPlaneV8DomainSpec,
+        sakiControlPlaneMigrationPlan.steps[5]!.migrate(v7Snapshot),
+        { targetBackend: sourceBackend, signal },
+      )
+      await facility.materialize(
+        sakiHostExecutionV3DomainSpec,
+        { tables: { operations: {} }, global: null },
+        { targetBackend: sourceBackend, signal },
+      )
+      await facility.materialize(
+        sakiStorageGenerationV6DomainSpec,
+        {
+          tables: {
+            storage_generation: {
+              [STORAGE_GENERATION_KEY]: storageGenerationV6SealRecordSchema.parse({
+                schemaVersion: 6,
                 installationId: B03_INSTALLATION_ID,
                 storageGenerationId: B03_STORAGE_GENERATION_ID,
                 stateVersion,
@@ -339,6 +380,10 @@ async function publishSelectedV7(
   customize?: Parameters<typeof publishSelectedHistorical>[2],
 ): Promise<string> {
   return await publishSelectedHistorical(options, 7, customize)
+}
+
+async function publishSelectedV8(options: SakiMaintenanceOptions): Promise<string> {
+  return await publishSelectedHistorical(options, 8)
 }
 
 function withRunningPreviousWritableAgent(
@@ -737,12 +782,12 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 8 })
+    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 9 })
     expect(await readFile(legacy)).toEqual(before)
     expect(result.selected.installation).toMatchObject({
       phase: 'ready',
       installationId: B03_INSTALLATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
     })
     const current = await readClosedCurrentSakiState(
       result.selected.databasePath,
@@ -806,13 +851,13 @@ describe('offline Saki Installation operations', () => {
     )
     await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
     await expect(readInstallationManifest(options.installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 8 },
+      value: { phase: 'ready', stateVersion: 9 },
     })
 
     const currentBackup = await backupSakiInstallation(options, signal)
     expect(currentBackup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
-      stateVersion: 8,
+      stateVersion: 9,
       sourceBuildId: options.currentBuildId,
     })
     await expect(upgradeSakiInstallation(options, signal)).rejects.toMatchObject({
@@ -874,7 +919,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, new AbortController().signal)
 
-    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 8 })
+    expect(result).toMatchObject({ sourceVersion: 2, targetVersion: 9 })
     expect(result.backup.manifest).toMatchObject({
       stateVersion: 2,
       sourceBuildId: options.legacyBuildId,
@@ -883,7 +928,7 @@ describe('offline Saki Installation operations', () => {
     await expect(readInstallationManifest(
       options.installationRoot,
       new AbortController().signal,
-    )).resolves.toMatchObject({ value: { phase: 'ready', stateVersion: 8 } })
+    )).resolves.toMatchObject({ value: { phase: 'ready', stateVersion: 9 } })
   })
 
   it('upgrades a manifest-selected exact v3 generation without mutating it', async () => {
@@ -894,7 +939,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 3, targetVersion: 8 })
+    expect(result).toMatchObject({ sourceVersion: 3, targetVersion: 9 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -924,7 +969,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 4, targetVersion: 8 })
+    expect(result).toMatchObject({ sourceVersion: 4, targetVersion: 9 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -933,7 +978,7 @@ describe('offline Saki Installation operations', () => {
     })
     expect(await readFile(selectedDatabasePath)).toEqual(before)
     await expect(readInstallationManifest(options.installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 8 },
+      value: { phase: 'ready', stateVersion: 9 },
     })
     await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
 
@@ -982,7 +1027,7 @@ describe('offline Saki Installation operations', () => {
       ]))
   })
 
-  it('upgrades an exact v5 generation into reopenable v8 state without mutating the source', async () => {
+  it('upgrades an exact v5 generation into reopenable v9 state without mutating the source', async () => {
     const { options } = await fixture()
     const selectedDatabasePath = await publishSelectedV5(options)
     const before = await readFile(selectedDatabasePath)
@@ -990,7 +1035,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 5, targetVersion: 8 })
+    expect(result).toMatchObject({ sourceVersion: 5, targetVersion: 9 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -1023,7 +1068,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 6, targetVersion: 8 })
+    expect(result).toMatchObject({ sourceVersion: 6, targetVersion: 9 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -1077,7 +1122,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 7, targetVersion: 8 })
+    expect(result).toMatchObject({ sourceVersion: 7, targetVersion: 9 })
     expect(result.backup.manifest).toMatchObject({
       installationId: B03_INSTALLATION_ID,
       storageGenerationId: B03_STORAGE_GENERATION_ID,
@@ -1099,14 +1144,61 @@ describe('offline Saki Installation operations', () => {
       },
       signal,
     )
-    expect(current.stateVersion).toBe(8)
+    expect(current.stateVersion).toBe(9)
     expect(current.hostExecution.table('operations').size).toBe(0)
     expect(current.controlPlane.table('intervention_requests').size).toBe(0)
     expect(current.storageGeneration.table('storage_generation').get(STORAGE_GENERATION_KEY))
-      .toMatchObject({ schemaVersion: 6, stateVersion: 8 })
+      .toMatchObject({ schemaVersion: 7, stateVersion: 9 })
   })
 
-  it('migrates a linked running v7 Agent operation and Host v2 record into valid v8 state', async () => {
+  it('upgrades an exact v8 generation through Host v3 and the retained v8 backup', async () => {
+    const { options } = await fixture()
+    const selectedDatabasePath = await publishSelectedV8(options)
+    const before = await readFile(selectedDatabasePath)
+    const signal = new AbortController().signal
+    const source = await readClosedSakiV8State(
+      selectedDatabasePath,
+      {
+        installationId: B03_INSTALLATION_ID,
+        storageGenerationId: B03_STORAGE_GENERATION_ID,
+        createdByBuildId: V8_SOURCE_BUILD_ID,
+      },
+      signal,
+    )
+    expect(source.hostExecution.table('operations').size).toBe(0)
+
+    const result = await upgradeSakiInstallation(options, signal)
+
+    expect(result).toMatchObject({ sourceVersion: 8, targetVersion: 9 })
+    expect(result.backup.manifest).toMatchObject({
+      installationId: B03_INSTALLATION_ID,
+      storageGenerationId: B03_STORAGE_GENERATION_ID,
+      stateVersion: 8,
+      sourceBuildId: V8_SOURCE_BUILD_ID,
+    })
+    expect(await readFile(selectedDatabasePath)).toEqual(before)
+    await expect(verifySakiInstallationBackup(
+      options,
+      result.backup.manifest.backupId,
+      signal,
+    )).resolves.toMatchObject({ manifest: { stateVersion: 8 } })
+    const current = await readClosedCurrentSakiState(
+      result.selected.databasePath,
+      {
+        installationId: result.selected.generation.installationId,
+        storageGenerationId: result.selected.generation.storageGenerationId,
+        createdByBuildId: result.selected.generation.createdByBuildId,
+      },
+      signal,
+    )
+    expect(current.stateVersion).toBe(9)
+    expect(current.hostExecution.table('operations').size).toBe(0)
+    expect(current.controlPlane.table('branch_deliveries').size).toBe(0)
+    expect(current.storageGeneration.table('storage_generation').get(STORAGE_GENERATION_KEY))
+      .toMatchObject({ schemaVersion: 7, stateVersion: 9 })
+  })
+
+  it('migrates a linked running v7 Agent operation and Host v2 record into valid v9 state', async () => {
     const { options } = await fixture()
     const selectedDatabasePath = await publishSelectedV7(options, withRunningPreviousWritableAgent)
     const before = await readFile(selectedDatabasePath)
@@ -1125,7 +1217,7 @@ describe('offline Saki Installation operations', () => {
 
     const result = await upgradeSakiInstallation(options, signal)
 
-    expect(result).toMatchObject({ sourceVersion: 7, targetVersion: 8 })
+    expect(result).toMatchObject({ sourceVersion: 7, targetVersion: 9 })
     expect(await readFile(selectedDatabasePath)).toEqual(before)
     const current = await readClosedCurrentSakiState(
       result.selected.databasePath,
@@ -1146,12 +1238,12 @@ describe('offline Saki Installation operations', () => {
       state: 'running',
     })
     expect(current.hostExecution.table('operations').get(OPERATION_ID)).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       snapshot: { state: 'succeeded' },
     })
   }, 20_000)
 
-  it('recovers a pre-backup v7 upgrade journal before retrying the v7-to-v8 upgrade', async () => {
+  it('recovers a pre-backup v7 upgrade journal before retrying the v7-to-v9 upgrade', async () => {
     const { options } = await fixture()
     await publishSelectedV7(options)
     const crash = new Error('crash after v7 journal publication')
@@ -1167,7 +1259,7 @@ describe('offline Saki Installation operations', () => {
 
     await expect(upgradeSakiInstallation(options, signal)).resolves.toMatchObject({
       sourceVersion: 7,
-      targetVersion: 8,
+      targetVersion: 9,
     })
     await expect(readActiveOperation(options.installationRoot, signal)).resolves.toBeUndefined()
   })

@@ -134,6 +134,17 @@ describe('safe error translation', () => {
       .toEqual({ code: 'permanent-rejection', status: 403 })
   })
 
+  it.each([
+    [404, { code: 'not-found', resource: 'test-operation' }, ['requestId']],
+    [429, { code: 'secondary-rate-limit' }, ['retryAfterMs', 'requestId']],
+    [503, { code: 'transient-transport' }, ['retryAfterMs', 'requestId']],
+  ] as const)('omits unavailable optional evidence for HTTP status %i', (status, expected, absent) => {
+    const failure = translated({ status, response: { headers: {} } })
+    expect(failure).toStrictEqual(expected)
+    for (const property of absent) expect(Object.hasOwn(failure, property)).toBe(false)
+    expect(JSON.parse(JSON.stringify(failure))).toStrictEqual(failure)
+  })
+
   it.each([undefined, null, '500', 99, 600, 500.5])(
     'rejects an invalid or absent HTTP status %j without retaining raw values',
     (status) => {

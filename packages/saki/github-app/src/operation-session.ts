@@ -56,6 +56,18 @@ const ISSUE_READ_PERMISSIONS = Object.freeze({
   metadata: 'read',
 })
 
+/** Minimal Product App permission profile for Pull Request creation. */
+const PULL_REQUEST_WRITE_PERMISSIONS = Object.freeze({
+  metadata: 'read',
+  pull_requests: 'write',
+})
+
+/** Minimal Product App permission profile for Pull Request inspection. */
+const PULL_REQUEST_READ_PERMISSIONS = Object.freeze({
+  metadata: 'read',
+  pull_requests: 'read',
+})
+
 /** Minimal Product App permission profile for Project inspections. */
 const PROJECT_READ_PERMISSIONS = Object.freeze({
   issues: 'read',
@@ -68,6 +80,8 @@ type GitHubOperationPurpose =
   | 'read'
   | 'issue-create'
   | 'issue-create-inspection'
+  | 'pull-request-create'
+  | 'pull-request-create-inspection'
   | 'project-item-add'
   | 'project-item-add-inspection'
   | 'project-item-position-set'
@@ -81,6 +95,8 @@ const PRODUCT_APP_OPERATION_PERMISSIONS = {
   read: READ_PERMISSIONS,
   'issue-create': ISSUE_WRITE_PERMISSIONS,
   'issue-create-inspection': ISSUE_READ_PERMISSIONS,
+  'pull-request-create': PULL_REQUEST_WRITE_PERMISSIONS,
+  'pull-request-create-inspection': PULL_REQUEST_READ_PERMISSIONS,
   'project-item-add': PROJECT_WRITE_PERMISSIONS,
   'project-item-add-inspection': PROJECT_READ_PERMISSIONS,
   'project-item-position-set': PROJECT_WRITE_PERMISSIONS,
@@ -210,7 +226,15 @@ function validateTokenPermissions(
   }
 }
 
-function createBoundedFetch(
+/**
+ * Build the provider's timeout-, size-, and queue-bounded transport.
+ * @param config - validated provider transport limits.
+ * @param signal - lifetime shared by queued and active requests.
+ * @param queue - provider-owned request scheduler.
+ * @param priority - scheduling class for each request.
+ * @returns fetch implementation that buffers only complete bounded responses.
+ */
+export function createBoundedFetch(
   config: ResolvedConfig,
   signal: AbortSignal,
   queue: InstallationPriorityQueue,
@@ -298,7 +322,13 @@ async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Pr
   }
 }
 
-function safeNumericId(value: string, name: string): number {
+/**
+ * Convert a validated decimal GitHub id to the SDK's safe numeric domain.
+ * @param value - decimal GitHub identifier text.
+ * @param name - field name used by the bounded failure diagnostic.
+ * @returns positive safe-integer identifier accepted by the SDK.
+ */
+export function safeNumericId(value: string, name: string): number {
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} exceeds the GitHub SDK numeric range`)
   return parsed

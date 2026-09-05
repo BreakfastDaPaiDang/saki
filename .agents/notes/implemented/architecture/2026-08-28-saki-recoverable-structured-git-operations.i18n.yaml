@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.md
-2026-08-28-saki-recoverable-structured-git-operations.md: 7facfe4f1d19bb2e0adc90dcb93238dafdc116e1
-2026-08-28-saki-recoverable-structured-git-operations.zh.md: 0f86f35bc0a40e1b469fd6a47c7de7f558b2a963
+2026-08-28-saki-recoverable-structured-git-operations.md: 6778e38ec6369e06b6480419faae602dcd3f7ff7
+2026-08-28-saki-recoverable-structured-git-operations.zh.md: dded660dd02b75e34a2eac69b312973febff50ab

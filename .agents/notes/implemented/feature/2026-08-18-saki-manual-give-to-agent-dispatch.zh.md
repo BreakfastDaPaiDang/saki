@@ -28,7 +28,7 @@ Host Operation 成功表示预期 Agent Run、Session 与精确输入已经获�
 
 `SakiWorkItemDetailProjection` 与 `SakiAgentRunProjection` 固定前端交接，但本切片不增加 query。它们的严格 wire schema 只公开有界且经过解析的 Issue definition、Assignment 与主要 Work Session reference、不透明 Run source、可安全显示的 Profile 与 Model fact、时间戳，以及明确的 resumable、terminal 或 reconciliation recovery state；其中不包含规范路径、凭据或 Host snapshot。
 
-当前状态版本 8 使用 `saki_control_plane@8` 保存手动 Agent record，使用 `saki_host_execution@3` 保存 `StartAgentRun` Host record，并使用 `saki_storage_generation@6`。冻结的 v7/v2/v5 schema 会保留原始手动启动格式。相邻 migration 会增加显式 Assignment ownership、Run waiting 与 resume-pending 状态、Intervention table 和当前 answer message source，但不会改变保留的原始启动 request 或 evidence。
+手动 Give-to-Agent 最初通过 `saki_control_plane@7`、`saki_host_execution@2` 与 `saki_storage_generation@5` 落入状态版本 7。当前状态版本 9 使用 `saki_control_plane@9`、`saki_host_execution@4` 与 `saki_storage_generation@7` 保存这些记录；冻结的版本 7 domain schema 保留原始手动启动格式。v7-to-v8 migration 增加显式 Assignment ownership、Run waiting 与 resume-pending 状态、Intervention table 和 answer message source。v8-to-v9 migration 增加 Delivery record、action 与 Push Host operation format，但不改变保留的原始启动 request 或 evidence。
 
 ## Alternatives considered
 

@@ -3,17 +3,21 @@ import {
   sakiHostExecutionDomainSpec,
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
+  sakiHostExecutionV3DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import {
+  sakiControlPlaneDomainSpec,
+  sakiControlPlaneV8DomainSpec,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
+  sakiStorageGenerationV6DomainSpec,
 } from '@breakfastdapaidang/saki-control-plane'
 import { sakiStateCapability } from '../src/state-version.ts'
 
 describe('Saki product state capability', () => {
-  it('retains exact v2-v7 readers and makes only complete v8 writable', () => {
-    expect(sakiStateCapability.readable.map(spec => spec.version)).toEqual([2, 3, 4, 5, 6, 7, 8])
+  it('retains exact v2-v8 readers and makes only complete v9 writable', () => {
+    expect(sakiStateCapability.readable.map(spec => spec.version)).toEqual([2, 3, 4, 5, 6, 7, 8, 9])
     expect(sakiStateCapability.resolveReadable(1)).toBeUndefined()
     expect(sakiStateCapability.resolveReadable(2)?.domains.map(domain => [domain.name, domain.version])).toEqual([
       ['saki_control_plane', 2],
@@ -57,7 +61,18 @@ describe('Saki product state capability', () => {
       ['saki_host_execution', 3],
       ['saki_storage_generation', 6],
     ])
-    expect(sakiStateCapability.writable.version).toBe(8)
+    const v8 = sakiStateCapability.resolveReadable(8)
+    if (v8?.version !== 8) throw new Error('state version 8 capability is missing')
+    expect(v8.controlPlane).toBe(sakiControlPlaneV8DomainSpec)
+    expect(v8.hostExecution).toBe(sakiHostExecutionV3DomainSpec)
+    expect(v8.storageGeneration).toBe(sakiStorageGenerationV6DomainSpec)
+    expect(sakiStateCapability.resolveReadable(9)?.domains.map(domain => [domain.name, domain.version])).toEqual([
+      ['saki_control_plane', 9],
+      ['saki_host_execution', 4],
+      ['saki_storage_generation', 7],
+    ])
+    expect(sakiStateCapability.writable.version).toBe(9)
+    expect(sakiStateCapability.writable.controlPlane).toBe(sakiControlPlaneDomainSpec)
     expect(sakiStateCapability.writable.hostExecution).toBe(sakiHostExecutionDomainSpec)
     expect(sakiStateCapability.writable.storageGeneration).toBe(sakiStorageGenerationDomainSpec)
     expect('buildId' in sakiStateCapability).toBe(false)

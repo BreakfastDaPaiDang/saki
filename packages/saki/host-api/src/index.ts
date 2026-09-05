@@ -18,6 +18,8 @@ import {
   sakiAccessProjectionSchema,
   sakiAnswerInterventionResultSchema,
   sakiAttentionResultSchema,
+  sakiBranchDeliveryIntentResultSchema,
+  sakiBranchDeliveryResultSchema,
   sakiBoardResultSchema,
   sakiBootstrapExchangeRequestSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
@@ -28,6 +30,8 @@ import {
   sakiEmptyRequestSchema,
   sakiInspectProjectSelectionResultSchema,
   sakiIntentRequestSchema,
+  sakiMilestoneDeliveryIntentResultSchema,
+  sakiMilestoneViewResultSchema,
   sakiRegisterDevelopmentProjectResultSchema,
   sakiProjectIndexResultSchema,
   sakiProjectDiffResultSchema,
@@ -173,6 +177,12 @@ async function query(
     case 'board': {
       return reply({ ok: true, value: sakiBoardResultSchema.parse(result) })
     }
+    case 'branch-delivery': {
+      return reply({ ok: true, value: sakiBranchDeliveryResultSchema.parse(result) })
+    }
+    case 'milestone-view': {
+      return reply({ ok: true, value: sakiMilestoneViewResultSchema.parse(result) })
+    }
     /* v8 ignore next 2 -- SakiQuery is closed and strict Host parsing rejects unknown tags before dispatch. */
     default: return assertNever(parsed.data)
   }
@@ -244,6 +254,20 @@ async function authenticatedMutation(
       case 'move-work-item': {
         const result = await controlPlane.submit(authentication, operation.intent, signal)
         return reply({ ok: true, value: sakiMoveWorkItemResultSchema.parse(result) })
+      }
+      case 'save-branch-delivery':
+      case 'push-branch-delivery':
+      case 'create-branch-delivery-pull-request':
+      case 'associate-branch-delivery-pull-request':
+      case 'mark-branch-delivery-in-review':
+      case 'accept-branch-delivery': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiBranchDeliveryIntentResultSchema.parse(result) })
+      }
+      case 'save-milestone-delivery':
+      case 'finalize-milestone-delivery': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiMilestoneDeliveryIntentResultSchema.parse(result) })
       }
       case 'give-work-item-to-agent': {
         const result = await controlPlane.submit(authentication, operation.intent, signal)
