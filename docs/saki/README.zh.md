@@ -15,6 +15,7 @@
 
 ## 运维
 
+- [维护](maintenance.zh.md)定义依赖评审、工作归属及可恢复的 Agent 检查点。
 - [Host 启动器](host-launcher.zh.md)定义已签入仓库的 Windows 启动入口和代理行为。
 - [上游同步](upstream-sync.zh.md)定义 Saki 如何跟踪 DeepSeek Harness，同时不继承不适用的 workflow。
 - [开发 skill 包](development-skill-pack.zh.md)定义仓库发现、兼容性预检、固定来源记录和已审阅更新流程。

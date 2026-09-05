@@ -6,6 +6,11 @@ updates:
     # Routine dependency upgrades arrive through the tracked DSH upstream.
     # Keep the entry so Dependabot security updates can still use this policy.
     open-pull-requests-limit: 0
+    groups:
+      security:
+        applies-to: security-updates
+        patterns:
+          - '*'
     exclude-paths:
       # Vendored Cordis sources follow vendor/README.md instead of registry updates.
       - "vendor/**"
