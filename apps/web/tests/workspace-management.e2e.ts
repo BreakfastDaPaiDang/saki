@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { join, sep } from 'node:path'
 import type { Browser, Locator, Page } from 'playwright'
 import { chromium } from 'playwright'
-import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFailed, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { logPath } from '../../../packages/session/session-persistence-jsonl/src/format.ts'
 import {
@@ -102,16 +102,15 @@ describe('web e2e: workspace management (create / rename / flat view / hover aff
   }
 
   /**
-   * Reveal and click a row action, re-hovering if a projection update replaces
-   * the row before its hover-only button becomes visible.
+   * Retry the hover/click gesture when a projection update moves the row away
+   * from the pointer before the action receives the click.
    */
   async function clickHoverAction(row: Locator, name: string): Promise<void> {
     const button = row.getByRole('button', { name })
-    await expect.poll(async () => {
-      await row.hover()
-      return await button.isVisible()
-    }, { timeout: 10_000 }).toBe(true)
-    await button.click()
+    await vi.waitFor(async () => {
+      await row.hover({ timeout: 1_000 })
+      await button.click({ timeout: 1_000 })
+    }, { timeout: 10_000 })
   }
 
   beforeAll(async () => {
