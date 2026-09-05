@@ -1,6 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import type { BrowserAuth } from '../src/browser-auth.ts'
+import type { ConnectionRpcHandler } from '../src/rpc.ts'
 import { HostConnectionService } from '../src/rpc-host.ts'
 
 async function mounted(): Promise<{
@@ -78,6 +79,48 @@ describe('Connection exact Fetch routes', () => {
       path: '/api/session.export', methods: ['HEAD'], fetch,
       requestBody: 'buffered',
     })).not.toThrow()
+    await disposeFiber()
+  })
+
+  it('selects exact-route authority before a shared interceptor and fences loopback requests', async () => {
+    const { connection, dispose: disposeFiber } = await mounted()
+    const intercepted = vi.fn<ConnectionRpcHandler>(async () => ({ result: { ok: true, value: 'intercepted' } }))
+    connection.rpc.intercept('/api', endpoint => endpoint === 'goals/create', intercepted, {
+      authority: 'loopback',
+      requiredResponseHeaders: { 'cache-control': 'no-store' },
+    })
+    connection.fetch.register({
+      path: '/api/goals/create',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: async () => new Response('exact route'),
+    })
+    const shared = connection.createSharedFetchHandler('/api')
+
+    expect(connection.sharedRequestOptions('GET', '/api/goals/create'))
+      .toEqual({ authority: 'trusted-host' })
+    expect(connection.sharedRequestOptions('POST', '/api/goals/create'))
+      .toMatchObject({ authority: 'loopback' })
+    expect(await (await shared.fetch(new Request('http://remote.example/api/goals/create'))).text())
+      .toBe('exact route')
+    const denied = await shared.fetch(new Request('http://remote.example/api/goals/create', {
+      method: 'POST', headers: { host: 'remote.example' },
+    }))
+    expect(denied.status).toBe(403)
+    expect(denied.headers.get('cache-control')).toBe('no-store')
+    expect(intercepted).not.toHaveBeenCalled()
+
+    const accepted = await shared.fetch(new Request('http://localhost/api/goals/create', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'goals-1', method: 'goals/create', payload: {} }),
+    }))
+    expect(accepted.status).toBe(200)
+    expect(await accepted.json()).toMatchObject({ result: { ok: true, value: 'intercepted' } })
+    expect(intercepted).toHaveBeenCalledOnce()
+    for (const path of ['/api/unclaimed', '/outside']) {
+      expect((await shared.fetch(new Request(`http://localhost${path}`))).status).toBe(404)
+    }
     await disposeFiber()
   })
 })

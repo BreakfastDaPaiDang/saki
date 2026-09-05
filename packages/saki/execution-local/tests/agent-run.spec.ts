@@ -1514,6 +1514,21 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     60_000,
   )
 
+  it('keeps an attempting Agent Run inspectable before its physical Session exists', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await persistAttemptingAgentRun(harness.execution, request, signal, 42)
+    const open = vi.spyOn(harness.context.sessionPersistence, 'open')
+
+    await expect(harness.execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'publishing' })
+    expect(open).not.toHaveBeenCalled()
+    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    expect(harness.adapter.requests).toHaveLength(0)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+
   it('reconciles succeeded Host evidence when its physical Session disappears', async () => {
     const harness = await agentRunHarness([stopResponse('done')])
     const signal = new AbortController().signal

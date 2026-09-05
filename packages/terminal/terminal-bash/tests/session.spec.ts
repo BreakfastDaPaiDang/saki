@@ -638,6 +638,25 @@ describe('LocalPtySession readiness and output', () => {
     failedInternal.fail(new Error('ignored'))
   })
 
+  it('discards queued caller input when cancellation arrives before the provider write', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const inspector = new FakeInspector()
+    const session = makeSession(terminal, inspector, config())
+    await initialize(session, terminal)
+    const controller = new AbortController()
+    const operation = session.startSend({ text: 'must not execute', submit: true, signal: controller.signal })
+    await Promise.resolve()
+    controller.abort()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(terminal.writes).toEqual([])
+    expect(inspector.groups).toContainEqual([456, 'SIGINT'])
+    terminal.emitData('\x1b]133;D;130\x07dsh> ')
+    await vi.advanceTimersByTimeAsync(10)
+    await operation.done
+  })
+
   it('does not write a send canceled during asynchronous foreground inspection', async () => {
     vi.useFakeTimers()
     const terminal = new FakeTerminal()
