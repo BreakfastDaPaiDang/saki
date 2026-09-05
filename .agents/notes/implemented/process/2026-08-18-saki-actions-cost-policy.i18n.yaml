@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-18-saki-actions-cost-policy.md
-2026-08-18-saki-actions-cost-policy.md: 9021b9be80a36efdcf95924f5bece0b573e9ca98
-2026-08-18-saki-actions-cost-policy.zh.md: 4cc7c47fbbbe6449b78dccad0da72bff341311e4
+2026-08-18-saki-actions-cost-policy.md: 657ab02787be473e6d940fe218c0d59f08dbc14c
+2026-08-18-saki-actions-cost-policy.zh.md: 65f467c3e1e564b844d48f72a0815ba7b6d24a2b

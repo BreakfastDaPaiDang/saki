@@ -1,0 +1,1 @@
+{"DSH_DPAPI_LOADER_TEST":{"ref":"DSH_DPAPI_LOADER_TEST","configured":true,"source":"windows-dpapi-current-user","protectionLevel":"local-user-trust","writable":true,"health":"available","observedAt":"{{timestamp}}"}}

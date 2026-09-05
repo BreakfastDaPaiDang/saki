@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { workspaceIdSchema } from '@deepseek-ai/dsh-workspace'
 import {
   githubAccountIdSchema,
@@ -2727,7 +2727,7 @@ const interventionCauseSchema = z.object({
   sessionId,
   toolCallId: z.string().min(1).max(200)
     .refine(value => value.isWellFormed() && !value.includes('\0'))
-    .transform(value => CallId(value)),
+    .transform(value => ToolCallId(value)),
 }).strict()
 
 const sakiReturnAddressSchema = z.object({

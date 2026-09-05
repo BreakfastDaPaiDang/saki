@@ -1,9 +1,33 @@
+---
+description: "检查本地仓库、执行结构化 Git 操作，并在同一 Host 上创建或恢复精确 Agent Run。"
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-execution-local`
 
 [English](README.md) | 中文
 
+## 概述
+
+检查本地仓库、执行结构化 Git 操作，并在同一 Host 上创建或恢复精确 Agent Run。
+
+## 目录
+
+- [使用本包](#use-this-package)
+- [检查行为](#inspection-behavior)
+- [结构化 Git 操作](#structured-git-operations)
+- [Agent Run operation](#agent-run-operations)
+- [配置](#configuration)
+- [模型体验](#model-experience)
+- [已知限制与暂缓事项](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
+
+<a id="use-this-package"></a>
+## 使用本包
+
 Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ctx.workspaceRegistry`、`ctx.storageDomain`、DSH Agent 与 Session 服务，以及同一 Host 的文件系统元数据实现 [`ctx.sakiHostExecution`](../execution/README.zh.md)。它检查不可信的本地目录选择与带 revision 的已绑定 Project 状态、读取有界 Diff、执行结构化 Git 修改与 exact-lease GitHub Push operation，并创建或恢复精确 Agent Run。它拥有 Service Provider 私有的持久 Host Operation 记录，但不拥有 Project 策略、Resource Binding、Workspace 创建流程或控制面 Intent。
 
+<a id="inspection-behavior"></a>
 ## 检查行为
 
 - **文件系统身份**：只使用文件系统的发现流程从所选目录向上查找普通 `.git` 目录或 gitfile，验证 linked worktree 的双向标记或本地 separate Git directory 布局，并通过 `realpath` 解析所选顶层目录、每 worktree Git directory 与 common Git directory。系统支持普通、linked、detached 与本地 separate Git directory worktree。只有所选规范目标包含在该顶层目录中时，才接受位于 Git 顶层目录之下的选择；返回的 worktree、Workspace 与展示证据都使用顶层目录。Service Provider 在两轮观察中为每个 Git 管理目录捕获不透明的同 Host 文件系统身份，在不把路径转换为小写的情况下比较路径，并拒绝缺失、非目录、bare、可清理、格式错误、逃逸或存在歧义的选择。直接 reparse locator、`.git` 标记、解析后的管理目录、对象目录或配置的 worktree 会被拒绝，而不会被规范化为别名。
@@ -16,6 +40,7 @@ Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ct
 - **已绑定 Project 状态**：`inspectProject` 只把保留的规范 worktree 路径当作 locator，重复执行稳定的两轮检查，并要求新的 Host、Workspace、worktree、Git directory 与文件系统身份匹配带 revision 的 Resource Binding。登记流程与状态投影共用同一套 inventory 比较语义；状态按有效 UTF-8 路径排序，区分 tracked、untracked、conflicted、staged、unstaged 与继承变更归因，并携带完整 index、worktree 与状态摘要。公共 gitlink row 只把父仓库已经证明的 commit 关系表达为 `changed`、`unchanged` 或 `unknown`，不会声称嵌套仓库的 tracked 或 untracked 脏状态。若已变更 gitlink 的嵌套 current state 无法准入，则只会在证明目录 mode 后携带 unavailable current evidence，并阻止结构化修改；已变更 gitlink 的 current mode 完全未知时会拒绝该状态。精确的 assume-unchanged 普通路径可以用同轮原始 inventory 重建被 Git 省略的 status row，但该 flag 仍会阻止修改。可见的 skip-worktree 变更会拒绝完整状态，而不会把已捕获的 current evidence 改称 unavailable；其他不受支持的 index flag 会让状态保持可读，同时阻止修改。Conversion 歧义、无法解析的 status membership、路径文本无效或达到协议限制时会拒绝完整状态，而不会伪造布尔变更事实或返回部分列表。
 - **精确 Commit 检查**：`inspectProjectCommit` 会重新验证 active Resource Binding，并只接受一个精确 object id，不接受 ref 或 revision expression。它通过私有 repository view 确认该 object 是 Commit 并返回同一个 id；身份陈旧、object 缺失和 Host evidence 不可用仍是不同的封闭结果。
 
+<a id="structured-git-operations"></a>
 ## 结构化 Git 操作
 
 - **持久生命周期**：`prepareOperation` 使用 source Intent 身份持久记录一个尚未产生效果的请求；完全相同的重放返回同一 operation，来自该 source 的不同请求会被拒绝。`startOperation` 获取新的准入结果，并在规划效果前重新完成 binding、status、HEAD、index、worktree、baseline 与修改可用性检查。每份 effect plan 都会把已解析的 `operationMaxIndexBytes` 固定为 `indexReadLimit`，Commit plan 还会把 `operationMaxReflogBytes` 固定为 `reflogReadLimit`；即使之后的 Service Provider 配置发生变化，恢复执行、恢复判断与清理仍会使用适用的持久值。持久 index plan 只接受非空、有界的 repository-relative 路径列表。原始校验会在结构化解析元素或分配 Base64 解码结果前拒绝超出 row 数量、UTF-8 路径总字节或规范 Base64 解码后总字节的输入；规范 Base64 与 repository-relative 路径校验先于每次解码和 Git 使用。占用中的锁和暂时不可用的证据让 operation 保持可重试。`inspectOperation` 只能依据只读 Git 与文件系统证据推进 publishing 生命周期，且不会创建新的 Git 效果。
@@ -28,6 +53,7 @@ Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ct
 
 应用 bootstrap 环境是 Git 可执行文件与普通继承进程变量的权威来源。Service Provider 会移除仓库或浏览器可控制的 Git 执行变量，但不会把已受损的父进程环境当作需要隔离的子进程沙箱。文件系统元数据取消遵循 FileSystem provider 在探测前后协作检查的约定；常规文件内容流会由取消信号销毁，Service Provider dispose 会等待全部调用收敛。
 
+<a id="agent-run-operations"></a>
 ## Agent Run operation
 
 `start-agent-run` Host Operation 会在接触 DSH 前保存一份 schema version 4 record，其中包含 `agent-run` effect plan。它的精确 replay 会挂载已固定 Agent Preset、应用已固定 Model Route，并在 Binding 的规范 worktree cwd 创建或恢复预分配 Session。Version 3 保留为精确 cold-migration schema，version 2 则只接受原始 `saki-agent-run` source。物理 Session header 必须证明该 cwd 与 preset，live Agent option 也必须匹配 route。任何不匹配、同一 Session id 下的其他 live Agent，或冲突的 message-source evidence 都会成为 conflict，而不会产生另一个 Run。
@@ -36,6 +62,7 @@ Provider 会通过完整 snapshot 与 event-history 读取，分离读取精确�
 
 Inspection 绝不创建、恢复或唤醒 Agent。`inspectInterventionOpening` 会读取分离的物理 Session history；只有一条精确 `request_intervention` call 的非 error 模型可见 result 后跟随匹配的最终 step end 与 completed turn end 时，它才返回确认，并且只返回闭合 evidence，不暴露 Session。启动 resume 是一项独立 operation，它要求精确的 succeeded Host result、匹配的物理 Session header 与输入，以及匹配且可用的 live Agent；Host 会在对外服务前恢复该 Agent，并使其保持 model-idle。因此，持久 `not-started` plan 可以在不归因无关 Session 的情况下证明取消；publishing 或终态 replay 会重新检查精确持久输入与 id。取消会在终态持久化前停止并排空所拥有的 live Agent。disposal 失败时，Host 会继续跟踪 handle，并让 operation 保持可重试。Host 成功只报告 Run 与输入已经持久存在，并不表示模型执行完成。
 
+<a id="configuration"></a>
 ## 配置
 
 数值字段都会解析为正整数。可选 credential 适配器会启用 Push，而不会把 credential authority 转入 request；其余限制约束观察与 Service Provider 私有修改证据。产品策略仍归控制面所有。
@@ -62,6 +89,7 @@ Inspection 绝不创建、恢复或唤醒 Agent。`inspectInterventionOpening` �
 | `operationMaxIndexBytes` | `67108864` | 固定到每项新规划 Host Operation 的 index 与 pin 读取限制 |
 | `operationMaxReflogBytes` | `4194304` | 固定到每项新规划 Commit 的 reflog 读取限制 |
 
+<a id="model-experience"></a>
 ## 模型体验
 
 ### Local Host 检查与 Agent 启动
@@ -78,6 +106,7 @@ Inspection 与结构化 Git operation 直接增加零个 token。Agent start 可
 
 Inspection 与模型请求相互独立。每条 Agent 输入都会在可复用 prefix 外加入一个 user turn；恢复 wake 在组装前被移除，因此没有 KV Cache 影响。
 
+<a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与暂缓事项
 
 - **只支持本地执行环境**：该 Service Provider 要求所选目录、文件系统元数据、系统 Git 可执行文件、Workspace registry 和 subprocess runtime 描述同一个 Host。远程 Host 需要另一种 Service Provider。
@@ -85,3 +114,13 @@ Inspection 与模型请求相互独立。每条 Agent 输入都会在可复用 p
 - **实时 data plane**：Git 读取期间，已准入 worktree 与 source object database 仍是实时数据。独立观察轮次与 source-control manifest 会拒绝它们观察到的变化，但不能阻止每个瞬时同用户竞态，也不会把 Service Provider 变成操作系统 sandbox。精确 owner 产物检查同样无法隔离恶意同用户进程在可写目录中于检查之间替换路径名：可移植 Node API 不提供跨 Windows 与 POSIX 的 handle-relative 或 `openat` 路径使用与删除。
 - **Reparse 范围**：Service Provider 会拒绝直接 locator alias，以及最终 Git marker、管理目录、控制文件、对象目录与配置 worktree 上的 reparse entry。当前 FileSystem capability 无法证明每个祖先 component 都在不跟随 reparse point 的情况下打开。
 - **不支持的控制布局**：reftable 等非 files ref storage，以及通过 `commondir` 重定向的普通 `.git` 目录，都会使检查变为不可用。如果 split index 所需的 `sharedindex.*` 文件不在私有控制目录中，该检查也会变为不可用。已经使用 object alternate 的 source repository 会被拒绝，而不会在快照中复现该布局。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者工作上下文——点击展开</summary>
+
+不发布 runtime invariant companion，因为领域解析器在打开及写入前校验 Host Operation 记录；实时接纳回调不属于持久状态。
+
+</details>

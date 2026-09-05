@@ -18,8 +18,9 @@ import {
   type ProjectGitStatusObservation,
 } from '@breakfastdapaidang/saki-execution'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
+import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import * as Connection from '@deepseek-ai/dsh-client-connection'
-import { RpcId, type ClientRequest, type ServerResponse } from '@deepseek-ai/dsh-host-apiproxy/api'
+import { RpcId, type ClientRequest, type ServerResponse } from '@deepseek-ai/dsh-client-connection'
 import SakiControlPlane from '@breakfastdapaidang/saki-control-plane'
 import {
   createStorageGenerationSeal,
@@ -104,6 +105,7 @@ async function start(): Promise<RunningHost> {
   await context.plugin(LocalSakiHostExecution)
   await context.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   const origin = `http://127.0.0.1:${String(context.webServer.port)}`
+  await context.plugin(LocalCredentialProvider, { dshHome: join(directory, 'home'), watch: false })
   await context.plugin(Connection, { trustedHosts: [] })
   await context.plugin(SakiControlPlane, {
     origin,

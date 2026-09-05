@@ -6,7 +6,7 @@ import { StorageError } from '@deepseek-ai/dsh-storage'
 import type { KvClosedUnitLease, KvClosedUnitMaterialization } from '@deepseek-ai/dsh-storage'
 import { createAtomicWriter } from '../src/atomic.ts'
 import { createClosedUnitOperations } from '../src/closed.ts'
-import { openJsonUnit } from '../src/unit.ts'
+import { openSingleUnit } from '../src/single-unit.ts'
 import { StorageRootGuard } from '../src/medium.ts'
 
 describe('atomic JSON publication', () => {
@@ -62,9 +62,9 @@ describe('atomic JSON publication', () => {
       syncDirectory: async () => { throw new Error('injected directory sync failure') },
       removeTemporary: path => rm(path, { force: true }),
     })
-    const unit = await openJsonUnit(
+    const unit = await openSingleUnit(
       { name: 'unit', version: 1, tables: ['records'], hasGlobal: false },
-      target,
+      root,
       () => {},
       writer.writeAtomic,
     )
@@ -79,9 +79,9 @@ describe('atomic JSON publication', () => {
     await expect(unit.putRecord('records', 'blocked', { value: 'blocked' }))
       .rejects.toMatchObject({ code: 'commit-outcome-unknown' })
     await unit.close()
-    const reopened = await openJsonUnit(
+    const reopened = await openSingleUnit(
       { name: 'unit', version: 1, tables: ['records'], hasGlobal: false },
-      target,
+      root,
       () => {},
     )
     await expect(reopened.loadAll()).resolves.toMatchObject({
@@ -93,12 +93,11 @@ describe('atomic JSON publication', () => {
 
   it('drains an admitted load before close completes and rejects later reads', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-json-unit-read-drain-'))
-    const target = join(root, 'unit.json')
     const rootGuard = new StorageRootGuard(root)
     await rootGuard.ensureCurrent('unit')
-    const unit = await openJsonUnit(
+    const unit = await openSingleUnit(
       { name: 'unit', version: 1, tables: ['records'], hasGlobal: false },
-      target,
+      root,
       () => {},
       undefined,
       rootGuard,
@@ -466,9 +465,9 @@ describe('atomic JSON publication', () => {
   ] as const)('poisons a direct unit when %s has %s publication evidence', async (operation, failure) => {
     const root = await mkdtemp(join(tmpdir(), `dsh-json-${operation}-evidence-`))
     let fail = false
-    const unit = await openJsonUnit(
+    const unit = await openSingleUnit(
       { name: 'unit', version: 1, tables: ['records'], hasGlobal: true },
-      join(root, 'unit.json'),
+      root,
       () => {},
       async () => {
         if (fail) throw failure
@@ -562,9 +561,9 @@ describe('atomic JSON publication', () => {
       removeTemporary: path => rm(path, { force: true }),
     })
     const target = join(root, 'unit.json')
-    const unit = await openJsonUnit(
+    const unit = await openSingleUnit(
       { name: 'unit', version: 1, tables: ['records'], hasGlobal: false },
-      target,
+      root,
       () => {},
       writer.writeAtomic,
       rootGuard,
@@ -596,9 +595,9 @@ describe('atomic JSON publication', () => {
       await mkdir(root)
       await writer.writeAtomic(...args)
     }
-    const unit = await openJsonUnit(
+    const unit = await openSingleUnit(
       { name: 'unit', version: 1, tables: ['records'], hasGlobal: false },
-      join(root, 'unit.json'),
+      root,
       () => {},
       publish,
       rootGuard,

@@ -149,7 +149,7 @@ export async function advanceLocalAgentRun(
     return { kind: 'retryable', reason: 'unavailable', record }
   }
   const { agent } = acquired.handle
-  evidence = classifyInput(agent.session.events, record.request.run.input, record.request.run.agentRunId)
+  evidence = classifyInput(agent.session.snapshotEvents(), record.request.run.input, record.request.run.agentRunId)
   if (evidence.kind === 'absent') {
     const verified = await verifyAgentRunWorld(dependencies, record, persist, signal)
     if (verified.kind !== 'verified') return verified.result
@@ -329,7 +329,7 @@ export async function cancelLocalAgentRun(
       return await persistReconciledAgentRun(dependencies, initial, 'evidence-conflict', persist)
     }
     const { agent } = acquired.handle
-    evidence = classifyInput(agent.session.events, initial.request.run.input, initial.request.run.agentRunId)
+    evidence = classifyInput(agent.session.snapshotEvents(), initial.request.run.input, initial.request.run.agentRunId)
     if (evidence.kind === 'pending') {
       await disposeOwnedAgentRun(dependencies, initial.request.run.sessionId)
       evidence = await inspectDurableInput(dependencies, initial, signal)
@@ -451,10 +451,10 @@ async function inspectDurableSession(
     await dependencies.sessions.flush(live.session)
     signal.throwIfAborted()
   }
-  const snapshots = await dependencies.sessionPersistence.listSnapshots(signal)
-  if (!snapshots.some(snapshot => snapshot.header.id === sessionId)) return { kind: 'absent' }
-  const persisted = await dependencies.sessionPersistence.readFrom(sessionId, 0, signal)
-  return { kind: 'present', events: persisted.events, meta: persisted.meta }
+  if (await dependencies.sessionPersistence.stat(sessionId, { signal }) === undefined) return { kind: 'absent' }
+  await using handle = await dependencies.sessionPersistence.open(sessionId, 'read', { signal })
+  const events = await handle.read(0, undefined, { signal })
+  return { kind: 'present', events, meta: handle.header }
 }
 
 function sessionMatchesRequest(
@@ -566,7 +566,7 @@ export async function waitForInputRecord(
   signal: AbortSignal,
   wake: () => void,
 ): Promise<void> {
-  if (agent.session.events.some(event => event.type === 'user/message'
+  if (agent.session.snapshotEvents().some(event => event.type === 'user/message'
     && event.data.id === expected.id && sameMessage(event.data, expected))) return
   const delivered = Promise.withResolvers<void>()
   const dispose = agent.ctx.on('session/event', (session, event) => {

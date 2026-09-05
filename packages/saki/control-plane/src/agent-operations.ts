@@ -3,7 +3,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
-import type { CallId } from '@deepseek-ai/dsh-llm'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SakiGitHub, GitHubBranchSafetyFact, GitHubIssueDetailFact } from '@breakfastdapaidang/saki-github'
 import {
   canonicalDigest,
@@ -76,7 +76,7 @@ import type {
 /** Stable Development Agent request admitted from the model-facing tool. */
 export interface SakiAgentInterventionRequest {
   readonly sessionId: StartAgentRunHostOperationRequest['run']['sessionId']
-  readonly toolCallId: CallId
+  readonly toolCallId: ToolCallId
   readonly prompt: string
 }
 

@@ -5,7 +5,7 @@ import type {
   ConnectionRpcReply,
   ConnectionRpcRequestMetadata,
 } from '@deepseek-ai/dsh-client-connection'
-import type { RpcResult } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { ConnectionRpcResult as RpcResult } from '@deepseek-ai/dsh-client-connection'
 import {
   resolveSakiAuthentication,
   sakiSessionCookieName,

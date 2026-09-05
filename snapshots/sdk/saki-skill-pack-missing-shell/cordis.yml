@@ -1,0 +1,10 @@
+- id: tool-bash
+  disabled: true
+
+- id: tool-pwsh
+  disabled: true
+
+- id: system-prompt
+  name: '@deepseek-ai/dsh-system-prompt'
+  config:
+    persona: You are a concise Saki preflight agent working in {{cwd}}. Stop before mutation when a required capability is absent.

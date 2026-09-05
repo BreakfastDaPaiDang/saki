@@ -1,11 +1,11 @@
 /**
- * JSON storage backend: one human-readable file per unit under a configured
- * root, published by atomic whole-file rewrite. Registers on the storage hub
+ * JSON storage backend: whole-unit files or per-record trees under a configured
+ * root, published by atomic file rewrite. Registers on the storage hub
  * under its configured backend name.
  * @module @deepseek-ai/dsh-storage-json
  */
 
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { ClosedUnitReservations, StorageError, storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
@@ -13,7 +13,8 @@ import type { KvFacet, KvUnit, KvUnitDescriptor, StorageBackend } from '@deepsee
 import { createClosedUnitOperations } from './closed.ts'
 import { validateDescriptor } from './format.ts'
 import { StorageRootGuard } from './medium.ts'
-import { openJsonUnit } from './unit.ts'
+import { openSingleUnit } from './single-unit.ts'
+import { openPerRecordUnit } from './per-record-unit.ts'
 
 /** Cordis plugin name. */
 export const name = 'storage-json'
@@ -29,7 +30,7 @@ export const inject = ['storage']
 export interface Config {
   /** Storage registry name; defaults to `json`. */
   backend?: string
-  /** Directory holding one `<unit>.json` file per unit. */
+  /** Directory holding one `<unit>.json` file (or `<unit>/` tree) per unit. */
   root: string
 }
 
@@ -90,14 +91,10 @@ export class JsonStorageBackend implements StorageBackend {
 
   private async openUnit(descriptor: KvUnitDescriptor): Promise<KvUnit> {
     await this.rootGuard.ensureCurrent(descriptor.name)
-    const path = join(this.root, `${descriptor.name}.json`)
-    const unit = await openJsonUnit(
-      descriptor,
-      path,
-      () => this.open.delete(descriptor.name),
-      undefined,
-      this.rootGuard,
-    )
+    const onClose = () => this.open.delete(descriptor.name)
+    const unit = descriptor.layout === 'per-record'
+      ? await openPerRecordUnit(descriptor, this.root, onClose)
+      : await openSingleUnit(descriptor, this.root, onClose, undefined, this.rootGuard)
     if (this.closed) {
       // The backend closed while this open was in flight: do not hand out a
       // live unit past close().

@@ -51,6 +51,7 @@ describe('Saki Installation launcher inputs', () => {
       name: '@deepseek-ai/dsh-agent-presets',
       config: {
         default: 'development',
+        includeShippedRoot: false,
         includeUserRoot: false,
         roots: [{ trust: 'system' }],
       },

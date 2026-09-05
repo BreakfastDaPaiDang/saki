@@ -24,9 +24,6 @@
       "path": "../../util/home-paths"
     },
     {
-      "path": "../../runtime-diagnostics/invariants"
-    },
-    {
       "path": "../control-plane"
     },
     {

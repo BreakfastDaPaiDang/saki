@@ -1,34 +1,117 @@
+---
+description: "SQLite 存储后端：面向在单个数据库文件中选择、配置或排查按行存储文档的 KV 存储的宿主与维护者。"
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-storage-sqlite
 
 [English](README.md) | 中文
 
-[存储中心](../storage/README.zh.md)的 SQLite 后端：以可配置的名称注册（默认为 `sqlite`），通过一个数据库提供 `kv` facet；该数据库由 `node:sqlite` 操作，可以是单个文件，也可以是 `:memory:`。设计与取舍见[领域 KV 存储 Agent Note](../../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.zh.md)。
+## 概述
 
-## 存储模型
+`dsh-storage-sqlite` 是一个存储后端：把每个已路由单元托管在同一个 SQLite 数据库文件中，每条记录按行存储一份 JSON 文档，注册为后端 `sqlite`。单条记录更新恰好触碰一行，这正是它适合高频定点写入的原因。当领域数据变动频繁、或部署偏好单一可查询数据库时选择它；当数据需要以纯文本文件形式可读时选择 JSON 后端。本后端只面向宿主侧：它不贡献提示词、工具或 schema，因此模型与 agent loop（智能体循环）永远不会看到它。
 
-物理 schema v2 每行存储一个文档。每个已声明的单元表都有一个无碰撞的 `u2_<单元名-utf8-hex>_<表名-utf8-hex>` STRICT 表，列为 `(key TEXT PRIMARY KEY, value TEXT NOT NULL)`，因此一个 key 只更新一行。数据库编码必须是 UTF-8；逻辑记录 key 以规范 JSON 字符串文本存储，因此包括内嵌 NUL 和孤立代理项在内的每个 JavaScript 字符串都保持互不混淆。读取时先把 key 与 value 的 TEXT 单元格作为原始字节取出，以不允许替换字符的方式解码 UTF-8，然后才校验 key 或解析 JSON；非法编码、非规范 key、隐藏的 NUL 后缀、重复对象成员以及会被 JavaScript 舍入、下溢或上溢的数字 token 都会作为畸形介质拒绝。权威布局分布在 `units(name, version, has_global)`、`unit_tables(unit, table_name)` 和 `unit_globals(unit, value)` 中。Schema SQL、对象类型、名称与所属表名也会从 `sqlite_schema` 作为原始字节读取，并在 token 或清单检查前严格解码；清单只省略精确匹配的隐式主键索引。文件型普通打开会先通过冻结副本验证完整布局及每个已存 key、value 与 global，再在配置 writer 之前对原连接重复验证，因此拒绝畸形介质不会改变其 journal mode 或源字节。返回实时句柄前，打开单元还要求其版本、全局值能力、声明表集合和物理记录表完全匹配。`PRAGMA user_version` 标识物理 schema；普通打开只接受 v2，绝不就地修补或升级现有介质。
+## 目录
 
-每个普通写入原语都是一条预处理语句，写入顺序仍由调用方负责。已经进入执行的语句一旦抛错，其提交结果便无法确定；后端会永久拒绝继续通过该共享连接读写，但关闭仍会释放连接。关闭单元的物化只允许创建，并在一个事务中提交元数据、记录表和初始内容。`COMMIT` 成功会返回 durable 结果；`COMMIT` 失败时，只有 SQLite 仍报告事务活跃才会回滚并拒绝，否则会返回带作用域内 `readBack()` 的 uncertain 结果并中毒共享连接。文件型关闭读取总是把数据库以及任何非空的 `-wal` 和 `-journal` sidecar 冻结到私有临时副本，把每个复制的恢复文件权限规范为 `0o600`，验证复制期间源数据库及所有 sidecar 均未变化，并且只允许 SQLite 在副本中重放 WAL 或恢复 hot rollback journal。即使源介质只读或后端已有温热 writer，这也能保持源文件字节、权限和文件清单不变。全新 `:memory:` 后端的关闭检查会报告缺失而不初始化或打版本戳；共享连接中毒后没有独立读取视图，因此 uncertain 读回会拒绝。只有文件数据库及其 `-wal`、`-shm` 和 `-journal` 路径全都不存在时，数据库才算缺失；任何孤儿 sidecar（包括空条目或非普通条目）都属于畸形介质，普通操作和关闭操作均不会改变它。相对数据库路径会在后端构造时解析，因此之后工作目录的变化无法把普通访问或关闭访问重定向到其他介质。单元名和表名在 DDL 之前进行验证，十六进制物理名称不包含外部 SQL 语法。缺失目录和数据库文件会以仅所有者可访问的权限创建（`0o700`／`0o600`）。
+- [使用本包](#use-this-package)
+- [理解实现](#understand-the-implementation)
+- [进一步探索](#further-exploration)
+- [模型体验](#model-experience)
+- [已知限制与延期工作](#known-limitations-and-deferred-work)
+- [开发备注](#dev-note)
 
-关闭单元 API 还会仅为迁移读取精确的旧物理 v1 B03 布局：介质必须只包含一个单元、没有全局行，并且只包含描述符对应的旧记录表；描述符必须声明 `hasGlobal: false`。普通服务仍拒绝 v1。
+-----
 
-## 配置（schemastery）
+<a id="use-this-package"></a>
+## 使用本包
 
-```ts
-interface Config {
-  backend?: string // storage registry name; default `sqlite`
-  path: string   // SQLite database file path, or ':memory:' for an in-process DB
-  journalMode?: 'wal' | 'delete' | 'truncate' | 'persist'   // journal_mode pragma; default 'wal'
-}
+当组合把频繁更新的领域数据保存在一个数据库中时使用本包：把相关领域路由到此后端，每个单元即作为表物化在配置的数据库文件中。
+
+### 何时选择
+
+当写入频繁且为定点更新时选择它——每个键恰好映射到一行，因此更新一条记录只触碰一行，而不是重写整个文件。当人类需要以纯文本文件查看或编辑已存数据时选择 JSON 后端。同步的 `node:sqlite` 驱动会在每条单语句调用期间阻塞 JavaScript 线程，这在领域数据规模下可以接受，但高写入率时值得纳入考量。
+
+### 配置
+
+两个字段：数据库路径与 journal mode。`:memory:` 打开一个进程内数据库，其内容随进程消失。
+
+```yaml
+- name: '@deepseek-ai/dsh-storage'
+- name: '@deepseek-ai/dsh-storage-sqlite'
+  config:
+    path: /var/lib/dsh/data.db
+- name: '@deepseek-ai/dsh-storage-domain'
+  config:
+    backend: sqlite
 ```
 
+| 字段 | 默认值 | 含义 |
+|---|---|---|
+| `path` | 必填 | SQLite 数据库文件路径，或 `:memory:` |
+| `journalMode` | `wal` | Journal mode：`wal`、`delete`、`truncate` 或 `persist` |
+
+`wal` 适合本地磁盘；回滚日志模式（`delete`／`truncate`／`persist`）适合 WAL 共享内存文件不可用的文件系统，例如网络挂载。生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-storage-sqlite)是每个受支持字段及其 JSDoc 的穷尽式真源。
+
+### 可观察行为
+
+缺失的目录与数据库文件会以仅所有者可访问的权限创建（`0o700`／`0o600`）；已有数据库保持其既有模式。已存格式版本与描述符不同的单元拒绝 `version-mismatch`，普通服务拒绝非当前物理布局版本的数据库；closed lease 可读取受支持的旧布局以进行显式迁移。失败携带稳定的 `StorageError` 代码，写入 resolve 后即已持久。
+
+-----
+
+<a id="understand-the-implementation"></a>
+## 理解实现
+
+<details>
+<summary>实现细节——点击展开</summary>
+
+普通服务要求物理 schema v2 和精确 unit 版本。记录表名无冲突地编码 unit 与 table 名称，规范 JSON 字符串 key 保留每种 JavaScript 字符串。UTF-8、SQL 布局和无损 JSON 校验在服务前拒绝畸形介质。closed lease 可以读取物理 v1，以便显式迁移到独立的缺失目标；它绝不原地升级源介质。物化在单个事务中校验并发布完整目标，并保留不确定提交证据供回读。详见[存储子系统](../../../docs/subsystems/storage.zh.md)。
+
+本后端是在单个 `node:sqlite` 连接之上的文档按行布局，设计目标是让每次按键更新都是一条预处理语句。
+
+### 设计理念
+
+- **每行一份文档。** 每个单元表都变成一张物理 STRICT 表 `u2_<unit-utf8-hex>_<table-utf8-hex> (key TEXT PRIMARY KEY, value TEXT NOT NULL)`，其 `value` 列保存记录的 JSON 文本；全局单例存放在共享的 `unit_globals` 表中。一个键的更新恰好触碰一行——这就是把高频变更领域路由到这里的原因。
+- **单语句原子性。** 每个写入原语都是一条预处理语句，因此 SQLite 的逐语句原子性无需显式事务即可满足 KV 约定；写入顺序仍由调用方负责（领域层的写入链）。
+- **名称在 DDL 之前校验。** 单元名与表名在进入 DDL 之前必须匹配 `UNIT_NAME_RE`，因此任何外部输入都不会被插值进 SQL 标识符。
+- **版本明确报错。** 物理布局版本存放在 `PRAGMA user_version`（全新数据库最后盖戳）；单元格式版本存放在 `units` 表中。任何其他已标记值都会被拒绝——不做迁移。
+
+### 打开顺序
+
+打开数据库时会以 `0o700` 创建父目录、以 `0o600` 独占创建缺失文件、应用 `PRAGMA foreign_keys = ON` 与 journal mode、检查 `user_version`、创建 `units` 与 `unit_globals` 元数据表，并在最后给全新数据库盖戳，让失败留下未盖戳的介质。
+
+### 源码地图
+
+| 文件 | 职责 |
+|---|---|
+| [`src/index.ts`](src/index.ts) | 插件入口：后端注册、`path`／`journalMode` 配置、单元表 |
+| [`src/schema.ts`](src/schema.ts) | 打开顺序、物理布局版本、元数据表、记录表命名 |
+| [`src/unit.ts`](src/unit.ts) | 一个已打开单元：预处理语句、JSON 值解析、关闭 |
+| — | 不发布运行时不变式伴生入口；版本是打开时检查。 |
+
+</details>
+
+-----
+
+<a id="further-exploration"></a>
+## 进一步探索
+
+当本后端视角不够用时阅读以下页面：子系统参考是权威约定，兄弟后端展示了另一种介质。
+
+- [存储子系统](../../../docs/subsystems/storage.zh.md)——后端约定、领域语义与生成的 API。
+- [存储包映射](../README.zh.md)——家族的各包及其在仓库中的位置。
+- [JSON 存储后端](../storage-json/README.zh.md)——面向小而可检查数据的人类可读介质。
+- [领域 KV 存储 Agent Note](../../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.zh.md)——后端家族背后的设计与被推迟的会话后端迁移。
+
+-----
+
+<a id="model-experience"></a>
 ## 模型体验
 
 ### 已存领域记录
 
-#### 模型看到的内容
+#### 模型看到什么
 
-无。该后端不贡献提示词、工具或 schema；它在 `ctx.storage` 后面持久化非会话领域数据（工作区记录、未来的会话伴随元数据），只供主机侧消费方使用。
+无。本后端不贡献提示词、工具或 schema；它在 `ctx.storage` 后面持久化非会话领域数据，只供宿主侧消费方使用。
 
 #### Token 影响
 
@@ -36,11 +119,26 @@ interface Config {
 
 #### KV Cache 影响
 
-无：该后端从不触碰实时请求前缀。
+无：本后端从不触碰实时请求前缀。
 
-## 已知限制与暂缓事项
+## 已知限制与延期工作
 
-- **`DatabaseSync` 是同步的**：每次写入都会在单条语句执行期间阻塞事件循环；在领域数据规模下可以接受。
-- **没有忙等待或重试策略**：另一个连接持有写事务时，该操作会立即被拒绝；没有多进程写入保护。
-- **普通服务只打开物理 v2**：严格的物理 v1 reader 仅用于关闭迁移 lease；任何格式都不会被就地修补或升级。
-- **`openDatabase` 重复了会话持久化 SQLite 的打开顺序**：提取到共享介质层的工作暂缓至计划的会话后端迁移（见 Agent Note 的复用审计）。
+<a id="known-limitations-and-deferred-work"></a>
+
+
+这些限制说明本后端何时不合适，或何时需要特别的运维注意。它们是当前包约束，不是任务积压。
+
+- **同步驱动阻塞事件循环**——每次写入都是一次同步 `DatabaseSync` 调用；阻塞只持续一条语句，在领域数据规模下可以接受。
+- **没有忙等待或重试策略**——持有写锁的竞争连接会立即拒绝操作，而不是等待；领域层的写入链在单进程内串行化写入，跨进程协调属于范围外。
+- **只打开当前的物理布局版本**——任何其他已标记的 `user_version` 都会被拒绝而不是迁移（预发布立场）。
+- **打开顺序与 query provider 重复**——`openDatabase` 与 `session-query-sqlite` 都强制执行 SQLite 文件 ownership，但两个 package 分别拥有不同的 application identity 与 schema；没有共享 medium helper 将其耦合。
+
+<a id="dev-note"></a>
+### 开发备注
+
+<details>
+<summary>维护者的工作上下文——点击展开</summary>
+
+无。
+
+</details>

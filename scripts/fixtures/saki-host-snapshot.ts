@@ -12,7 +12,8 @@ import type { ProjectGitHead } from '@breakfastdapaidang/saki-execution'
 import type { GitMutationExpectation, SakiProjectChangesProjection } from '@breakfastdapaidang/saki-control-plane'
 import { sakiSnapshotEnvironment } from '../saki-snapshot-environment.ts'
 
-const SNAPSHOT_RPC_TIMEOUT_MS = 30_000
+// Git mutations perform several complete repository observations before returning.
+const SNAPSHOT_RPC_TIMEOUT_MS = 90_000
 
 const root = resolve(import.meta.dirname, '../..')
 const tsxLoader = import.meta.resolve('tsx/esm')

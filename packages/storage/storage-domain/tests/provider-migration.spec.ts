@@ -10,7 +10,7 @@ import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import { createAtomicWriter } from '@deepseek-ai/dsh-storage-json/src/atomic.ts'
 import { createClosedUnitOperations } from '@deepseek-ai/dsh-storage-json/src/closed.ts'
 import { StorageRootGuard } from '@deepseek-ai/dsh-storage-json/src/medium.ts'
-import { openJsonUnit } from '@deepseek-ai/dsh-storage-json/src/unit.ts'
+import { openSingleUnit } from '@deepseek-ai/dsh-storage-json/src/single-unit.ts'
 import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   DomainFacility,
@@ -214,9 +214,9 @@ async function rootReplacementBackend(outer: string): Promise<{
       ),
       open: async (descriptor) => {
         await rootGuard.ensureCurrent(descriptor.name)
-        return await openJsonUnit(
+        return await openSingleUnit(
           descriptor,
-          join(root, `${descriptor.name}.json`),
+          root,
           () => {},
           writer.writeAtomic,
           rootGuard,

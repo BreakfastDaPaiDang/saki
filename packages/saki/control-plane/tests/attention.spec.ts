@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@breakfastdapaidang/saki-execution'
 import {
   deriveSakiAttention,
@@ -136,7 +136,7 @@ function openIntervention(patch: Partial<OpenIntervention> = {}): OpenInterventi
       agentRunId: AGENT_RUN_ID,
       workSessionId: WORK_SESSION_ID,
       sessionId: SESSION_ID,
-      toolCallId: CallId('call-fixture'),
+      toolCallId: ToolCallId('call-fixture'),
     },
     state: 'open',
     openedAt: 121,

@@ -1,9 +1,9 @@
 /** Controllable keyless LLM adapter used only by the Saki composition smoke. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { CallId, LlmAdapter, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, LlmAdapter, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
 
-const INTERVENTION_CALL_ID = CallId('saki-agent-run-intervention')
+const INTERVENTION_CALL_ID = ToolCallId('saki-agent-run-intervention')
 const INTERVENTION_QUESTION = 'Should this Agent Run preserve the current repository state before continuing?'
 
 /** Observable adapter state published to the smoke driver. */

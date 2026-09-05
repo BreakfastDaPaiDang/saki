@@ -43,6 +43,7 @@ describe('Saki bundle package', () => {
       ['storage-domain', '@deepseek-ai/dsh-storage-domain'],
       ['llm', '@deepseek-ai/dsh-llm'],
       ['session', '@deepseek-ai/dsh-session'],
+      ['session-projection', '@deepseek-ai/dsh-session-projection'],
       ['session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'],
       ['system-prompt', '@deepseek-ai/dsh-system-prompt'],
       ['tools', '@deepseek-ai/dsh-tools'],
@@ -60,6 +61,7 @@ describe('Saki bundle package', () => {
       ['pwsh-sandbox', '@deepseek-ai/dsh-pwsh-sandbox'],
       ['saki-execution-local', '@breakfastdapaidang/saki-execution-local'],
       ['saki-credentials', '@deepseek-ai/dsh-credentials-windows-dpapi'],
+      ['saki-connection-credentials', '@deepseek-ai/dsh-credentials-local'],
       ['saki-github-app', '@breakfastdapaidang/saki-github-app'],
       ['saki-webserver', '@deepseek-ai/dsh-host-webserver'],
       ['saki-connection', '@deepseek-ai/dsh-client-connection'],
@@ -88,6 +90,7 @@ describe('Saki bundle package', () => {
     })
     expect(insert.find(entry => entry.id === 'agent-presets')?.config).toEqual({
       default: 'development',
+      includeShippedRoot: false,
       includeUserRoot: false,
     })
     expect(insert.find(entry => entry.id === 'agent-loop')?.config).toEqual({ agents: [] })
@@ -101,6 +104,9 @@ describe('Saki bundle package', () => {
     })
     expect(insert.find(entry => entry.id === 'saki-credentials')?.disabled).toEqual({
       __jsExpr: "process.platform !== 'win32'",
+    })
+    expect(insert.find(entry => entry.id === 'saki-connection-credentials')?.disabled).toEqual({
+      __jsExpr: "process.platform === 'win32'",
     })
     expect(insert.find(entry => entry.id === 'saki-github-app')).toMatchObject({
       inject: ['credentials'],

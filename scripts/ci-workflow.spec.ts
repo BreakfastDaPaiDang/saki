@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest'
 import { isRecord, loadWorkflow, workflowEvent, workflowJob } from './workflow-test-support.ts'
 
 const root = resolve(import.meta.dirname, '..')
-const runnerPrivatePnpmDestination = '${{ runner.temp }}/setup-pnpm'
-const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js'
+const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}$/
+const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
   it('isolates every pnpm action setup destination per runner', () => {
@@ -186,6 +186,15 @@ describe('DeepSeek e2e workflow', () => {
     })
     expect(JSON.stringify(steps)).not.toContain('apt-get')
   })
+
+  it('bounds profile subprocess fan-out to the tested e2e default', () => {
+    const workflow = loadWorkflow('.github/workflows/e2e.yml')
+    const e2e = workflowJob(workflow, 'e2e')
+    if (!Array.isArray(e2e.steps)) throw new TypeError('DeepSeek e2e workflow must define steps')
+
+    const step = e2e.steps.filter(isRecord).find(candidate => candidate.name === 'E2E tests (real DeepSeek API)')
+    expect(step).toMatchObject({ env: { DSH_E2E_MAX_WORKERS: 4 } })
+  })
 })
 
 describe('E2B e2e workflow', () => {
@@ -219,7 +228,6 @@ describe('Python release workflows', () => {
   it('keeps complete wheel validation separate from protected public publication', () => {
     const workflow = loadWorkflow('.github/workflows/python-release.yml')
     const dispatch = workflowEvent(workflow, 'workflow_dispatch')
-    const pullRequest = workflowEvent(workflow, 'pull_request')
     const build = workflowJob(workflow, 'build')
     const pythonCompat = workflowJob(workflow, 'python-compat')
     const validate = workflowJob(workflow, 'validate')
@@ -235,12 +243,12 @@ describe('Python release workflows', () => {
     }
 
     expect(dispatch.inputs.publish).toMatchObject({ type: 'boolean', default: false })
-    expect(pullRequest).toEqual({ types: ['labeled'] })
+    if (!isRecord(workflow.on)) throw new TypeError('python-release workflow must define on')
+    expect(Object.keys(workflow.on)).toEqual(['workflow_dispatch'])
     expect(build).toMatchObject({
-      if: "github.event_name == 'workflow_dispatch' || github.event.label.name == 'python-release-dry-run'",
       uses: './.github/workflows/build-exe-for-python-sdk.yml',
       with: {
-        targets: 'node24-linux-x64,node24-linux-arm64,node24-macos-arm64',
+        targets: 'node24-linux-x64,node24-linux-arm64,node24-macos-arm64,node24-macos-x64,node24-win-x64',
         release: true,
       },
     })
@@ -299,49 +307,101 @@ describe('Python release workflows', () => {
 
   it('exposes the native wheel builder to the release caller with normalized versions', () => {
     const workflow = loadWorkflow('.github/workflows/build-exe-for-python-sdk.yml')
+    expect(Object.keys(workflow.on as Record<string, unknown>).sort()).toEqual(['workflow_call', 'workflow_dispatch'])
     const call = workflowEvent(workflow, 'workflow_call')
     const plan = workflowJob(workflow, 'plan')
     const build = workflowJob(workflow, 'build')
-    if (!isRecord(call.inputs) || !Array.isArray(plan.steps) || !Array.isArray(build.steps)) {
+    if (!isRecord(call.inputs) || !isRecord(call.secrets) || !Array.isArray(plan.steps) || !Array.isArray(build.steps)) {
       throw new TypeError('Python wheel builder must define workflow_call inputs and plan steps')
     }
 
     const buildSteps: unknown[] = build.steps
     const manylinuxAddon = buildSteps.find(step => isRecord(step) && step.name === 'Rebuild Linux node-pty against manylinux 2.28')
-    const macosCheck = buildSteps.find(step => isRecord(step) && step.name === 'Check macOS deployment target')
+    const macosCheck = buildSteps.find(step => isRecord(step) && step.name === 'Check macOS payload architecture and deployment target')
     const manylinuxSmoke = buildSteps.find(step => isRecord(step) && step.name === 'Run wheel in a manylinux 2.28 container')
-    if (!isRecord(manylinuxAddon) || typeof manylinuxAddon.run !== 'string') {
-      throw new TypeError('Python wheel builder must define the manylinux node-pty rebuild step')
+    const cleanVenvPosix = buildSteps.find(step => isRecord(step) && step.name === 'Install local SDK and runtime wheels into a clean venv (POSIX)')
+    const cleanVenvWindows = buildSteps.find(step => isRecord(step) && step.name === 'Install local SDK and runtime wheels into a clean venv (Windows)')
+    const installedKeylessPosix = buildSteps.find(step => isRecord(step) && step.name === 'Run installed-wheel keyless black-box tests (POSIX)')
+    const installedKeylessWindows = buildSteps.find(step => isRecord(step) && step.name === 'Run installed-wheel keyless black-box tests (Windows)')
+    const realApiPreflightPosix = buildSteps.find(step => isRecord(step) && step.name === 'Preflight installed-wheel real API test (POSIX)')
+    const realApiPreflightWindows = buildSteps.find(step => isRecord(step) && step.name === 'Preflight installed-wheel real API test (Windows)')
+    const installedRealApiPosix = buildSteps.find(step => isRecord(step) && step.name === 'Run installed-wheel real API black-box test (POSIX)')
+    const installedRealApiWindows = buildSteps.find(step => isRecord(step) && step.name === 'Run installed-wheel real API black-box test (Windows)')
+    if (!isRecord(macosCheck) || typeof macosCheck.run !== 'string'
+      || !isRecord(cleanVenvPosix) || !isRecord(cleanVenvWindows)
+      || !isRecord(installedKeylessPosix) || !isRecord(installedKeylessWindows)
+      || !isRecord(realApiPreflightPosix) || !isRecord(realApiPreflightWindows)
+      || !isRecord(installedRealApiPosix) || !isRecord(installedRealApiWindows)) {
+      throw new TypeError('Python wheel builder must define native POSIX and Windows installed-wheel steps')
     }
     expect(call.inputs).toHaveProperty('targets')
     expect(call.inputs).toMatchObject({
       ci: { type: 'boolean', default: false },
       release: { type: 'boolean', default: false },
     })
+    expect(call.secrets).toMatchObject({
+      DEEPSEEK_API_KEY_EXTERNAL: { required: false },
+    })
     expect(workflow.concurrency).toMatchObject({
       group: 'build-single-exe-${{ github.workflow }}-${{ github.ref }}',
     })
+    expect(build.defaults).toBeUndefined()
     expect(plan.if).toContain('inputs.ci')
     expect(plan.if).toContain('inputs.release')
     expect(JSON.stringify(plan.steps)).toContain('pep440_version')
     const workflowJson = JSON.stringify(workflow)
     expect(workflowJson).toContain('macosx_14_0_arm64')
+    expect(workflowJson).toContain('macosx_14_0_x86_64')
+    expect(workflowJson).toContain('node24-macos-x64')
+    expect(workflowJson).toContain('macos-15-intel')
+    expect(workflowJson).toContain('win_amd64')
+    expect(workflowJson).toContain('node24-win-x64')
+    expect(workflowJson).toContain('windows-2025')
     expect(workflowJson).toContain('dist-python/$SDK_WHEEL')
     expect(workflowJson).toContain('dist-python/$RUNTIME_WHEEL')
     expect(workflowJson).toContain('/work/dist-python/$SDK_WHEEL')
     expect(workflowJson).toContain('/work/dist-python/$RUNTIME_WHEEL')
     expect(workflowJson).not.toContain('--find-links dist-python')
     expect(workflowJson).not.toContain('--find-links /work/dist-python')
+    expect(workflowJson).not.toContain('cygpath')
     expect(manylinuxAddon).toMatchObject({ if: "runner.os == 'Linux'" })
     expect(JSON.stringify(manylinuxAddon)).toContain('manylinux_2_28_x86_64')
     expect(JSON.stringify(manylinuxAddon)).toContain('manylinux_2_28_aarch64')
     expect(JSON.stringify(manylinuxAddon)).toContain('npm_config_build_from_source=true pnpm run install')
-    expect(JSON.stringify(manylinuxAddon)).toContain('$HOME/setup-pnpm:$HOME/setup-pnpm:ro')
+    expect(JSON.stringify(manylinuxAddon)).toContain('pnpm_setup_root')
+    expect(JSON.stringify(manylinuxAddon)).toContain('$pnpm_setup_root:$pnpm_setup_root:ro')
     expect(JSON.stringify(manylinuxAddon)).toContain('node-pty-glibc-versions.txt')
     expect(JSON.stringify(manylinuxAddon)).toContain('le 2.28')
     expect(macosCheck).toMatchObject({ if: "runner.os == 'macOS'" })
-    expect(JSON.stringify(macosCheck)).toContain('scripts/check-macos-deployment-target.py')
-    expect(JSON.stringify(macosCheck)).toContain('$EXE-spawn-helper')
+    expect(macosCheck.run).toContain('scripts/check-macos-deployment-target.py')
+    expect(macosCheck.run).toContain('lipo "$payload" -verify_arch')
+    expect(macosCheck.run).toContain('$EXE-rg')
+    expect(macosCheck.run).toContain('$EXE-spawn-helper')
+    expect(JSON.stringify(installedKeylessPosix)).toContain('--scenario all')
+    expect(JSON.stringify(installedKeylessPosix)).toContain('env -u PYTHONPATH')
+    expect(JSON.stringify(installedKeylessWindows)).toContain('--scenario all --installed-wheel')
+    expect(installedKeylessWindows).toMatchObject({ if: "runner.os == 'Windows'", shell: 'pwsh' })
+    expect(cleanVenvWindows).toMatchObject({ if: "runner.os == 'Windows'", shell: 'pwsh' })
+    expect(JSON.stringify(cleanVenvWindows)).toContain('Scripts\\\\python.exe')
+    expect(realApiPreflightPosix).toMatchObject({
+      env: { DEEPSEEK_API_KEY: '${{ secrets.DEEPSEEK_API_KEY_EXTERNAL }}' },
+    })
+    for (const step of [realApiPreflightPosix, realApiPreflightWindows, installedRealApiPosix, installedRealApiWindows]) {
+      expect(String(step.if)).toContain("github.event_name == 'workflow_dispatch' && inputs.real-api")
+    }
+    expect(String(realApiPreflightPosix.if)).toContain('head.repo.fork')
+    expect(String(realApiPreflightPosix.if)).toContain('dependabot[bot]')
+    expect(realApiPreflightWindows).toMatchObject({ shell: 'pwsh' })
+    expect(installedRealApiPosix).toMatchObject({
+      env: {
+        DEEPSEEK_API_KEY: '${{ secrets.DEEPSEEK_API_KEY_EXTERNAL }}',
+        DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+      },
+    })
+    expect(JSON.stringify(installedRealApiPosix)).toContain('--scenario sdk-live')
+    expect(JSON.stringify(installedRealApiPosix)).toContain('-u DSH_RUNTIME_MODE')
+    expect(installedRealApiWindows).toMatchObject({ shell: 'pwsh' })
+    expect(JSON.stringify(installedRealApiWindows)).toContain('--scenario sdk-live --installed-wheel')
     expect(manylinuxSmoke).toMatchObject({ if: "runner.os == 'Linux'" })
     expect(JSON.stringify(manylinuxSmoke)).toContain('-e DSH_TELEMETRY_DISABLED')
   })
@@ -354,14 +414,47 @@ describe('Python release workflows', () => {
     }
     const runtimeScript: unknown[] = runtimeWheel.script
     const macosCheck = runtimeScript.find(
-      step => typeof step === 'string' && step.includes('PLATFORM" = macos-arm64'),
+      step => typeof step === 'string' && step.includes('${PLATFORM#macos-}'),
     )
     if (typeof macosCheck !== 'string') {
       throw new TypeError('GitLab CI must check the macOS deployment target')
     }
 
     expect(macosCheck).toContain('scripts/check-macos-deployment-target.py')
-    expect(macosCheck).toContain('"$EXE" "$EXE-spawn-helper"')
+    expect(macosCheck).toContain('lipo "$payload" -verify_arch')
+    expect(macosCheck).toContain('"$EXE" "$EXE-rg" "$EXE-spawn-helper"')
+  })
+
+  it('builds the macOS x64 wheel on the matching GitLab runner', () => {
+    const workflow = loadWorkflow('.gitlab-ci.yml')
+    const macosX64 = workflow['runtime-macos-x64']
+    const publish = workflow['publish-python']
+    if (!isRecord(macosX64) || !isRecord(publish) || !Array.isArray(publish.needs)) {
+      throw new TypeError('GitLab CI must define the macOS x64 runtime and publication jobs')
+    }
+
+    expect(macosX64.tags).toEqual(['macos-x64'])
+    expect(macosX64.variables).toMatchObject({ PKG_TARGET: 'node24-macos-x64', PLATFORM: 'macos-x64' })
+    expect(publish.needs).toContainEqual({ job: 'runtime-macos-x64', artifacts: true })
+    expect(JSON.stringify(publish.script)).toContain('macosx_14_0_x86_64.whl')
+  })
+
+  it('builds and black-box tests the Windows x64 wheel in GitLab', () => {
+    const workflow = loadWorkflow('.gitlab-ci.yml')
+    const windows = workflow['runtime-windows-x64']
+    const publish = workflow['publish-python']
+    if (!isRecord(windows) || !Array.isArray(windows.before_script) || !Array.isArray(windows.script)
+      || !isRecord(publish) || !Array.isArray(publish.needs)) {
+      throw new TypeError('GitLab CI must define the Windows runtime and aggregate publication jobs')
+    }
+
+    expect(windows.tags).toEqual(['windows-x64'])
+    expect(windows.variables).toMatchObject({ PKG_TARGET: 'node24-win-x64', PLATFORM: 'win-x64' })
+    expect(JSON.stringify(windows.before_script)).toContain('.ci-python\\\\Scripts')
+    expect(JSON.stringify(windows.before_script)).toContain('[IO.Path]::PathSeparator')
+    expect(JSON.stringify(windows.script)).toContain('win_amd64.whl')
+    expect(JSON.stringify(windows.script)).toContain('--scenario all --installed-wheel')
+    expect(publish.needs).toContainEqual({ job: 'runtime-windows-x64', artifacts: true })
   })
 })
 
@@ -384,6 +477,7 @@ describe('Issue lifecycle workflow', () => {
     // review events.
     const lifecyclePullRequest = workflowEvent(lifecycle, 'pull_request')
     const lifecycleReview = workflowEvent(lifecycle, 'pull_request_review')
+    expect(lifecyclePullRequest.types).toContain('opened')
     expect(lifecyclePullRequest.types).not.toContain('ready_for_review')
     expect(lifecyclePullRequest.types).toContain('review_requested')
     expect(lifecycleReview.types).toEqual(['submitted'])
@@ -398,6 +492,38 @@ describe('Issue lifecycle workflow', () => {
     const policyPullRequest = workflowEvent(policy, 'pull_request')
     expect(policyPullRequest.types).toContain('ready_for_review')
   })
+
+  it('uses a read-only Project token only for human pull request policy metadata', () => {
+    const policy = loadWorkflow('.github/workflows/issue-policy.yml')
+    const policyJob = workflowJob(policy, 'policy')
+    if (!Array.isArray(policyJob.steps)) throw new TypeError('Issue policy job must define steps')
+    const steps = policyJob.steps.filter(isRecord)
+    const tokenStep = steps.find(step => step.name === 'Create Project read token')
+    const validateStep = steps.find(step => step.name === 'Validate pull request')
+    const humanPullRequest =
+      "${{ github.event.pull_request.user.type != 'Bot' && github.event.pull_request.user.type != 'App' }}"
+
+    expect(tokenStep).toMatchObject({
+      id: 'app-token',
+      if: humanPullRequest,
+      uses: 'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1',
+      with: {
+        'client-id': '${{ vars.DSH_ISSUE_APP_CLIENT_ID }}',
+        'private-key': '${{ secrets.DSH_ISSUE_APP_PRIVATE_KEY }}',
+        owner: 'deepseek-harness',
+        repositories: 'deepseek-harness',
+        'permission-issues': 'read',
+        'permission-organization-projects': 'read',
+      },
+    })
+    expect(validateStep).toMatchObject({
+      if: humanPullRequest,
+      env: {
+        GITHUB_TOKEN: '${{ github.token }}',
+        PROJECT_TOKEN: '${{ steps.app-token.outputs.token }}',
+      },
+    })
+  })
 })
 
 describe('npm release workflows', () => {
@@ -406,7 +532,7 @@ describe('npm release workflows', () => {
     for (const file of ['release.yml', 'release-vendor.yml']) {
       const workflow = loadWorkflow(`.github/workflows/${file}`)
       if (!isRecord(workflow.jobs)) throw new TypeError(`${file} must define jobs`)
-      expect(Object.keys(workflow.jobs).sort()).toEqual(['pack'])
+      expect(Object.keys(workflow.jobs).sort()).toEqual(file === 'release.yml' ? ['dependencies', 'pack'] : ['pack'])
     }
 
     // publication is workflow_dispatch-only (never a PR check) and keeps the
@@ -420,6 +546,20 @@ describe('npm release workflows', () => {
       expect(publish.environment).toBe('npm-publish')
       expect(publish.concurrency).toMatchObject({ group: 'Release-publish' })
     }
+  })
+
+  it('runs dependency policy and npm layout checks in the DSH release workflow', () => {
+    const workflow = loadWorkflow('.github/workflows/release.yml')
+    const dependencies = workflowJob(workflow, 'dependencies')
+    if (!isRecord(workflow.on) || !Array.isArray(dependencies.steps)) {
+      throw new TypeError('DSH release workflow must define triggers and dependency steps')
+    }
+    const commands = dependencies.steps.flatMap(step =>
+      isRecord(step) && typeof step.run === 'string' ? [step.run] : [])
+
+    expect(Object.keys(workflow.on).sort()).toEqual(['push', 'workflow_dispatch'])
+    expect(commands).toContain('pnpm run verify-package-dependencies')
+    expect(commands).toContain('pnpm run verify-npm-install-layout')
   })
 })
 

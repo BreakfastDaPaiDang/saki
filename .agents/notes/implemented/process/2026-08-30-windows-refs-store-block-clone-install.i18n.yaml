@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-30-windows-refs-store-block-clone-install.md
+2026-08-30-windows-refs-store-block-clone-install.md: e96e42b0a5233a2ac18a0dd8e90b841dd828a541
+2026-08-30-windows-refs-store-block-clone-install.zh.md: 9e1301c88178513ac3a9a76650d6a22ff52d9f3e

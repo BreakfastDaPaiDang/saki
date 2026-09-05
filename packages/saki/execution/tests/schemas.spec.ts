@@ -1,5 +1,4 @@
 import { Context } from '@deepseek-ai/cordis'
-import Invariants from '@deepseek-ai/dsh-invariants'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { describe, expect, it, vi } from 'vitest'
@@ -1941,13 +1940,6 @@ describe('InheritedChangeBaseline schemas', () => {
     }).success).toBe(false)
   }, 15_000)
 
-  it('registers the stateless package invariant companion', async () => {
-    const ctx = new Context()
-    const fiber = await ctx.plugin(Invariants)
-
-    expect(ctx.invariants).toBeDefined()
-    await fiber.dispose()
-  })
 
   it('constructs a Host Execution provider through the service seam', async () => {
     class TestExecution extends SakiHostExecution {

@@ -83,9 +83,10 @@ describe('Saki Actions cost policy', () => {
     expect(Object.keys(workflowEvents(vendor)).sort()).toEqual(['push', 'workflow_dispatch'])
     expect(workflowEvent(dsh, 'push')).toEqual({ tags: ['dsh-v*'] })
     expect(workflowEvent(vendor, 'push')).toEqual({ tags: ['vendor-*-v*'] })
+    expect(workflowJobNames(dsh)).toEqual(['dependencies', 'pack'])
+    expect(workflowJobNames(vendor)).toEqual(['pack'])
     for (const workflow of [dsh, vendor]) {
       expect(workflowEvents(workflow).workflow_dispatch).toBeNull()
-      expect(workflowJobNames(workflow)).toEqual(['pack'])
     }
   })
 

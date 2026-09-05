@@ -8,7 +8,7 @@ import type {
   InterventionOpeningEvidence,
 } from '@breakfastdapaidang/saki-execution'
 
-type OpeningPersistence = Pick<SessionPersistence, 'listSnapshots' | 'readFrom'>
+type OpeningPersistence = Pick<SessionPersistence, 'stat' | 'open'>
 
 /**
  * Inspect physical Session evidence for one exact `request_intervention` success.
@@ -23,10 +23,9 @@ export async function inspectLocalInterventionOpening(
   signal: AbortSignal,
 ): Promise<InterventionOpeningEvidence> {
   signal.throwIfAborted()
-  const snapshots = await persistence.listSnapshots(signal)
-  if (!snapshots.some(snapshot => snapshot.header.id === request.sessionId)) return { kind: 'absent' }
-
-  const { events } = await persistence.readFrom(request.sessionId, 0, signal)
+  if (await persistence.stat(request.sessionId, { signal }) === undefined) return { kind: 'absent' }
+  await using handle = await persistence.open(request.sessionId, 'read', { signal })
+  const events = await handle.read(0, undefined, { signal })
   if (!request.expectedToolResult.content[0].text.includes(request.interventionId)) {
     return { kind: 'conflict' }
   }

@@ -1,9 +1,34 @@
+---
+description: "Request project inspection, bounded diffs, structured Git mutations, and durable Agent starts through a provider-neutral Host interface."
+kind: "package-reference"
+---
+
 # `@breakfastdapaidang/saki-execution`
 
 English | [中文](README.zh.md)
 
+## Summary
+
+Request project inspection, bounded diffs, structured Git mutations, and durable Agent starts through a provider-neutral Host interface.
+
+## Table of Contents
+
+- [Use this package](#use-this-package)
+- [Project-selection inspection](#project-selection-inspection)
+- [Bound project status](#bound-project-status)
+- [Bound project Diff](#bound-project-diff)
+- [Durable structured mutations](#durable-structured-mutations)
+- [Durable Agent starts](#durable-agent-starts)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+<a id="use-this-package"></a>
+## Use this package
+
 The private Saki Host Execution Service Definition registers `ctx.sakiHostExecution`. It defines provider-neutral project inspection and Diff values plus the durable Host Operation lifecycle used for structured StageFiles, UnstageFiles, Commit, PushBranch, and Agent Run start effects. The [Saki control plane](../control-plane/README.md) owns authorization, Project policy, write admission, and durable Control Intents. The wider control-plane and execution-plane split is defined by the [Saki backend architecture](../../../docs/saki/architecture/0.1.0-backend.md).
 
+<a id="project-selection-inspection"></a>
 ## Project-selection inspection
 
 The request contains a selected Saki Host id and a caller-supplied directory locator. The locator is untrusted input: a provider resolves and inspects it independently on every call, and neither that spelling nor an earlier Projection authorizes a later operation. The required `AbortSignal` binds inspection work to the caller lifetime.
@@ -12,6 +37,7 @@ A successful result separates a browser-safe `ProjectSelectionProjection` from `
 
 The baseline schemas distinguish a complete capture, including a clean zero-entry result, from an unavailable capture that carries only a bounded reason and observed limits. Consumers must not treat unavailable evidence as a partial complete baseline.
 
+<a id="bound-project-status"></a>
 ## Bound project status
 
 `inspectProject` accepts an `ActiveHostProjectBinding` containing its stable id and revision, literal active health, Host and Workspace identities, the accepted registration inspection, and the registration-time inherited-change baseline. Strict schemas require the Host and baseline identity to agree with that registration evidence. The registration inspection may predate Workspace creation, so a Service Provider revalidates the current repository and Workspace relation before it returns status; retained paths and fingerprints never authorize a read.
@@ -20,10 +46,12 @@ A successful `ProjectGitStatusObservation` contains branch, HEAD, upstream, cano
 
 `inspectProjectCommit` revalidates an active Binding and accepts only an exact object id whose width matches the repository format. It confirms that the local object is a Commit and returns the same id, or distinguishes stale Binding, missing Commit, and unavailable Host evidence without accepting an arbitrary revision, ref, or path.
 
+<a id="bound-project-diff"></a>
 ## Bound project Diff
 
 `readDiff` accepts an active Binding, exact status fingerprint, opaque change id, staged, unstaged, or conflict layer, and optional continuation cursor. The Service Provider resolves the file internally and returns one bounded `ProjectGitDiffPage`; the patch fingerprint binds every page to the same complete patch, while line and byte ranges make truncation explicit. The request contains no caller-selected path or Git command. Stale observations or cursors, missing or ambiguous rows, unsupported untracked, conflict, or binary content, invalid UTF-8, and resource limits return closed path-free reasons instead of partial output.
 
+<a id="durable-structured-mutations"></a>
 ## Durable structured mutations
 
 `prepareOperation` durably binds one immutable Host request to its Control Intent source before any effect and returns provider-owned acceptance that cannot cross JSON. `startOperation` checks that acceptance and a current same-process Binding Write Admission before planning or publication. `inspectOperation` advances recovery from durable evidence without repeating an ambiguous effect, `cancelOperation` records only the closed durable cancellation reasons, and `onChanged` supplies post-commit wake-ups while snapshots remain authoritative. A caller `AbortSignal` limits one call; it is not durable cancellation.
@@ -34,6 +62,7 @@ PushBranch binds one exact local Commit and active Resource Binding to one canon
 
 The Service Definition has no configuration. Each Service Provider owns its execution-world mechanism and required resource bounds.
 
+<a id="durable-agent-starts"></a>
 ## Durable Agent starts
 
 `StartAgentRun` carries an `execution-dispatch` source, exact writable Git precondition, preallocated Agent Run, Work Session, DSH Session and input MessageId, frozen Agent Profile and Model Route, and one complete text-only `UserMessage`. Its payload digest covers that message and either its initial `saki-agent-run` source or attributed `saki-intervention-answer` source. Preparation is inert; start requires the accepted Dispatch mapping and current `agent-run` Binding Write Admission. The stable result repeats all four Run, Work Session, Session, and input identities.
@@ -63,3 +92,12 @@ Each initial input or Intervention answer is a new user turn rather than part of
 ## Known Limitations and Deferred Work
 
 - **Constrained Git operation set** — per-hunk staging, stash, conflict editing, general branch management, worktree management, repair, and retirement remain outside this service. Commit is hook-free and unsigned; repositories that require hooks, signing, or unsupported external filters need a different explicitly trusted provider.
+
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+No runtime invariant companion is published because the Service Definition contains schemas and canonical value helpers without a mutable relationship.
+
+</details>

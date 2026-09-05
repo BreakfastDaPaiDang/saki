@@ -14,10 +14,6 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./invariant": {
-      "types": "./lib/types/invariant.d.ts",
-      "default": "./lib/invariant.js"
-    },
     "./bin": {
       "types": "./lib/types/bin.d.ts",
       "default": "./lib/bin.js"
@@ -27,7 +23,6 @@
   },
   "files": [
     "lib/index.js",
-    "lib/invariant.js",
     "lib/bin.js",
     "lib/maintenance-operations-*.js",
     "lib/types/**/*.d.ts"
@@ -42,7 +37,6 @@
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
     "@breakfastdapaidang/saki-execution-local": "workspace:^",
     "@deepseek-ai/dsh-brand": "workspace:^",
-    "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
     "@deepseek-ai/dsh-storage-domain": "workspace:^",
     "@deepseek-ai/dsh-storage-sqlite": "workspace:^",
@@ -53,7 +47,6 @@
     "@breakfastdapaidang/saki-execution": "workspace:^",
     "@breakfastdapaidang/saki-execution-local": "workspace:^",
     "@deepseek-ai/dsh-brand": "workspace:^",
-    "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
     "@deepseek-ai/dsh-storage-domain": "workspace:^",
     "@deepseek-ai/dsh-storage-sqlite": "workspace:^",

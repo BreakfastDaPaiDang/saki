@@ -64,6 +64,48 @@ describe('pi-ai credential store over harness records', () => {
     await expect(ctx.credentials.readRecord(CODEX)).resolves.toEqual({ kind: 'grant', payload: granted })
   })
 
+  it('stores the JSON image of a grant, dropping explicitly-undefined members', async () => {
+    const ctx = await stored()
+    const store = credentialStoreFrom(ctx)
+    // The github.com Copilot shape: pi-ai sets optional members to explicit
+    // undefined, which the strict record validator refuses verbatim.
+    const granted = {
+      type: 'oauth' as const,
+      access: 'at',
+      refresh: 'rt',
+      expires: 42,
+      enterpriseUrl: undefined,
+      nested: { keep: 'x', drop: undefined },
+      list: ['a', undefined, 'b'],
+    }
+
+    await store.modify('github-copilot', () => Promise.resolve(granted))
+
+    await expect(ctx.credentials.readRecord(recordKeyFor('github-copilot'))).resolves.toEqual({
+      kind: 'grant',
+      payload: {
+        type: 'oauth',
+        access: 'at',
+        refresh: 'rt',
+        expires: 42,
+        nested: { keep: 'x' },
+        list: ['a', null, 'b'],
+      },
+    })
+  })
+
+  it('rejects grant members with executable JSON serialization', async () => {
+    const ctx = await stored()
+    const store = credentialStoreFrom(ctx)
+    const issued = new Date(0)
+    const serialize = vi.spyOn(issued, 'toJSON')
+    const granted = { type: 'oauth' as const, access: 'at', refresh: 'rt', expires: 42, issued }
+
+    await expect(store.modify('github-copilot', () => Promise.resolve(granted)))
+      .rejects.toThrow('exposes executable toJSON')
+    expect(serialize).not.toHaveBeenCalled()
+  })
+
   it('shows the mutation the current credential and leaves it alone when declined', async () => {
     const store = credentialStoreFrom(await stored())
     await store.modify('openai-codex', () =>

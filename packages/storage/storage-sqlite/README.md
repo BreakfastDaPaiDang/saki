@@ -1,34 +1,117 @@
+---
+description: "SQLite storage backend for hosts and maintainers choosing, configuring, or debugging document-per-row KV storage in one database file."
+kind: "package-reference"
+---
+
 # @deepseek-ai/dsh-storage-sqlite
 
 English | [中文](README.zh.md)
 
-SQLite backend for the [storage hub](../storage/README.md): registers under a configurable name that defaults to `sqlite`, serving the `kv` facet over one `node:sqlite` database file (or `:memory:`). Design and trade-offs: [domain KV storage Agent Note](../../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md).
+## Summary
 
-## Storage model
+`dsh-storage-sqlite` is a storage backend that hosts every routed unit in one SQLite database file, storing each record as one JSON document per row, registered as backend `sqlite`. A single record update touches exactly one row, which is what makes this the right medium for high-frequency, point-sized writes. Choose it when a domain's data changes often or the deployment prefers one queryable database; choose the JSON backend when the data should be readable as plain files. The backend is host-side only: it contributes no prompt, tool, or schema, so the model and the agent loop never see it.
 
-Physical schema v2 stores one document per row. Each declared unit table has a collision-free `u2_<unit-utf8-hex>_<table-utf8-hex>` STRICT table with `(key TEXT PRIMARY KEY, value TEXT NOT NULL)`, so one key updates one row. The database encoding must be UTF-8, and logical record keys are stored as canonical JSON string text so every JavaScript string, including embedded NUL and unpaired surrogates, remains distinct. Reads select key and value TEXT cells as raw bytes and decode UTF-8 without replacement before validating keys or parsing JSON; invalid encoding, non-canonical keys, hidden NUL suffixes, duplicate object members, and numeric tokens that JavaScript would round, underflow, or overflow all reject as malformed media. The authoritative layout is split across `units(name, version, has_global)`, `unit_tables(unit, table_name)`, and `unit_globals(unit, value)`. Schema SQL, object types, names, and owning-table names are likewise read from `sqlite_schema` as raw bytes and decoded strictly before token or inventory checks; only the exact implicit primary-key autoindexes are omitted from that inventory. A file-backed ordinary open validates the complete layout and every stored key, value, and global first through a frozen copy and again on the original connection before writer configuration, so rejecting malformed media does not change its journal mode or source bytes. Opening a unit also requires its version, global capability, declared table set, and physical record tables to match exactly before the live handle is returned. `PRAGMA user_version` identifies the physical schema; ordinary opens accept only v2 and never repair or upgrade an existing medium in place.
+## Table of Contents
 
-Every ordinary write primitive is a single prepared statement; write ordering stays the caller's responsibility. If an entered statement throws, its commit outcome is unknown and the backend permanently rejects further reads and writes through that shared connection while still allowing close to release it. Closed-unit materialization is create-only and commits metadata, record tables, and initial content in one transaction. A successful `COMMIT` returns a durable result; a failed `COMMIT` is rolled back and rejected only while SQLite still reports an active transaction, otherwise it returns an uncertain result with a scoped `readBack()` and poisons the shared connection. File-backed closed reads always freeze the database plus any nonempty `-wal` and `-journal` sidecars into a private temporary copy, normalize every copied recovery file to `0o600`, verify that the source database and all sidecars did not change during the copy, and let SQLite replay the WAL or recover a hot rollback journal only in the copy. This preserves source bytes, modes, and file inventory even when the source is read-only or the backend already has a warm writer. A fresh `:memory:` closed inspection reports missing without initializing or stamping the database; after its shared connection is poisoned it has no independent read view, so uncertain readback rejects. An absent file database counts as missing only when its `-wal`, `-shm`, and `-journal` paths are also absent; any orphan sidecar, including an empty or non-regular entry, is a malformed medium that ordinary and closed operations leave unchanged. Relative database paths are resolved when the backend is constructed, so later working-directory changes cannot redirect ordinary or closed access to another medium. Unit and table names are validated before DDL, and the hexadecimal physical names contain no external SQL syntax. Missing directories and database files are created owner-only (`0o700`/`0o600`).
+- [Use this package](#use-this-package)
+- [Understand the implementation](#understand-the-implementation)
+- [Further Exploration](#further-exploration)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
 
-The closed-unit API also reads the exact legacy physical-v1 B03 layout for migration only: the medium must contain one unit, no global row, and exactly the descriptor's legacy record tables, and the descriptor must declare `hasGlobal: false`. Ordinary serving still rejects v1.
+-----
 
-## Configuration (schemastery)
+<a id="use-this-package"></a>
+## Use this package
 
-```ts
-interface Config {
-  backend?: string // storage registry name; default `sqlite`
-  path: string   // SQLite database file path, or ':memory:' for an in-process DB
-  journalMode?: 'wal' | 'delete' | 'truncate' | 'persist'   // journal_mode pragma; default 'wal'
-}
+Use this package when a composition keeps frequently updated domain data in one database: route the relevant domains to this backend and each unit materializes as tables in the configured database file.
+
+### When to choose it
+
+Choose it when writes are frequent and point-sized — each key maps to exactly one row, so updating one record touches one row instead of rewriting a whole file. Choose the JSON backend when humans inspect or edit the stored data as plain files. The synchronous `node:sqlite` driver blocks the JavaScript thread for the duration of each single-statement call, which is fine at domain-data scale but worth accounting for at high write rates.
+
+### Configuration
+
+Two fields: the database path and the journal mode. `:memory:` opens an in-process database whose contents disappear with the process.
+
+```yaml
+- name: '@deepseek-ai/dsh-storage'
+- name: '@deepseek-ai/dsh-storage-sqlite'
+  config:
+    path: /var/lib/dsh/data.db
+- name: '@deepseek-ai/dsh-storage-domain'
+  config:
+    backend: sqlite
 ```
 
+| Field | Default | Meaning |
+|---|---|---|
+| `path` | required | SQLite database file path, or `:memory:` |
+| `journalMode` | `wal` | Journal mode: `wal`, `delete`, `truncate`, or `persist` |
+
+`wal` suits local disks; a rollback-journal mode (`delete`/`truncate`/`persist`) fits filesystems where WAL's shared-memory files do not work, such as network mounts. The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-storage-sqlite) is the exhaustive source for every accepted field and its JSDoc.
+
+### Observable behavior
+
+Missing directories and database files are created owner-only (`0o700`/`0o600`); an existing database keeps its modes. A unit whose stored format version differs from its descriptor rejects `version-mismatch`, and ordinary serving rejects a database stamped with another physical layout version; closed leases may read supported older layouts for explicit migration. Failures carry stable `StorageError` codes, and writes are durable once resolved.
+
+-----
+
+<a id="understand-the-implementation"></a>
+## Understand the implementation
+
+<details>
+<summary>Implementation internals — click to expand</summary>
+
+Ordinary serving requires physical schema v2 and exact unit versions. Record-table names encode unit and table names without collisions, and canonical JSON string keys preserve every JavaScript string. UTF-8, SQL layout, and lossless JSON validation reject malformed media before serving. A closed lease may read physical v1 for explicit migration into a separate missing target; it never upgrades the source in place. Materialization validates and publishes the complete target in one transaction, retaining uncertain commit evidence for readback. See the [storage subsystem](../../../docs/subsystems/storage.md).
+
+The backend is a document-per-row layout over one `node:sqlite` connection, designed so a per-key update is a single prepared statement.
+
+### Design concept
+
+- **Document per row.** Each unit table becomes a physical STRICT table `u2_<unit-utf8-hex>_<table-utf8-hex> (key TEXT PRIMARY KEY, value TEXT NOT NULL)` whose `value` column holds the record's JSON text; the global singleton lives in a shared `unit_globals` table. One key update touches exactly one row — the reason to route a high-churn domain here.
+- **Single-statement atomicity.** Every write primitive is one prepared statement, so SQLite's per-statement atomicity satisfies the KV contract without explicit transactions; write ordering stays the caller's responsibility (the domain layer's write chain).
+- **Names validated before DDL.** Unit and table names must match `UNIT_NAME_RE` before they reach DDL, so no external input is ever interpolated into SQL identifiers.
+- **Versions fail loud.** The physical layout version lives in `PRAGMA user_version` (fresh databases stamp it last); unit format versions live in the `units` table. Ordinary serving rejects other stamps; closed migration reads have their own supported-layout checks.
+
+### Open sequence
+
+Opening the database creates the parent as `0o700`, exclusively creates a missing file as `0o600`, applies `PRAGMA foreign_keys = ON` and the journal mode, checks `user_version`, creates the `units` and `unit_globals` metadata tables, and stamps fresh databases last so a failure leaves the medium unstamped.
+
+### Source map
+
+| File | Role |
+|---|---|
+| [`src/index.ts`](src/index.ts) | Plugin entry: backend registration, `path`/`journalMode` config, unit table |
+| [`src/schema.ts`](src/schema.ts) | Open sequence, physical layout version, metadata tables, record table naming |
+| [`src/unit.ts`](src/unit.ts) | One opened unit: prepared statements, JSON value parse, close |
+| — | No runtime invariant companion is published; schema-version and unit-version consistency are open-time checks that reject before a unit exists, and durability needs the backend round-trip tests in the shared KV conformance suite; this package exposes no continuously observable in-process relation. |
+
+</details>
+
+-----
+
+<a id="further-exploration"></a>
+## Further Exploration
+
+Read these pages when this backend's view is not enough: the subsystem reference is the authoritative contract, and the sibling backend shows the alternative medium.
+
+- [Storage subsystem](../../../docs/subsystems/storage.md) — the backend contract, domain semantics, and generated API.
+- [Storage package map](../README.md) — the family's packages and their repository position.
+- [JSON storage backend](../storage-json/README.md) — the human-readable medium for small, inspectable data.
+- [domain KV storage Agent Note](../../../.agents/notes/proposed/architecture/2026-07-24-domain-kv-storage-and-workspace.md) — the design behind the backend family and the deferred session-backend migration.
+
+-----
+
+<a id="model-experience"></a>
 ## Model Experience
 
 ### Stored domain records
 
 #### What the model sees
 
-Nothing. This backend contributes no prompt, tool, or schema; it persists non-session domain data (workspace records, future session sidecar metadata) behind `ctx.storage` for host-side consumers only.
+Nothing. This backend contributes no prompt, tool, or schema; it persists non-session domain data behind `ctx.storage` for host-side consumers only.
 
 #### Token effect
 
@@ -40,7 +123,22 @@ None — the backend never touches live request prefixes.
 
 ## Known Limitations and Deferred Work
 
-- **`DatabaseSync` is synchronous** — each write blocks the event loop for its (single-statement) duration; acceptable at domain-data scale.
-- **No busy-wait or retry policy** — another connection holding a write transaction rejects the operation immediately; there is no multi-process write protection.
-- **Only physical v2 opens for ordinary serving** — the strict physical-v1 reader exists only for a closed migration lease; no format is repaired or upgraded in place.
-- **`openDatabase` duplicates the session-persistence SQLite open sequence** — extraction into a shared media layer is deferred to the planned session-backend migration (see the Agent Note's reuse audit).
+<a id="known-limitations-and-deferred-work"></a>
+
+
+These limits define when this backend is a poor fit or needs special operational care. They are current package constraints, not a task backlog.
+
+- **Synchronous driver blocks the event loop** — each write is a synchronous `DatabaseSync` call; the block lasts a single statement, which is acceptable at domain-data scale.
+- **No busy-wait or retry policy** — a competing connection holding a write lock rejects the operation immediately instead of waiting; the domain layer's write chain serializes writes within one process, and cross-process coordination is out of scope.
+- **Only the current physical layout version opens** — any other stamped `user_version` is rejected rather than migrated (pre-release stance).
+- **Open sequence duplicated with the query provider** — `openDatabase` and `session-query-sqlite` both enforce SQLite file ownership, but each package owns a distinct application identity and schema; no shared medium helper couples them.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>

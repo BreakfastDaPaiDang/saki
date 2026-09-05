@@ -1,0 +1,10 @@
+version: 1
+scenario: saki-skill-pack-missing-shell
+profile: sdk
+composition: saki-skill-no-shell
+recording: authored
+header:
+  class: default
+  pin: true
+workspace:
+  setup: saki-skill-pack

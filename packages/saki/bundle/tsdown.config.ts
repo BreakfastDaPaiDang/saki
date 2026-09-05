@@ -13,6 +13,5 @@ const shared = {
 /** Build each public entry independently so the private package needs no undeclared shared chunk. */
 export default defineConfig([
   { ...shared, entry: ['lib/types/index.js'] },
-  { ...shared, entry: ['lib/types/invariant.js'] },
   { ...shared, entry: ['lib/types/bin.js'] },
 ])

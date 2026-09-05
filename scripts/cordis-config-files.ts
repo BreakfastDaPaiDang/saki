@@ -8,11 +8,11 @@ import { globSync } from 'node:fs'
  * Translation consistency records are YAML sidecars, never Loader inputs.
  *
  * @param root Repository root to scan.
- * @returns Sorted repository-relative Loader configuration paths.
+ * @returns Sorted slash-normalized repository-relative Loader configuration paths.
  */
 export function cordisConfigFiles(root: string): string[] {
   return globSync(['**/*cordis*.yml', '**/*cordis*.yaml'], {
     cwd: root,
     exclude: ['.claude/**', 'node_modules/**', 'vendor/**', '**/*.i18n.yaml'],
-  }).sort()
+  }).map(path => path.replaceAll('\\', '/')).sort()
 }
