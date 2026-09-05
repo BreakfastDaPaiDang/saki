@@ -146,12 +146,10 @@ async function captureDirectory(path: string): Promise<NodeIdentity> {
 
 async function captureFile(path: string): Promise<SealedFile> {
   const initial = await lstat(path, { bigint: true })
-  if (!initial.isFile() || initial.isSymbolicLink()) throw integrityChanged()
+  if (!initial.isFile()) throw integrityChanged()
   const bytes = await readFile(path)
   const confirmed = await lstat(path, { bigint: true })
   if (!sameNode(initial, confirmed)
-    || !confirmed.isFile()
-    || confirmed.isSymbolicLink()
     || initial.size !== confirmed.size
     || initial.mtimeNs !== confirmed.mtimeNs
     || initial.ctimeNs !== confirmed.ctimeNs
@@ -174,7 +172,7 @@ async function assertFile(path: string, expected: SealedFile): Promise<void> {
   } catch {
     throw integrityChanged()
   }
-  if (!initial.isFile() || initial.isSymbolicLink() || !nodeIdentityMatches(initial, expected.identity)) {
+  if (!initial.isFile() || !nodeIdentityMatches(initial, expected.identity)) {
     throw integrityChanged()
   }
   let bytes: Buffer
@@ -190,9 +188,6 @@ async function assertFile(path: string, expected: SealedFile): Promise<void> {
     throw integrityChanged()
   }
   if (!sameNode(initial, confirmed)
-    || !confirmed.isFile()
-    || confirmed.isSymbolicLink()
-    || !nodeIdentityMatches(confirmed, expected.identity)
     || initial.size !== confirmed.size
     || initial.mtimeNs !== confirmed.mtimeNs
     || initial.ctimeNs !== confirmed.ctimeNs
@@ -303,7 +298,7 @@ async function nodePathMissing(path: string): Promise<boolean> {
 }
 
 function isRealDirectory(info: BigIntStats): boolean {
-  return info.isDirectory() && !info.isSymbolicLink()
+  return info.isDirectory()
 }
 
 function nodeIdentity(info: BigIntStats): NodeIdentity {

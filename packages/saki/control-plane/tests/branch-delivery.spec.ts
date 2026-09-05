@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   canonicalDigest,
   computeProjectInspectionFingerprint,
+  sakiExecutionDispatchIdSchema,
   type ActiveHostProjectBinding,
   type HostOperationAdmissionSource,
   type HostOperationCancellationReason,
@@ -24,6 +25,7 @@ import {
   githubCommitId,
   githubCommitStatusId,
   githubIssueId,
+  githubPullRequestCreateMarkerId,
   githubPullRequestId,
   githubPullRequestReviewId,
   githubRepositoryDatabaseId,
@@ -34,11 +36,12 @@ import {
   type GitHubFailure,
   type GitHubMutationMap,
   type GitHubPullRequestCreateRequest,
+  type GitHubPullRequestCreateInspectionOutcome,
   type GitHubReadMap,
   type GitHubScanMap,
   type GitHubInstallationProfile,
 } from '@breakfastdapaidang/saki-github'
-import { controlIntentActorSchema, type BindingWriteAdmissionRecord } from '../src/spec.ts'
+import { bindingWriteAdmissionRecordSchema, controlIntentActorSchema, type BindingWriteAdmissionRecord } from '../src/spec.ts'
 import {
   sakiBoardRemoteFingerprintSchema,
   sakiBoardWorkItemIdSchema,
@@ -153,7 +156,7 @@ interface Harness {
   readonly createOperations: () => BranchDeliveryOperations
 }
 
-function harness(): Harness {
+function harness(overrides: Partial<Pick<BranchDeliveryOperationsOptions, 'currentLocalHead' | 'moveWorkItem' | 'resolveContext'>> = {}): Harness {
   const deliveries = new MemoryTable<ReturnType<typeof branchDeliveryId>, BranchDeliveryRecord>()
   const intents = new MemoryTable<ReturnType<typeof sakiControlIntentIdSchema.parse>, BranchDeliveryIntentRecord>()
   const admissions = new MemoryTable<
@@ -212,6 +215,7 @@ function harness(): Harness {
     notifyChanged: () => {},
     reportUnexpectedFailure: (error) => { unexpectedFailures.push(error) },
     lifetime: new AbortController().signal,
+    ...overrides,
   }
   const createDetachedOperations = () => new BranchDeliveryOperations(options)
   const createOperations = () => {
@@ -252,6 +256,7 @@ class PushExecution {
   unavailable = false
   crashBeforePrepareOnce = false
   beforeAdmission: (() => void) | undefined
+  afterStart: ((snapshot: Extract<HostOperationSnapshot<'push-branch'>, { state: 'succeeded' }>) => HostOperationSnapshot<'push-branch'>) | undefined
 
   async prepareOperation(
     request: PushBranchHostOperationRequest,
@@ -334,10 +339,11 @@ class PushExecution {
         credential: { helperId: 'git-credential-manager' },
       },
     }
+    if (this.afterStart !== undefined) this.snapshot = this.afterStart(this.snapshot)
     return { ok: true as const, snapshot: structuredClone(this.snapshot) }
   }
 
-  async cancelOperation(_operation: unknown, reason: HostOperationCancellationReason) {
+  async cancelOperation(_operation: unknown, reason: HostOperationCancellationReason): Promise<HostOperationSnapshot<'push-branch'>> {
     if (this.snapshot === undefined) throw new Error('missing Push operation')
     if (this.snapshot.state !== 'succeeded' && this.snapshot.state !== 'failed'
       && this.snapshot.state !== 'canceled' && this.snapshot.state !== 'reconciliation-required') {
@@ -359,6 +365,9 @@ class PushExecution {
 class SimulatedProcessCrash extends Error {}
 
 class DeliveryGitHub extends SakiGitHub {
+  inspectionOutcome: GitHubPullRequestCreateInspectionOutcome | undefined
+  inspectionFailure: Error | undefined
+  dispatchFailure: Error | undefined
   pullRequestCreated = false
   crashAfterCreate = false
   dispatches = 0
@@ -400,7 +409,7 @@ class DeliveryGitHub extends SakiGitHub {
           'master',
           this.remoteCommit,
           this.observedAt,
-        ) as GitHubReadMap[K]['result']
+        )
       case 'pull-request-reviews': {
         const pullRequest = pullRequestFact('feature/delivery', 'master', this.remoteCommit, this.observedAt)
         return {
@@ -463,6 +472,7 @@ class DeliveryGitHub extends SakiGitHub {
     this.dispatches += 1
     this.lastCreateRequest = structuredClone(request)
     this.pullRequestCreated = true
+    if (this.dispatchFailure !== undefined) throw this.dispatchFailure
     if (this.crashAfterCreate) throw new SimulatedProcessCrash('process stopped after GitHub accepted the PR')
     return {
       pullRequestId: this.pullRequestId,
@@ -475,11 +485,12 @@ class DeliveryGitHub extends SakiGitHub {
     _signal: AbortSignal,
   ): Promise<GitHubMutationMap[K]['inspection']> {
     if (request.kind !== 'pull-request-create') throw new Error(`unexpected inspection ${request.kind}`)
+    if (this.inspectionFailure !== undefined) throw this.inspectionFailure
     return {
       snapshot: {
         repositoryId: request.repositoryId,
         repositoryDatabaseId: request.repositoryDatabaseId,
-        outcome: this.pullRequestCreated
+        outcome: this.inspectionOutcome ?? (this.pullRequestCreated
           ? {
             state: 'unique-pull-request',
             pullRequest: this.pullRequestFact(
@@ -489,7 +500,7 @@ class DeliveryGitHub extends SakiGitHub {
               this.pullRequestInspectionObservedAt,
             ),
           }
-          : { state: 'absent-complete' },
+          : { state: 'absent-complete' }),
       },
       observedAt: this.pullRequestInspectionObservedAt,
     } as GitHubMutationMap[K]['inspection']
@@ -554,7 +565,7 @@ function pullRequestFact(
     title: 'Deliver B10',
     url: 'https://github.com/BreakfastDaPaiDang/saki/pull/72',
     head: { repositoryId: REPOSITORY_ID, ref: headRef, commitId: headCommitId },
-    base: { repositoryId: REPOSITORY_ID, ref: baseRef, commitId: '4'.repeat(40) },
+    base: { repositoryId: REPOSITORY_ID, ref: baseRef, commitId: githubCommitId('4'.repeat(40)) },
     updatedAt: observedAt - 1,
     observedAt,
   }
@@ -785,6 +796,1000 @@ async function seedPreSealAcceptancePrefix(test: Harness): Promise<void> {
 }
 
 describe('BranchDeliveryOperations', () => {
+  it('keeps association pending when its targeted provider read fails', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    h.github.failures.set('pull-request-association', { code: 'transient-transport' })
+    expect(await h.operations.submit(associatePullRequestIntent(), ACTOR, signal))
+      .toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(h.intents.get(ASSOCIATE_INTENT_ID)?.checkpoint.state).toBe('active')
+  })
+
+  it('reports a pending recovery failure after attempting the polling batch', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    h.github.inspectionOutcome = { state: 'incomplete' }
+    await h.operations.submit(createPullRequestIntent(), ACTOR, signal)
+    const failure = new Error('pending PR inspection failed unexpectedly')
+    h.github.inspectionFailure = failure
+    await expect(h.operations.pollPending(signal)).rejects.toBe(failure)
+    expect(h.intents.get(PULL_REQUEST_INTENT_ID)?.checkpoint.state).toBe('active')
+  })
+
+  it.each([false, true])('only confirms a closed PR if it was merged (merged: %s)', async (merged) => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    h.github.inspectionOutcome = { state: 'unique-pull-request', pullRequest: {
+      ...pullRequestFact('feature/delivery', 'master'), state: 'closed', merged,
+    } }
+    expect(await h.operations.submit(createPullRequestIntent(), ACTOR, signal)).toMatchObject({ ok: merged })
+    expect(h.github.dispatches).toBe(0)
+  })
+
+  it('rejects late PR confirmation after a cancellation cleared its Delivery ownership', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    const inspect = h.github.inspectMutation.bind(h.github)
+    vi.spyOn(h.github, 'inspectMutation').mockImplementationOnce(async (request, lifetime) => {
+      const fact = await inspect(request, lifetime)
+      h.authority.current = false
+      return fact
+    })
+    h.intents.beforeUpdate = (id, _current, next) => {
+      if (id === PULL_REQUEST_INTENT_ID && next.checkpoint.state === 'terminal') throw new Error('cancellation checkpoint lost')
+    }
+    await expect(h.operations.submit(createPullRequestIntent(), ACTOR, signal)).rejects.toThrow('cancellation checkpoint lost')
+    h.intents.beforeUpdate = undefined
+    h.authority.current = true
+    h.github.pullRequestCreated = true
+    await expect(h.operations.submit(createPullRequestIntent(), ACTOR, signal)).rejects.toThrow('lost its Branch Delivery ownership')
+    expect(h.github.dispatches).toBe(0)
+  })
+
+  it('does not resume a prepared Push after a later Intent seals acceptance', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    const delayed = { ...pushIntent(), intentId: IMMUTABLE_INTENT_ID }
+    h.deliveries.beforeUpdate = (_id, _current, next) => {
+      if (next.activeIntentId === delayed.intentId) throw new Error('ownership not committed')
+    }
+    await expect(h.operations.submit(delayed, ACTOR, signal)).rejects.toThrow('ownership not committed')
+    h.deliveries.beforeUpdate = undefined
+    await h.operations.submit(pushIntent(), ACTOR, signal)
+    await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    await h.operations.submit(inReviewIntent(4), ACTOR, signal)
+    await h.operations.submit(acceptIntent(6), ACTOR, signal)
+    expect(await h.operations.submit(delayed, ACTOR, signal)).toMatchObject({ ok: false, reason: 'conflict' })
+    expect(h.intents.get(delayed.intentId)?.checkpoint).toMatchObject({ state: 'terminal', reason: 'immutable' })
+    expect(h.execution.starts).toBe(1)
+  })
+
+  it('recovers an updated Save whose terminal write was not committed', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    h.intents.beforeUpdate = (id, _current, next) => {
+      if (id === UPDATE_INTENT_ID && next.checkpoint.state === 'terminal') throw new Error('updated Save terminal lost')
+    }
+    const update = saveIntent(UPDATE_INTENT_ID, COMMIT_ID, 0)
+    await expect(h.operations.submit(update, ACTOR, signal)).rejects.toThrow('updated Save terminal lost')
+    h.intents.beforeUpdate = undefined
+    expect(await h.operations.submit(update, ACTOR, signal)).toMatchObject({ ok: true, receipt: { deliveryRevision: 1 } })
+  })
+
+  it.each(['revision', 'accepted'] as const)('rejects a queued Save when stored %s changed', async (changed) => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    let replacement: BranchDeliveryRecord
+    if (changed === 'accepted') {
+      const accepted = harness()
+      await seedPreSealAcceptancePrefix(accepted)
+      await accepted.operations.submit(acceptIntent(6), ACTOR, signal)
+      replacement = branchDeliveryRecordSchema.parse({
+        ...accepted.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)), revision: 0,
+      })
+    } else replacement = branchDeliveryRecordSchema.parse({
+      ...h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)), revision: 1,
+    })
+    const update = h.deliveries.update.bind(h.deliveries)
+    vi.spyOn(h.deliveries, 'update').mockImplementationOnce(async (id, operation) => {
+      h.deliveries.values.set(id, replacement)
+      return await update(id, operation)
+    })
+    await expect(h.operations.submit(saveIntent(UPDATE_INTENT_ID, COMMIT_ID, 0), ACTOR, signal)).rejects.toThrow()
+    expect(h.deliveries.get(replacement.id)).toEqual(replacement)
+  })
+
+  it('rejects In Review against another Work Item revision', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    await h.operations.submit(pushIntent(), ACTOR, signal)
+    await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    expect(await h.operations.submit({ ...inReviewIntent(4), expectedWorkItemRemoteFingerprint: REVIEW_FINGERPRINT }, ACTOR, signal))
+      .toMatchObject({ ok: false, reason: 'conflict' })
+    expect(h.moveAttempts).toEqual([])
+  })
+
+  it.each(['authority', 'context'] as const)(
+    'rechecks %s before preparing the In Review child', async (changed) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      await h.operations.submit(pushIntent(), ACTOR, signal)
+      await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+      h.intents.beforeUpdate = (id, _current, next) => {
+        if (id !== REVIEW_INTENT_ID || next.checkpoint.state !== 'active') return
+        if (changed === 'authority') h.authority.current = false
+        else h.context.current = { ...h.context.current, projectRevision: 4 }
+      }
+      expect(await h.operations.submit(inReviewIntent(4), ACTOR, signal)).toMatchObject({ ok: false,
+        reason: changed === 'authority' ? 'denied' : 'conflict' })
+      expect(h.moveAttempts).toEqual([])
+    },
+  )
+
+  it('recovers In Review when the aggregate committed before its terminal Intent', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    await h.operations.submit(pushIntent(), ACTOR, signal)
+    await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    h.intents.beforeUpdate = (id, _current, next) => {
+      if (id === REVIEW_INTENT_ID && next.checkpoint.state === 'terminal') throw new Error('terminal write failed')
+    }
+    await expect(h.operations.submit(inReviewIntent(4), ACTOR, signal)).rejects.toThrow('terminal write failed')
+    expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.phase).toBe('in-review')
+    expect(await h.operations.submit(saveIntent(UPDATE_INTENT_ID, COMMIT_ID, 6), ACTOR, signal))
+      .toEqual({ ok: false, reason: 'unavailable' })
+    h.intents.beforeUpdate = undefined
+    expect(await h.operations.submit(inReviewIntent(4), ACTOR, signal)).toMatchObject({ ok: true })
+    expect(h.moveAttempts).toHaveLength(1)
+  })
+
+  it('retains a confirmed remote ref when a complete read reports that ref absent', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    await h.operations.refresh(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID), signal)
+    const read = h.github.read.bind(h.github)
+    vi.spyOn(h.github, 'read').mockImplementation(async (request, lifetime) => request.kind === 'branch-head'
+      ? { state: 'absent', repositoryId: request.repositoryId, branch: request.branch, observedAt: 101 }
+      : await read(request, lifetime))
+    await h.operations.refresh(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID), signal)
+    expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.remoteRef).toMatchObject({
+      confirmed: { fact: { state: 'present', commitId: COMMIT_ID } },
+      current: { state: 'invalidated', reason: 'target-absent' },
+    })
+  })
+
+  it.each(['authority', 'context-before-read', 'context-after-read'] as const)(
+    'does not apply a prepared Save after losing %s', async (changed) => {
+      let missing = false
+      const h = harness({
+        resolveContext: () => missing ? { ok: false, reason: 'unavailable' } : { ok: true, context: deliveryContext() },
+        currentLocalHead: async () => {
+          if (changed === 'context-after-read') missing = true
+          return { ok: true, commitId: COMMIT_ID }
+        },
+      })
+      const put = h.intents.put.bind(h.intents)
+      vi.spyOn(h.intents, 'put').mockImplementationOnce(async (id, value) => {
+        await put(id, value)
+        if (changed === 'authority') h.authority.current = false
+        if (changed === 'context-before-read') missing = true
+      })
+      expect(await h.operations.submit(saveIntent(), ACTOR, new AbortController().signal)).toMatchObject({ ok: false,
+        reason: changed === 'authority' ? 'denied' : 'unavailable' })
+      expect(h.deliveries.size).toBe(0)
+    },
+  )
+
+  it.each([null, 4])('rejects Save revision %s against an existing revision zero Delivery', async (expected) => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    expect(await h.operations.submit(saveIntent(UPDATE_INTENT_ID, COMMIT_ID, expected), ACTOR, signal))
+      .toMatchObject({ ok: false, reason: 'conflict' })
+    expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.revision).toBe(0)
+  })
+
+  it('rejects an update-only Save when the Delivery does not exist', async () => {
+    const h = harness()
+    expect(await h.operations.submit(saveIntent(SAVE_INTENT_ID, COMMIT_ID, 0), ACTOR, new AbortController().signal))
+      .toMatchObject({ ok: false, reason: 'conflict' })
+    expect(h.deliveries.size).toBe(0)
+  })
+
+  it.each(['pending', 'repair', 'accepted'] as const)('does not replace a %s Delivery with Save', async (state) => {
+    const h = harness()
+    const signal = new AbortController().signal
+    if (state === 'accepted') {
+      await seedPreSealAcceptancePrefix(h)
+      await h.operations.submit(acceptIntent(6), ACTOR, signal)
+    } else {
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      h.github.inspectionOutcome = state === 'pending'
+        ? { state: 'incomplete' } : { state: 'known-pull-request-absent' }
+      await h.operations.submit(createPullRequestIntent(), ACTOR, signal)
+    }
+    const before = structuredClone(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))!)
+    const intent = saveIntent(UPDATE_INTENT_ID, COMMIT_ID, before.revision)
+    expect(await h.operations.submit({ ...intent, expected: { ...intent.expected,
+      workItemRemoteFingerprint: h.context.current.workItem.remoteFingerprint } }, ACTOR, signal))
+      .toMatchObject({ ok: false, reason: 'conflict' })
+    expect(h.deliveries.get(before.id)).toEqual(before)
+  })
+
+  it.each([false, true])('polls every eligible Delivery despite read failures (all fail: %s)', async (allFail) => {
+    const h = harness()
+    const signal = new AbortController().signal
+    h.additionalContexts.set(SECOND_WORK_ITEM_ID, {
+      ...deliveryContext(), workItem: { id: SECOND_WORK_ITEM_ID, remoteFingerprint: REMOTE_FINGERPRINT,
+        issueId: githubIssueId('I_issue_33') },
+    })
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    await h.operations.submit({ ...saveIntent(SECOND_SAVE_INTENT_ID), workItemId: SECOND_WORK_ITEM_ID }, ACTOR, signal)
+    const before = [...h.deliveries.values.values()].map(record => record.revision)
+    const read = h.github.read.bind(h.github)
+    const firstFailure = new Error('first repository read failed unexpectedly')
+    let branchReads = 0
+    vi.spyOn(h.github, 'read').mockImplementation(async (request, lifetime) => {
+      if (request.kind === 'branch-head') {
+        branchReads += 1
+        if (branchReads === 1 || allFail) throw firstFailure
+      }
+      return await read(request, lifetime)
+    })
+    await expect(h.operations.pollPending(signal)).rejects.toBe(firstFailure)
+    expect(branchReads).toBe(2)
+    expect([...h.deliveries.values.values()].map(record => record.revision))
+      .toEqual(allFail ? before : [before[0], before[1]! + 1])
+  })
+
+  it('rejects a second provider attachment and makes disposal repeatable', async () => {
+    const h = harness()
+    expect(() => h.operations.attach(h.github)).toThrow('already attached')
+    await h.detachOperations()
+    await h.detachOperations()
+    const detach = h.operations.attach(h.github)
+    await detach()
+  })
+
+  it.each(['accepted', 'pending', 'detached'] as const)(
+    'does not refresh a Delivery that is %s', async (state) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      if (state === 'accepted') {
+        await seedPreSealAcceptancePrefix(h)
+        await h.operations.submit(acceptIntent(6), ACTOR, signal)
+      } else {
+        await h.operations.submit(saveIntent(), ACTOR, signal)
+        if (state === 'pending') {
+          h.github.inspectionOutcome = { state: 'incomplete' }
+          await h.operations.submit(createPullRequestIntent(), ACTOR, signal)
+        } else await h.detachOperations()
+      }
+      const before = h.github.reads.length
+      expect(await h.operations.refresh(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID), signal)).toEqual({
+        ok: false, reason: state === 'accepted' ? 'immutable' : 'unavailable',
+      })
+      expect(h.github.reads).toHaveLength(before)
+      expect(h.operations.project(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID), Date.now())).toBeDefined()
+    },
+  )
+
+  it.each(['prepare', 'seal'] as const)(
+    'leaves %s acceptance pending while its provider is detached', async (stage) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      if (stage === 'seal') await seedPreSealAcceptancePrefix(h)
+      else {
+        await h.operations.submit(saveIntent(), ACTOR, signal)
+        await h.operations.submit(pushIntent(), ACTOR, signal)
+        await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+        await h.operations.submit(inReviewIntent(4), ACTOR, signal)
+      }
+      await h.detachOperations()
+      expect(await h.operations.submit(acceptIntent(6), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+      expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.phase).toBe('in-review')
+      expect(h.moveAttempts.some(move => move.targetStatus === 'done')).toBe(false)
+    },
+  )
+
+  it.each(['prepare', 'seal'] as const)(
+    'rechecks acceptance authority after %s evidence reads', async (stage) => {
+      let revoke = false
+      const h = harness({ currentLocalHead: async () => {
+        if (revoke) h.authority.current = false
+        return { ok: true, commitId: COMMIT_ID, observedAt: Date.now() }
+      } })
+      const signal = new AbortController().signal
+      if (stage === 'seal') await seedPreSealAcceptancePrefix(h)
+      else {
+        await h.operations.submit(saveIntent(), ACTOR, signal)
+        await h.operations.submit(pushIntent(), ACTOR, signal)
+        await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+        await h.operations.submit(inReviewIntent(4), ACTOR, signal)
+      }
+      revoke = true
+      expect(await h.operations.submit(acceptIntent(6), ACTOR, signal)).toMatchObject({ ok: false, reason: 'denied' })
+      expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.phase).toBe('in-review')
+      expect(h.moveAttempts.some(move => move.targetStatus === 'done')).toBe(false)
+    },
+  )
+
+  it.each(['prepare', 'seal'] as const)(
+    'rejects %s acceptance when the local Commit cannot be observed', async (stage) => {
+      let unavailable = false
+      const h = harness({ currentLocalHead: async () => unavailable
+        ? { ok: false, reason: 'unavailable' } : { ok: true, commitId: COMMIT_ID } })
+      const signal = new AbortController().signal
+      if (stage === 'seal') await seedPreSealAcceptancePrefix(h)
+      else {
+        await h.operations.submit(saveIntent(), ACTOR, signal)
+        await h.operations.submit(pushIntent(), ACTOR, signal)
+        await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+        await h.operations.submit(inReviewIntent(4), ACTOR, signal)
+      }
+      unavailable = true
+      expect(await h.operations.submit(acceptIntent(6), ACTOR, signal)).toMatchObject({ ok: false })
+      expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.phase).toBe('in-review')
+      expect(h.moveAttempts.some(move => move.targetStatus === 'done')).toBe(false)
+    },
+  )
+
+  it.each(['before-inspection', 'after-effect-checkpoint'] as const)(
+    'does not create a PR after its context changes %s', async (point) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      const changeContext = () => { h.context.current = { ...h.context.current, projectRevision: 4 } }
+      if (point === 'before-inspection') {
+        const inspect = h.github.inspectMutation.bind(h.github)
+        vi.spyOn(h.github, 'inspectMutation').mockImplementationOnce(async (request, lifetime) => {
+          const fact = await inspect(request, lifetime)
+          changeContext()
+          return fact
+        })
+      } else {
+        h.intents.beforeUpdate = (_key, _current, next) => {
+          if (next.checkpoint.state === 'pull-request-effect-possible') changeContext()
+        }
+      }
+      expect(await h.operations.submit(createPullRequestIntent(), ACTOR, signal)).toMatchObject({ ok: false,
+        reason: point === 'before-inspection' ? 'conflict' : 'reconciliation-required' })
+      expect(h.github.dispatches).toBe(0)
+    },
+  )
+
+  it('does not associate a PR after its authorization changes during the targeted read', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    h.github.pullRequestCreated = true
+    const read = h.github.read.bind(h.github)
+    vi.spyOn(h.github, 'read').mockImplementationOnce(async (request, lifetime) => {
+      const fact = await read(request, lifetime)
+      h.authority.current = false
+      return fact
+    })
+    expect(await h.operations.submit(associatePullRequestIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'conflict' })
+    expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.pullRequest.confirmed).toBeUndefined()
+  })
+
+  it('retains association pending without the Product App provider', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    await h.detachOperations()
+    expect(await h.operations.submit(associatePullRequestIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(h.intents.get(ASSOCIATE_INTENT_ID)?.checkpoint.state).toBe('active')
+  })
+
+  it.each(['intent-put', 'delivery-put', 'intent-update', 'delivery-update', 'save-update'] as const)(
+    'recovers a committed %s write whose acknowledgement is lost', async (write) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      if (write === 'delivery-update' || write === 'save-update') {
+        await h.operations.submit(saveIntent(), ACTOR, signal)
+      }
+      const fault = new Error('storage acknowledgement lost')
+      if (write === 'intent-put') {
+        const put = h.intents.put.bind(h.intents)
+        vi.spyOn(h.intents, 'put').mockImplementationOnce(async (id, value) => { await put(id, value); throw fault })
+      } else if (write === 'delivery-put') {
+        const put = h.deliveries.put.bind(h.deliveries)
+        vi.spyOn(h.deliveries, 'put').mockImplementationOnce(async (id, value) => { await put(id, value); throw fault })
+      } else if (write === 'intent-update') {
+        const update = h.intents.update.bind(h.intents)
+        vi.spyOn(h.intents, 'update').mockImplementationOnce(async (id, operation) => { await update(id, operation); throw fault })
+      } else {
+        const update = h.deliveries.update.bind(h.deliveries)
+        vi.spyOn(h.deliveries, 'update').mockImplementationOnce(async (id, operation) => { await update(id, operation); throw fault })
+      }
+      const intent = write === 'delivery-update' ? createPullRequestIntent()
+        : write === 'save-update' ? saveIntent(UPDATE_INTENT_ID, COMMIT_ID, 0) : saveIntent()
+      expect(await h.operations.submit(intent, ACTOR, signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+      h.operations.validateDurableState(new Set())
+      expect(await h.operations.submit(intent, ACTOR, signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+      expect(h.github.dispatches).toBe(write === 'delivery-update' ? 1 : 0)
+    },
+  )
+
+  it.each(['intent-put', 'delivery-put', 'save-update'] as const)(
+    'does not acknowledge an uncommitted %s write', async (write) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      if (write === 'save-update') await h.operations.submit(saveIntent(), ACTOR, signal)
+      const fault = new Error('storage write failed')
+      if (write === 'intent-put') vi.spyOn(h.intents, 'put').mockRejectedValueOnce(fault)
+      else if (write === 'delivery-put') vi.spyOn(h.deliveries, 'put').mockRejectedValueOnce(fault)
+      else vi.spyOn(h.deliveries, 'update').mockRejectedValueOnce(fault)
+      const intent = write === 'save-update' ? saveIntent(UPDATE_INTENT_ID, COMMIT_ID, 0) : saveIntent()
+      await expect(h.operations.submit(intent, ACTOR, signal)).rejects.toBe(fault)
+      expect(await h.operations.submit(intent, ACTOR, signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+      h.operations.validateDurableState(new Set())
+    },
+  )
+
+  it.each(['reserve', 'accept', 'release'] as const)(
+    'recovers a committed Push admission %s write whose acknowledgement is lost', async (phase) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      const update = h.admissions.update.bind(h.admissions)
+      let writes = 0
+      vi.spyOn(h.admissions, 'update').mockImplementation(async (id, operation) => {
+        const saved = await update(id, operation)
+        writes += 1
+        if (writes === ({ reserve: 1, accept: 2, release: 3 })[phase]) throw new Error('admission acknowledgement lost')
+        return saved
+      })
+      expect(await h.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+      expect(h.admissions.get(BINDING_ID)).toMatchObject({ state: 'available', revision: 3 })
+      expect(h.execution.starts).toBe(1)
+      h.operations.validateDurableState(new Set())
+    },
+  )
+
+  it.each(['branch-head', 'pull-request', 'commit-ci'] as const)(
+    'rejects acceptance when required %s evidence cannot be read', async (kind) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      await h.operations.submit(pushIntent(), ACTOR, signal)
+      await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+      await h.operations.submit(inReviewIntent(4), ACTOR, signal)
+      h.github.failures.set(kind, { code: 'transient-transport' })
+      expect(await h.operations.submit(acceptIntent(6), ACTOR, signal)).toMatchObject({ ok: false })
+      expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))).toMatchObject({ phase: 'in-review' })
+      expect(h.moveAttempts.map(move => move.targetStatus)).toEqual(['in-review'])
+      h.operations.validateDurableState(new Set())
+    },
+  )
+
+  it.each(['branch-head', 'pull-request', 'commit-ci'] as const)(
+    'does not seal prepared acceptance when its repeated %s read fails', async (kind) => {
+      const h = harness()
+      await seedPreSealAcceptancePrefix(h)
+      h.github.failures.set(kind, { code: 'transient-transport' })
+      expect(await h.operations.submit(acceptIntent(6), ACTOR, new AbortController().signal)).toMatchObject({ ok: false })
+      expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))).toMatchObject({ phase: 'in-review' })
+      expect(h.moveAttempts).toEqual([])
+      h.operations.validateDurableState(new Set())
+    },
+  )
+
+  it.each(['failed', 'effect-unknown', 'evidence-conflict'] as const)(
+    'retains the Host %s outcome without claiming a successful Push', async (state) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      h.execution.afterStart = (snapshot) => {
+        const { result: _result, completedAt, ...base } = snapshot
+        return state === 'failed'
+          ? { ...base, state: 'failed', completedAt, failure: { reason: 'binding-stale' }, effect: 'none' }
+          : { ...base, state: 'reconciliation-required', observedAt: completedAt, reason: state }
+      }
+      expect(await h.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({
+        ok: false, reason: state === 'failed' ? 'unavailable' : 'reconciliation-required',
+      })
+      const record = branchDeliveryRecordSchema.parse(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)))
+      expect(record.push).toBeUndefined()
+      expect(record.activeIntentId).toBeUndefined()
+      expect(h.admissions.get(BINDING_ID)?.state).toBe(state === 'failed' ? 'available' : 'manual-host-operation')
+      expect(() => h.operations.validateDurableState(new Set())).not.toThrow()
+      await h.operations.submit(pushIntent(), ACTOR, signal)
+      expect(h.execution.starts).toBe(1)
+    },
+  )
+
+  it('wakes a pending Push from a Host notification and retains its exact terminal snapshot', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    let completed: Extract<HostOperationSnapshot<'push-branch'>, { state: 'succeeded' }> | undefined
+    h.execution.afterStart = (snapshot) => {
+      completed = snapshot
+      const { result: _result, completedAt: _completedAt, ...base } = snapshot
+      return { ...base, state: 'accepted' }
+    }
+    expect(await h.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    if (completed === undefined) throw new Error('Host did not accept the Push')
+    h.execution.snapshot = completed
+    h.operations.hostChanged({ operation: completed.operation, revision: completed.revision })
+    await h.operations.dispose()
+    expect(h.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject({
+      state: 'terminal', outcome: 'succeeded', host: { snapshot: completed },
+    })
+    expect(h.execution.starts).toBe(1)
+    expect(h.admissions.get(BINDING_ID)?.state).toBe('available')
+    h.operations.hostChanged({ operation: completed.operation, revision: completed.revision })
+    await h.operations.dispose()
+    expect(h.execution.starts).toBe(1)
+  })
+
+  it('ignores a Host notification that has no retained Push owner', async () => {
+    const h = harness()
+    h.operations.hostChanged({
+      operation: { id: 'host-operation-00000000-0000-4000-8000-000000000212' as HostOperationId, hostId: ACTOR.hostId, type: 'push-branch' },
+      revision: 0,
+    })
+    await h.operations.dispose()
+    expect(h.intents.size).toBe(0)
+    expect(h.execution.starts).toBe(0)
+  })
+
+  it.each(['incomplete', 'multiple-matches', 'marker-removed', 'known-pull-request-absent', 'identity-conflict'] as const)(
+    'does not create a PR when complete-marker inspection reports %s', async (state) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      h.github.inspectionOutcome = { state }
+      expect(await h.operations.submit(createPullRequestIntent(), ACTOR, signal)).toMatchObject({
+        ok: false, reason: state === 'incomplete' ? 'unavailable' : 'reconciliation-required',
+      })
+      expect(h.github.dispatches).toBe(0)
+      const record = branchDeliveryRecordSchema.parse(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)))
+      if (state !== 'incomplete') {
+        expect(record.repair?.reason).toBe(state === 'multiple-matches' ? 'marker-ambiguous' : 'evidence-conflict')
+        expect(h.operations.project(record.id, Date.now())?.delivery.repair).toEqual(record.repair)
+      }
+      expect(() => h.operations.validateDurableState(new Set())).not.toThrow()
+    },
+  )
+
+  it.each(['incomplete', 'absent-complete', 'multiple-matches', 'known-pull-request-absent', 'marker-removed'] as const)(
+    'does not redispatch an uncertain PR effect whose recovery reports %s', async (state) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      h.github.crashAfterCreate = true
+      await expect(h.operations.submit(createPullRequestIntent(), ACTOR, signal)).rejects.toThrow(SimulatedProcessCrash)
+      h.github.inspectionOutcome = { state }
+      expect(await h.operations.submit(createPullRequestIntent(), ACTOR, signal)).toMatchObject({
+        ok: false, reason: state === 'incomplete' ? 'unavailable' : 'reconciliation-required',
+      })
+      expect(h.github.dispatches).toBe(1)
+      expect(() => h.operations.validateDurableState(new Set())).not.toThrow()
+    },
+  )
+
+  it.each(['before-dispatch', 'after-dispatch'] as const)('keeps PR recovery pending when inspection fails %s', async (when) => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    if (when === 'after-dispatch') {
+      h.github.crashAfterCreate = true
+      await expect(h.operations.submit(createPullRequestIntent(), ACTOR, signal)).rejects.toThrow(SimulatedProcessCrash)
+    }
+    h.github.inspectionFailure = new GitHubProviderError({ code: 'transient-transport' })
+    expect(await h.operations.submit(createPullRequestIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(h.intents.get(PULL_REQUEST_INTENT_ID)?.checkpoint.state)
+      .toBe(when === 'before-dispatch' ? 'active' : 'pull-request-effect-possible')
+    h.github.inspectionFailure = undefined
+    h.github.crashAfterCreate = false
+    expect(await h.operations.submit(createPullRequestIntent(), ACTOR, signal)).toMatchObject({ ok: true })
+    expect(h.github.dispatches).toBe(1)
+  })
+
+  it('confirms a PR accepted by GitHub even when its HTTP response is lost', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    h.github.dispatchFailure = new GitHubProviderError({ code: 'transient-transport' })
+    expect(await h.operations.submit(createPullRequestIntent(), ACTOR, signal))
+      .toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(h.github.dispatches).toBe(1)
+    expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.pullRequest.confirmed?.fact.id)
+      .toBe(h.github.pullRequestId)
+  })
+
+  it('rejects a matching marker whose Pull Request targets another Commit', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    h.github.inspectionOutcome = {
+      state: 'unique-pull-request', pullRequest: pullRequestFact('feature/delivery', 'master', UPDATED_COMMIT_ID, 100),
+    }
+    expect(await h.operations.submit(createPullRequestIntent(), ACTOR, signal))
+      .toMatchObject({ ok: false, reason: 'reconciliation-required' })
+    expect(h.github.dispatches).toBe(0)
+    expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.repair?.reason).toBe('evidence-conflict')
+  })
+
+  it.each(['missing', 'authority', 'revision', 'context', 'head-unavailable', 'head-conflict', 'late-authority', 'late-context'] as const)(
+    'recovers a prepared Push after %s changes without sending stale Git work', async (changed) => {
+      let resumed = false
+      const h = harness({ currentLocalHead: async () => {
+        if (resumed && changed === 'head-unavailable') return { ok: false, reason: 'unavailable' }
+        if (resumed && changed === 'head-conflict') return { ok: false, reason: 'conflict' }
+        if (resumed && changed === 'late-authority') h.authority.current = false
+        if (resumed && changed === 'late-context') h.context.current.projectRevision += 1
+        return { ok: true, commitId: COMMIT_ID }
+      } })
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      h.deliveries.beforeUpdate = (_key, _current, next) => {
+        if (next.activeIntentId === PUSH_INTENT_ID) throw new SimulatedProcessCrash('before Push ownership write')
+      }
+      await expect(h.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('before Push ownership write')
+      h.deliveries.beforeUpdate = undefined
+      expect(h.intents.get(PUSH_INTENT_ID)?.checkpoint).toEqual({ state: 'prepared' })
+      expect(() => h.operations.validateDurableState(new Set())).not.toThrow()
+      if (changed === 'missing') h.deliveries.values.clear()
+      if (changed === 'authority') h.authority.current = false
+      if (changed === 'revision') await h.operations.submit(saveIntent(UPDATE_INTENT_ID, COMMIT_ID, 0), ACTOR, signal)
+      if (changed === 'context') h.context.current.projectRevision += 1
+      resumed = true
+      const result = await h.operations.submit(pushIntent(), ACTOR, signal)
+      expect(result).toMatchObject(changed === 'head-unavailable'
+        ? { ok: true, receipt: { state: 'pending' } }
+        : { ok: false, reason: changed === 'authority' || changed === 'late-authority' ? 'denied' : 'conflict' })
+      expect(h.execution.starts).toBe(0)
+      expect(h.intents.get(PUSH_INTENT_ID)?.checkpoint.state).toBe(changed === 'head-unavailable' ? 'prepared' : 'terminal')
+      expect(() => h.operations.validateDurableState(new Set())).not.toThrow()
+    },
+  )
+
+  it('recovers a Push ownership write whose active checkpoint was not acknowledged', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    h.intents.beforeUpdate = (key, _current, next) => {
+      if (key === PUSH_INTENT_ID && next.checkpoint.state === 'active') throw new SimulatedProcessCrash('before active checkpoint')
+    }
+    await expect(h.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('before active checkpoint')
+    h.intents.beforeUpdate = undefined
+    expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))).toMatchObject({ activeIntentId: PUSH_INTENT_ID })
+    expect(h.intents.get(PUSH_INTENT_ID)?.checkpoint.state).toBe('prepared')
+    const restart = h.createDetachedOperations()
+    await restart.initializeValidated(restart.validateDurableState(new Set()))
+    expect(h.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject({ state: 'terminal', outcome: 'succeeded' })
+    expect(h.execution.starts).toBe(1)
+    expect(h.admissions.get(BINDING_ID)).toMatchObject({ state: 'available' })
+  })
+
+  it.each(['before-read', 'after-read'] as const)('keeps a prepared Push pending when its context disappears %s', async (when) => {
+    let resumed = false
+    let available = true
+    const h = harness({
+      resolveContext: () => available ? { ok: true, context: h.context.current } : { ok: false, reason: 'unavailable' },
+      currentLocalHead: async () => {
+        if (resumed && when === 'after-read') available = false
+        return { ok: true, commitId: COMMIT_ID }
+      },
+    })
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    h.deliveries.beforeUpdate = () => { throw new SimulatedProcessCrash('before Push ownership write') }
+    await expect(h.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('before Push ownership write')
+    h.deliveries.beforeUpdate = undefined
+    resumed = true
+    if (when === 'before-read') available = false
+    expect(await h.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: true, receipt: { state: 'pending' } })
+    expect(h.intents.get(PUSH_INTENT_ID)?.checkpoint.state).toBe('prepared')
+    expect(h.execution.starts).toBe(0)
+  })
+
+  it.each<readonly [string, (record: BranchDeliveryIntentRecord) => unknown, string]>([
+    ['another id', record => ({ ...record, id: UPDATE_INTENT_ID }), 'id disagrees with its payload'],
+    ['backward time', record => ({ ...record, updatedAt: record.createdAt - 1 }), 'timestamps are not monotonic'],
+    ['another operation', record => ({ ...record, operation: { kind: 'save' } }), 'operation disagrees'],
+    ['missing terminal revision', record => ({
+      ...record, checkpoint: { state: 'terminal', outcome: 'succeeded' },
+    }), 'terminal checkpoint lacks its result evidence'],
+    ['missing failure reason', record => ({
+      ...record, checkpoint: { state: 'terminal', outcome: 'failure', deliveryRevision: 2 },
+    }), 'terminal checkpoint lacks its result evidence'],
+    ['a success with a failure reason', record => ({
+      ...record, checkpoint: { state: 'terminal', outcome: 'succeeded', deliveryRevision: 2, reason: 'authority' },
+    }), 'terminal checkpoint lacks its result evidence'],
+    ['a PR checkpoint for a Push', record => ({
+      ...record, checkpoint: { state: 'pull-request-effect-possible', deliveryRevision: 1 },
+    }), 'checkpoint disagrees with its operation'],
+    ['a substituted Push source', record => ({
+      ...record,
+      operation: record.operation.kind === 'push' ? {
+        ...record.operation, request: {
+          ...record.operation.request, source: { ...record.operation.request.source, intentId: UPDATE_INTENT_ID },
+        },
+      } : record.operation,
+    }), 'Push source is not its admitting Intent'],
+    ['a terminal Host from another Binding', record => ({
+      ...record, checkpoint: record.checkpoint.state === 'terminal' && record.checkpoint.host !== undefined ? {
+        ...record.checkpoint,
+        host: {
+          ...record.checkpoint.host,
+          snapshot: { ...record.checkpoint.host.snapshot, bindingRevision: 99 },
+        },
+      } : record.checkpoint,
+    }), 'terminal Host evidence changed identity'],
+  ])('rejects a persisted Push Intent with %s', async (_name, corrupt, message) => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    await h.operations.submit(pushIntent(0), ACTOR, signal)
+    const record = branchDeliveryIntentRecordSchema.parse(h.intents.get(PUSH_INTENT_ID))
+    const parsed = branchDeliveryIntentRecordSchema.safeParse(corrupt(record))
+    expect(parsed.success).toBe(false)
+    if (parsed.success) throw new Error('inconsistent Push Intent was accepted')
+    expect(parsed.error.issues.map(issue => issue.message)).toContainEqual(expect.stringContaining(message))
+  })
+
+  it.each(['move-id', 'status', 'fingerprint', 'ci', 'digest'] as const)(
+    'rejects a persisted acceptance child checkpoint with changed %s', async (changed) => {
+      const h = harness()
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      await h.operations.submit(pushIntent(0), ACTOR, signal)
+      await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+      await h.operations.submit(inReviewIntent(4), ACTOR, signal)
+      h.moveUnavailableOnce.add('done')
+      await h.operations.submit(acceptIntent(6), ACTOR, signal)
+      const record = branchDeliveryIntentRecordSchema.parse(h.intents.get(ACCEPT_INTENT_ID))
+      const checkpoint = record.checkpoint
+      if (checkpoint.state !== 'child-pending') throw new Error('acceptance did not retain its child checkpoint')
+      const parsed = branchDeliveryIntentRecordSchema.safeParse({
+        ...record,
+        checkpoint: {
+          ...checkpoint,
+          move: {
+            ...checkpoint.move,
+            ...(changed === 'move-id' ? { intentId: SAVE_INTENT_ID } : {}),
+            ...(changed === 'status' ? { targetStatus: 'in-review' } : {}),
+            ...(changed === 'fingerprint' ? { expectedRemoteFingerprint: REMOTE_FINGERPRINT } : {}),
+          },
+          evidence: {
+            ...checkpoint.evidence,
+            ...(changed === 'ci' ? { ci: undefined } : {}),
+            ...(changed === 'digest' ? { digest: '0'.repeat(64) } : {}),
+          },
+        },
+      })
+      expect(parsed.success).toBe(false)
+      if (parsed.success) throw new Error('inconsistent acceptance checkpoint was accepted')
+      expect(parsed.error.issues.map(issue => issue.message)).toContain(changed === 'digest'
+        ? 'Branch Delivery transition evidence digest is inconsistent' : 'Branch Delivery child checkpoint is not replayable')
+    },
+  )
+
+  it.each(['delivery-key', 'intent-key', 'duplicate-kind', 'save-target', 'missing-last', 'missing-project'] as const)(
+    'rejects %s corruption before restarting Branch Delivery work', async (changed) => {
+      const h = harness()
+      await h.operations.submit(saveIntent(), ACTOR, new AbortController().signal)
+      const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+      const otherId = branchDeliveryId(PROJECT_ID, SECOND_WORK_ITEM_ID)
+      const delivery = branchDeliveryRecordSchema.parse(h.deliveries.get(id))
+      const intent = branchDeliveryIntentRecordSchema.parse(h.intents.get(SAVE_INTENT_ID))
+      expect(() => h.operations.validateDurableState(new Set())).not.toThrow()
+      const messages = {
+        'delivery-key': 'Branch Delivery id disagrees with its table key',
+        'intent-key': 'Branch Delivery Intent id disagrees with its table key',
+        'duplicate-kind': 'is retained by multiple Intent kinds',
+        'save-target': 'Branch Delivery save Intent targets another aggregate',
+        'missing-last': 'Branch Delivery last Intent reference is inconsistent',
+        'missing-project': 'Branch Delivery save Intent targets a missing Development Project',
+      }
+      if (changed === 'delivery-key') {
+        h.deliveries.values.delete(id)
+        h.deliveries.values.set(otherId, delivery)
+      } else if (changed === 'intent-key') {
+        h.intents.values.delete(SAVE_INTENT_ID)
+        h.intents.values.set(UPDATE_INTENT_ID, intent)
+      } else if (changed === 'save-target') {
+        h.intents.values.set(SAVE_INTENT_ID, { ...intent, deliveryId: otherId })
+      } else if (changed === 'missing-last') {
+        h.intents.values.delete(SAVE_INTENT_ID)
+      } else if (changed === 'missing-project') {
+        h.deliveries.values.clear()
+        h.projectPresent.current = false
+      }
+      expect(() => h.operations.validateDurableState(new Set(changed === 'duplicate-kind' ? [SAVE_INTENT_ID] : [])))
+        .toThrow(messages[changed])
+      expect(h.github.reads).toEqual([])
+      expect(h.execution.starts).toBe(0)
+    },
+  )
+
+  it.each(['save', 'push', 'create', 'associate', 'review', 'accept'] as const)(
+    'rejects unauthorized %s without retaining an Intent or invoking providers', async (kind) => {
+      const h = harness()
+      h.authority.current = false
+      const intents = {
+        save: saveIntent(), push: pushIntent(), create: createPullRequestIntent(),
+        associate: associatePullRequestIntent(), review: inReviewIntent(0), accept: acceptIntent(0),
+      }
+      expect(await h.operations.submit(intents[kind], ACTOR, new AbortController().signal))
+        .toEqual({ ok: false, reason: 'denied' })
+      expect(h.intents.size).toBe(0)
+      expect(h.deliveries.size).toBe(0)
+      expect(h.github.reads).toEqual([])
+      expect(h.execution.starts).toBe(0)
+    },
+  )
+
+  it('rejects a missing delivery without creating an orphan operation', async () => {
+    const h = harness()
+    expect(await h.operations.submit(pushIntent(), ACTOR, new AbortController().signal))
+      .toEqual({ ok: false, reason: 'unavailable' })
+    expect(h.intents.size).toBe(0)
+    expect(h.operations.project(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID), 100)).toBeUndefined()
+    expect(await h.operations.refresh(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID), new AbortController().signal))
+      .toEqual({ ok: false, reason: 'not-found' })
+    await h.operations.dispose()
+  })
+
+  it('rejects a Save for an unresolved Work Item without retaining it', async () => {
+    const h = harness()
+    expect(await h.operations.submit({ ...saveIntent(), workItemId: SECOND_WORK_ITEM_ID }, ACTOR, new AbortController().signal))
+      .toEqual({ ok: false, reason: 'unavailable' })
+    expect(h.intents.size).toBe(0)
+  })
+
+  it.each(['unavailable', 'conflict'] as const)('retains the correct Save outcome when local HEAD is %s', async (reason) => {
+    const h = harness({ currentLocalHead: async () => ({ ok: false, reason }) })
+    const intent = saveIntent()
+    expect(await h.operations.submit(intent, ACTOR, new AbortController().signal))
+      .toMatchObject({ ok: false, reason: reason === 'unavailable' ? 'unavailable' : 'conflict' })
+    expect(h.deliveries.size).toBe(0)
+    expect(h.intents.get(SAVE_INTENT_ID)?.checkpoint).toMatchObject(reason === 'unavailable'
+      ? { state: 'prepared' } : { state: 'terminal', outcome: 'conflict', reason: 'expected-evidence' })
+  })
+
+  it.each(['registryRevision', 'projectRevision', 'synchronizationRevision', 'mappingRevision'] as const)(
+    'rejects Save evidence after %s advances', async (field) => {
+      const h = harness()
+      h.context.current = { ...h.context.current, [field]: h.context.current[field] + 1 }
+      expect(await h.operations.submit(saveIntent(), ACTOR, new AbortController().signal))
+        .toMatchObject({ ok: false, reason: 'conflict' })
+      expect(h.deliveries.size).toBe(0)
+    },
+  )
+
+  it('rejects replaying a Save id with a different selected Commit', async () => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    expect(await h.operations.submit(saveIntent(SAVE_INTENT_ID, UPDATED_COMMIT_ID), ACTOR, signal))
+      .toEqual({ ok: false, reason: 'conflict' })
+    expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))).toMatchObject({ commitId: COMMIT_ID, revision: 0 })
+  })
+
+  it.each(['revision', 'context', 'head'] as const)('rejects a Push whose selected %s changed', async (changed) => {
+    const h = harness()
+    const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    if (changed === 'context') h.context.current.projectRevision += 1
+    if (changed === 'head') h.localHead.current = UPDATED_COMMIT_ID
+    expect(await h.operations.submit(pushIntent(changed === 'revision' ? 1 : 0), ACTOR, signal))
+      .toMatchObject({ ok: false, reason: 'conflict' })
+    expect(h.execution.starts).toBe(0)
+    expect(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))).not.toHaveProperty('activeIntentId')
+  })
+
+  it.each(['in-review', 'done'] as const)('preserves delivery evidence when the %s child cannot complete', async (status) => {
+    for (const outcome of ['pending', 'conflict', 'reconciliation-required'] as const) {
+      const h = harness({ moveWorkItem: async (request) => {
+        if (request.targetStatus === status) return { state: outcome }
+        h.context.current.workItem.remoteFingerprint = REVIEW_FINGERPRINT
+        return { state: 'succeeded', remoteFingerprint: REVIEW_FINGERPRINT }
+      } })
+      const signal = new AbortController().signal
+      await h.operations.submit(saveIntent(), ACTOR, signal)
+      await h.operations.submit(pushIntent(0), ACTOR, signal)
+      await h.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+      if (status === 'done') await h.operations.submit(inReviewIntent(4), ACTOR, signal)
+      const intent = status === 'in-review' ? inReviewIntent(4) : acceptIntent(6)
+      const result = await h.operations.submit(intent, ACTOR, signal)
+      expect(result).toMatchObject({
+        ok: false,
+        reason: outcome === 'pending' ? 'unavailable'
+          : status === 'done' || outcome === 'reconciliation-required' ? 'reconciliation-required' : 'conflict',
+      })
+      const record = branchDeliveryRecordSchema.parse(h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)))
+      expect(record.phase).toBe(status === 'done' ? 'accepted' : 'draft')
+      expect(() => h.operations.validateDurableState(new Set())).not.toThrow()
+      const dispatches = h.github.dispatches
+      await h.operations.submit(intent, ACTOR, signal)
+      expect(h.github.dispatches).toBe(dispatches)
+      await h.operations.dispose()
+    }
+  })
+
+  it.each<readonly [string, (record: BranchDeliveryRecord) => unknown, string]>([
+    ['Work Item identity', record => ({ ...record, workItemId: SECOND_WORK_ITEM_ID }),
+      'Branch Delivery target Work Item disagrees with its identity'],
+    ['creation time', record => ({ ...record, updatedAt: record.createdAt - 1 }),
+      'Branch Delivery contains invalid relationship evidence'],
+    ['missing acceptance', record => ({ ...record, acceptance: undefined }),
+      'Branch Delivery acceptance disagrees with its phase'],
+    ['unaccepted phase', record => ({ ...record, phase: 'in-review' }),
+      'Branch Delivery acceptance disagrees with its phase'],
+    ['mutable accepted owner', record => ({ ...record, activeIntentId: ACCEPT_INTENT_ID }),
+      'accepted Branch Delivery retains a mutable Intent owner'],
+    ['equal refs', record => ({ ...record, headRef: record.baseRef }),
+      'Branch Delivery contains inconsistent GitHub identities'],
+    ['active repair', record => ({ ...record, phase: 'draft', acceptance: undefined,
+      activeIntentId: PUSH_INTENT_ID,
+      repair: { intentId: PUSH_INTENT_ID, reason: 'effect-unknown', recordedAt: record.updatedAt } }),
+    'Branch Delivery cannot be active and awaiting repair'],
+    ['Push Commit', record => ({ ...record, push: { ...record.push,
+      result: { ...record.push?.result, commitId: UPDATED_COMMIT_ID } } }),
+    'Branch Delivery Push result targets another Commit or ref'],
+    ['remote Commit', record => ({ ...record, remoteRef: { ...record.remoteRef,
+      confirmed: { ...record.remoteRef.confirmed,
+        fact: { ...record.remoteRef.confirmed?.fact, commitId: UPDATED_COMMIT_ID } } } }),
+    'Branch Delivery remote-ref confirmation targets another Commit'],
+    ['Pull Request base', record => ({ ...record, pullRequest: { ...record.pullRequest,
+      confirmed: { ...record.pullRequest.confirmed,
+        fact: { ...record.pullRequest.confirmed?.fact,
+          base: { ...record.pullRequest.confirmed?.fact.base, ref: 'other-base' } } } } }),
+    'Branch Delivery Pull Request confirmation targets another delivery'],
+    ['CI Commit', record => ({ ...record, ci: { ...record.ci,
+      confirmed: { ...record.ci.confirmed,
+        fact: { ...record.ci.confirmed?.fact, commitId: UPDATED_COMMIT_ID } } } }),
+    'Branch Delivery CI confirmation targets another Commit'],
+    ['missing Push', record => ({ ...record, push: undefined }),
+      'advanced Branch Delivery lacks confirmed Push and Pull Request evidence'],
+    ['missing Pull Request', record => ({ ...record,
+      pullRequest: { current: { state: 'unobserved' } } }),
+    'advanced Branch Delivery lacks confirmed Push and Pull Request evidence'],
+    ['acceptance digest', record => ({ ...record, acceptance: { ...record.acceptance,
+      evidence: { ...record.acceptance?.evidence, digest: '0'.repeat(64) } } }),
+    'Branch Delivery acceptance evidence is inconsistent'],
+    ['confirmation before observation', record => ({ ...record, ci: { ...record.ci,
+      confirmed: { ...record.ci.confirmed, confirmedAt: 0 } } }),
+    'source confirmation predates its observation'],
+    ['missing confirmed fact', record => ({ ...record, ci: {
+      current: { state: 'confirmed', observedAt: 100 } } }),
+    'current source confirmation lacks the same exact fact'],
+    ['different confirmed observation', record => ({ ...record, ci: { ...record.ci,
+      current: { state: 'confirmed', observedAt: 0 } } }),
+    'current source confirmation lacks the same exact fact'],
+  ])('rejects durable accepted Delivery corruption: %s', async (_name, corrupt, message) => {
+    const test = harness()
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    await test.operations.submit(inReviewIntent(4), ACTOR, signal)
+    await test.operations.submit(acceptIntent(6), ACTOR, signal)
+    const record = branchDeliveryRecordSchema.parse(test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)))
+    expect(record.phase).toBe('accepted')
+    const parsed = branchDeliveryRecordSchema.safeParse(corrupt(record))
+    expect(parsed.success).toBe(false)
+    if (parsed.success) throw new Error('corrupt durable Delivery was accepted')
+    expect(parsed.error.issues.map(issue => issue.message)).toContain(message)
+  })
+
   it('does not request reviews before an exact Pull Request is known', async () => {
     const test = harness()
     await test.operations.submit(saveIntent(), ACTOR, new AbortController().signal)
@@ -2136,5 +3141,1024 @@ describe('BranchDeliveryOperations', () => {
       checkpoint: { state: 'terminal', outcome: 'conflict', reason: 'expected-evidence' },
     })
     expect(test.moveAttempts).toEqual([])
+  })
+})
+
+describe('Branch Delivery durable graph validation', () => {
+  it('restores an In Review child repair without repeating its uncertain Work Item transition', async () => {
+    const moveWorkItem = vi.fn(async () => ({ state: 'reconciliation-required' as const }))
+    const test = harness({ moveWorkItem })
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    test.intents.beforeUpdate = (id, _current, next) => {
+      if (id === REVIEW_INTENT_ID && next.checkpoint.state === 'terminal') {
+        throw new SimulatedProcessCrash('before In Review repair acknowledgement')
+      }
+    }
+    await expect(test.operations.submit(inReviewIntent(4), ACTOR, signal))
+      .rejects.toThrow('before In Review repair acknowledgement')
+    test.intents.beforeUpdate = undefined
+    expect(test.intents.get(REVIEW_INTENT_ID)?.checkpoint.state).toBe('child-pending')
+    expect(test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))).toMatchObject({
+      lastIntentId: REVIEW_INTENT_ID, repair: { intentId: REVIEW_INTENT_ID, reason: 'evidence-conflict' },
+    })
+    const restarted = test.createDetachedOperations()
+    await restarted.initializeValidated(restarted.validateDurableState(new Set()))
+    expect(test.intents.get(REVIEW_INTENT_ID)?.checkpoint).toMatchObject({
+      state: 'terminal', outcome: 'reconciliation-required', reason: 'child-transition',
+    })
+    expect(moveWorkItem).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores an accepted Push admission whose active Intent has not acknowledged Host preparation', async () => {
+    const test = harness()
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    test.intents.beforeUpdate = (id, _current, next) => {
+      if (id === PUSH_INTENT_ID && next.checkpoint.state === 'push-host-accepted') {
+        throw new SimulatedProcessCrash('before accepted Host checkpoint')
+      }
+    }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('before accepted Host checkpoint')
+    test.intents.beforeUpdate = undefined
+    expect(test.admissions.get(BINDING_ID)).toMatchObject({ state: 'manual-host-operation', phase: 'accepted' })
+    expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint.state).toBe('active')
+    expect(test.execution.starts).toBe(0)
+    const restarted = test.createDetachedOperations()
+    await restarted.initializeValidated(restarted.validateDurableState(new Set()))
+    expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject({ state: 'terminal', outcome: 'succeeded' })
+    expect(test.execution.starts).toBe(1)
+  })
+
+  it.each(['storage-error', 'next-revision', 'later-revision'] as const)(
+    'does not acknowledge a Delivery ownership write after %s without its requested fields', async (race) => {
+      const test = harness()
+      const signal = new AbortController().signal
+      await test.operations.submit(saveIntent(), ACTOR, signal)
+      const update = test.deliveries.update.bind(test.deliveries)
+      const failure = new Error('Delivery storage write failed')
+      vi.spyOn(test.deliveries, 'update').mockImplementationOnce(async (id, operation) => {
+        if (race === 'storage-error') throw failure
+        const current = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+        test.deliveries.values.set(id, branchDeliveryRecordSchema.parse({
+          ...current, revision: current.revision + (race === 'next-revision' ? 1 : 2),
+        }))
+        return await update(id, operation)
+      })
+      const submitted = test.operations.submit(associatePullRequestIntent(), ACTOR, signal)
+      if (race === 'storage-error') await expect(submitted).rejects.toBe(failure)
+      else await expect(submitted).rejects.toBeInstanceOf(Error)
+      expect(test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.activeIntentId).toBeUndefined()
+      expect(test.intents.get(ASSOCIATE_INTENT_ID)?.checkpoint).toEqual({ state: 'prepared' })
+      expect(test.github.reads).toEqual([])
+    },
+  )
+
+  it.each(['storage-error', 'next-revision', 'later-revision', 'changed-payload'] as const)(
+    'does not acknowledge a terminal Intent write after %s without its exact checkpoint', async (race) => {
+      const test = harness()
+      const update = test.intents.update.bind(test.intents)
+      const failure = new Error('Intent storage write failed')
+      vi.spyOn(test.intents, 'update').mockImplementationOnce(async (id, operation) => {
+        if (race === 'storage-error') throw failure
+        const current = branchDeliveryIntentRecordSchema.parse(test.intents.get(id))
+        const payload = race === 'changed-payload'
+          ? { ...current.payload, actor: { ...current.payload.actor, grantRevision: ACTOR.grantRevision + 1 } }
+          : current.payload
+        test.intents.values.set(id, branchDeliveryIntentRecordSchema.parse({
+          ...current, payload, payloadDigest: canonicalDigest('saki/branch-delivery-intent/v1', payload),
+          revision: current.revision + (race === 'changed-payload' ? 0 : race === 'next-revision' ? 1 : 2),
+        }))
+        return await update(id, operation)
+      })
+      const submitted = test.operations.submit(saveIntent(), ACTOR, new AbortController().signal)
+      if (race === 'storage-error') await expect(submitted).rejects.toBe(failure)
+      else await expect(submitted).rejects.toBeInstanceOf(Error)
+      expect(test.intents.get(SAVE_INTENT_ID)?.checkpoint).toEqual({ state: 'prepared' })
+      expect(test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.lastIntentId).toBe(SAVE_INTENT_ID)
+    },
+  )
+
+  it.each(['active', 'push-host-accepted', 'changed-host-reason', 'changed-host-state'] as const)(
+    'reconciles retained Push repair against its %s recovery evidence', async (scenario) => {
+      const state = scenario === 'active' ? 'active' : 'push-host-accepted'
+      const test = harness()
+      const signal = new AbortController().signal
+      await test.operations.submit(saveIntent(), ACTOR, signal)
+      if (state === 'active') {
+        const host = test.execution as unknown as SakiHostExecution
+        vi.spyOn(host, 'prepareOperation').mockResolvedValueOnce({ ok: false, reason: 'source-conflict' })
+      } else {
+        test.execution.afterStart = (snapshot) => {
+          const { result: _result, completedAt, ...base } = snapshot
+          return { ...base, state: 'reconciliation-required', observedAt: completedAt, reason: 'effect-unknown' }
+        }
+      }
+      test.intents.beforeUpdate = (id, _current, next) => {
+        if (id === PUSH_INTENT_ID && next.checkpoint.state === 'terminal') {
+          throw new SimulatedProcessCrash('before Push repair acknowledgement')
+        }
+      }
+      await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('before Push repair acknowledgement')
+      test.intents.beforeUpdate = undefined
+      expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint.state).toBe(state)
+      const delivery = test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))
+      expect(delivery).toMatchObject({ lastIntentId: PUSH_INTENT_ID, repair: { intentId: PUSH_INTENT_ID } })
+      expect(delivery?.activeIntentId).toBeUndefined()
+      const restarted = test.createDetachedOperations()
+      const retained = restarted.validateDurableState(new Set())
+      if (scenario === 'changed-host-reason' || scenario === 'changed-host-state') {
+        const snapshot = test.execution.snapshot
+        if (snapshot?.state !== 'reconciliation-required') throw new Error('expected retained Host reconciliation')
+        if (scenario === 'changed-host-reason') test.execution.snapshot = { ...snapshot, reason: 'evidence-conflict' }
+        else {
+          const { reason: _reason, observedAt: _observedAt, ...base } = snapshot
+          test.execution.snapshot = { ...base, state: 'accepted' }
+        }
+        await expect(restarted.initializeValidated(retained)).rejects.toThrow('Branch Delivery repair disagrees with its Host snapshot')
+        expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint.state).toBe(state)
+      } else {
+        await restarted.initializeValidated(retained)
+        expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject({
+          state: 'terminal', outcome: 'reconciliation-required', reason: state === 'active' ? 'evidence-conflict' : 'effect-unknown',
+        })
+        expect(() => restarted.validateDurableState(new Set())).not.toThrow()
+      }
+      expect(test.execution.starts).toBe(state === 'active' ? 0 : 1)
+    },
+  )
+
+  it('keeps a prepared Push pending while a later Save has not acknowledged its aggregate write', async () => {
+    const test = harness()
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    test.deliveries.beforeUpdate = () => { throw new SimulatedProcessCrash('before Push ownership') }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('before Push ownership')
+    test.deliveries.beforeUpdate = undefined
+    test.intents.beforeUpdate = (id, _current, next) => {
+      if (id === SECOND_SAVE_INTENT_ID && next.checkpoint.state === 'terminal') {
+        throw new SimulatedProcessCrash('before Save acknowledgement')
+      }
+    }
+    await expect(test.operations.submit(saveIntent(SECOND_SAVE_INTENT_ID, COMMIT_ID, 0), ACTOR, signal))
+      .rejects.toThrow('before Save acknowledgement')
+    test.intents.beforeUpdate = undefined
+    expect(() => test.operations.validateDurableState(new Set())).not.toThrow()
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({
+      ok: true, receipt: { state: 'pending' },
+    })
+    expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint).toEqual({ state: 'prepared' })
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it('orders simultaneously created durable aggregates and Intents by their stable ids', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(2_000_000_000_000)
+    try {
+      const test = harness()
+      const signal = new AbortController().signal
+      test.additionalContexts.set(SECOND_WORK_ITEM_ID, {
+        ...deliveryContext(), workItem: { id: SECOND_WORK_ITEM_ID, remoteFingerprint: REMOTE_FINGERPRINT,
+          issueId: githubIssueId('I_issue_33') },
+      })
+      await test.operations.submit({ ...saveIntent(SECOND_SAVE_INTENT_ID), workItemId: SECOND_WORK_ITEM_ID }, ACTOR, signal)
+      await test.operations.submit(saveIntent(), ACTOR, signal)
+      const retained = test.operations.validateDurableState(new Set())
+      expect(new Set(retained.deliveries.map(record => record.createdAt)).size).toBe(1)
+      expect(new Set(retained.intents.map(record => record.createdAt)).size).toBe(1)
+      expect(retained.deliveries.map(record => record.id)).toEqual([
+        branchDeliveryId(PROJECT_ID, WORK_ITEM_ID), branchDeliveryId(PROJECT_ID, SECOND_WORK_ITEM_ID),
+      ].sort((left, right) => left.localeCompare(right)))
+      expect(retained.intents.map(record => record.id)).toEqual([
+        SAVE_INTENT_ID, SECOND_SAVE_INTENT_ID,
+      ].sort((left, right) => left.localeCompare(right)))
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('rejects a persisted Save carrying another Intent\'s child-transition checkpoint', async () => {
+    const test = harness()
+    await seedPreSealAcceptancePrefix(test)
+    const save = branchDeliveryIntentRecordSchema.parse(test.intents.get(SAVE_INTENT_ID))
+    const accept = branchDeliveryIntentRecordSchema.parse(test.intents.get(ACCEPT_INTENT_ID))
+    test.intents.values.set(save.id, { ...save, checkpoint: accept.checkpoint })
+    expect(() => test.operations.validateDurableState(new Set())).toThrow('Branch Delivery child checkpoint is not replayable')
+  })
+
+  it('retains an unavailable association with its active owner separate from the last completed Save', async () => {
+    const test = harness()
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    await test.detachOperations()
+    expect(await test.operations.submit(associatePullRequestIntent(), ACTOR, signal))
+      .toMatchObject({ ok: false, reason: 'unavailable' })
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    expect(test.deliveries.get(id)).toMatchObject({
+      revision: 1, activeIntentId: ASSOCIATE_INTENT_ID, lastIntentId: SAVE_INTENT_ID,
+    })
+    const restarted = test.createDetachedOperations()
+    const retained = restarted.validateDurableState(new Set())
+    expect(retained.intents).toContainEqual(expect.objectContaining({
+      id: ASSOCIATE_INTENT_ID, checkpoint: { state: 'active', deliveryRevision: 1 },
+    }))
+    expect(test.github.reads).toEqual([])
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it('rejects Push evidence borrowing a terminal Intent from another aggregate', async () => {
+    const test = harness()
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    const intent = branchDeliveryIntentRecordSchema.parse(test.intents.get(PUSH_INTENT_ID))
+    if (intent.operation.kind !== 'push' || intent.payload.intent.type !== 'push-branch-delivery') {
+      throw new Error('expected retained Push Intent')
+    }
+    const deliveryId = branchDeliveryId(PROJECT_ID, SECOND_WORK_ITEM_ID)
+    const payload = { ...intent.payload, intent: { ...intent.payload.intent, deliveryId } }
+    const payloadDigest = canonicalDigest('saki/branch-delivery-intent/v1', payload)
+    test.intents.values.set(intent.id, branchDeliveryIntentRecordSchema.parse({
+      ...intent, deliveryId, payload, payloadDigest,
+      operation: {
+        ...intent.operation,
+        request: { ...intent.operation.request, source: { ...intent.operation.request.source, payloadDigest } },
+      },
+      checkpoint: { state: 'terminal', outcome: 'conflict', reason: 'expected-evidence' },
+    }))
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('Branch Delivery Push Intent reference is inconsistent')
+  })
+
+  it('rejects a PR repair attached to an Intent that has not become active', async () => {
+    const test = harness()
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    const intent = branchDeliveryIntentRecordSchema.parse(test.intents.get(PULL_REQUEST_INTENT_ID))
+    test.intents.values.set(intent.id, { ...intent, checkpoint: { state: 'prepared' } })
+    test.deliveries.values.set(id, {
+      ...delivery, repair: { intentId: intent.id, reason: 'marker-ambiguous', recordedAt: delivery.updatedAt },
+    })
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('Branch Delivery repair Intent reference is inconsistent')
+  })
+
+  it.each(['save', 'push', 'accept'] as const)('rejects a repair reason unavailable to its %s owner', async (kind) => {
+    const test = harness()
+    const signal = new AbortController().signal
+    if (kind === 'accept') await seedPreSealAcceptancePrefix(test)
+    else {
+      await test.operations.submit(saveIntent(), ACTOR, signal)
+      if (kind === 'push') await test.operations.submit(pushIntent(), ACTOR, signal)
+    }
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    const intentId = kind === 'save' ? SAVE_INTENT_ID : kind === 'push' ? PUSH_INTENT_ID : ACCEPT_INTENT_ID
+    test.deliveries.values.set(id, {
+      ...delivery, activeIntentId: undefined, lastIntentId: intentId,
+      repair: { intentId, reason: kind === 'push' ? 'marker-ambiguous' : 'effect-unknown', recordedAt: delivery.updatedAt },
+    })
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('Branch Delivery repair Intent reference is inconsistent')
+  })
+
+  it.each(['active', 'pull-request-effect-possible'] as const)(
+    'accepts the PR repair write before its %s Intent acknowledges reconciliation', async (state) => {
+      const test = harness()
+      const signal = new AbortController().signal
+      await test.operations.submit(saveIntent(), ACTOR, signal)
+      await test.operations.submit(pushIntent(), ACTOR, signal)
+      await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+      const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+      const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+      const intent = branchDeliveryIntentRecordSchema.parse(test.intents.get(PULL_REQUEST_INTENT_ID))
+      test.intents.values.set(intent.id, { ...intent, checkpoint: { state, deliveryRevision: delivery.revision - 1 } })
+      test.deliveries.values.set(id, {
+        ...delivery, repair: { intentId: intent.id, reason: 'marker-ambiguous', recordedAt: delivery.updatedAt },
+      })
+      expect(() => test.operations.validateDurableState(new Set())).not.toThrow()
+      test.intents.values.set(intent.id, { ...intent, checkpoint: { state, deliveryRevision: delivery.revision } })
+      expect(() => test.operations.validateDurableState(new Set()))
+        .toThrow('Branch Delivery repair Intent reference is inconsistent')
+    },
+  )
+
+  it('accepts child-transition repair publication before acknowledgement without replaying Done', async () => {
+    const test = harness()
+    await seedPreSealAcceptancePrefix(test)
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    test.deliveries.values.set(id, {
+      ...delivery, revision: 8, activeIntentId: undefined, lastIntentId: ACCEPT_INTENT_ID,
+      repair: { intentId: ACCEPT_INTENT_ID, reason: 'evidence-conflict', recordedAt: delivery.updatedAt },
+    })
+    const restarted = test.createDetachedOperations()
+    await restarted.initializeValidated(restarted.validateDurableState(new Set()))
+    expect(test.intents.get(ACCEPT_INTENT_ID)?.checkpoint).toMatchObject({
+      state: 'terminal', outcome: 'reconciliation-required', reason: 'child-transition',
+    })
+    expect(test.moveAttempts).toEqual([])
+  })
+
+  it('rejects an active transition whose Work Item fingerprint differs from its aggregate', async () => {
+    const test = harness()
+    await seedPreSealAcceptancePrefix(test)
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    test.deliveries.values.set(id, {
+      ...delivery, lastIntentId: ACCEPT_INTENT_ID,
+      target: { ...delivery.target, workItem: { ...delivery.target.workItem, remoteFingerprint: REMOTE_FINGERPRINT } },
+    })
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('Branch Delivery last Intent reference is inconsistent')
+  })
+
+  it('rejects accepted Delivery attribution that differs from its accepting Intent', async () => {
+    const test = harness()
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    await test.operations.submit(inReviewIntent(4), ACTOR, signal)
+    await test.operations.submit(acceptIntent(6), ACTOR, signal)
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    if (delivery.acceptance === undefined) throw new Error('expected accepted Delivery evidence')
+    test.deliveries.values.set(id, {
+      ...delivery,
+      acceptance: { ...delivery.acceptance, actor: { ...ACTOR, grantRevision: ACTOR.grantRevision + 1 } },
+    })
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('Branch Delivery last Intent reference is inconsistent')
+  })
+
+  it('rejects an aggregate identity derived from another Work Item', async () => {
+    const test = harness()
+    await test.operations.submit(saveIntent(), ACTOR, new AbortController().signal)
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const otherId = branchDeliveryId(PROJECT_ID, SECOND_WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    test.deliveries.values.delete(id)
+    test.deliveries.values.set(otherId, {
+      ...delivery, id: otherId,
+      markerId: githubPullRequestCreateMarkerId(`pull-request-marker-${canonicalDigest(
+        'saki/branch-delivery/pull-request-marker/v1', { deliveryId: otherId },
+      )}`),
+    })
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('Branch Delivery id disagrees with its Project and Work Item')
+  })
+
+  it('rejects an active owner that points to a completed Save Intent', async () => {
+    const test = harness()
+    await test.operations.submit(saveIntent(), ACTOR, new AbortController().signal)
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    test.deliveries.values.set(id, { ...delivery, activeIntentId: SAVE_INTENT_ID })
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('Branch Delivery active Intent owner is inconsistent')
+  })
+
+  it('rejects two different recoverable owners for one Delivery', async () => {
+    const test = harness()
+    await seedPreSealAcceptancePrefix(test)
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    test.deliveries.values.set(id, { ...delivery, activeIntentId: REVIEW_INTENT_ID, lastIntentId: ACCEPT_INTENT_ID })
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('Branch Delivery has two recoverable Intent owners')
+  })
+
+  it.each(['prepared', 'active', 'succeeded'] as const)(
+    'rejects a %s non-Save Intent whose aggregate disappeared', async (state) => {
+      const test = harness()
+      const signal = new AbortController().signal
+      await test.operations.submit(saveIntent(), ACTOR, signal)
+      await test.operations.submit(pushIntent(), ACTOR, signal)
+      await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+      const intent = branchDeliveryIntentRecordSchema.parse(test.intents.get(PULL_REQUEST_INTENT_ID))
+      test.deliveries.values.clear()
+      test.intents.values.clear()
+      test.intents.values.set(intent.id, {
+        ...intent,
+        checkpoint: state === 'succeeded' ? intent.checkpoint
+          : state === 'prepared' ? { state } : { state, deliveryRevision: 3 },
+      })
+      expect(() => test.operations.validateDurableState(new Set()))
+        .toThrow('Branch Delivery Intent targets a missing aggregate')
+    },
+  )
+
+  it('rejects a nonterminal Intent after both aggregate ownership references disappear', async () => {
+    const test = harness()
+    await seedPreSealAcceptancePrefix(test)
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    test.deliveries.values.set(id, { ...delivery, activeIntentId: undefined, lastIntentId: REVIEW_INTENT_ID })
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('recoverable Branch Delivery Intent has no matching aggregate owner')
+  })
+
+  it('rejects an active PR Intent whose retained request targets another branch', async () => {
+    const test = harness()
+    await seedPreSealAcceptancePrefix(test)
+    const id = branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)
+    const delivery = branchDeliveryRecordSchema.parse(test.deliveries.get(id))
+    const intent = branchDeliveryIntentRecordSchema.parse(test.intents.get(PULL_REQUEST_INTENT_ID))
+    test.intents.values.delete(ACCEPT_INTENT_ID)
+    test.intents.values.set(intent.id, { ...intent, checkpoint: { state: 'active', deliveryRevision: 3 } })
+    test.deliveries.values.set(id, {
+      ...delivery, phase: 'draft', revision: 3, activeIntentId: intent.id, lastIntentId: REVIEW_INTENT_ID,
+      headRef: 'refs/heads/another-branch', push: undefined,
+      remoteRef: { current: { state: 'unobserved' } }, pullRequest: { current: { state: 'unobserved' } },
+      reviews: { current: { state: 'unobserved' } }, ci: { current: { state: 'unobserved' } },
+    })
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('recoverable Branch Delivery Intent changed its exact target')
+  })
+
+  it('rejects Push evidence whose Intent was deleted after a later Delivery operation', async () => {
+    const test = harness()
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    test.intents.values.delete(PUSH_INTENT_ID)
+    expect(() => test.operations.validateDurableState(new Set()))
+      .toThrow('Branch Delivery Push Intent reference is inconsistent')
+  })
+
+  it.each(['operation-id', 'marker-id'] as const)('rejects changed PR recovery %s before durable graph admission', async (field) => {
+    const test = harness()
+    const signal = new AbortController().signal
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    const intent = branchDeliveryIntentRecordSchema.parse(test.intents.get(PULL_REQUEST_INTENT_ID))
+    if (intent.operation.kind !== 'pull-request-create') throw new Error('expected retained PR create operation')
+    const request = intent.operation.request
+    const markerId = githubPullRequestCreateMarkerId(`pull-request-marker-${'f'.repeat(64)}`)
+    const parsed = branchDeliveryIntentRecordSchema.safeParse({
+      ...intent,
+      operation: {
+        ...intent.operation,
+        request: field === 'operation-id' ? { ...request, operationId: 'another-operation' } : {
+          ...request, markerId, body: request.body.replaceAll(request.markerId, markerId),
+        },
+      },
+    })
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) expect(parsed.error.issues).toContainEqual(expect.objectContaining({
+      message: 'Branch Delivery Pull Request request lacks stable recovery identity',
+    }))
+  })
+})
+
+describe('Branch Delivery Push admission', () => {
+  const signal = new AbortController().signal
+
+  async function saved() {
+    const test = harness()
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    return test
+  }
+
+  async function reserved() {
+    const test = await saved()
+    test.execution.crashBeforePrepareOnce = true
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toBeInstanceOf(SimulatedProcessCrash)
+    return test
+  }
+
+  it('keeps a Push pending until its Binding admission exists', async () => {
+    const test = await saved()
+    const available = test.admissions.get(BINDING_ID)!
+    await test.admissions.delete(BINDING_ID)
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(test.execution.starts).toBe(0)
+    await test.admissions.put(BINDING_ID, available)
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: true })
+    expect(test.execution.starts).toBe(1)
+  })
+
+  it.each(['other-push', 'manual-commit'] as const)('does not steal a reservation held by %s', async (owner) => {
+    const test = await reserved()
+    const own = test.admissions.get(BINDING_ID)
+    if (own?.state !== 'manual-host-operation') throw new Error('missing reservation')
+    const foreign = {
+      ...own,
+      action: owner === 'other-push' ? 'project-branch:push' as const : 'project-commit:create' as const,
+      source: { ...own.source, intentId: SECOND_SAVE_INTENT_ID },
+    }
+    await test.admissions.put(BINDING_ID, foreign)
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(test.admissions.get(BINDING_ID)).toEqual(foreign)
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it.each(['missing', 'foreign'] as const)('rechecks a changed target with %s reservation after interruption', async (state) => {
+    const test = await reserved()
+    test.context.current = { ...test.context.current, mappingRevision: 5 }
+    const own = test.admissions.get(BINDING_ID)
+    if (own?.state !== 'manual-host-operation') throw new Error('missing reservation')
+    if (state === 'missing') await test.admissions.delete(BINDING_ID)
+    else await test.admissions.put(BINDING_ID, { ...own, source: { ...own.source, intentId: SECOND_SAVE_INTENT_ID } })
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false })
+    expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject(state === 'missing'
+      ? { state: 'active' }
+      : { state: 'terminal', outcome: 'conflict' })
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it.each(['unavailable', 'source-conflict'] as const)('retains the Host preparation %s result without starting', async (reason) => {
+    const test = await saved()
+    const host = test.execution as unknown as SakiHostExecution
+    vi.spyOn(host, 'prepareOperation').mockResolvedValueOnce({ ok: false, reason })
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false })
+    expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject(reason === 'unavailable'
+      ? { state: 'active' }
+      : { state: 'terminal', outcome: 'reconciliation-required' })
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it.each(['reserve', 'accept'] as const)('does not mask an uncommitted %s admission write', async (phase) => {
+    const test = await saved()
+    const failure = new Error('admission persistence unavailable')
+    const update = test.admissions.update.bind(test.admissions)
+    let calls = 0
+    vi.spyOn(test.admissions, 'update').mockImplementation(async (id, operation) => {
+      calls += 1
+      if (calls === (phase === 'reserve' ? 1 : 2)) throw failure
+      return await update(id, operation)
+    })
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toBe(failure)
+    expect(test.execution.starts).toBe(0)
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: true })
+    expect(test.execution.starts).toBe(1)
+  })
+
+  it('does not accept a reservation replaced while the Host prepares', async () => {
+    const test = await saved()
+    const prepare = test.execution.prepareOperation.bind(test.execution)
+    vi.spyOn(test.execution, 'prepareOperation').mockImplementation(async (...args) => {
+      const result = await prepare(...args)
+      const admission = test.admissions.get(BINDING_ID)
+      if (admission?.state !== 'manual-host-operation') throw new Error('missing reservation')
+      await test.admissions.put(BINDING_ID, { ...admission, source: { ...admission.source, intentId: SECOND_SAVE_INTENT_ID } })
+      return result
+    })
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(test.execution.starts).toBe(0)
+    expect(test.admissions.get(BINDING_ID)).toMatchObject({ source: { intentId: SECOND_SAVE_INTENT_ID } })
+  })
+
+  it('keeps an accepted Push pending when its admission disappears before Host start', async () => {
+    const test = await saved()
+    let accepted: BindingWriteAdmissionRecord | undefined
+    test.execution.beforeAdmission = () => {
+      accepted = test.admissions.get(BINDING_ID)
+      test.admissions.values.delete(BINDING_ID)
+    }
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(test.execution.starts).toBe(0)
+    expect(test.execution.cancellations).toEqual([])
+    if (accepted === undefined) throw new Error('missing accepted admission')
+    await test.admissions.put(BINDING_ID, accepted)
+    test.execution.beforeAdmission = undefined
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: true })
+    expect(test.execution.starts).toBe(1)
+  })
+
+  it('rejects a Host preparation whose identity disagrees with its snapshot', async () => {
+    const test = await saved()
+    const prepare = test.execution.prepareOperation.bind(test.execution)
+    vi.spyOn(test.execution, 'prepareOperation').mockImplementation(async (...args) => {
+      const result = await prepare(...args)
+      return { ...result, preparation: {
+        ...result.preparation,
+        operation: { ...result.preparation.operation, id: 'host-operation-00000000-0000-4000-8000-000000000299' as HostOperationId },
+      } }
+    })
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('Push Host preparation disagrees')
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it('rejects a Host snapshot routed to another Binding revision', async () => {
+    const test = await saved()
+    const prepare = test.execution.prepareOperation.bind(test.execution)
+    vi.spyOn(test.execution, 'prepareOperation').mockImplementation(async (...args) => {
+      const result = await prepare(...args)
+      return { ...result, snapshot: { ...result.snapshot, bindingRevision: result.snapshot.bindingRevision + 1 } }
+    })
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('Push Host snapshot disagrees')
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it('rejects a Host that changes its retained preparation revision during replay', async () => {
+    const test = await saved()
+    const host = test.execution as unknown as SakiHostExecution
+    const start = vi.spyOn(host, 'startOperation').mockImplementationOnce(async () => ({
+      ok: false, reason: 'busy', snapshot: await test.execution.inspectOperation(),
+    }))
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    start.mockRestore()
+    const prepare = test.execution.prepareOperation.bind(test.execution)
+    vi.spyOn(test.execution, 'prepareOperation').mockImplementation(async (...args) => {
+      const result = await prepare(...args)
+      return { ...result, preparation: { ...result.preparation, preparationRevision: 1 } }
+    })
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('Push Host preparation changed during replay')
+    expect(test.execution.starts).toBe(0)
+  })
+
+  async function pendingAdmission() {
+    const test = await saved()
+    const host = test.execution as unknown as SakiHostExecution
+    const start = vi.spyOn(host, 'startOperation').mockImplementationOnce(async () => ({
+      ok: false, reason: 'busy', snapshot: await test.execution.inspectOperation(),
+    }))
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    start.mockRestore()
+    const intent = test.intents.get(PUSH_INTENT_ID)
+    if (intent?.checkpoint.state !== 'push-host-accepted' || intent.operation.kind !== 'push'
+      || test.execution.admissionSource === undefined) throw new Error('missing pending Host admission')
+    return {
+      test,
+      intent,
+      admit: test.execution.admissionSource,
+      expectation: {
+        bindingId: intent.operation.request.expected.binding.id,
+        bindingRevision: intent.operation.request.expected.binding.revision,
+        preparation: intent.checkpoint.preparation,
+        source: intent.operation.request.source,
+      },
+    }
+  }
+
+  it.each(['intent-missing', 'intent-active', 'non-push-intent', 'binding-revision', 'preparation-id'] as const)(
+    'denies the Host admission callback for stale %s evidence', async (change) => {
+      const { test, intent, admit, expectation } = await pendingAdmission()
+      let stale = expectation
+      if (change === 'intent-missing') test.intents.values.delete(PUSH_INTENT_ID)
+      else if (change === 'intent-active') {
+        test.intents.values.set(PUSH_INTENT_ID, {
+          ...intent, checkpoint: { state: 'active', deliveryRevision: 1 },
+        })
+      }
+      else if (change === 'non-push-intent') stale = {
+        ...expectation, source: { ...expectation.source, intentId: SAVE_INTENT_ID },
+      }
+      else if (change === 'binding-revision') stale = { ...expectation, bindingRevision: expectation.bindingRevision + 1 }
+      else stale = { ...expectation, preparation: {
+        ...expectation.preparation,
+        operation: { ...expectation.preparation.operation, id: 'host-operation-00000000-0000-4000-8000-000000000299' as HostOperationId },
+      } }
+      expect(await admit(stale, signal)).toEqual({ kind: 'denied', reason: 'not-current' })
+      expect(test.execution.starts).toBe(0)
+    },
+  )
+
+  it.each(['revision', 'reserved', 'different-source', 'other-action'] as const)(
+    'denies the Host admission callback after a durable admission changes its %s', async (change) => {
+      const { test, admit, expectation } = await pendingAdmission()
+      const admission = test.admissions.get(BINDING_ID)
+      if (admission?.state !== 'manual-host-operation' || admission.phase !== 'accepted') {
+        throw new Error('missing accepted admission')
+      }
+      if (change === 'revision') await test.admissions.put(BINDING_ID, { ...admission, revision: admission.revision + 1 })
+      else if (change === 'different-source') await test.admissions.put(BINDING_ID, {
+        ...admission, source: { ...admission.source, intentId: SECOND_SAVE_INTENT_ID },
+      })
+      else if (change === 'other-action') await test.admissions.put(BINDING_ID, {
+        ...admission, action: 'project-commit:create',
+      })
+      else {
+        const { preparation: _preparation, acceptedAt: _acceptedAt, ...reservedAdmission } = admission
+        await test.admissions.put(BINDING_ID, { ...reservedAdmission, phase: 'reserved' })
+      }
+      expect(await admit(expectation, signal)).toEqual({ kind: 'denied', reason: 'not-current' })
+      expect(test.execution.starts).toBe(0)
+    },
+  )
+
+  it.each(['missing', 'foreign'] as const)('retains successful Host evidence when its admission is %s at release', async (change) => {
+    const test = await saved()
+    let retained: BindingWriteAdmissionRecord | undefined
+    test.execution.afterStart = (snapshot) => {
+      retained = test.admissions.get(BINDING_ID)
+      if (retained?.state !== 'manual-host-operation') throw new Error('missing accepted admission')
+      if (change === 'missing') test.admissions.values.delete(BINDING_ID)
+      else test.admissions.values.set(BINDING_ID, {
+        ...retained, source: { ...retained.source, intentId: SECOND_SAVE_INTENT_ID },
+      })
+      return snapshot
+    }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow()
+    expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject({ state: 'terminal', outcome: 'succeeded' })
+    expect(test.execution.starts).toBe(1)
+    if (retained === undefined) throw new Error('missing retained admission')
+    await test.admissions.put(BINDING_ID, retained)
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: true })
+    expect(test.admissions.get(BINDING_ID)).toMatchObject({ state: 'available' })
+    expect(test.execution.starts).toBe(1)
+  })
+
+  it('does not release another Push reservation while replaying a completed delivery', async () => {
+    const test = await saved()
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    const available = test.admissions.get(BINDING_ID)!
+    const request = test.execution.request!
+    const foreign: BindingWriteAdmissionRecord = {
+      ...available,
+      state: 'manual-host-operation',
+      phase: 'reserved',
+      action: 'project-branch:push',
+      bindingRevision: request.expected.binding.revision,
+      source: { ...request.source, intentId: SECOND_SAVE_INTENT_ID },
+      reservedAt: available.updatedAt,
+    }
+    await test.admissions.put(BINDING_ID, foreign)
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: true })
+    expect(test.admissions.get(BINDING_ID)).toEqual(foreign)
+    expect(test.execution.starts).toBe(1)
+    await test.admissions.delete(BINDING_ID)
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow()
+    expect(test.execution.starts).toBe(1)
+  })
+
+  it('replays accepted admission after its Intent checkpoint write is interrupted', async () => {
+    const test = await saved()
+    test.intents.beforeUpdate = (_id, _current, next) => {
+      if (next.checkpoint.state !== 'push-host-accepted') return
+      test.intents.beforeUpdate = undefined
+      throw new SimulatedProcessCrash()
+    }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toBeInstanceOf(SimulatedProcessCrash)
+    expect(test.admissions.get(BINDING_ID)).toMatchObject({ phase: 'accepted' })
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: true })
+    expect(test.execution.starts).toBe(1)
+    expect(test.admissions.get(BINDING_ID)).toMatchObject({ state: 'available', revision: 3 })
+  })
+
+  it('finishes a canceled Host receipt after the Delivery release was already durable', async () => {
+    const test = await saved()
+    test.execution.beforeAdmission = () => { test.authority.current = false }
+    test.intents.beforeUpdate = (_id, _current, next) => {
+      if (next.checkpoint.state !== 'terminal') return
+      test.intents.beforeUpdate = undefined
+      throw new SimulatedProcessCrash()
+    }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toBeInstanceOf(SimulatedProcessCrash)
+    expect(test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.activeIntentId).toBeUndefined()
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'denied' })
+    expect(test.admissions.get(BINDING_ID)).toMatchObject({ state: 'available' })
+    expect(test.execution.starts).toBe(0)
+    expect(test.execution.cancellations).toEqual(['authority-revoked'])
+  })
+
+  it('keeps waiting when the Host cannot yet finish cancellation', async () => {
+    const test = await saved()
+    test.execution.beforeAdmission = () => { test.authority.current = false }
+    vi.spyOn(test.execution, 'cancelOperation').mockImplementationOnce(async () => await test.execution.inspectOperation())
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject({ state: 'push-host-accepted' })
+    expect(test.admissions.get(BINDING_ID)).toMatchObject({ phase: 'accepted' })
+    expect(test.execution.starts).toBe(0)
+    expect(await test.operations.submit(pushIntent(), ACTOR, signal)).toMatchObject({ ok: false, reason: 'denied' })
+  })
+
+  it('rejects a terminal Host fact that changed after the Delivery receipt was retained', async () => {
+    const test = await saved()
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    const snapshot = test.execution.snapshot
+    if (snapshot?.state !== 'succeeded') throw new Error('missing terminal Host snapshot')
+    test.execution.snapshot = { ...snapshot, completedAt: snapshot.completedAt + 1, updatedAt: snapshot.updatedAt + 1 }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('terminal Push snapshot disagrees')
+    expect(test.execution.starts).toBe(1)
+  })
+
+  it('rejects a changed Host success when recovering an applied Delivery write prefix', async () => {
+    const test = await saved()
+    test.intents.beforeUpdate = (_id, _current, next) => {
+      if (next.checkpoint.state !== 'terminal') return
+      test.intents.beforeUpdate = undefined
+      throw new SimulatedProcessCrash()
+    }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toBeInstanceOf(SimulatedProcessCrash)
+    const snapshot = test.execution.snapshot
+    if (snapshot?.state !== 'succeeded') throw new Error('missing terminal Host snapshot')
+    test.execution.snapshot = { ...snapshot, completedAt: snapshot.completedAt + 1, updatedAt: snapshot.updatedAt + 1 }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('Applied Branch Push disagrees')
+    expect(test.execution.starts).toBe(1)
+  })
+
+  it('rejects an inspected Host operation whose retained preparation changed', async () => {
+    const { test } = await pendingAdmission()
+    const snapshot = test.execution.snapshot!
+    test.execution.snapshot = {
+      ...snapshot,
+      requestFingerprint: { ...snapshot.requestFingerprint, digest: 'f'.repeat(64) },
+    }
+    const prepare = test.execution.prepareOperation.bind(test.execution)
+    vi.spyOn(test.execution, 'prepareOperation').mockImplementation(async (...args) => {
+      const result = await prepare(...args)
+      return { ...result, preparation: {
+        ...result.preparation, requestFingerprint: test.execution.snapshot!.requestFingerprint,
+      } }
+    })
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('Push Host snapshot changed preparation')
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it('rejects a Host success that published another Commit', async () => {
+    const test = await saved()
+    test.execution.afterStart = snapshot => ({ ...snapshot, result: { ...snapshot.result, commitId: UPDATED_COMMIT_ID } })
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('Push result disagrees')
+    expect(test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.push).toBeUndefined()
+    expect(test.admissions.get(BINDING_ID)).toMatchObject({ phase: 'accepted' })
+  })
+
+  it.each(['before-release', 'queued-release', 'queued-foreign', 'queued-missing'] as const)(
+    'rechecks current admission ownership during %s', async (change) => {
+      const test = await saved()
+      const update = test.admissions.update.bind(test.admissions)
+      let count = 0
+      const release = () => {
+        const current = test.admissions.get(BINDING_ID)!
+        test.admissions.values.set(BINDING_ID, {
+          id: BINDING_ID, schemaVersion: 1, revision: current.revision + 1,
+          state: 'available', updatedAt: current.updatedAt,
+        })
+      }
+      if (change === 'before-release') test.execution.afterStart = (snapshot) => { release(); return snapshot }
+      else vi.spyOn(test.admissions, 'update').mockImplementation(async (id, operation) => {
+        count += 1
+        if (count === 3) {
+          if (change === 'queued-release') release()
+          else if (change === 'queued-missing') test.admissions.values.delete(BINDING_ID)
+          else {
+            const current = test.admissions.get(BINDING_ID)
+            if (current?.state !== 'manual-host-operation') throw new Error('missing accepted admission')
+            test.admissions.values.set(BINDING_ID, { ...current, revision: current.revision + 1 })
+          }
+        }
+        return await update(id, operation)
+      })
+      const result = test.operations.submit(pushIntent(), ACTOR, signal)
+      if (change === 'queued-foreign' || change === 'queued-missing') await expect(result).rejects.toThrow()
+      else expect(await result).toMatchObject({ ok: true })
+      expect(test.execution.starts).toBe(1)
+      expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject({ state: 'terminal', outcome: 'succeeded' })
+    },
+  )
+
+  it('denies an Agent Run dispatch presented to the Push admission callback', async () => {
+    const { test, admit, expectation } = await pendingAdmission()
+    expect(await admit({ ...expectation, source: {
+      kind: 'execution-dispatch',
+      dispatchId: sakiExecutionDispatchIdSchema.parse('dispatch-00000000-0000-4000-8000-000000000299'),
+      payloadDigest: 'f'.repeat(64),
+    } }, signal)).toEqual({ kind: 'denied', reason: 'not-current' })
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it.each(['reserve', 'accept'] as const)('reports an admission disappearing during its %s write', async (phase) => {
+    const test = await saved()
+    const failure = new Error('admission row removed during write')
+    const update = test.admissions.update.bind(test.admissions)
+    let calls = 0
+    vi.spyOn(test.admissions, 'update').mockImplementation(async (id, operation) => {
+      calls += 1
+      if (calls === (phase === 'reserve' ? 1 : 2)) {
+        await test.admissions.delete(id)
+        throw failure
+      }
+      return await update(id, operation)
+    })
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toBe(failure)
+    expect(test.execution.starts).toBe(0)
+    expect(test.intents.get(PUSH_INTENT_ID)?.checkpoint).toMatchObject({ state: 'active' })
+  })
+
+  it('rejects a Host success contradicting an already-applied cancellation prefix', async () => {
+    const test = await saved()
+    test.execution.beforeAdmission = () => { test.authority.current = false }
+    test.intents.beforeUpdate = (_id, _current, next) => {
+      if (next.checkpoint.state !== 'terminal') return
+      test.intents.beforeUpdate = undefined
+      throw new SimulatedProcessCrash()
+    }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toBeInstanceOf(SimulatedProcessCrash)
+    const canceled = test.execution.snapshot
+    if (canceled?.state !== 'canceled') throw new Error('missing canceled Host snapshot')
+    const { reason: _reason, effect: _effect, ...base } = canceled
+    test.execution.snapshot = {
+      ...base,
+      state: 'succeeded',
+      admission: { kind: 'accepted', revision: 2, acceptedAt: 11 },
+      result: {
+        type: 'push-branch',
+        repository: { nameWithOwner: 'BreakfastDaPaiDang/saki' },
+        targetRef: 'refs/heads/feature/delivery',
+        commitId: COMMIT_ID,
+        previous: { kind: 'absent' },
+        credential: { helperId: 'git-credential-manager' },
+      },
+    }
+    await expect(test.operations.submit(pushIntent(), ACTOR, signal)).rejects.toThrow('Push success lost its Branch Delivery ownership')
+    expect(test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.push).toBeUndefined()
+    expect(test.execution.starts).toBe(0)
+  })
+
+  it.each(['Save', 'Pull Request'] as const)('rejects a durable Push reservation referencing a %s Intent', async (kind) => {
+    const test = await saved()
+    if (kind === 'Pull Request') {
+      await test.operations.submit(pushIntent(), ACTOR, signal)
+      await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    }
+    const referenced = branchDeliveryIntentRecordSchema.parse(test.intents.get(
+      kind === 'Save' ? SAVE_INTENT_ID : PULL_REQUEST_INTENT_ID,
+    ))
+    const available = test.admissions.get(BINDING_ID)!
+    const reservation = bindingWriteAdmissionRecordSchema.parse({
+      id: BINDING_ID,
+      schemaVersion: 1,
+      revision: available.revision + 1,
+      state: 'manual-host-operation',
+      phase: 'reserved',
+      action: 'project-branch:push',
+      bindingRevision: test.context.current.binding.revision,
+      source: {
+        kind: 'control-intent',
+        intentId: referenced.id,
+        intentRevision: referenced.revision,
+        payloadDigest: referenced.payloadDigest,
+      },
+      reservedAt: available.updatedAt,
+      updatedAt: available.updatedAt,
+    })
+    await test.admissions.put(BINDING_ID, reservation)
+    expect(() => test.operations.validateDurableState(new Set())).toThrow('lacks its Push request')
+    expect(test.admissions.get(BINDING_ID)).toEqual(reservation)
+  })
+
+  it('rejects recovery of an applied Push whose durable Intent lost its Host preparation', async () => {
+    const test = await saved()
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    const terminal = branchDeliveryIntentRecordSchema.parse(test.intents.get(PUSH_INTENT_ID))
+    const missingPreparation = branchDeliveryIntentRecordSchema.parse({
+      ...terminal,
+      checkpoint: { state: 'active', deliveryRevision: 1 },
+    })
+    await test.intents.put(PUSH_INTENT_ID, missingPreparation)
+    const restarted = test.createDetachedOperations()
+    const validated = restarted.validateDurableState(new Set())
+
+    await expect(restarted.initializeValidated(validated)).rejects.toThrow('lacks Host preparation')
+
+    expect(test.intents.get(PUSH_INTENT_ID)).toEqual(missingPreparation)
+    expect(test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))?.push).toMatchObject({ intentId: PUSH_INTENT_ID })
+    expect(test.execution.starts).toBe(1)
+  })
+})
+
+describe('Branch Delivery child cancellation prefix', () => {
+  it('rejects a successful child replay after an unrecorded conflict released its Delivery owner', async () => {
+    const signal = new AbortController().signal
+    // Work Item admission may reject a busy item before persisting the child Intent.
+    const moveWorkItem = vi.fn<BranchDeliveryOperationsOptions['moveWorkItem']>()
+      .mockResolvedValueOnce({ state: 'conflict' })
+      .mockResolvedValue({ state: 'succeeded', remoteFingerprint: REVIEW_FINGERPRINT })
+    const test = harness({ moveWorkItem })
+    await test.operations.submit(saveIntent(), ACTOR, signal)
+    await test.operations.submit(pushIntent(), ACTOR, signal)
+    await test.operations.submit(createPullRequestIntent(2), ACTOR, signal)
+    test.intents.beforeUpdate = (id, _current, next) => {
+      if (id !== REVIEW_INTENT_ID || next.checkpoint.state !== 'terminal') return
+      test.intents.beforeUpdate = undefined
+      throw new SimulatedProcessCrash()
+    }
+
+    await expect(test.operations.submit(inReviewIntent(4), ACTOR, signal))
+      .rejects.toBeInstanceOf(SimulatedProcessCrash)
+    const canceled = branchDeliveryRecordSchema.parse(test.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID)))
+    expect(canceled).toMatchObject({ phase: 'draft', lastIntentId: REVIEW_INTENT_ID })
+    expect(canceled.activeIntentId).toBeUndefined()
+    expect(test.intents.get(REVIEW_INTENT_ID)?.checkpoint).toMatchObject({ state: 'child-pending' })
+    const restarted = test.createDetachedOperations()
+    const validated = restarted.validateDurableState(new Set())
+
+    await expect(restarted.initializeValidated(validated))
+      .rejects.toThrow('In-review child transition lost its prepared evidence')
+
+    expect(moveWorkItem).toHaveBeenCalledTimes(2)
+    expect(test.deliveries.get(canceled.id)).toEqual(canceled)
+    expect(test.intents.get(REVIEW_INTENT_ID)?.checkpoint).toMatchObject({ state: 'child-pending' })
   })
 })

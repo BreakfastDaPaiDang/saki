@@ -1376,6 +1376,32 @@ describe('active Saki operation recovery', () => {
     await expect(readFile(selected.databasePath)).resolves.not.toHaveLength(0)
   })
 
+  it('rolls back an uncommitted upgrade from an exact manifest-selected v8 generation', async () => {
+    const root = await createRoot()
+    const signal = AbortSignal.timeout(10_000)
+    const databasePath = await publishPreviousWritableCandidate(root, 'ready', 'upgrade', signal)
+    const before = await readFile(databasePath)
+    const journal = createOperationJournal({
+      kind: 'upgrade',
+      operationId: createSakiMaintenanceOperationId(),
+      installationId: INSTALLATION_ID,
+      sourceStateVersion: 8,
+      sourceStorageGenerationId: CANDIDATE_ID,
+      sourceBuildId: PREVIOUS_WRITABLE_BUILD_ID,
+      backupId: createSakiRecoveryBackupId(),
+      candidateStorageGenerationId: OTHER_GENERATION_ID,
+    })
+    await publishActiveOperation(root, journal, signal)
+
+    await recoverActiveSakiOperation(root, join(root, 'unused-legacy.sqlite'), signal)
+
+    await expect(readActiveOperation(root, signal)).resolves.toBeUndefined()
+    expect(await readFile(databasePath)).toEqual(before)
+    await expect(readInstallationManifest(root, signal)).resolves.toMatchObject({
+      value: { stateVersion: 8, storageGenerationId: CANDIDATE_ID },
+    })
+  })
+
   it('retains a pre-commit manifest-selected upgrade whose journal has the wrong source build', async () => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(5_000)

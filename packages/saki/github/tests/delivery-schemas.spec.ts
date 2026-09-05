@@ -3,6 +3,7 @@ import {
   GITHUB_PULL_REQUEST_CREATE_BODY_UTF8_LIMIT,
   GITHUB_PULL_REQUEST_CREATE_TITLE_UTF8_LIMIT,
   githubCheckRunId,
+  githubCheckRunFactSchema,
   githubBranchHeadFactSchema,
   githubBranchHeadReadRequestSchema,
   githubCommitCiFactSchema,
@@ -213,6 +214,17 @@ describe('GitHub delivery request admission', () => {
 })
 
 describe('GitHub delivery facts', () => {
+  it('allows incomplete check timestamps but rejects completion before start', () => {
+    const check = {
+      id: githubCheckRunId('201'), name: 'CI', status: 'completed', conclusion: 'success',
+      url: 'https://github.com/breakfast/saki/runs/201',
+    }
+    for (const timestamps of [{}, { startedAt: 2 }, { completedAt: 1 }, { startedAt: 2, completedAt: 2 }]) {
+      expect(githubCheckRunFactSchema.parse({ ...check, ...timestamps })).toEqual({ ...check, ...timestamps })
+    }
+    expect(githubCheckRunFactSchema.safeParse({ ...check, startedAt: 2, completedAt: 1 }).success).toBe(false)
+  })
+
   it('admits one exact Pull Request review collection without inventing nullable fields', () => {
     const request = {
       kind: 'pull-request-reviews' as const,
@@ -324,6 +336,10 @@ describe('GitHub delivery facts', () => {
       observedAt: OBSERVED_AT,
     } as const
     expect(githubPullRequestCreateInspectionSchema.parse(base)).toEqual(base)
+    expect(githubPullRequestCreateInspectionSchema.safeParse({
+      ...base,
+      snapshot: { ...base.snapshot, repositoryId: githubRepositoryId('R_foreign') },
+    }).success).toBe(false)
     for (const state of [
       'absent-complete', 'marker-removed', 'known-pull-request-absent',
       'identity-conflict', 'multiple-matches', 'incomplete',

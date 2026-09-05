@@ -223,11 +223,10 @@ export function validateBranchDeliveryOperationLinks(
 }
 
 function branchPushWithoutHostValid(
-  intent: CurrentBranchDeliveryIntentRecord,
+  intent: CurrentBranchPushIntentRecord,
   delivery: CurrentBranchDeliveryRecord,
   admission: BindingWriteAdmissionRecord | undefined,
 ): boolean {
-  if (intent.operation.kind !== 'push') return false
   const checkpoint = intent.checkpoint
   const ownedAdmission = admission !== undefined && isBranchPushAdmission(admission)
     && branchPushAdmissionMatchesRequest(admission, intent, intent.operation.request)
@@ -308,9 +307,9 @@ function activeBranchPushWindowValid(
   admission: Extract<BindingWriteAdmissionRecord, {
     readonly state: 'manual-host-operation'
     readonly action: 'project-branch:push'
-  }> | undefined,
+  }>,
 ): boolean {
-  if (admission === undefined || !branchPushAdmissionMatchesRequest(admission, intent, operation.request)) return false
+  if (!branchPushAdmissionMatchesRequest(admission, intent, operation.request)) return false
   if (operation.snapshot.state === 'prepared') {
     if (admission.phase === 'reserved') return true
     return isDeepStrictEqual(admission.preparation, operationPreparation(operation))
@@ -319,12 +318,11 @@ function activeBranchPushWindowValid(
 }
 
 function branchPushWindowValid(
-  intent: CurrentBranchDeliveryIntentRecord,
+  intent: CurrentBranchPushIntentRecord,
   delivery: CurrentBranchDeliveryRecord,
   operation: CurrentPushHostOperationRecord,
   admission: BindingWriteAdmissionRecord | undefined,
 ): boolean {
-  if (intent.operation.kind !== 'push') return false
   const checkpoint = intent.checkpoint
   if (!isDeepStrictEqual(operation.request, intent.operation.request)) {
     return sourceConflictedBranchPushValid(intent, delivery, operation, admission)
@@ -357,7 +355,9 @@ function branchPushWindowValid(
       || appliedPush.confirmedAt !== operation.snapshot.completedAt) {
       throw new Error('applied Branch Push disagrees with its succeeded Host snapshot')
     }
-    return branchPushAdmissionAfterHostMatches(admission, intent, operation, checkpoint.preparation)
+    return branchPushAdmissionAfterHostMatches(
+      admission, intent, operation, checkpoint.preparation, operation.snapshot.admission,
+    )
   }
   if (admission === undefined || !isBranchPushAdmission(admission) || admission.phase !== 'accepted'
     || admission.revision !== checkpoint.admissionRevision
@@ -373,7 +373,7 @@ function branchPushWindowValid(
 }
 
 function sourceConflictedBranchPushValid(
-  intent: CurrentBranchDeliveryIntentRecord,
+  intent: CurrentBranchPushIntentRecord,
   delivery: CurrentBranchDeliveryRecord,
   operation: CurrentPushHostOperationRecord,
   admission: BindingWriteAdmissionRecord | undefined,
@@ -393,8 +393,7 @@ function sourceConflictedBranchPushValid(
     && checkpoint.host === undefined && delivery.activeIntentId === undefined
     && delivery.lastIntentId === intent.id && delivery.repair?.intentId === intent.id
     && delivery.repair.reason === 'evidence-conflict'
-  return intent.operation.kind === 'push'
-    && !isDeepStrictEqual(operation.request, intent.operation.request)
+  return !isDeepStrictEqual(operation.request, intent.operation.request)
     && isDeepStrictEqual(operation.request.source, intent.operation.request.source)
     && admission !== undefined && isBranchPushAdmission(admission) && admission.phase === 'reserved'
     && branchPushAdmissionMatchesRequest(admission, intent, intent.operation.request)
@@ -447,9 +446,11 @@ function terminalBranchPushAdmissionMatches(
       && (evidence.kind === 'not-accepted' || admission.revision === evidence.revision)
       && branchPushAcceptedAdmissionMatches(admission, intent, operation, preparation)
   }
-  if (operation.snapshot.state !== 'succeeded' && operation.snapshot.state !== 'failed'
-    && operation.snapshot.state !== 'canceled') return false
-  return admission.updatedAt >= operation.snapshot.completedAt
+  // Intent schema hostSnapshotMatchesOutcome proves terminal state; the caller handles reconciliation separately.
+  const snapshot = operation.snapshot as Extract<CurrentPushHostOperationRecord['snapshot'], {
+    readonly state: 'succeeded' | 'failed' | 'canceled'
+  }>
+  return admission.updatedAt >= snapshot.completedAt
     && (evidence.kind === 'not-accepted' || admission.revision > evidence.revision)
 }
 
@@ -458,15 +459,9 @@ function branchPushAdmissionAfterHostMatches(
   intent: CurrentBranchDeliveryIntentRecord,
   operation: CurrentPushHostOperationRecord,
   preparation: ReturnType<typeof operationPreparation>,
+  evidence: Extract<CurrentPushHostOperationRecord['snapshot']['admission'], { readonly kind: 'accepted' }>,
 ): boolean {
-  const evidence = operation.snapshot.admission
   if (admission === undefined) return false
-  if (evidence.kind === 'not-accepted') {
-    if (operation.snapshot.state !== 'canceled' || operation.effectPlan !== undefined) return false
-    if (admission.state === 'available') return admission.id === operation.request.expected.binding.id
-    return isBranchPushAdmission(admission) && admission.phase === 'accepted'
-      && branchPushAcceptedAdmissionMatches(admission, intent, operation, preparation)
-  }
   if (admission.state === 'available') {
     return admission.id === operation.request.expected.binding.id && admission.revision === evidence.revision + 1
   }

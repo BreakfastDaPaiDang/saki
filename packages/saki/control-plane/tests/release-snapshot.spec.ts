@@ -41,6 +41,21 @@ const ACTOR = controlIntentActorSchema.parse({
 })
 
 describe('assembleReleaseSnapshot', () => {
+  it.each([false, true])('orders accepted and unaccepted deliveries independently of source order: reversed=%s', (reversed) => {
+    const first = delivery(FIRST_WORK_ITEM_ID, 7, '709')
+    const second = delivery(SECOND_WORK_ITEM_ID, 3, '710')
+    delete second.acceptance
+    second.phase = 'draft'
+    const records = reversed ? [second, first] : [first, second]
+    const snapshot = assembleReleaseSnapshot({ developmentProjectId: PROJECT_ID, capturedAt: 40,
+      board: {}, milestone: {}, tag: {}, release: {}, releaseCommit: {}, upstreamCommit: {}, upstreamAncestry: {},
+      deliveries: records.map(record => ({ record, pullRequest: {}, ci: {}, ancestry: {} })),
+    })
+    expect(snapshot.deliveries.map(item => item.workItemId)).toEqual([FIRST_WORK_ITEM_ID, SECOND_WORK_ITEM_ID])
+    expect(snapshot.deliveries[0]).toHaveProperty('acceptance')
+    expect(snapshot.deliveries[1]).not.toHaveProperty('acceptance')
+  })
+
   it('maps safe delivery facts in stable order and preserves independent source health', () => {
     const first = delivery(FIRST_WORK_ITEM_ID, 7, '709')
     const second = delivery(SECOND_WORK_ITEM_ID, 3, '710')

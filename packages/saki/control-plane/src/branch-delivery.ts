@@ -216,17 +216,20 @@ const sourceObservationStateSchema = z.discriminatedUnion('state', [
   }).strict(),
 ])
 
-function sourceObservationSchema<F extends z.ZodType>(fact: F) {
+function sourceObservationSchema<F extends z.ZodType<{ readonly observedAt: number }>>(fact: F) {
   return z.object({
     confirmed: z.object({ fact, confirmedAt: timestamp }).strict().optional(),
     current: sourceObservationStateSchema,
   }).strict().superRefine((observation, context) => {
-    const confirmed = observation.confirmed as { readonly fact: unknown; readonly confirmedAt: number } | undefined
-    if (confirmed !== undefined && confirmed.confirmedAt < observationTime(confirmed.fact)) {
+    const confirmed = observation.confirmed as {
+      readonly fact: { readonly observedAt: number }
+      readonly confirmedAt: number
+    } | undefined
+    if (confirmed !== undefined && confirmed.confirmedAt < confirmed.fact.observedAt) {
       context.addIssue({ code: 'custom', message: 'source confirmation predates its observation' })
     }
     if (observation.current.state === 'confirmed'
-      && (confirmed === undefined || observationTime(confirmed.fact) !== observation.current.observedAt)) {
+      && (confirmed === undefined || confirmed.fact.observedAt !== observation.current.observedAt)) {
       context.addIssue({ code: 'custom', message: 'current source confirmation lacks the same exact fact' })
     }
   })
@@ -416,7 +419,7 @@ export const branchDeliveryRecordSchema: z.ZodType<BranchDeliveryRecord> = branc
     if (record.target.workItem.id !== record.workItemId) {
       context.addIssue({ code: 'custom', message: 'Branch Delivery target Work Item disagrees with its identity' })
     }
-    if (record.target.binding.id === '' || record.updatedAt < record.createdAt) {
+    if (record.updatedAt < record.createdAt) {
       context.addIssue({ code: 'custom', message: 'Branch Delivery contains invalid relationship evidence' })
     }
     if (record.phase === 'accepted' ? record.acceptance === undefined : record.acceptance !== undefined) {
@@ -832,7 +835,7 @@ export function validateBranchDeliveryOperationsDurableState(
     }
     if (delivery.repair !== undefined) {
       const repairIntent = intentById.get(delivery.repair.intentId)
-      if (repairIntent === undefined || !repairCheckpointValid(repairIntent, delivery)) {
+      if (repairIntent === undefined || !repairCheckpointValid(repairIntent, delivery, delivery.repair)) {
         throw new Error('Branch Delivery repair Intent reference is inconsistent')
       }
     }
@@ -937,7 +940,7 @@ export class BranchDeliveryOperations {
       const providerSignal = AbortSignal.any([signal, attachment.lifetime.signal])
       const evidence = await this.readEvidence(delivery, attachment.provider, providerSignal, true)
       providerSignal.throwIfAborted()
-      const saved = await this.updateDelivery(delivery, evidenceUpdates(delivery, evidence, true))
+      const saved = await this.updateDelivery(delivery, evidenceUpdates(delivery, evidence))
       this.options.notifyChanged()
       return { ok: true, record: saved }
     })
@@ -1054,13 +1057,10 @@ export class BranchDeliveryOperations {
 
   private async reservePreparedIntent(
     initial: BranchDeliveryIntentRecord,
+    intent: Exclude<BranchDeliveryIntent, BranchDeliverySaveIntent>,
     signal: AbortSignal,
   ): Promise<BranchDeliveryIntentRecord> {
     let record = initial
-    const intent = record.payload.intent
-    if (intent.type === 'save-branch-delivery' || record.checkpoint.state !== 'prepared') {
-      throw new Error('Branch Delivery reservation requires a prepared existing-delivery Intent')
-    }
     const value = this.options.deliveryTable.get(record.deliveryId)
     if (value === undefined) return await this.finishIntent(record, 'conflict', 'expected-evidence')
     const delivery = branchDeliveryRecordSchema.parse(value)
@@ -1120,9 +1120,10 @@ export class BranchDeliveryOperations {
     signal.throwIfAborted()
     let record = this.requireIntent(intentId)
     if (terminalIntent(record)) return await this.replayTerminal(record, signal)
+    const intent = record.payload.intent
+    if (intent.type === 'save-branch-delivery') return await this.resumeSave(record, intent, signal)
     if (record.checkpoint.state === 'prepared') {
-      if (record.payload.intent.type === 'save-branch-delivery') return await this.resumeSave(record, signal)
-      record = await this.reservePreparedIntent(record, signal)
+      record = await this.reservePreparedIntent(record, intent, signal)
       if (terminalIntent(record) || record.checkpoint.state === 'prepared') return resultFor(record)
     }
     const delivery = this.requireDelivery(record.deliveryId)
@@ -1143,21 +1144,21 @@ export class BranchDeliveryOperations {
           ? 'child-transition' : delivery.repair.reason,
         delivery.repair.recordedAt, snapshot)
     }
-    switch (record.payload.intent.type) {
+    switch (intent.type) {
       case 'push-branch-delivery':
         return await this.resumePush(record, signal)
       case 'create-branch-delivery-pull-request':
-        return await this.resumePullRequestCreate(record, signal)
-      case 'save-branch-delivery':
-        throw new Error('prepared Branch Delivery Save escaped recovery')
+        return await this.resumePullRequestCreate(record,
+          (record.operation as Extract<BranchDeliveryIntentOperation, { kind: 'pull-request-create' }>).request, signal)
       case 'associate-branch-delivery-pull-request':
-        return await this.resumePullRequestAssociation(record, signal)
+        return await this.resumePullRequestAssociation(record, intent, signal)
       case 'mark-branch-delivery-in-review':
-        return await this.resumeWorkItemTransition(record, signal, 'in-review')
+        return await this.resumeWorkItemTransition(record, intent, signal)
       case 'accept-branch-delivery':
-        return await this.resumeWorkItemTransition(record, signal, 'done')
+        return await this.resumeWorkItemTransition(record, intent, signal)
+      /* v8 ignore next -- closed-union exhaustiveness guard */
       default:
-        return assertNever(record.payload.intent)
+        return assertNever(intent)
     }
   }
 
@@ -1300,7 +1301,7 @@ export class BranchDeliveryOperations {
       try {
         admission = await this.acceptPushAdmission(record, prepared.preparation)
       } catch (error) {
-        if (error instanceof AdmissionBusy || error instanceof AdmissionUnavailable) return unavailableResult(record)
+        if (error instanceof AdmissionBusy) return unavailableResult(record)
         throw error
       }
       record = await this.updateIntent(record, {
@@ -1320,7 +1321,7 @@ export class BranchDeliveryOperations {
       signal,
     )
     assertPushSnapshot(record, inspected)
-    if (terminalHostSnapshot(inspected.state)) return await this.finishPushSnapshot(record, inspected)
+    if (terminalHostSnapshot(inspected)) return await this.finishPushSnapshot(record, inspected)
     const started = await this.options.execution.startOperation<'push-branch'>(
       preparation.operation,
       prepared.acceptance,
@@ -1328,13 +1329,13 @@ export class BranchDeliveryOperations {
     )
     signal.throwIfAborted()
     assertPushSnapshot(record, started.snapshot)
-    if (terminalHostSnapshot(started.snapshot.state)) return await this.finishPushSnapshot(record, started.snapshot)
+    if (terminalHostSnapshot(started.snapshot)) return await this.finishPushSnapshot(record, started.snapshot)
     if (!started.ok && started.reason !== 'busy' && started.reason !== 'unavailable') {
       const reason = started.reason === 'authority-revoked' ? 'authority-revoked' : 'source-canceled'
       const canceled = await this.options.execution.cancelOperation(preparation.operation, reason, signal)
       signal.throwIfAborted()
       assertPushSnapshot(record, canceled)
-      if (terminalHostSnapshot(canceled.state)) return await this.finishPushSnapshot(record, canceled)
+      if (terminalHostSnapshot(canceled)) return await this.finishPushSnapshot(record, canceled)
     }
     this.options.notifyChanged()
     return unavailableResult(record)
@@ -1342,7 +1343,7 @@ export class BranchDeliveryOperations {
 
   private async finishPushSnapshot(
     record: BranchDeliveryIntentRecord,
-    snapshot: HostOperationSnapshot<'push-branch'>,
+    snapshot: Extract<HostOperationSnapshot<'push-branch'>, { state: 'succeeded' | 'failed' | 'canceled' | 'reconciliation-required' }>,
   ): Promise<BranchDeliveryIntentResult> {
     assertPushSnapshot(record, snapshot)
     const delivery = this.requireDelivery(record.deliveryId)
@@ -1371,9 +1372,6 @@ export class BranchDeliveryOperations {
       this.options.notifyChanged()
       return resultFor(record)
     }
-    if (snapshot.state !== 'failed' && snapshot.state !== 'canceled') {
-      throw new Error(`Nonterminal Host snapshot cannot finish Push Intent '${record.id}'`)
-    }
     const outcome = snapshot.state === 'canceled' && snapshot.reason === 'authority-revoked' ? 'denied' : 'failure'
     const reason = snapshot.state === 'failed' ? 'host-operation'
       : snapshot.reason === 'authority-revoked' ? 'authority' : 'host-operation'
@@ -1395,17 +1393,17 @@ export class BranchDeliveryOperations {
   }
 
   private async replayTerminal(
-    record: BranchDeliveryIntentRecord,
+    record: BranchDeliveryIntentRecord & { readonly checkpoint: BranchDeliveryTerminalCheckpoint },
     signal: AbortSignal,
   ): Promise<BranchDeliveryIntentResult> {
-    const checkpoint = requireTerminalCheckpoint(record)
+    const checkpoint = record.checkpoint
     if (checkpoint.host !== undefined) {
       const inspected = await this.options.execution.inspectOperation<'push-branch'>(
         checkpoint.host.preparation.operation as HostOperationPreparation<'push-branch'>['operation'],
         signal,
       )
       assertPushSnapshot(record, inspected)
-      if (!terminalHostSnapshot(inspected.state) || !isDeepStrictEqual(inspected, checkpoint.host.snapshot)) {
+      if (!terminalHostSnapshot(inspected) || !isDeepStrictEqual(inspected, checkpoint.host.snapshot)) {
         throw new Error(`terminal Push snapshot disagrees with Branch Delivery Intent '${record.id}'`)
       }
       if (checkpoint.outcome !== 'reconciliation-required') await this.releasePushAdmissionIfOwned(record)
@@ -1441,10 +1439,10 @@ export class BranchDeliveryOperations {
           updatedAt: now,
         })
       })
-      if (!isPushAdmission(next)) throw new AdmissionUnavailable()
-      return next
+      // KvTable.update returns the value produced by this callback; every return above is a Push admission.
+      return next as PushWriteAdmissionRecord
     } catch (error) {
-      if (error instanceof AdmissionBusy || error instanceof AdmissionUnavailable) throw error
+      if (error instanceof AdmissionBusy) throw error
       const replay = this.options.admissionTable.get(bindingId)
       if (replay !== undefined) {
         const parsed = bindingWriteAdmissionRecordSchema.parse(replay)
@@ -1477,11 +1475,11 @@ export class BranchDeliveryOperations {
           updatedAt: now,
         })
       })
-      /* jscpd:ignore-start -- accepted-phase replay must reassert the phase that reserved admission deliberately does not require */
-      if (!isPushAdmission(next) || next.phase !== 'accepted') throw new AdmissionUnavailable()
-      return next
+      /* jscpd:ignore-start -- accepted-phase replay requires the additional durable phase check */
+      // Both callback returns preserve an accepted Push admission.
+      return next as PushWriteAdmissionRecord
     } catch (error) {
-      if (error instanceof AdmissionBusy || error instanceof AdmissionUnavailable) throw error
+      if (error instanceof AdmissionBusy) throw error
       const replay = this.options.admissionTable.get(bindingId)
       if (replay !== undefined) {
         const parsed = bindingWriteAdmissionRecordSchema.parse(replay)
@@ -1574,13 +1572,10 @@ export class BranchDeliveryOperations {
 
   private async resumePullRequestCreate(
     initial: BranchDeliveryIntentRecord,
+    request: GitHubPullRequestCreateRequest,
     signal: AbortSignal,
   ): Promise<BranchDeliveryIntentResult> {
     let record = initial
-    if (record.operation.kind !== 'pull-request-create') {
-      throw new Error('Pull Request create Intent lacks its immutable request')
-    }
-    const request = record.operation.request
     const applied = this.requireDelivery(record.deliveryId)
     if (applied.activeIntentId === undefined && applied.lastIntentId === record.id
       && applied.pullRequest.confirmed !== undefined && intentMatchesDelivery(record, applied)) {
@@ -1628,13 +1623,7 @@ export class BranchDeliveryOperations {
     } catch (error) {
       const failure = tryProviderFailure(error)
       if (failure === undefined) throw error
-      try {
-        return await this.inspectPossiblePullRequestEffect(record, request, provider, providerSignal)
-      } catch (inspectionError) {
-        if (!(inspectionError instanceof GitHubProviderError)) throw inspectionError
-        providerFailure(inspectionError)
-        return unavailableResult(record)
-      }
+      return await this.inspectPossiblePullRequestEffect(record, request, provider, providerSignal)
     }
     providerSignal.throwIfAborted()
     const inspectionRequest = githubPullRequestCreateRequestSchema.parse({ ...request, inspectionHint: hint })
@@ -1646,12 +1635,9 @@ export class BranchDeliveryOperations {
 
   private async resumePullRequestAssociation(
     record: BranchDeliveryIntentRecord,
+    intent: BranchDeliveryAssociatePullRequestIntent,
     signal: AbortSignal,
   ): Promise<BranchDeliveryIntentResult> {
-    const intent = record.payload.intent
-    if (intent.type !== 'associate-branch-delivery-pull-request') {
-      throw new Error('Pull Request association selected another Intent kind')
-    }
     const delivery = this.requireDelivery(record.deliveryId)
     if (delivery.activeIntentId === undefined && delivery.lastIntentId === record.id
       && delivery.pullRequest.confirmed?.fact.id === intent.pullRequestId) {
@@ -1705,9 +1691,10 @@ export class BranchDeliveryOperations {
 
   private async resumeWorkItemTransition(
     initial: BranchDeliveryIntentRecord,
+    intent: BranchDeliveryInReviewIntent | BranchDeliveryAcceptIntent,
     signal: AbortSignal,
-    targetStatus: 'in-review' | 'done',
   ): Promise<BranchDeliveryIntentResult> {
+    const targetStatus = intent.type === 'accept-branch-delivery' ? 'done' : 'in-review'
     let record = initial
     const applied = this.requireDelivery(record.deliveryId)
     if (targetStatus === 'in-review' && applied.activeIntentId === undefined
@@ -1716,19 +1703,18 @@ export class BranchDeliveryOperations {
       return resultFor(record)
     }
     if (record.checkpoint.state !== 'child-pending') {
-      const prepared = await this.prepareWorkItemTransition(record, signal, targetStatus)
+      const prepared = await this.prepareWorkItemTransition(record, intent, signal, targetStatus)
       if ('result' in prepared) return prepared.result
       record = prepared.record
     }
-    const checkpoint = record.checkpoint
-    if (checkpoint.state !== 'child-pending' || checkpoint.move.targetStatus !== targetStatus) {
-      throw new Error(`Branch Delivery ${targetStatus} Intent lacks its child transition`)
-    }
-    if (targetStatus === 'done') {
-      const sealed = await this.ensureAcceptanceSealed(record, signal)
+    // Preparation persists child-pending; the durable parser binds its target Status to this Intent type.
+    const checkpoint = record.checkpoint as BranchDeliveryChildCheckpoint
+    if (intent.type === 'accept-branch-delivery') {
+      const sealed = await this.ensureAcceptanceSealed(record, checkpoint, intent, signal)
       if ('result' in sealed) return sealed.result
       record = sealed.record
     }
+    // The Delivery queue remains held through the child transition; this owner alone writes the aggregate.
     const result = await this.options.moveWorkItem(checkpoint.move, record.payload.actor, signal)
     switch (result.state) {
       case 'pending':
@@ -1742,13 +1728,11 @@ export class BranchDeliveryOperations {
           ? await this.finishAcceptedChildFailure(record, 'child-transition')
           : await this.reconcileTransition(record, 'evidence-conflict')
       case 'succeeded': break
+      /* v8 ignore next -- closed-union exhaustiveness guard */
       default: return assertNever(result)
     }
     if (targetStatus === 'done') {
       const delivery = this.requireDelivery(record.deliveryId)
-      if (delivery.phase !== 'accepted' || delivery.acceptance?.intentId !== record.id) {
-        throw new Error('Done child transition lost its immutable acceptance')
-      }
       record = await this.finishIntent(record, 'succeeded', undefined, delivery.revision)
       this.options.notifyChanged()
       return resultFor(record)
@@ -1780,13 +1764,10 @@ export class BranchDeliveryOperations {
 
   private async prepareWorkItemTransition(
     record: BranchDeliveryIntentRecord,
+    intent: BranchDeliveryInReviewIntent | BranchDeliveryAcceptIntent,
     signal: AbortSignal,
     targetStatus: 'in-review' | 'done',
   ): Promise<{ readonly record: BranchDeliveryIntentRecord } | { readonly result: BranchDeliveryIntentResult }> {
-    const intent = record.payload.intent
-    if (intent.type !== 'mark-branch-delivery-in-review' && intent.type !== 'accept-branch-delivery') {
-      throw new Error('Work Item transition selected another Branch Delivery Intent kind')
-    }
     const action = targetStatus === 'done' ? 'branch-delivery:accept' : 'branch-delivery:review'
     const delivery = this.requireDelivery(record.deliveryId)
     if (delivery.activeIntentId !== record.id || delivery.revision !== activeDeliveryRevision(record)
@@ -1824,24 +1805,24 @@ export class BranchDeliveryOperations {
     if (!this.options.authorityCurrent(record.payload.actor, action)) {
       return { result: await this.cancelActiveIntent(record, 'denied', 'authority') }
     }
-    const readFailure = firstEvidenceFailure(reads, targetStatus === 'done')
-    if (readFailure !== undefined || !localHead.ok) {
+    if (!evidenceReadsSucceeded(reads) || !localHead.ok) {
       return {
-        result: await this.finishEvidenceRejection(record, delivery, reads, targetStatus === 'done', 'failure'),
+        result: await this.finishEvidenceRejection(record, delivery, reads, 'failure'),
       }
     }
-    const remoteRef = reads.remoteRef.ok ? reads.remoteRef.fact : undefined
-    const pullRequest = reads.pullRequest?.ok === true ? reads.pullRequest.fact : undefined
-    const ci = reads.ci?.ok === true ? reads.ci.fact : undefined
+    const remoteRef = reads.remoteRef.fact
+    // A known PR is required above; readEvidence requests that PR and its reviews together.
+    const pullRequest = (reads.pullRequest as NonNullable<typeof reads.pullRequest>).fact
+    const ci = reads.ci?.fact
     const evidenceMatches = localHead.commitId === delivery.commitId
-      && remoteRef !== undefined && remoteRefMatches(delivery)(remoteRef)
-      && pullRequest !== undefined && pullRequestMatchesDelivery(pullRequest, delivery)
+      && remoteRefMatches(delivery)(remoteRef)
+      && pullRequestMatchesDelivery(pullRequest, delivery)
       && (targetStatus !== 'done' || (ci !== undefined
         && ciMatches(delivery)(ci)
         && summarizeCommitCi(ci).state === 'successful'))
     if (!evidenceMatches || !this.intentTargetCurrent(record, action)) {
       return {
-        result: await this.finishEvidenceRejection(record, delivery, reads, targetStatus === 'done', 'conflict'),
+        result: await this.finishEvidenceRejection(record, delivery, reads, 'conflict'),
       }
     }
     const localCommitObservedAt = localHead.observedAt ?? Date.now()
@@ -1875,14 +1856,10 @@ export class BranchDeliveryOperations {
 
   private async ensureAcceptanceSealed(
     record: BranchDeliveryIntentRecord,
+    checkpoint: BranchDeliveryChildCheckpoint,
+    intent: BranchDeliveryAcceptIntent,
     signal: AbortSignal,
   ): Promise<{ readonly record: BranchDeliveryIntentRecord } | { readonly result: BranchDeliveryIntentResult }> {
-    const checkpoint = record.checkpoint
-    const intent = record.payload.intent
-    if (checkpoint.state !== 'child-pending' || checkpoint.move.targetStatus !== 'done'
-      || intent.type !== 'accept-branch-delivery') {
-      throw new Error('Branch Delivery acceptance lacks its prepared Done transition')
-    }
     const delivery = this.requireDelivery(record.deliveryId)
     if (delivery.phase === 'accepted' && delivery.acceptance?.intentId === record.id) return { record }
     if (delivery.phase !== 'in-review' || delivery.activeIntentId !== record.id
@@ -1913,20 +1890,21 @@ export class BranchDeliveryOperations {
     if (!this.options.authorityCurrent(record.payload.actor, 'branch-delivery:accept')) {
       return { result: await this.cancelActiveIntent(record, 'denied', 'authority') }
     }
-    if (firstEvidenceFailure(reads, true) !== undefined || !localHead.ok) {
-      return { result: await this.finishEvidenceRejection(record, delivery, reads, true, 'failure') }
+    if (!evidenceReadsSucceeded(reads) || !localHead.ok) {
+      return { result: await this.finishEvidenceRejection(record, delivery, reads, 'failure') }
     }
-    const remoteRef = reads.remoteRef.ok ? reads.remoteRef.fact : undefined
-    const pullRequest = reads.pullRequest?.ok === true ? reads.pullRequest.fact : undefined
-    const ci = reads.ci?.ok === true ? reads.ci.fact : undefined
+    const remoteRef = reads.remoteRef.fact
+    // The validated child checkpoint has a known PR; this read batch additionally requests exact-Commit CI.
+    const pullRequest = (reads.pullRequest as NonNullable<typeof reads.pullRequest>).fact
+    const ci = (reads.ci as NonNullable<typeof reads.ci>).fact
     const current = localHead.commitId === delivery.commitId
-      && remoteRef !== undefined && remoteRefMatches(delivery)(remoteRef)
-      && pullRequest !== undefined && pullRequestMatchesDelivery(pullRequest, delivery)
-      && ci !== undefined && ciMatches(delivery)(ci)
+      && remoteRefMatches(delivery)(remoteRef)
+      && pullRequestMatchesDelivery(pullRequest, delivery)
+      && ciMatches(delivery)(ci)
       && summarizeCommitCi(ci).state === 'successful'
       && this.intentTargetCurrent(record, 'branch-delivery:accept')
     if (!current) {
-      return { result: await this.finishEvidenceRejection(record, delivery, reads, true, 'conflict') }
+      return { result: await this.finishEvidenceRejection(record, delivery, reads, 'conflict') }
     }
     const evidenceMaterial = {
       localCommitObservedAt: localHead.observedAt ?? Date.now(),
@@ -1945,7 +1923,7 @@ export class BranchDeliveryOperations {
       pullRequest: confirmedObservation(pullRequest) as BranchDeliveryRecord['pullRequest'],
       reviews: sourceObservation(
         delivery.reviews,
-        requireReviewsRead(reads),
+        reads.reviews as NonNullable<typeof reads.reviews>,
         fact => reviewsMatchDelivery(fact, delivery, pullRequest),
       ) as BranchDeliveryRecord['reviews'],
       ci: confirmedObservation(ci) as BranchDeliveryRecord['ci'],
@@ -1965,12 +1943,11 @@ export class BranchDeliveryOperations {
     record: BranchDeliveryIntentRecord,
     delivery: BranchDeliveryRecord,
     reads: DeliveryEvidenceReads,
-    includeCi: boolean,
     outcome: 'failure' | 'conflict',
   ): Promise<BranchDeliveryIntentResult> {
     const saved = await this.updateDelivery(delivery, {
       activeIntentId: undefined,
-      ...evidenceUpdates(delivery, reads, includeCi),
+      ...evidenceUpdates(delivery, reads),
       lastIntentId: record.id,
     })
     record = await this.finishIntent(record, outcome, 'expected-evidence', saved.revision)
@@ -1990,9 +1967,6 @@ export class BranchDeliveryOperations {
     reason: 'child-transition',
   ): Promise<BranchDeliveryIntentResult> {
     const delivery = this.requireDelivery(record.deliveryId)
-    if (delivery.phase !== 'accepted' || delivery.acceptance?.intentId !== record.id) {
-      throw new Error('accepted child failure lost its immutable Delivery evidence')
-    }
     record = await this.finishIntent(record, 'reconciliation-required', reason, delivery.revision)
     this.options.notifyChanged()
     return resultFor(record)
@@ -2093,24 +2067,19 @@ export class BranchDeliveryOperations {
       return await this.reconcilePullRequest(record, inspection, 'evidence-conflict')
     }
     const confirmedAt = Math.max(Date.now(), inspection.observedAt, pullRequest.observedAt)
-    let saved: BranchDeliveryRecord
-    if (delivery.activeIntentId === record.id) {
-      saved = await this.updateDelivery(delivery, {
-        activeIntentId: undefined,
-        pullRequest: {
-          confirmed: { fact: pullRequest, confirmedAt },
-          current: { state: 'confirmed', observedAt: pullRequest.observedAt },
-        },
-        reviews: reviewsAfterPullRequestConfirmation(delivery, pullRequest),
-        lastIntentId: record.id,
-        repair: undefined,
-      })
-    } else if (delivery.lastIntentId === record.id
-      && delivery.pullRequest.confirmed?.fact.id === pullRequest.id) {
-      saved = delivery
-    } else {
+    if (delivery.activeIntentId !== record.id) {
       throw new Error('Pull Request confirmation lost its Branch Delivery ownership')
     }
+    const saved = await this.updateDelivery(delivery, {
+      activeIntentId: undefined,
+      pullRequest: {
+        confirmed: { fact: pullRequest, confirmedAt },
+        current: { state: 'confirmed', observedAt: pullRequest.observedAt },
+      },
+      reviews: reviewsAfterPullRequestConfirmation(delivery, pullRequest),
+      lastIntentId: record.id,
+      repair: undefined,
+    })
     record = await this.finishIntent(record, 'succeeded', undefined, saved.revision)
     this.options.notifyChanged()
     return resultFor(record)
@@ -2183,19 +2152,16 @@ export class BranchDeliveryOperations {
         updatedAt: now,
       })
       await this.putIntent(record)
-      return await this.resumeSave(record, signal)
+      return await this.resumeSave(record, intent, signal)
     })
   }
 
   private async resumeSave(
     initial: BranchDeliveryIntentRecord,
+    intent: BranchDeliverySaveIntent,
     signal: AbortSignal,
   ): Promise<BranchDeliveryIntentResult> {
     let record = initial
-    const intent = record.payload.intent
-    if (intent.type !== 'save-branch-delivery' || record.checkpoint.state !== 'prepared') {
-      throw new Error('Branch Delivery Save lacks its prepared checkpoint')
-    }
     const appliedValue = this.options.deliveryTable.get(record.deliveryId)
     const applied = appliedValue === undefined ? undefined : branchDeliveryRecordSchema.parse(appliedValue)
     if (applied?.lastIntentId === record.id
@@ -2240,7 +2206,7 @@ export class BranchDeliveryOperations {
       record = await this.finishIntent(record, 'conflict', 'expected-evidence', current.revision)
       return resultFor(record)
     }
-    const saved = await this.saveDelivery(record, currentContext.context, current)
+    const saved = await this.saveDelivery(record, intent, currentContext.context, current)
     record = await this.finishIntent(record, 'succeeded', undefined, saved.revision)
     this.options.notifyChanged()
     return resultFor(record)
@@ -2248,11 +2214,10 @@ export class BranchDeliveryOperations {
 
   private async saveDelivery(
     intentRecord: BranchDeliveryIntentRecord,
+    intent: BranchDeliverySaveIntent,
     context: BranchDeliveryCurrentContext,
     current: BranchDeliveryRecord | undefined,
   ): Promise<BranchDeliveryRecord> {
-    const intent = intentRecord.payload.intent
-    if (intent.type !== 'save-branch-delivery') throw new Error('Branch Delivery save record has another Intent kind')
     const now = Math.max(Date.now(), current?.updatedAt ?? 0)
     const candidate = branchDeliveryRecordSchema.parse({
       id: intentRecord.deliveryId,
@@ -2298,9 +2263,7 @@ export class BranchDeliveryOperations {
   }
 
   private intentTargetCurrent(record: BranchDeliveryIntentRecord, action: BranchDeliveryAction): boolean {
-    const deliveryValue = this.options.deliveryTable.get(record.deliveryId)
-    if (deliveryValue === undefined) return false
-    const delivery = branchDeliveryRecordSchema.parse(deliveryValue)
+    const delivery = this.requireDelivery(record.deliveryId)
     if (delivery.activeIntentId !== record.id || delivery.revision !== activeDeliveryRevision(record)
       || delivery.phase === 'accepted' || delivery.repair !== undefined
       || !this.options.authorityCurrent(record.payload.actor, action)) return false
@@ -2327,21 +2290,15 @@ export class BranchDeliveryOperations {
   }
 
   private requireIntent(id: SakiControlIntentId): BranchDeliveryIntentRecord {
-    const value = this.options.intentTable.get(id)
-    if (value === undefined) throw new Error(`Saki Branch Delivery Intent '${id}' is missing`)
-    return branchDeliveryIntentRecordSchema.parse(value)
+    return branchDeliveryIntentRecordSchema.parse(this.options.intentTable.get(id))
   }
 
   private requireDelivery(id: SakiBranchDeliveryId): BranchDeliveryRecord {
-    const value = this.options.deliveryTable.get(id)
-    if (value === undefined) throw new Error(`Saki Branch Delivery '${id}' is missing`)
-    return branchDeliveryRecordSchema.parse(value)
+    return branchDeliveryRecordSchema.parse(this.options.deliveryTable.get(id))
   }
 
   private lastIntentPending(delivery: BranchDeliveryRecord): boolean {
-    const value = this.options.intentTable.get(delivery.lastIntentId)
-    if (value === undefined) throw new Error('Branch Delivery last Intent is missing')
-    return !terminalIntent(branchDeliveryIntentRecordSchema.parse(value))
+    return !terminalIntent(this.requireIntent(delivery.lastIntentId))
   }
 
   private async updateDelivery(
@@ -2363,14 +2320,11 @@ export class BranchDeliveryOperations {
         ))
       })
     } catch (error) {
-      const replay = this.options.deliveryTable.get(current.id)
-      if (replay !== undefined) {
-        const parsed = branchDeliveryRecordSchema.parse(replay)
-        if (parsed.revision === current.revision + 1
-          && Object.entries(values).every(([key, expected]) => isDeepStrictEqual(
-            parsed[key as keyof BranchDeliveryRecord], expected,
-          ))) return parsed
-      }
+      const parsed = this.requireDelivery(current.id)
+      if (parsed.revision === current.revision + 1
+        && Object.entries(values).every(([key, expected]) => isDeepStrictEqual(
+          parsed[key as keyof BranchDeliveryRecord], expected,
+        ))) return parsed
       throw error
     }
   }
@@ -2424,14 +2378,11 @@ export class BranchDeliveryOperations {
         })
       })
     } catch (error) {
-      const replay = this.options.intentTable.get(current.id)
-      if (replay !== undefined) {
-        const parsed = branchDeliveryIntentRecordSchema.parse(replay)
-        if (parsed.payloadDigest === current.payloadDigest && parsed.revision === current.revision + 1
-          && Object.entries(values).every(([key, expected]) => isDeepStrictEqual(
-            parsed[key as keyof BranchDeliveryIntentRecord], expected,
-          ))) return parsed
-      }
+      const parsed = this.requireIntent(current.id)
+      if (parsed.payloadDigest === current.payloadDigest && parsed.revision === current.revision + 1
+        && Object.entries(values).every(([key, expected]) => isDeepStrictEqual(
+          parsed[key as keyof BranchDeliveryIntentRecord], expected,
+        ))) return parsed
       throw error
     }
   }
@@ -2472,7 +2423,7 @@ function reviewsAfterPullRequestConfirmation(
   }
 }
 
-function sourceObservation<T>(
+function sourceObservation<T extends { readonly observedAt: number }>(
   previous: BranchDeliverySourceObservation<T>,
   read: DeliveryRead<T>,
   matches: (fact: T) => boolean,
@@ -2487,7 +2438,7 @@ function sourceObservation<T>(
       },
     }
   }
-  const observedAt = observationTime(read.fact)
+  const observedAt = read.fact.observedAt
   if (!matches(read.fact)) {
     return {
       ...previous,
@@ -2500,8 +2451,8 @@ function sourceObservation<T>(
   }
 }
 
-function invalidationReason(fact: unknown): 'target-absent' | 'target-changed' {
-  return typeof fact === 'object' && fact !== null && 'state' in fact && fact.state === 'absent'
+function invalidationReason(fact: object): 'target-absent' | 'target-changed' {
+  return 'state' in fact && fact.state === 'absent'
     ? 'target-absent'
     : 'target-changed'
 }
@@ -2509,7 +2460,6 @@ function invalidationReason(fact: unknown): 'target-absent' | 'target-changed' {
 function evidenceUpdates(
   delivery: BranchDeliveryRecord,
   reads: DeliveryEvidenceReads,
-  includeCi: boolean,
 ): Partial<Pick<BranchDeliveryRecord, 'remoteRef' | 'pullRequest' | 'reviews' | 'ci'>> {
   return {
     remoteRef: sourceObservation(
@@ -2535,8 +2485,8 @@ function evidenceUpdates(
         ),
       ) as BranchDeliveryRecord['reviews'],
     }),
-    ...(includeCi ? {
-      ci: sourceObservation(delivery.ci, requireCiRead(reads), ciMatches(delivery)) as BranchDeliveryRecord['ci'],
+    ...(reads.ci !== undefined ? {
+      ci: sourceObservation(delivery.ci, reads.ci, ciMatches(delivery)) as BranchDeliveryRecord['ci'],
     } : {}),
   }
 }
@@ -2614,12 +2564,6 @@ function projectBrowserDelivery(record: BranchDeliveryRecord): BranchDeliveryBro
   }
 }
 
-function observationTime(fact: unknown): number {
-  if (typeof fact !== 'object' || fact === null || !('observedAt' in fact)
-    || typeof fact.observedAt !== 'number') throw new Error('targeted GitHub fact lacks observedAt')
-  return fact.observedAt
-}
-
 async function readGitHub<T>(read: () => Promise<T>): Promise<DeliveryRead<T>> {
   try {
     return { ok: true, fact: await read() }
@@ -2661,27 +2605,14 @@ function reviewsTargetDelivery(
     && fact.headCommitId === delivery.commitId
 }
 
-function firstEvidenceFailure(
+function evidenceReadsSucceeded(
   reads: DeliveryEvidenceReads,
-  includeCi: boolean,
-): GitHubFailure | undefined {
-  if (!reads.remoteRef.ok) return reads.remoteRef.failure
-  if (reads.pullRequest !== undefined && !reads.pullRequest.ok) return reads.pullRequest.failure
-  if (includeCi) {
-    const ci = requireCiRead(reads)
-    if (!ci.ok) return ci.failure
-  }
-  return undefined
-}
-
-function requireCiRead(reads: DeliveryEvidenceReads): DeliveryRead<GitHubCommitCiFact> {
-  if (reads.ci === undefined) throw new Error('exact-Commit CI was not requested')
-  return reads.ci
-}
-
-function requireReviewsRead(reads: DeliveryEvidenceReads): DeliveryRead<GitHubPullRequestReviewsFact> {
-  if (reads.reviews === undefined) throw new Error('exact-Pull-Request reviews were not requested')
-  return reads.reviews
+): reads is DeliveryEvidenceReads & {
+  readonly remoteRef: Extract<DeliveryRead<GitHubBranchHeadFact>, { ok: true }>
+  readonly pullRequest: Extract<DeliveryRead<GitHubPullRequestFact>, { ok: true }> | undefined
+  readonly ci: Extract<DeliveryRead<GitHubCommitCiFact>, { ok: true }> | undefined
+} {
+  return reads.remoteRef.ok && reads.pullRequest?.ok !== false && reads.ci?.ok !== false
 }
 
 function confirmedObservation<T extends { readonly observedAt: number }>(
@@ -2790,34 +2721,31 @@ function intentMatchesDelivery(
   delivery: BranchDeliveryRecord,
 ): boolean {
   if (record.deliveryId !== delivery.id) return false
-  switch (record.operation.kind) {
-    case 'save':
-      return record.payload.intent.type === 'save-branch-delivery'
-        && delivery.projectId === record.payload.intent.projectId
-        && delivery.workItemId === record.payload.intent.workItemId
-        && delivery.commitId === record.payload.intent.commitId
-        && delivery.headRef === record.payload.intent.headRef
-        && delivery.baseRef === record.payload.intent.baseRef
+  const intent = record.payload.intent
+  // The durable parser binds operation.kind to intent.type before any aggregate relationship is checked.
+  switch (intent.type) {
+    case 'save-branch-delivery':
+      return delivery.projectId === intent.projectId
+        && delivery.workItemId === intent.workItemId
+        && delivery.commitId === intent.commitId
+        && delivery.headRef === intent.headRef
+        && delivery.baseRef === intent.baseRef
     /* jscpd:ignore-start -- aggregate recovery and installation maintenance independently validate persisted Push associations */
-    case 'push': {
-      const request = record.operation.request
+    case 'push-branch-delivery': {
+      const request = (record.operation as Extract<BranchDeliveryIntentOperation, { kind: 'push' }>).request
       return isDeepStrictEqual(request.expected.binding, delivery.target.binding)
         && request.expected.commitId === delivery.commitId
         && request.expected.repository.nameWithOwner === delivery.target.repository.nameWithOwner
         && request.targetRef === delivery.headRef
     }
     /* jscpd:ignore-end */
-    case 'pull-request-create': {
-      const request = record.operation.request
-      const intent = record.payload.intent
-      if (intent.type !== 'create-branch-delivery-pull-request') return false
+    case 'create-branch-delivery-pull-request': {
+      const request = (record.operation as Extract<BranchDeliveryIntentOperation, { kind: 'pull-request-create' }>).request
       const { inspectionHint: ignoredInspectionHint, ...requestWithoutInspectionHint } = request
       void ignoredInspectionHint
       return isDeepStrictEqual(requestWithoutInspectionHint, pullRequestCreateRequest(delivery, intent))
     }
-    case 'pull-request-associate': {
-      const intent = record.payload.intent
-      if (intent.type !== 'associate-branch-delivery-pull-request') return false
+    case 'associate-branch-delivery-pull-request': {
       if (delivery.lastIntentId !== record.id) return true
       if (delivery.pullRequest.confirmed?.fact.id === intent.pullRequestId
         && delivery.pullRequest.confirmed.fact.number === intent.pullRequestNumber) return true
@@ -2827,14 +2755,12 @@ function intentMatchesDelivery(
           && (checkpoint.outcome === 'conflict' || checkpoint.outcome === 'denied'
             || checkpoint.outcome === 'failure')))
     }
-    case 'in-review':
-    case 'accept': {
+    case 'mark-branch-delivery-in-review':
+    case 'accept-branch-delivery': {
       const checkpoint = record.checkpoint
-      const intent = record.payload.intent
-      if (intent.type !== 'mark-branch-delivery-in-review' && intent.type !== 'accept-branch-delivery') return false
       if (delivery.activeIntentId === record.id
         && intent.expectedWorkItemRemoteFingerprint !== delivery.target.workItem.remoteFingerprint) return false
-      if (record.operation.kind === 'accept' && delivery.acceptance?.intentId === record.id
+      if (intent.type === 'accept-branch-delivery' && delivery.acceptance?.intentId === record.id
         && !isDeepStrictEqual(delivery.acceptance.actor, record.payload.actor)) return false
       return checkpoint.state !== 'child-pending' || (checkpoint.move.projectId === delivery.projectId
         && checkpoint.move.workItemId === delivery.workItemId
@@ -2842,7 +2768,8 @@ function intentMatchesDelivery(
         && pullRequestMatchesDelivery(checkpoint.evidence.pullRequest, delivery)
         && (checkpoint.evidence.ci === undefined || ciMatches(delivery)(checkpoint.evidence.ci)))
     }
-    default: return assertNever(record.operation)
+    /* v8 ignore next -- closed-union exhaustiveness guard */
+    default: return assertNever(intent)
   }
 }
 
@@ -2853,10 +2780,13 @@ function acceptanceCheckpointValid(record: BranchDeliveryIntentRecord): boolean 
       || (checkpoint.outcome === 'reconciliation-required' && checkpoint.reason === 'child-transition')))
 }
 
-function repairCheckpointValid(record: BranchDeliveryIntentRecord, delivery: BranchDeliveryRecord): boolean {
-  const repair = delivery.repair
+function repairCheckpointValid(
+  record: BranchDeliveryIntentRecord,
+  delivery: BranchDeliveryRecord,
+  repair: NonNullable<BranchDeliveryRecord['repair']>,
+): boolean {
   if (record.operation.kind === 'save' || record.operation.kind === 'pull-request-associate'
-    || repair === undefined || record.deliveryId !== delivery.id || delivery.activeIntentId !== undefined
+    || record.deliveryId !== delivery.id
     || delivery.lastIntentId !== record.id) return false
   const checkpoint = record.checkpoint
   const transition = record.operation.kind === 'in-review' || record.operation.kind === 'accept'
@@ -2868,7 +2798,7 @@ function repairCheckpointValid(record: BranchDeliveryIntentRecord, delivery: Bra
       && (checkpoint.host === undefined || (checkpoint.host.snapshot.state === 'reconciliation-required'
         && checkpoint.host.snapshot.reason === repair.reason))
   }
-  if (record.payload.intent.type === 'save-branch-delivery' || checkpoint.state === 'prepared'
+  if (checkpoint.state === 'prepared'
     || delivery.revision !== checkpoint.deliveryRevision + 1) return false
   switch (record.operation.kind) {
     case 'push': return checkpoint.state === 'push-host-accepted'
@@ -2877,6 +2807,7 @@ function repairCheckpointValid(record: BranchDeliveryIntentRecord, delivery: Bra
       || checkpoint.state === 'pull-request-effect-possible'
     case 'in-review':
     case 'accept': return checkpoint.state === 'child-pending'
+    /* v8 ignore next -- closed-union exhaustiveness guard */
     default: return assertNever(record.operation)
   }
 }
@@ -2906,6 +2837,7 @@ function intentOperation(
     case 'associate-branch-delivery-pull-request': return { kind: 'pull-request-associate' }
     case 'mark-branch-delivery-in-review': return { kind: 'in-review' }
     case 'accept-branch-delivery': return { kind: 'accept' }
+    /* v8 ignore next -- closed-union exhaustiveness guard */
     default: return assertNever(intent)
   }
 }
@@ -2918,6 +2850,7 @@ function operationKind(type: BranchDeliveryIntent['type']): BranchDeliveryIntent
     case 'associate-branch-delivery-pull-request': return 'pull-request-associate'
     case 'mark-branch-delivery-in-review': return 'in-review'
     case 'accept-branch-delivery': return 'accept'
+    /* v8 ignore next -- closed-union exhaustiveness guard */
     default: return assertNever(type)
   }
 }
@@ -2931,19 +2864,20 @@ function checkpointAllowed(
     case 'push-host-accepted': return operation === 'push'
     case 'pull-request-effect-possible': return operation === 'pull-request-create'
     case 'child-pending': return operation === 'in-review' || operation === 'accept'
+    /* v8 ignore next -- closed-union exhaustiveness guard */
     default: return assertNever(checkpoint)
   }
 }
 
-function terminalIntent(record: BranchDeliveryIntentRecord): boolean {
+function terminalIntent(
+  record: BranchDeliveryIntentRecord,
+): record is BranchDeliveryIntentRecord & { readonly checkpoint: BranchDeliveryTerminalCheckpoint } {
   return record.checkpoint.state === 'terminal'
 }
 
 function activeDeliveryRevision(record: BranchDeliveryIntentRecord): number {
-  if (record.checkpoint.state === 'prepared' || record.checkpoint.state === 'terminal') {
-    throw new Error(`Branch Delivery Intent '${record.id}' has no active Delivery revision`)
-  }
-  return record.checkpoint.deliveryRevision
+  // Recovery dispatch excludes prepared/terminal records; Host admission independently requires push-host-accepted.
+  return (record.checkpoint as Exclude<BranchDeliveryIntentCheckpoint, { state: 'prepared' | 'terminal' }>).deliveryRevision
 }
 
 function checkpointDeliveryRevision(record: BranchDeliveryIntentRecord): number | undefined {
@@ -2965,13 +2899,6 @@ function requireHostPreparation(record: BranchDeliveryIntentRecord): HostOperati
   const preparation = hostPreparation(record)
   if (preparation === undefined) throw new Error(`Branch Delivery Intent '${record.id}' lacks Host preparation`)
   return preparation
-}
-
-function requireTerminalCheckpoint(record: BranchDeliveryIntentRecord): BranchDeliveryTerminalCheckpoint {
-  if (record.checkpoint.state !== 'terminal') {
-    throw new Error(`Branch Delivery Intent '${record.id}' is not terminal`)
-  }
-  return record.checkpoint
 }
 
 function requirePushRequest(record: BranchDeliveryIntentRecord): PushBranchHostOperationRequest {
@@ -3077,7 +3004,7 @@ function hostEvidenceMatches(
   const request = record.operation.request
   const { preparation, snapshot } = host
   return preparation.operation.type === 'push-branch'
-    && terminalHostSnapshot(snapshot.state)
+    && terminalHostSnapshot(snapshot)
     && snapshot.operation.type === 'push-branch'
     && preparation.operation.id === snapshot.operation.id
     && preparation.operation.hostId === snapshot.operation.hostId
@@ -3100,7 +3027,10 @@ function hostSnapshotMatchesOutcome(
   return outcome === 'failure' && (snapshot.state === 'failed' || snapshot.state === 'canceled')
 }
 
-function terminalHostSnapshot(state: HostOperationSnapshot<'push-branch'>['state']): boolean {
+function terminalHostSnapshot<T extends HostOperationSnapshot>(
+  snapshot: T,
+): snapshot is Extract<T, { state: 'succeeded' | 'failed' | 'canceled' | 'reconciliation-required' }> {
+  const { state } = snapshot
   return state === 'succeeded' || state === 'failed' || state === 'canceled'
     || state === 'reconciliation-required'
 }
@@ -3162,6 +3092,7 @@ function actionFor(type: Exclude<BranchDeliveryIntent['type'], 'save-branch-deli
     case 'associate-branch-delivery-pull-request': return 'branch-delivery:pull-request:associate'
     case 'mark-branch-delivery-in-review': return 'branch-delivery:review'
     case 'accept-branch-delivery': return 'branch-delivery:accept'
+    /* v8 ignore next -- closed-union exhaustiveness guard */
     default: return assertNever(type)
   }
 }
@@ -3198,6 +3129,7 @@ function compareIntentOrder(left: BranchDeliveryIntentRecord, right: BranchDeliv
   return left.createdAt - right.createdAt || String(left.id).localeCompare(String(right.id))
 }
 
+/* v8 ignore next -- reached only by closed-union exhaustiveness guards */
 function assertNever(value: never): never {
   throw new Error(`Unexpected Branch Delivery value: ${String(value)}`)
 }

@@ -23,6 +23,7 @@ import {
 import {
   MilestoneDeliveryOperations,
   milestoneDeliveryId,
+  milestoneDeliveryIntentRecordSchema,
   milestoneDeliveryRecordSchema,
   projectMilestoneDelivery,
   type MilestoneDeliveryIntentRecord,
@@ -77,6 +78,7 @@ const ACTOR = controlIntentActorSchema.parse({
 class MemoryTable<K extends string, V> implements KvTable<K, V> {
   readonly values = new Map<K, V>()
   failNextUpdate: Error | undefined
+  beforeUpdate: ((key: K) => void) | undefined
   get size(): number { return this.values.size }
   get(key: K): V | undefined { return this.values.get(key) }
   entries(): IterableIterator<[K, V]> { return new Map(this.values).entries() }
@@ -89,6 +91,7 @@ class MemoryTable<K extends string, V> implements KvTable<K, V> {
       this.failNextUpdate = undefined
       throw error
     }
+    this.beforeUpdate?.(key)
     const current = this.values.get(key)
     if (current === undefined) throw new Error('missing key')
     const next = cloneLosslessJsonValue(operation(structuredClone(current)))
@@ -98,6 +101,384 @@ class MemoryTable<K extends string, V> implements KvTable<K, V> {
 }
 
 describe('MilestoneDeliveryOperations', () => {
+  it('retains the newest source facts and failure times across delayed and empty refreshes', async () => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    const latest = releaseSnapshot(200, 200)
+    harness.viewTransform.current = () => ({
+      ...latest,
+      upstreamCommit: {
+        ...latest.upstreamCommit,
+        failure: { failure: { code: 'transient-transport' }, failedAt: 300 },
+        invalidatedAt: 400,
+      },
+    })
+    expect(await harness.operations.refresh(id, signal())).toEqual({ ok: true })
+    const retained = milestoneDeliveryRecordSchema.parse(harness.deliveries.get(id)).sources.upstreamCommit
+    harness.viewTransform.current = () => ({
+      ...releaseSnapshot(100, 100),
+      upstreamCommit: {
+        ...releaseSnapshot(100, 100).upstreamCommit,
+        failure: { failure: { code: 'transient-transport' }, failedAt: 250 },
+        invalidatedAt: 350,
+      },
+    })
+    expect(await harness.operations.refresh(id, signal())).toEqual({ ok: true })
+    expect(harness.deliveries.get(id)?.sources.upstreamCommit).toEqual(retained)
+    harness.viewTransform.current = snapshot => ({
+      ...snapshot, milestone: {}, tag: {}, release: {}, releaseCommit: {}, upstreamCommit: {}, upstreamAncestry: {},
+    })
+    expect(await harness.operations.refresh(id, signal())).toEqual({ ok: true })
+    expect(harness.deliveries.get(id)?.sources.upstreamCommit).toEqual(retained)
+    expect(harness.deliveries.get(id)).toMatchObject({ revision: 0, sources: { revision: 3 } })
+  })
+
+  it('retains unavailable sources without inventing confirmations', async () => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    harness.viewTransform.current = snapshot => ({
+      ...snapshot, milestone: {}, tag: {}, release: {}, releaseCommit: {}, upstreamCommit: {}, upstreamAncestry: {},
+    })
+    expect(await harness.operations.refresh(id, signal())).toEqual({ ok: true })
+    expect(harness.deliveries.get(id)?.sources.milestone).toEqual({})
+  })
+
+  it('propagates storage failures during source retention without changing metadata', async () => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    const failure = new Error('storage unavailable during refresh')
+    harness.deliveries.failNextUpdate = failure
+    await expect(harness.operations.refresh(id, signal())).rejects.toThrow(failure)
+    expect(harness.deliveries.get(id)).toMatchObject({ revision: 0, sources: { revision: 0 } })
+  })
+
+  it('rejects a retained absent Release observation for a different tag', async () => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    const record = milestoneDeliveryRecordSchema.parse(harness.deliveries.get(id))
+    const sources = { ...record.sources, release: { confirmed: {
+      observedAt: record.updatedAt,
+      value: {
+        kind: 'absent', repositoryId: REPOSITORY_ID, tagName: githubReleaseTagName('saki-v0.2.0'),
+        observedAt: record.updatedAt,
+      },
+    } } }
+    expect(() => milestoneDeliveryRecordSchema.parse({ ...record, sources })).toThrow('source target disagrees')
+  })
+
+  it.each([0, 10])('orders recovered Milestones and Intents deterministically with a %s ms timestamp gap', async (gap) => {
+    const harness = createHarness()
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    await harness.operations.submit({
+      ...saveIntent(SECOND_BATCH_SAVE_INTENT_ID, null, 'planned'),
+      release: { ...releaseExpectation(), milestoneId: SECOND_MILESTONE_ID, milestoneNumber: 2 },
+    }, ACTOR, signal())
+    let createdAt = 100
+    for (const [id, record] of harness.deliveries.entries()) {
+      harness.deliveries.values.set(id, { ...record, createdAt })
+      createdAt += gap
+    }
+    createdAt = 100
+    for (const [id, record] of harness.intents.entries()) {
+      harness.intents.values.set(id, { ...record, createdAt })
+      createdAt += gap
+    }
+    const state = harness.createOperations().validateDurableState(new Set())
+    const ids = [milestoneDeliveryId(PROJECT_ID, MILESTONE_ID), milestoneDeliveryId(PROJECT_ID, SECOND_MILESTONE_ID)]
+    expect(state.deliveries.map(record => record.id)).toEqual(gap === 0 ? ids.toSorted() : ids)
+    expect(state.intents.map(record => record.id)).toEqual([SAVE_INTENT_ID, SECOND_BATCH_SAVE_INTENT_ID])
+  })
+
+  it.each([
+    ['evaluation', 1, false], ['final-reread', 2, false],
+    ['finalization', 3, false], ['repair', 3, true],
+  ] as const)('preserves a concurrent metadata write during %s', async (_name, updateNumber, repair) => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'ready-to-release'), ACTOR, signal())
+    if (repair) {
+      harness.finalRereadTransform.current = (snapshot) => {
+        const milestone = snapshot.milestone.confirmed
+        if (milestone === undefined) throw new Error('missing fixture Milestone')
+        return { ...snapshot, milestone: { confirmed: {
+          ...milestone, value: { ...milestone.value, state: 'closed' },
+        } } }
+      }
+    }
+    let updates = 0
+    harness.deliveries.beforeUpdate = () => {
+      if (++updates !== updateNumber) return
+      const current = milestoneDeliveryRecordSchema.parse(harness.deliveries.get(id))
+      harness.deliveries.values.set(id, { ...current, revision: current.revision + 1 })
+    }
+    expect(await harness.operations.submit({
+      type: 'finalize-milestone-delivery', intentId: FINALIZE_INTENT_ID, deliveryId: id,
+      expectedDeliveryRevision: 0, release: releaseExpectation(),
+    }, ACTOR, signal())).toMatchObject({ ok: false, reason: 'conflict' })
+    expect(harness.deliveries.get(id)).toMatchObject({ revision: 1 })
+    expect(harness.deliveries.get(id)).not.toHaveProperty('releaseEvidence')
+    expect(harness.deliveries.get(id)).not.toHaveProperty('repair')
+  })
+
+  it.each([false, true])('retains a prepared finalization when its final storage write fails (repair: %s)', async (repair) => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'ready-to-release'), ACTOR, signal())
+    if (repair) {
+      harness.finalRereadTransform.current = (snapshot) => {
+        const milestone = snapshot.milestone.confirmed
+        if (milestone === undefined) throw new Error('missing fixture Milestone')
+        return { ...snapshot, milestone: { confirmed: {
+          ...milestone, value: { ...milestone.value, state: 'closed' },
+        } } }
+      }
+    }
+    const failure = new Error('storage unavailable at final commit')
+    let updates = 0
+    harness.deliveries.beforeUpdate = () => { if (++updates === 3) throw failure }
+    const intent = {
+      type: 'finalize-milestone-delivery' as const, intentId: FINALIZE_INTENT_ID, deliveryId: id,
+      expectedDeliveryRevision: 0, release: releaseExpectation(),
+    }
+    await expect(harness.operations.submit(intent, ACTOR, signal())).rejects.toThrow(failure)
+    expect(harness.intents.get(FINALIZE_INTENT_ID)).toMatchObject({ phase: 'prepared' })
+    expect(harness.deliveries.get(id)).toMatchObject({ revision: 0 })
+    harness.deliveries.beforeUpdate = undefined
+    expect(await harness.createOperations().submit(intent, ACTOR, signal())).toMatchObject({
+      receipt: { state: repair ? 'reconciliation-required' : 'succeeded', deliveryRevision: 1 },
+    })
+    expect(() => harness.createOperations().validateDurableState(new Set())).not.toThrow()
+  })
+
+  it('reports a refresh conflict without replacing newer metadata', async () => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    harness.afterRead.current = async () => {
+      const current = milestoneDeliveryRecordSchema.parse(harness.deliveries.get(id))
+      harness.deliveries.values.set(id, { ...current, revision: 1 })
+    }
+    expect(await harness.operations.refresh(id, signal())).toEqual({ ok: false, reason: 'conflict' })
+    expect(harness.deliveries.get(id)).toMatchObject({ revision: 1, sources: { revision: 0 } })
+  })
+
+  it('leaves a phase write recoverable when storage changes its selected revision', async () => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    harness.deliveries.beforeUpdate = () => {
+      const current = milestoneDeliveryRecordSchema.parse(harness.deliveries.get(id))
+      harness.deliveries.values.set(id, { ...current, revision: 1 })
+    }
+    const intent = saveIntent(UPDATE_INTENT_ID, 0, 'in-progress')
+    await expect(harness.operations.submit(intent, ACTOR, signal())).rejects.toThrow()
+    expect(harness.intents.get(UPDATE_INTENT_ID)).toMatchObject({ phase: 'prepared' })
+    harness.deliveries.beforeUpdate = undefined
+    expect(await harness.createOperations().submit(intent, ACTOR, signal())).toMatchObject({ ok: false, reason: 'conflict' })
+    expect(harness.deliveries.get(id)).toMatchObject({ revision: 1, phase: 'planned' })
+  })
+
+  it('does not read GitHub when refreshing a missing Milestone Delivery', async () => {
+    const harness = createHarness()
+    expect(await harness.operations.refresh(milestoneDeliveryId(PROJECT_ID, MILESTONE_ID), signal()))
+      .toEqual({ ok: false, reason: 'not-found' })
+    expect(harness.readPasses).toEqual([])
+  })
+
+  it('replays terminal receipts but rejects reuse of an Intent id with a different payload', async () => {
+    const harness = createHarness()
+    const intent = saveIntent(SAVE_INTENT_ID, null, 'planned')
+    const result = await harness.operations.submit(intent, ACTOR, signal())
+    expect(await harness.createOperations().submit(intent, ACTOR, signal())).toEqual(result)
+    expect(await harness.operations.submit({ ...intent, phase: 'canceled' }, ACTOR, signal()))
+      .toEqual({ ok: false, reason: 'conflict' })
+    expect(harness.deliveries.get(milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)))
+      .toMatchObject({ revision: 0, phase: 'planned' })
+  })
+
+  it('retains a denied Save without creating Milestone metadata', async () => {
+    const harness = createHarness()
+    harness.authority.current = false
+    expect(await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal()))
+      .toMatchObject({ ok: false, reason: 'denied', receipt: { state: 'denied' } })
+    expect(harness.deliveries.size).toBe(0)
+    expect(harness.intents.get(SAVE_INTENT_ID)).toMatchObject({ phase: 'denied' })
+  })
+
+  it.each(['registry', 'project', 'repository', 'board', 'missing-revision'] as const)(
+    'rejects stale %s evidence before saving Milestone metadata', async (changed) => {
+      const harness = createHarness()
+      const intent = saveIntent(SAVE_INTENT_ID, changed === 'missing-revision' ? 0 : null, 'planned')
+      if (changed === 'registry') harness.context.current.registryRevision += 1
+      if (changed === 'project') harness.context.current.projectRevision += 1
+      if (changed === 'repository') harness.context.current.repositoryId = UPSTREAM_REPOSITORY_ID
+      if (changed === 'board') harness.context.current.projectId = githubProjectId('P_other')
+      expect(await harness.operations.submit(intent, ACTOR, signal())).toMatchObject({ ok: false, reason: 'conflict' })
+      expect(harness.deliveries.size).toBe(0)
+      expect(harness.readPasses).toEqual([])
+    },
+  )
+
+  it.each(['missing', 'authority', 'revision', 'phase', 'release', 'project', 'context'] as const)(
+    'rejects %s finalization preconditions before reading release evidence', async (changed) => {
+      const harness = createHarness()
+      const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+      if (changed !== 'missing') {
+        await harness.operations.submit(saveIntent(
+          SAVE_INTENT_ID, null, changed === 'phase' ? 'planned' : 'ready-to-release',
+        ), ACTOR, signal())
+      }
+      if (changed === 'authority') harness.authority.current = false
+      if (changed === 'project') harness.projectPresent.current = false
+      if (changed === 'context') harness.context.current.projectRevision += 1
+      const release = releaseExpectation()
+      expect(await harness.operations.submit({
+        type: 'finalize-milestone-delivery', intentId: FINALIZE_INTENT_ID, deliveryId: id,
+        expectedDeliveryRevision: changed === 'revision' ? 1 : 0,
+        release: changed === 'release' ? { ...release, releaseCommitId: UPSTREAM_COMMIT_ID } : release,
+      }, ACTOR, signal())).toMatchObject({
+        ok: false,
+        reason: changed === 'authority' ? 'denied' : changed === 'project' ? 'unavailable' : 'conflict',
+      })
+      expect(harness.readPasses).toEqual([])
+      expect(harness.deliveries.get(id)?.releaseEvidence).toBeUndefined()
+    },
+  )
+
+  it.each([
+    ['authority', false, 'denied'],
+    ['project', false, 'unavailable'],
+    ['project', true, 'unavailable'],
+    ['context', true, 'conflict'],
+  ] as const)('rechecks %s after the final reread (repair: %s)', async (changed, repair, reason) => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'ready-to-release'), ACTOR, signal())
+    if (repair) {
+      harness.finalRereadTransform.current = (snapshot) => {
+        const milestone = snapshot.milestone.confirmed
+        if (milestone === undefined) throw new Error('missing fixture Milestone')
+        return { ...snapshot, milestone: { confirmed: {
+          ...milestone, value: { ...milestone.value, state: 'closed' },
+        } } }
+      }
+    }
+    harness.afterRead.current = async (pass) => {
+      if (pass !== 'final-reread') return
+      if (changed === 'authority') harness.authority.current = false
+      if (changed === 'project') harness.projectPresent.current = false
+      if (changed === 'context') harness.context.current.projectRevision += 1
+    }
+    expect(await harness.operations.submit({
+      type: 'finalize-milestone-delivery', intentId: FINALIZE_INTENT_ID, deliveryId: id,
+      expectedDeliveryRevision: 0, release: releaseExpectation(),
+    }, ACTOR, signal())).toMatchObject({ ok: false, reason })
+    expect(harness.readPasses).toEqual(['evaluation', 'final-reread'])
+    expect(harness.deliveries.get(id)).toMatchObject({ revision: 0 })
+    expect(harness.deliveries.get(id)).not.toHaveProperty('releaseEvidence')
+    expect(harness.deliveries.get(id)).not.toHaveProperty('repair')
+  })
+
+  it.each<readonly [string, (record: MilestoneDeliveryRecord) => unknown, string]>([
+    ['backward timestamps', record => ({ ...record, updatedAt: record.createdAt - 1 }), 'timestamps are not monotonic'],
+    ['another aggregate id', record => ({ ...record, id: milestoneDeliveryId(PROJECT_ID, SECOND_MILESTONE_ID) }), 'id disagrees'],
+    ['sources newer than the aggregate', record => ({ ...record, sources: { ...record.sources, updatedAt: record.updatedAt + 1 } }), 'sources postdate'],
+    ['another release phase', record => ({ ...record, phase: 'planned' }), 'not an atomic finalization'],
+    ['another finalization Intent', record => ({ ...record, lastIntentId: SAVE_INTENT_ID }), 'not an atomic finalization'],
+    ['another metadata revision', record => ({ ...record, revision: record.revision + 1 }), 'not an atomic finalization'],
+    ['another evidence embedding time', record => ({
+      ...record, releaseEvidence: { ...record.releaseEvidence, embeddedAt: record.updatedAt + 1 },
+    }), 'release target disagrees'],
+    ['another upstream name', record => ({
+      ...record, release: { ...record.release, upstreamRepositoryNameWithOwner: 'other/upstream' },
+    }), 'release target disagrees'],
+    ['another Milestone source', record => ({
+      ...record, release: { ...record.release, milestoneNumber: 2 },
+    }), 'source target disagrees'],
+    ['another tag source', record => ({
+      ...record, release: { ...record.release, tagName: githubReleaseTagName('saki-v0.2.0') },
+    }), 'source target disagrees'],
+    ['another release commit source', record => ({
+      ...record, release: { ...record.release, releaseCommitId: UPSTREAM_COMMIT_ID },
+    }), 'source target disagrees'],
+    ['another upstream commit source', record => ({
+      ...record, release: { ...record.release, upstreamCommitId: RELEASE_COMMIT_ID },
+    }), 'source target disagrees'],
+    ['an unrelated repair Intent', record => ({
+      ...record,
+      repair: {
+        intentId: SAVE_INTENT_ID, priorRevision: 0, reason: 'concurrent-github-change',
+        blockages: [{ kind: 'final-reread-mismatch' }], recordedAt: record.updatedAt,
+      },
+    }), 'repair is not an atomic observation'],
+  ])('rejects a persisted finalized Milestone with %s', async (_name, corrupt, message) => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'ready-to-release'), ACTOR, signal())
+    expect(await harness.operations.submit({
+      type: 'finalize-milestone-delivery', intentId: FINALIZE_INTENT_ID, deliveryId: id,
+      expectedDeliveryRevision: 0, release: releaseExpectation(),
+    }, ACTOR, signal())).toMatchObject({ ok: true })
+    const record = milestoneDeliveryRecordSchema.parse(harness.deliveries.get(id))
+    const parsed = milestoneDeliveryRecordSchema.safeParse(corrupt(record))
+    expect(parsed.success).toBe(false)
+    if (parsed.success) throw new Error('inconsistent Milestone was accepted')
+    expect(parsed.error.issues.map(issue => issue.message)).toContainEqual(expect.stringContaining(message))
+  })
+
+  it.each<readonly [string, (record: MilestoneDeliveryIntentRecord) => unknown, string]>([
+    ['another Intent identity', record => ({ ...record, id: UPDATE_INTENT_ID }), 'identity or timestamps'],
+    ['backward timestamps', record => ({ ...record, updatedAt: record.createdAt - 1 }), 'identity or timestamps'],
+    ['a missing completion revision', record => ({ ...record, resultDeliveryRevision: undefined }), 'result disagrees'],
+    ['an unfinished completion revision', record => ({ ...record, phase: 'prepared' }), 'result disagrees'],
+    ['missing blockages', record => ({ ...record, phase: 'reconciliation-required' }), 'blockages disagree'],
+    ['unexpected blockages', record => ({ ...record, blockages: [{ kind: 'final-reread-mismatch' }] }), 'blockages disagree'],
+    ['a replaced payload digest', record => ({ ...record, payloadDigest: '0'.repeat(64) }), 'payload digest is invalid'],
+  ])('rejects a persisted Milestone Intent with %s', async (_name, corrupt, message) => {
+    const harness = createHarness()
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    const record = milestoneDeliveryIntentRecordSchema.parse(harness.intents.get(SAVE_INTENT_ID))
+    const parsed = milestoneDeliveryIntentRecordSchema.safeParse(corrupt(record))
+    expect(parsed.success).toBe(false)
+    if (parsed.success) throw new Error('inconsistent Milestone Intent was accepted')
+    expect(parsed.error.issues.map(issue => issue.message)).toContainEqual(expect.stringContaining(message))
+  })
+
+  it.each(['delivery-key', 'intent-key', 'intent-target', 'missing-aggregate'] as const)(
+    'rejects %s corruption before Milestone recovery reads GitHub', async (corruption) => {
+      const harness = createHarness()
+      const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+      const otherId = milestoneDeliveryId(PROJECT_ID, SECOND_MILESTONE_ID)
+      await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+      const record = milestoneDeliveryRecordSchema.parse(harness.deliveries.get(id))
+      const intent = milestoneDeliveryIntentRecordSchema.parse(harness.intents.get(SAVE_INTENT_ID))
+      expect(() => harness.operations.validateDurableState(new Set())).not.toThrow()
+      const messages = {
+        'delivery-key': 'Milestone Delivery id disagrees with its table key',
+        'intent-key': 'Milestone Delivery Intent id disagrees with its table key',
+        'intent-target': 'Milestone Delivery Intent targets another aggregate',
+        'missing-aggregate': 'completed Milestone Delivery Intent targets a missing aggregate',
+      }
+      if (corruption === 'delivery-key') {
+        harness.deliveries.values.delete(id)
+        harness.deliveries.values.set(otherId, record)
+      } else if (corruption === 'intent-key') {
+        harness.intents.values.delete(SAVE_INTENT_ID)
+        harness.intents.values.set(UPDATE_INTENT_ID, intent)
+      } else if (corruption === 'intent-target') {
+        harness.intents.values.set(SAVE_INTENT_ID, { ...intent, deliveryId: otherId })
+      } else {
+        harness.deliveries.values.delete(id)
+      }
+      expect(() => harness.createOperations().validateDurableState(new Set())).toThrow(messages[corruption])
+      expect(harness.readPasses).toEqual([])
+    },
+  )
+
   it('rejects an invalid targeted-observation freshness configuration at construction', () => {
     expect(() => createHarness({ maxObservationAgeMs: 0 })).toThrow(
       'Milestone Delivery observation freshness must be one positive safe integer',
@@ -189,6 +570,7 @@ describe('MilestoneDeliveryOperations', () => {
       phase: 'in-progress',
       lastIntentId: UPDATE_INTENT_ID,
     })
+    expect(() => harness.createOperations().validateDurableState(new Set())).not.toThrow()
   })
 
   it('refreshes durable View sources without changing the metadata revision', async () => {
@@ -704,7 +1086,7 @@ describe('MilestoneDeliveryOperations', () => {
     })
   })
 
-  it('attempts later prepared finalizations before reporting an earlier provider failure', async () => {
+  it.each([false, true])('attempts later prepared finalizations before reporting the first failure (both fail: %s)', async (bothFail) => {
     const harness = createHarness()
     const secondRelease = {
       ...releaseExpectation(),
@@ -735,17 +1117,61 @@ describe('MilestoneDeliveryOperations', () => {
     harness.afterRead.current = async () => {
       recoveryReads += 1
       if (recoveryReads === 1) throw new Error('first finalization remains unavailable')
+      if (bothFail) throw new Error('second finalization remains unavailable')
     }
 
-    await expect(harness.createOperations().resumePreparedFinalizations(signal()))
+    const recovery = harness.createOperations()
+    await expect(bothFail ? recovery.pollPending(signal()) : recovery.resumePreparedFinalizations(signal()))
       .rejects.toThrow('first finalization remains unavailable')
 
-    expect(recoveryReads).toBe(3)
+    expect(recoveryReads).toBe(bothFail ? 2 : 3)
     expect(harness.intents.get(FIRST_BATCH_INTENT_ID)).toMatchObject({ phase: 'prepared' })
-    expect(harness.intents.get(SECOND_BATCH_INTENT_ID)).toMatchObject({
+    expect(harness.intents.get(SECOND_BATCH_INTENT_ID)).toMatchObject(bothFail ? { phase: 'prepared' } : {
       phase: 'succeeded',
       resultDeliveryRevision: 1,
     })
+  })
+
+  it('attempts every repair refresh and reports the first failure when all providers fail', async () => {
+    const harness = createHarness()
+    harness.finalRereadTransform.current = (snapshot) => {
+      const milestone = snapshot.milestone.confirmed
+      if (milestone === undefined) throw new Error('missing fixture Milestone')
+      return { ...snapshot, milestone: { confirmed: {
+        ...milestone, value: { ...milestone.value, state: 'closed' },
+      } } }
+    }
+    for (const [milestoneId, milestoneNumber, saveId, finalizeId] of [
+      [MILESTONE_ID, 1, SAVE_INTENT_ID, FIRST_BATCH_INTENT_ID],
+      [SECOND_MILESTONE_ID, 2, SECOND_BATCH_SAVE_INTENT_ID, SECOND_BATCH_INTENT_ID],
+    ] as const) {
+      const release = { ...releaseExpectation(), milestoneId, milestoneNumber }
+      await harness.operations.submit({
+        ...saveIntent(saveId, null, 'ready-to-release'), release,
+      }, ACTOR, signal())
+      expect(await harness.operations.submit({
+        type: 'finalize-milestone-delivery', intentId: finalizeId,
+        deliveryId: milestoneDeliveryId(PROJECT_ID, milestoneId), expectedDeliveryRevision: 0, release,
+      }, ACTOR, signal())).toMatchObject({ ok: false, reason: 'reconciliation-required' })
+    }
+    let attempts = 0
+    harness.afterRead.current = async () => { throw new Error(`repair source unavailable ${++attempts}`) }
+    await expect(harness.operations.pollPending(signal())).rejects.toThrow('repair source unavailable 1')
+    expect(attempts).toBe(2)
+    expect(harness.readPasses.slice(-2)).toEqual(['view', 'view'])
+    expect([...harness.deliveries.values.values()].every(record => record.repair !== undefined)).toBe(true)
+  })
+
+  it('rejects a saved aggregate whose owning Intent was replaced with a denied record', async () => {
+    const harness = createHarness()
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    const record = milestoneDeliveryIntentRecordSchema.parse(harness.intents.get(SAVE_INTENT_ID))
+    harness.intents.values.set(SAVE_INTENT_ID, milestoneDeliveryIntentRecordSchema.parse({
+      ...record, phase: 'denied', resultDeliveryRevision: undefined,
+    }))
+    expect(() => harness.createOperations().validateDurableState(new Set()))
+      .toThrow('Milestone Delivery last Intent reference is inconsistent')
+    expect(harness.readPasses).toEqual([])
   })
 
   it('rejects duplicate global Intent ownership and dangling aggregate references before recovery', async () => {
@@ -839,6 +1265,9 @@ function createHarness(configuration: {
   const finalRereadTransform = {
     current: (snapshot: ReleaseEvidencePolicyV1Snapshot): ReleaseEvidencePolicyV1Snapshot => snapshot,
   }
+  const viewTransform = {
+    current: (snapshot: ReleaseEvidencePolicyV1Snapshot): ReleaseEvidencePolicyV1Snapshot => snapshot,
+  }
   const afterRead = {
     current: async (_pass: 'view' | 'evaluation' | 'final-reread'): Promise<void> => {},
   }
@@ -883,7 +1312,8 @@ function createHarness(configuration: {
           },
         }
       await afterRead.current(pass)
-      return pass === 'final-reread' ? finalRereadTransform.current(snapshot) : snapshot
+      return pass === 'final-reread' ? finalRereadTransform.current(snapshot)
+        : pass === 'view' ? viewTransform.current(snapshot) : snapshot
     },
     authorityCurrent: () => authority.current,
     validateActorReference: () => {},
@@ -898,6 +1328,7 @@ function createHarness(configuration: {
     intents,
     readPasses,
     finalRereadTransform,
+    viewTransform,
     afterRead,
     context,
     projectPresent,

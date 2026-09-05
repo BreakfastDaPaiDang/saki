@@ -373,7 +373,8 @@ export class LocalSakiHostExecution extends SakiHostExecution {
           snapshot: record.snapshot as HostOperationSnapshot<K>,
         }
       }
-      if (record.request.type === 'push-branch' && this.config.pushCredentialHelper === undefined) {
+      const pushCredential = this.config.pushCredentialHelper
+      if (record.request.type === 'push-branch' && pushCredential === undefined) {
         return {
           ok: false,
           reason: 'unavailable',
@@ -426,7 +427,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
         )
         : record.request.type === 'push-branch'
           ? await advanceLocalGitPush(
-            this.gitPushDependencies(),
+            this.gitPushDependencies(pushCredential as GitCredentialHelperId),
             record as LocalHostPushBranchOperationRecord,
             next => this.persistOperation(next),
             fused,
@@ -496,7 +497,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
         if (record.request.type === 'push-branch') {
           if (this.config.pushCredentialHelper !== undefined) {
             const recovered = await recoverLocalGitPush(
-              this.gitPushDependencies(),
+              this.gitPushDependencies(this.config.pushCredentialHelper),
               record as LocalHostPushBranchOperationRecord,
               next => this.persistOperation(next),
               fused,
@@ -699,11 +700,9 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     }
   }
 
-  private gitPushDependencies() {
+  private gitPushDependencies(credential: GitCredentialHelperId) {
     const internals = localGitPushInternalsFor(this.ctx)
     const transport = internals?.transport
-    const credential = this.config.pushCredentialHelper
-    if (credential === undefined) throw new Error('Saki Local Host Push credential adapter is unavailable')
     return {
       fs: this.ctx.fs,
       workspaces: this.ctx.workspaceRegistry,

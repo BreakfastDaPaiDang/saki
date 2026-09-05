@@ -120,7 +120,6 @@ export async function openSafeRepositoryView(
   scope?: SafeRepositoryScope,
 ): Promise<SafeRepositoryOpenResult> {
   let directoryDraft: OwnedPrivateGitDirectoryDraft | undefined
-  let directoryOwner: OwnedPrivateGitDirectory | undefined
   try {
     signal.throwIfAborted()
     if (!isSafeLocalRepositoryPath(selectedPath) || selectedPath.length > MAX_TRUSTED_PATH_CHARS) {
@@ -373,8 +372,6 @@ export async function openSafeRepositoryView(
       config: privateConfig,
       objectAlternates: { kind: 'exact', bytes: privateAlternate },
     })
-    directoryOwner = privateGitDirectory
-    directoryDraft = undefined
     const privateGitDirectoryPath = privateGitDirectory.path
     let observedHead: string | undefined
     const git: RepositoryInventoryGit = {
@@ -433,7 +430,7 @@ export async function openSafeRepositoryView(
         return output
       },
     }
-    directoryOwner = undefined
+    directoryDraft = undefined
     return {
       kind: 'repository',
       view: {
@@ -494,7 +491,6 @@ export async function openSafeRepositoryView(
     return { kind: 'unavailable' }
   } finally {
     if (directoryDraft !== undefined) await directoryDraft[Symbol.asyncDispose]()
-    else if (directoryOwner !== undefined) await directoryOwner[Symbol.asyncDispose]()
   }
 }
 

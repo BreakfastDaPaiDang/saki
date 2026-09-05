@@ -60,6 +60,10 @@ Milestone Projection 分别保留各 source 的 confirmation、failure、stalene
 
 Automatic merge、automatic Done、复杂 Git history editing、任意 release train、GitHub user authorization 与验收后的 Delivery mutation 均不属于本决策。
 
+持久化解析器在分派前校验 operation family、准确身份与检查点关系。携带 Index 或 Commit effect plan 的 Push 记录产生 schema 错误，不进入其他 operation family 的校验器。内部处理函数接收调用方已选定的 Intent 类型；成功的 table update 返回其回调计算出的值。这些同进程保证不能替代跨记录所有权检查、Host 快照比对、文件系统身份检查，以及异步工作后的权限检查。被拒绝的 Work Item 子操作可能没有持久化的子 Intent；取消操作清除父操作的所有权后，子操作后续重试成功也不能重新取得该所有权。
+
+Cordis 服务访问返回带追踪的代理对象，因此重新读取服务属性不能证明 Provider 身份。控制面保留 injected fiber 捕获的 Provider，并在等待卸载前清除该引用；Cordis 会先排空该 fiber，再加载替代实例。
+
 ## 考虑过的替代方案
 
 **使用可变 branch、PR 或 GitHub Release `target_commitish` 作为 delivery identity。**它们可以各自独立移动，并在较早 observation 之后指向不同 Commit。准确 Commit、ref、PR head、递归 peel 后 tag 与 Release relation 保留了 acceptance 和 release finalization 所需的 identity。
@@ -79,6 +83,8 @@ Automatic merge、automatic Done、复杂 Git history editing、任意 release t
 ## 验证
 
 Branch Delivery schema、存储、控制面与恢复测试固定每个 Development Project 与 Work Item 至多一个当前聚合、验收前 expected-revision update、不可变的已验收证据、准确 Commit 与 ref 准入、Push acknowledgement 丢失后的 inspection、marker 绑定的 PR 创建、准确关联，以及可恢复的 In review 与 Done 子 transition。测试还证明原始 PR review 事实保持为独立展示证据，人工验收仍要求当前 authority 与完整成功的准确 Commit CI reread。
+
+存储故障测试区分 Delivery、Intent 与 Binding admission 记录的写入失败，以及写入已提交但确认丢失。恢复保留其他操作的 admission，拒绝矛盾的 Host 结果，并在 Done 子操作需要 reconciliation 时保持已封存的 acceptance。非法的持久化 operation family 组合、SHA-256 Commit 身份、文件系统替换与私有目录回滚均有直接回归覆盖。带说明的逐行覆盖率排除仅适用于静态不可达的封闭联合 `assertNever` 守卫；业务、失败与恢复路径仍遵守逐文件 100% 要求。
 
 GitHub Service Definition、Product App 与 Host API 测试覆盖严格的 PR、review、CI、Milestone、tag、Release、Commit、public upstream Commit 与 ancestry 事实；完整分页与父身份检查；operation 专属 permission；有界 failure；Provider 分离；以及封闭 wire projection。Polling 测试覆盖限定在 Provider 生命周期内且立即执行的首轮 pass、每次完成后等待完整 interval、pending record 选择、逐记录故障隔离，以及不会推进 Board checkpoint 的取消并排空 dispose。
 

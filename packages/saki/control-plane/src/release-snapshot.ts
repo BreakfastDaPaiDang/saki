@@ -35,7 +35,7 @@ export interface AssembleReleaseSnapshotInput {
 /**
  * Assemble safe release-policy facts without reads, writes, or source-health interpretation.
  * @param input - already-read targeted facts and durable Branch Deliveries for one Development Project.
- * @returns detached snapshot with Branch Deliveries in stable Work Item and delivery-id order.
+ * @returns detached snapshot with Branch Deliveries in stable Work Item id order.
  */
 export function assembleReleaseSnapshot(input: AssembleReleaseSnapshotInput): ReleaseEvidencePolicyV1Snapshot {
   const deliveries = input.deliveries.map(({ record, pullRequest, ci, ancestry }): SakiReleaseDeliveryFact => {
@@ -65,8 +65,7 @@ export function assembleReleaseSnapshot(input: AssembleReleaseSnapshotInput): Re
           },
         }),
     }
-  }).sort((left, right) => compareText(left.workItemId, right.workItemId)
-    || compareText(left.deliveryId, right.deliveryId))
+  }).sort((left, right) => left.workItemId.localeCompare(right.workItemId))
 
   return {
     capturedAt: input.capturedAt,
@@ -79,8 +78,4 @@ export function assembleReleaseSnapshot(input: AssembleReleaseSnapshotInput): Re
     upstreamCommit: structuredClone(input.upstreamCommit),
     upstreamAncestry: structuredClone(input.upstreamAncestry),
   }
-}
-
-function compareText(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0
 }

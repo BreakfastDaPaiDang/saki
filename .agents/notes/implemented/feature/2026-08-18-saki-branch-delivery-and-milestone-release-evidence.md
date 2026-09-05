@@ -60,6 +60,10 @@ The feature persists the durable Git, PR, CI, acceptance, and release facts that
 
 Automatic merge, automatic Done, complex Git history editing, arbitrary release trains, GitHub user authorization, and post-acceptance Delivery mutation remain outside this decision.
 
+Durable parsers validate operation families, exact identities, and checkpoint relationships before dispatch. Push records with an Index or Commit effect plan produce schema errors without entering validators for those other operation families. Internal handlers receive the Intent type selected by their caller; a successful table update returns the value computed by its callback. Those same-process guarantees do not replace cross-record ownership checks, Host snapshot comparisons, filesystem identity checks, or authority checks after asynchronous work. A rejected Work Item child may have no durable child Intent; after cancellation clears the parent owner, a later successful child retry cannot reclaim that ownership.
+
+Cordis service access returns traced proxies, so rereading a service property cannot establish Provider identity. The control plane retains the Provider captured by its injected fiber and clears that reference before awaiting disposal; Cordis drains the fiber before loading a replacement.
+
 ## Alternatives considered
 
 **Use a mutable branch, pull request, or GitHub Release `target_commitish` as delivery identity.** Each can move independently and can point at a different Commit after an earlier observation. Exact Commit, ref, pull-request head, recursively peeled tag, and Release relationships preserve the identity that acceptance and release finalization require.
@@ -79,6 +83,8 @@ Automatic merge, automatic Done, complex Git history editing, arbitrary release 
 ## Verification
 
 Branch Delivery schema, storage, control-plane, and recovery tests pin one current aggregate per Development Project and Work Item, expected-revision updates before acceptance, immutable accepted evidence, exact Commit and ref admission, Push lost-acknowledgement inspection, marker-bound pull-request creation, exact association, and recoverable In review and Done child transitions. They also prove that raw pull-request review facts remain independent display evidence and that human acceptance still requires current authority plus a complete successful exact-Commit CI reread.
+
+Storage fault tests distinguish failed writes from committed writes whose acknowledgement is lost across Delivery, Intent, and Binding admission records. Recovery preserves another operation's admission, rejects contradictory Host outcomes, and keeps sealed acceptance when its Done child requires reconciliation. Invalid durable operation-family combinations, SHA-256 Commit identities, filesystem replacement, and private-directory rollback have direct regression coverage. Explained per-line coverage exclusions apply only to statically unreachable closed-union `assertNever` guards; business, failure, and recovery paths retain the per-file 100% requirement.
 
 GitHub Service Definition, Product App, and Host API tests cover strict pull-request, review, CI, Milestone, tag, Release, Commit, public upstream Commit, and ancestry facts; complete pagination and parent-identity checks; operation-specific permissions; bounded failures; provider detachment; and closed wire projections. Polling tests exercise an immediate provider-scoped pass, full-interval scheduling after completion, pending-record selection, per-record isolation, and abort-and-drain disposal without advancing a Board checkpoint.
 

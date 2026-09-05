@@ -436,13 +436,10 @@ export async function createTransportGitDirectory(): Promise<OwnedPrivateGitDire
       { mode: 0o600, flag: 'wx' },
     )
     return await draft.seal({ config: TRANSPORT_CONFIG, objectAlternates: { kind: 'absent' } })
-  /* v8 ignore start -- each step uses a private mkdtemp path; Node filesystem fault injection
-   * would only exercise this best-effort rollback before the original error is rethrown. */
   } catch (error) {
     await draft[Symbol.asyncDispose]()
     throw error
   }
-  /* v8 ignore stop */
 }
 
 function sameRemote(left: GitRemoteBranchState, right: GitRemoteBranchState): boolean {

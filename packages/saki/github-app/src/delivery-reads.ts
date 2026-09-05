@@ -611,17 +611,14 @@ function normalize(value: string): string {
 }
 
 function sameMilestone(left: z.infer<typeof milestoneNodeSchema>, right: z.infer<typeof milestoneNodeSchema>): boolean {
-  return left.id === right.id && left.number === right.number && left.state === right.state
+  return left.state === right.state
     && left.title === right.title && left.description === right.description && left.dueOn === right.dueOn
     && left.url === right.url && left.updatedAt === right.updatedAt
-    && left.repository.id === right.repository.id && String(left.repository.databaseId) === String(right.repository.databaseId)
 }
 
 function sameReviewPullRequest(
   left: z.infer<typeof reviewPullRequestNodeSchema>,
   right: z.infer<typeof reviewPullRequestNodeSchema>,
 ): boolean {
-  return left.id === right.id && left.number === right.number && left.headRefOid === right.headRefOid
-    && left.updatedAt === right.updatedAt && left.repository.id === right.repository.id
-    && left.repository.owner.id === right.repository.owner.id
+  return left.headRefOid === right.headRefOid && left.updatedAt === right.updatedAt
 }

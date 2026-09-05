@@ -1,6 +1,6 @@
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   GitHubCommitCiFact,
   GitHubCommitComparisonFact,
@@ -32,7 +32,7 @@ import { SAKI_PROJECT_PROJECTION_FIXTURES } from '../src/fixtures.ts'
 import { sakiHostIdSchema } from '../src/ids.ts'
 import type { MilestoneDeliverySources } from '../src/milestone-delivery.ts'
 import type { ReleaseEvidencePolicyV1Expectation, ReleaseEvidencePolicyV1Snapshot } from '../src/release-evidence-policy.ts'
-import { readReleaseSnapshotV1 } from '../src/release-snapshot-reader.ts'
+import { readReleaseSnapshotV1, type ReadReleaseSnapshotV1Input } from '../src/release-snapshot-reader.ts'
 import type { DevelopmentProjectRecord } from '../src/spec.ts'
 import type {
   GitHubSynchronizationConfiguration,
@@ -126,6 +126,112 @@ const BOARD = {
 } satisfies ReleaseEvidencePolicyV1Snapshot['board']
 
 describe('readReleaseSnapshotV1', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it.each(['configuration', 'delivery project'] as const)('rejects a changed %s before reading any sources', async (mode) => {
+    const read = vi.fn(async (request: GitHubReadRequest) => successfulFact(request))
+    const input = readerInput(read)
+    const changed = mode === 'configuration'
+      ? { ...input, configuration: { ...CONFIGURATION, repositoryNodeId: UPSTREAM_REPOSITORY_ID } }
+      : { ...input, branchDeliveries: [{ ...delivery(), projectId: 'project-00000000-0000-4000-8000-000000000899' as SakiDevelopmentProjectId }] }
+    await expect(readReleaseSnapshotV1(changed, new AbortController().signal)).rejects.toBeInstanceOf(TypeError)
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it.each(['reference failure', 'peel failure', 'reference mismatch', 'peel mismatch', 'lightweight', 'missing annotated object'] as const)(
+    'preserves independent tag observation: %s', async (mode) => {
+      const read = vi.fn(async (request: GitHubReadRequest) => {
+        if ((request.kind === 'tag-reference' && mode === 'reference failure')
+          || (request.kind === 'tag-object' && mode === 'peel failure')) {
+          throw new GitHubProviderError({ code: 'not-found', resource: request.kind })
+        }
+        if (request.kind === 'tag-reference') return {
+          repositoryId: REPOSITORY_ID, tagName: TAG_NAME,
+          ref: mode === 'reference mismatch' ? 'refs/tags/another-release' : `refs/tags/${TAG_NAME}`,
+          target: mode === 'lightweight' ? { kind: 'commit', id: RELEASE_COMMIT_ID } : { kind: 'tag', id: TAG_OBJECT_ID },
+          observedAt: 190,
+        } satisfies GitHubTagReferenceFact
+        if (request.kind === 'tag-object') return {
+          repositoryId: mode === 'peel mismatch' ? UPSTREAM_REPOSITORY_ID : REPOSITORY_ID,
+          tagObjects: mode === 'lightweight' || mode === 'missing annotated object' ? []
+            : [{ id: TAG_OBJECT_ID, target: { kind: 'commit', id: RELEASE_COMMIT_ID } }],
+          commitId: RELEASE_COMMIT_ID, observedAt: 191,
+        } satisfies GitHubTagPeelFact
+        return successfulFact(request)
+      })
+      const snapshot = await readReleaseSnapshotV1(readerInput(read), new AbortController().signal)
+      if (mode === 'lightweight') expect(snapshot.tag).toMatchObject({ confirmed: { observedAt: 190,
+        value: { reference: { target: { kind: 'commit' } }, peel: { tagObjects: [], commitId: RELEASE_COMMIT_ID } } } })
+      else if (mode === 'reference failure' || mode === 'peel failure') expect(snapshot.tag).toMatchObject({ failure: { failure: { code: 'not-found' } } })
+      else expect(snapshot.tag).toHaveProperty('invalidatedAt')
+      expect(snapshot.releaseCommit.confirmed?.value.id).toBe(RELEASE_COMMIT_ID)
+      if (mode === 'reference failure' || mode === 'reference mismatch') expect(read.mock.calls.some(([request]) => request.kind === 'tag-object')).toBe(false)
+    })
+
+  it.each(['unobserved board', 'unobserved milestone', 'foreign milestone issue', 'not Done'] as const)(
+    'does not read deliveries without confirmed scope: %s', async (mode) => {
+      const read = vi.fn(async (request: GitHubReadRequest) => {
+        if (request.kind === 'milestone' && mode === 'unobserved milestone') throw new GitHubProviderError({ code: 'not-found', resource: 'milestone' })
+        if (request.kind === 'milestone' && mode === 'foreign milestone issue') {
+          const fact = milestone(190)
+          return { ...fact, issues: fact.issues.map(issue => ({ ...issue, repositoryId: UPSTREAM_REPOSITORY_ID })) }
+        }
+        return successfulFact(request)
+      })
+      const input = readerInput(read)
+      const board = mode === 'unobserved board' ? {} : mode === 'not Done'
+        ? { confirmed: { ...BOARD.confirmed, value: { ...BOARD.confirmed.value,
+          items: BOARD.confirmed.value.items.map(item => ({ ...item, status: 'in-review' as const })) } } }
+        : BOARD
+      const snapshot = await readReleaseSnapshotV1({ ...input, board }, new AbortController().signal)
+      expect(snapshot.deliveries).toEqual([])
+      expect(read.mock.calls.some(([request]) => request.kind === 'pull-request' || request.kind === 'commit-ci')).toBe(false)
+    })
+
+  it.each(['repository changed', 'no Pull Request', 'failed source', 'invalidated source'] as const)(
+    'retains delivery evidence while handling %s', async (mode) => {
+      vi.spyOn(Date, 'now').mockReturnValue(220)
+      const current = delivery()
+      if (mode === 'repository changed') current.target.repository.id = UPSTREAM_REPOSITORY_ID
+      if (mode === 'no Pull Request') current.pullRequest = { current: { state: 'unobserved' } }
+      if (mode === 'failed source') current.pullRequest.current = {
+        state: 'failure', failure: { code: 'not-found', resource: 'pull-request' }, failedAt: 170,
+      }
+      if (mode === 'invalidated source') current.ci.current = { state: 'invalidated', invalidatedAt: 170, reason: 'target-changed' }
+      const read = vi.fn(async (request: GitHubReadRequest) => {
+        if (mode === 'failed source' && request.kind === 'pull-request') throw new GitHubProviderError({ code: 'transient-transport' })
+        if (mode === 'invalidated source' && request.kind === 'commit-ci') return { ...commitCi(190), commitId: RELEASE_COMMIT_ID }
+        return successfulFact(request)
+      })
+      const snapshot = await readReleaseSnapshotV1({ ...readerInput(read), branchDeliveries: [current] }, new AbortController().signal)
+      const result = snapshot.deliveries[0]
+      expect(result).toBeDefined()
+      if (mode === 'repository changed') {
+        expect(result).toMatchObject({ pullRequest: { confirmed: { observedAt: 160 }, invalidatedAt: 220 },
+          ci: { confirmed: { observedAt: 160 }, invalidatedAt: 220 }, ancestry: { invalidatedAt: 220 } })
+        expect(read.mock.calls.some(([request]) => request.kind === 'pull-request' || request.kind === 'commit-ci')).toBe(false)
+      } else if (mode === 'no Pull Request') {
+        expect(result?.pullRequest).toEqual({ invalidatedAt: 220 })
+        expect(read.mock.calls.some(([request]) => request.kind === 'pull-request')).toBe(false)
+      } else if (mode === 'failed source') expect(result?.pullRequest).toMatchObject({ confirmed: { observedAt: 160 }, failure: { failure: { code: 'transient-transport' } } })
+      else expect(result?.ci).toMatchObject({ confirmed: { observedAt: 160 }, invalidatedAt: 220 })
+    })
+
+  it.each(['before reading', 'tag reference', 'tag peel', 'final delivery'] as const)(
+    'propagates cancellation %s without returning a partial snapshot', async (mode) => {
+      const controller = new AbortController()
+      const reason = new Error('release snapshot canceled')
+      if (mode === 'before reading') controller.abort(reason)
+      const read = vi.fn(async (request: GitHubReadRequest) => {
+        if ((mode === 'tag reference' && request.kind === 'tag-reference')
+          || (mode === 'tag peel' && request.kind === 'tag-object')
+          || (mode === 'final delivery' && request.kind === 'compare-commits' && request.baseCommitId === DELIVERY_COMMIT_ID)) controller.abort(reason)
+        return successfulFact(request)
+      })
+      await expect(readReleaseSnapshotV1(readerInput(read), controller.signal)).rejects.toBe(reason)
+      if (mode === 'before reading') expect(read).not.toHaveBeenCalled()
+    })
+
   it('reads every fixed global and Done-delivery source through exact authenticated or public requests', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(200)
     const read = vi.fn(async (request: GitHubReadRequest) => successfulFact(request))
@@ -265,6 +371,12 @@ describe('readReleaseSnapshotV1', () => {
     }, new AbortController().signal)).rejects.toBe(failure)
   })
 })
+
+function readerInput(read: (request: GitHubReadRequest) => Promise<unknown>): ReadReleaseSnapshotV1Input {
+  return { project: PROJECT, github: { read } as unknown as Pick<SakiGitHub, 'read'>,
+    configuration: CONFIGURATION, expected: EXPECTED, milestoneSources: emptySources(),
+    branchDeliveries: [delivery()], board: BOARD }
+}
 
 function emptySources(): MilestoneDeliverySources {
   return {

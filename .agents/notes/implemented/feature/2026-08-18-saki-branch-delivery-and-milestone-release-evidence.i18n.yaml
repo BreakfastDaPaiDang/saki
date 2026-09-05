@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-18-saki-branch-delivery-and-milestone-release-evidence.md
-2026-08-18-saki-branch-delivery-and-milestone-release-evidence.md: 7e57ab6c67c6a53843924433e1252cb2c2990162
-2026-08-18-saki-branch-delivery-and-milestone-release-evidence.zh.md: 9fca44420c25815739453b06c4b8276e7b945ab3
+2026-08-18-saki-branch-delivery-and-milestone-release-evidence.md: 7004b9ec55c010d7cd02d7114f865c446e5e1e9c
+2026-08-18-saki-branch-delivery-and-milestone-release-evidence.zh.md: 7d7eaa8fc7dfb8debdb786c201bcd7480c4b1377

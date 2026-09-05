@@ -1388,6 +1388,32 @@ describe('InheritedChangeBaseline schemas', () => {
     }).success).toBe(false)
   })
 
+  it('requires SHA-256 commit identities for Push and lookup in a SHA-256 Binding', () => {
+    const { binding, request } = pushBranchFixture()
+    const head = binding.expectedInspection.projection.head
+    if (head.kind !== 'commit') throw new Error('expected a committed Binding HEAD')
+    const sha256Binding = {
+      ...binding,
+      expectedInspection: {
+        ...binding.expectedInspection,
+        projection: signedInspection({
+          ...binding.expectedInspection.projection,
+          objectFormat: 'sha256',
+          head: { ...head, objectId: 'a'.repeat(64) },
+        }, binding.expectedInspection.trusted),
+      },
+    }
+    for (const width of [40, 64]) {
+      const commitId = 'a'.repeat(width)
+      expect(pushBranchHostOperationRequestSchema.safeParse({
+        ...request,
+        expected: { ...request.expected, binding: sha256Binding, commitId },
+      }).success).toBe(width === 64)
+      expect(inspectProjectCommitRequestSchema.safeParse({ binding: sha256Binding, commitId }).success)
+        .toBe(width === 64)
+    }
+  })
+
   it('keeps PushBranch transport and credential authority Host-owned', () => {
     const { request } = pushBranchFixture()
 

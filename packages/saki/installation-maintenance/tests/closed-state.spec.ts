@@ -1080,6 +1080,24 @@ describe('closed Saki state reads', () => {
   })
 
   it.each([
+    ['missing seal', () => ({ global: null, tables: { storage_generation: {} } }), 'is not the required singleton'],
+    ['noncanonical seal key', () => ({
+      global: null,
+      tables: { storage_generation: { unexpected: v6SealSnapshot().tables.storage_generation![STORAGE_GENERATION_KEY] } },
+    }), 'is not the required singleton'],
+    ['different build provenance', () => v6SealSnapshot(OTHER_BUILD_ID), 'disagrees with selected generation metadata'],
+  ] as const)('rejects historical v8 state with %s without modifying its database', async (_name, snapshot, message) => {
+    const path = await databasePath()
+    await materializeV8(path, snapshot())
+    const before = await readFile(path)
+    await expect(readClosedSakiV8State(path, V5_EXPECTATION, AbortSignal.timeout(2_000))).rejects.toMatchObject({
+      code: 'recovery-required',
+      cause: { message: `historical v8 Saki storage-generation seal ${message}` },
+    })
+    expect(await readFile(path)).toEqual(before)
+  })
+
+  it.each([
     {
       description: 'a missing storage-generation seal',
       snapshot: () => ({ global: null, tables: { storage_generation: {} } }),

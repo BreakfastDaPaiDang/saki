@@ -831,7 +831,38 @@ describe('bounded raw command runner', () => {
     }
   })
 
-  it('runs GitHub transport with one fixed non-interactive credential adapter', async () => {
+  it('passes exact binary stdin to a bounded Git mutation', async () => {
+    const written: Buffer[] = []
+    const spawn = vi.fn((_spec: Parameters<SubprocessRuntime['spawn']>[0]) => ({
+      stdin: new Writable({
+        write(chunk: Buffer, _encoding, callback) {
+          written.push(Buffer.from(chunk))
+          callback()
+        },
+      }),
+      stdout: Readable.from([]),
+      stderr: Readable.from([]),
+      done: Promise.resolve({ exitCode: 0, signal: null }),
+      terminate: vi.fn(),
+      waitForExit: () => Promise.resolve(true),
+    }))
+    const runner = new GitRunner({ spawn } as unknown as SubprocessRuntime, 'git', {
+      maxStdoutBytes: 2,
+      maxStderrBytes: 3,
+      timeoutMs: 5_000,
+      terminationGraceMs: 100,
+    })
+    const bytes = Buffer.from([0, 255])
+    await runner.runMutation('owned-worktree', ['hash-object', '-w', '--stdin'],
+      new AbortController().signal, { hooksDirectory: 'owned-hooks' }, { bytes, maxBytes: 2 })
+    expect(Buffer.concat(written)).toEqual(bytes)
+    expect(spawn.mock.calls[0]?.[0].stdio).toMatchObject({ stdin: 'pipe' })
+  })
+
+  it.each([
+    ['git-credential-manager', 'manager'],
+    ['git-credential-manager-core', 'manager-core'],
+  ] as const)('runs GitHub transport with the fixed non-interactive %s adapter', async (adapter, helper) => {
     const spawn = vi.fn((_spec: Parameters<SubprocessRuntime['spawn']>[0]) => ({
       stdout: Readable.from([]),
       stderr: Readable.from([]),
@@ -850,14 +881,14 @@ describe('bounded raw command runner', () => {
       'private-git-directory',
       ['ls-remote', '--refs', 'https://github.com/o/r.git', 'refs/heads/main'],
       new AbortController().signal,
-      'git-credential-manager',
+      adapter,
     )
 
     const spec = spawn.mock.calls[0]?.[0]
     if (spec === undefined) throw new Error('GitHub transport did not spawn')
     expect(spec.argv).toEqual(expect.arrayContaining([
       '-c', 'credential.helper=',
-      '-c', 'credential.helper=manager',
+      '-c', `credential.helper=${helper}`,
       '-c', 'protocol.allow=never',
       '-c', 'protocol.https.allow=always',
       '-c', 'http.followRedirects=false',

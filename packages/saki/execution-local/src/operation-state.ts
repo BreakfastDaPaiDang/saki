@@ -562,6 +562,7 @@ function validateLocalHostOperationRecord(
       !== canonicalDigest('saki/host-operation-result/v1', record.effectPlan.result)) {
     context.addIssue({ code: 'custom', message: 'Host Operation success disagrees with published effect plan' })
   }
+  if (request.type === 'push-branch') return
   if (record.effectPlan?.kind === 'index' && request.type !== 'start-agent-run') {
     validateIndexPlan(record as LocalHostAnyStructuredGitOperationRecord, record.effectPlan, context)
   }

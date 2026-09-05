@@ -39,6 +39,21 @@ const ISSUE_ID = githubIssueId('I_milestone_view')
 const UNMAPPED_ISSUE_ID = githubIssueId('I_unmapped')
 
 describe('projectMilestoneView', () => {
+  it.each(['repository', 'project'] as const)('does not join a confirmed Board from another %s', (changed) => {
+    const input = snapshot()
+    const confirmed = input.board.confirmed
+    if (confirmed === undefined) throw new Error('missing fixture Board')
+    const view = projectMilestoneView(record(input), { confirmed: {
+      ...confirmed,
+      value: {
+        ...confirmed.value,
+        ...(changed === 'repository' ? { repositoryId: githubRepositoryId('R_other') } : { projectId: githubProjectId('P_other') }),
+      },
+    } }, 120, 50)
+    expect(view.scope).toBeUndefined()
+    expect(view.blockages).toEqual([{ kind: 'milestone-target-mismatch' }])
+  })
+
   it('joins one current complete Milestone scope to one confirmed Board generation', () => {
     const input = snapshot()
     const view = projectMilestoneView(record(input), input.board, 120, 50)
@@ -186,6 +201,22 @@ describe('projectMilestoneView', () => {
 })
 
 describe('milestoneBoardEvidence', () => {
+  it('invalidates confirmed release evidence when Board mapping fails', () => {
+    const board = SAKI_BOARD_PROJECTION_FIXTURES.confirmedStaleFailure
+    const failedAt = board.failure.failedAt
+    const evidence = milestoneBoardEvidence({
+      ...board,
+      failure: { ...board.failure, failure: { kind: 'mapping', issues: [] } },
+    }, failedAt + 1)
+    expect(evidence.confirmed?.observedAt).toBe(board.checkpoint.observedAt)
+    expect(evidence.invalidatedAt).toBe(failedAt)
+    expect(evidence.failure).toBeUndefined()
+  })
+
+  it('has no release evidence before the first Board checkpoint', () => {
+    expect(milestoneBoardEvidence(SAKI_BOARD_PROJECTION_FIXTURES.awaitingFirstCheckpoint, 123_456)).toEqual({})
+  })
+
   it('retains one complete generation and its newer provider failure', () => {
     const board = SAKI_BOARD_PROJECTION_FIXTURES.confirmedStaleFailure
     const confirmed = board.confirmed

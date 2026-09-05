@@ -33,7 +33,7 @@ import type {
   UnstageFilesHostOperationRequest,
 } from '@breakfastdapaidang/saki-execution'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { GitCommandError, type GitRunner } from '../src/git-runner.ts'
+import { GitCommandError, GitRunner } from '../src/git-runner.ts'
 import { installLocalGitMutationInternals } from '../src/git-mutation-internals.ts'
 import { installLocalGitPushInternals } from '../src/git-push-internals.ts'
 import { gitHubPushArguments, type LocalGitPushTransport } from '../src/git-push.ts'
@@ -366,7 +366,30 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     expect(transport.pushCount).toBe(1)
     await expect(execution.inspectOperation(prepared.preparation.operation, signal))
       .resolves.toEqual(started.snapshot)
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toEqual(started)
     expect(transport.pushCount).toBe(1)
+  }, 30_000)
+
+  it('uses the default fixed GitHub Push transport when no test transport is installed', async () => {
+    const root = await repository()
+    const commitId = await gitText(root, 'rev-parse', 'HEAD')
+    let pushed = false
+    const remote = vi.spyOn(GitRunner.prototype, 'runGitHubTransport').mockImplementation(async (_path, args) => {
+      if (args[0] === 'push') pushed = true
+      return {
+        stdout: pushed && args[0] === 'ls-remote' ? Buffer.from(`${commitId}\trefs/heads/main\n`) : Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+      }
+    })
+    const execution = await provider(root, { config: { pushCredentialHelper: 'git-credential-manager' } })
+    const signal = new AbortController().signal
+    const binding = await activeBinding(execution, root, signal)
+    const prepared = await execution.prepareOperation(pushRequest(binding, commitId, '1'), acceptedAdmission(1), signal)
+    if (!prepared.ok) throw new Error('test Push was not prepared')
+    await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .resolves.toMatchObject({ ok: true, snapshot: { state: 'succeeded', result: { commitId } } })
+    expect(remote.mock.calls.map(call => call[1][0])).toEqual(['ls-remote', 'ls-remote', 'push', 'ls-remote'])
   }, 30_000)
 
   it('publishes only a proven fast-forward over the exact remote Commit', async () => {
@@ -750,8 +773,18 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
       .resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
 
+    const configPath = join(root, '.git', 'config')
+    const config = await readFile(configPath)
+    await writeFile(configPath, '[include]\n\tpath = ../outside\n')
     await expect(execution.inspectOperation(prepared.preparation.operation, signal))
       .resolves.toMatchObject({ state: 'publishing' })
+    expect(transport.readCount).toBe(2)
+    await writeFile(configPath, config)
+    await expect(execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'publishing' })
+    await expect(execution.inspectOperation(prepared.preparation.operation, signal))
+      .resolves.toMatchObject({ state: 'publishing' })
+    expect(transport.readCount).toBe(4)
     await git(racer, 'push', remote, 'HEAD:refs/heads/main')
     await expect(execution.inspectOperation(prepared.preparation.operation, signal))
       .resolves.toMatchObject({ state: 'failed', failure: { reason: 'observation-stale' }, effect: 'none' })
@@ -3267,6 +3300,25 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
       publication: 'attempting' as const,
       result: localHostAgentRunResultFor(agentRunRequest),
     }
+    const push = pushRequest(durable.request.expected.binding, 'a'.repeat(40), '1')
+    const pushPlan = {
+      kind: 'push-branch',
+      publication: 'not-started',
+      result: {
+        type: 'push-branch',
+        repository: push.expected.repository,
+        targetRef: push.targetRef,
+        commitId: push.expected.commitId,
+        previous: { kind: 'absent' },
+        credential: { helperId: 'git-credential-manager' },
+      },
+    }
+    expectOperationRecordIssue({ ...durable, effectPlan: pushPlan },
+      'Push effect plan disagrees with Host Operation type')
+    expectOperationRecordIssue({ ...durable, request: push, effectPlan: agentRunPlan },
+      'Push Host Operation has a different effect plan')
+    expectOperationRecordIssue({ ...durable, request: push },
+      'Push Host Operation has a different effect plan')
     expectOperationRecordIssue({
       ...durable,
       effectPlan: agentRunPlan,

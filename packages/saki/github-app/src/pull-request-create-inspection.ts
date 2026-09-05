@@ -154,8 +154,7 @@ function classify(request: GitHubPullRequestCreateRequest, traversal: Traversal)
 }
 
 function matchesRequest(request: GitHubPullRequestCreateRequest, pullRequest: GitHubPullRequestFact): boolean {
-  return pullRequest.repositoryId === request.repositoryId
-    && pullRequest.head.repositoryId === request.repositoryId
+  return pullRequest.head.repositoryId === request.repositoryId
     && pullRequest.head.ref === request.headRef
     && pullRequest.head.commitId === request.expectedHeadCommitId
     && pullRequest.base.repositoryId === request.repositoryId

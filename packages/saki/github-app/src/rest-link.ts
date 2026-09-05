@@ -22,6 +22,5 @@ export function parseNextLinkTarget(link: string | undefined): string | null {
     }
     if (relations?.includes('next') === true) nextTargets.push(String(match[1]))
   }
-  if (nextTargets.length === 0) return null
-  return nextTargets.length === 1 ? nextTargets[0] ?? 'invalid' : 'invalid'
+  return nextTargets.length > 1 ? 'invalid' : nextTargets[0] ?? null
 }

@@ -1201,6 +1201,7 @@ function compareIntentOrder(left: MilestoneDeliveryIntentRecord, right: Mileston
   return left.createdAt - right.createdAt || String(left.id).localeCompare(String(right.id))
 }
 
+// Prepared Intents resume through submitSave/submitFinalize; only settled records reach this projection.
 function resultFor(record: MilestoneDeliveryIntentRecord): MilestoneDeliveryIntentResult {
   const receipt = {
     intentId: record.id,
@@ -1208,7 +1209,6 @@ function resultFor(record: MilestoneDeliveryIntentRecord): MilestoneDeliveryInte
     ...(record.resultDeliveryRevision === undefined ? {} : { deliveryRevision: record.resultDeliveryRevision }),
   }
   if (record.phase === 'succeeded') return { ok: true, receipt: { ...receipt, state: 'succeeded' } }
-  if (record.phase === 'prepared') return { ok: true, receipt: { ...receipt, state: 'pending' } }
   if (record.phase === 'denied') return { ok: false, reason: 'denied', receipt: { ...receipt, state: 'denied' } }
   if (record.phase === 'reconciliation-required') {
     return {

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { Domain, KvTable, TableValueOf } from '@deepseek-ai/dsh-storage-domain'
 import { canonicalDigest } from '@breakfastdapaidang/saki-execution'
+import { branchDeliveryIntentRecordSchema } from '../src/branch-delivery.ts'
+import { boardWorkItemId, unjoinedBoardRemoteFingerprint } from '../src/work-item-mapping.ts'
 import {
   SAKI_PROJECT_PROJECTION_FIXTURES,
   SAKI_PROJECT_REQUEST_FIXTURES,
@@ -23,6 +25,8 @@ import {
   developmentProjectRegistryRecordSchema,
   grantRecordSchema,
   githubProjectSyncRecordSchema,
+  githubWorkItemRecoveryId,
+  githubWorkItemRecoveryRecordSchema,
   historicalControlStateRecordSchema,
   historicalInstallationAccessRecordSchema,
   historicalInstallationRecordSchema,
@@ -347,6 +351,8 @@ function fixtureInspection() {
 function currentDomains(
   fixture: CurrentFixture,
   githubProjectSync: ReadonlyMap<SakiDevelopmentProjectId, GitHubProjectSyncRecord> = new Map(),
+  deliveryIntents: ReadonlyMap<SakiControlIntentId, unknown> = new Map(),
+  workItemRecoveries: ReadonlyMap<string, unknown> = new Map(),
 ) {
   const tables = {
     control_state: readonlyTable(fixture.controlState),
@@ -360,11 +366,11 @@ function currentDomains(
     github_project_sync: readonlyTable(githubProjectSync),
     github_sync_configuration_intents: readonlyTable(new Map()),
     github_work_item_intents: readonlyTable(new Map()),
-    github_work_item_recovery: readonlyTable(new Map()),
+    github_work_item_recovery: readonlyTable(workItemRecoveries),
     git_operation_intents: readonlyTable(new Map()),
     binding_write_admissions: readonlyTable(new Map()),
     branch_deliveries: readonlyTable(new Map()),
-    branch_delivery_intents: readonlyTable(new Map()),
+    branch_delivery_intents: readonlyTable(deliveryIntents),
     milestone_deliveries: readonlyTable(new Map()),
     milestone_delivery_intents: readonlyTable(new Map()),
     agent_operation_intents: readonlyTable(new Map()),
@@ -888,6 +894,63 @@ describe('current Saki state validation', () => {
         BUILD_ID,
       )
     }).not.toThrow()
+  })
+
+  it.each([false, true])('validates retained denied Delivery actor attribution (invalid revision: %s)', (invalid) => {
+    const fixture = currentFixture()
+    const payload = {
+      actor: {
+        installationId: INSTALLATION_ID, storageGenerationId: STORAGE_GENERATION_ID, hostId: HOST_ID,
+        principalId: PRINCIPAL_ID, principalRevision: 4, grantId: GRANT_ID, grantRevision: invalid ? 6 : 5,
+      },
+      intent: {
+        type: 'mark-branch-delivery-in-review', intentId: GITHUB_INTENT_ID,
+        deliveryId: `branch-delivery-${'a'.repeat(64)}`, expectedDeliveryRevision: 0,
+        expectedWorkItemRemoteFingerprint: `remote-fingerprint-${'b'.repeat(64)}`,
+      },
+    }
+    const record = branchDeliveryIntentRecordSchema.parse({
+      id: GITHUB_INTENT_ID, schemaVersion: 1, revision: 1, payload,
+      payloadDigest: canonicalDigest('saki/branch-delivery-intent/v1', payload),
+      deliveryId: payload.intent.deliveryId, operation: { kind: 'in-review' },
+      checkpoint: { state: 'terminal', outcome: 'denied', reason: 'authority' }, createdAt: 1, updatedAt: 2,
+    })
+    const domains = currentDomains(fixture, new Map(), new Map([[GITHUB_INTENT_ID, record]]))
+    const validate = () => {
+      validateCurrentSakiState(domains.controlPlane, domains.storageGeneration,
+        INSTALLATION_ID, STORAGE_GENERATION_ID, BUILD_ID)
+    }
+    if (invalid) expect(validate).toThrow('Saki registration Intent actor reference is inconsistent')
+    else expect(validate).not.toThrow()
+  })
+
+  it('rejects targeted Work Item recovery when its Project no longer exists', () => {
+    const fixture = currentFixture()
+    const workItemId = boardWorkItemId('R_repo', 'I_issue')
+    const recovery = githubWorkItemRecoveryRecordSchema.parse({
+      id: githubWorkItemRecoveryId(PROJECT_ID, workItemId), workItemId,
+      schemaVersion: 1, revision: 0, projectId: PROJECT_ID, latestNonTerminalStatus: null, updatedAt: 2,
+      confirmed: {
+        sourceIntentId: GITHUB_INTENT_ID, confirmedAt: 2,
+        observation: {
+          stageMutationId: 'work-item:missing-project:status', stageKind: 'project-item-status-set', workItemId,
+          remoteFingerprint: unjoinedBoardRemoteFingerprint('R_repo', 'I_issue', 'open'), observedAt: 1,
+          facts: {
+            repositoryId: 'R_repo', repositoryDatabaseId: '1', projectId: 'P_project', statusFieldId: 'F_status',
+            membership: { state: 'absent' },
+            issue: {
+              id: 'I_issue', repositoryId: 'R_repo', repositoryDatabaseId: '1', number: 1, state: 'open',
+              title: 'Recover work', url: 'https://github.com/owner/repo/issues/1', updatedAt: 1,
+            },
+          },
+        },
+      },
+    })
+    const domains = currentDomains(fixture, new Map(), new Map(), new Map([[recovery.id, recovery]]))
+    expect(() => {
+      validateCurrentSakiState(domains.controlPlane, domains.storageGeneration,
+        INSTALLATION_ID, STORAGE_GENERATION_ID, BUILD_ID)
+    }).toThrow('GitHub Work Item recovery targets a missing Development Project')
   })
 
   it('rejects a missing current control singleton', () => {

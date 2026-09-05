@@ -565,6 +565,67 @@ describe('ReleaseEvidencePolicyV1', () => {
     })).toEqual({ ok: false, blockages: [{ kind: 'final-reread-mismatch' }] })
   })
 
+  it.each(['headRef', 'baseRef'] as const)('rejects a non-branch %s in observed delivery facts', (field) => {
+    const input = validInput()
+    expect(evaluateReleaseEvidencePolicyV1({
+      ...input,
+      evaluation: {
+        ...input.evaluation,
+        deliveries: input.evaluation.deliveries.map(item => ({ ...item, [field]: 'refs/tags/release' })),
+      },
+    })).toMatchObject({ ok: false, blockages: [{ kind: 'delivery-pr-mismatch', workItemId: WORK_ITEM_ID }] })
+  })
+
+  it.each<readonly [string, (evidence: ReleaseEvidencePolicyV1Evidence) => ReleaseEvidencePolicyV1Evidence]>([
+    ['an issue from another repository', evidence => ({
+      ...evidence,
+      milestone: {
+        ...evidence.milestone,
+        issues: evidence.milestone.issues.map(issue => ({ ...issue, repositoryId: UPSTREAM_REPOSITORY_ID })),
+      },
+    })],
+    ['duplicate Milestone issues', evidence => ({
+      ...evidence,
+      milestone: { ...evidence.milestone, issues: [...evidence.milestone.issues, ...evidence.milestone.issues] },
+    })],
+    ['duplicate Work Items', evidence => ({ ...evidence, workItems: [...evidence.workItems, ...evidence.workItems] })],
+    ['two Work Items mapped to one issue', evidence => ({
+      ...evidence,
+      workItems: [
+        ...evidence.workItems,
+        ...evidence.workItems.map(item => ({ ...item, workItemId: `work-item-${'f'.repeat(64)}` as SakiBoardWorkItemId })),
+      ],
+    })],
+    ['a Work Item outside the Milestone', evidence => ({
+      ...evidence,
+      workItems: evidence.workItems.map(item => ({ ...item, issueId: 'I_outside' as GitHubIssueId })),
+    })],
+    ['an unmapped Milestone issue', evidence => ({ ...evidence, workItems: [] })],
+    ['a closed unmerged pull request', evidence => ({
+      ...evidence,
+      deliveries: evidence.deliveries.map(item => ({
+        ...item,
+        pullRequest: { ...item.pullRequest, state: 'closed', merged: false },
+      })),
+    })],
+  ])('rejects persisted evidence with %s even when both digests match', (_name, corrupt) => {
+    const result = evaluateReleaseEvidencePolicyV1(validInput())
+    if (!result.ok) throw new Error('valid release evidence was rejected')
+    expect(releaseEvidencePolicyV1EvidenceSchema.safeParse(result.evidence).success).toBe(true)
+    const changed = corrupt(result.evidence)
+    const parsed = releaseEvidencePolicyV1EvidenceSchema.safeParse(redigestEvidence({
+      ...changed,
+      scopeFingerprint: canonicalDigest(
+        'saki/release-evidence-milestone-scope/v1', stripObservationTimes(changed.milestone.issues),
+      ),
+    }))
+    expect(parsed.success).toBe(false)
+    if (parsed.success) throw new Error('inconsistent evidence was accepted')
+    const messages = parsed.error.issues.map(issue => issue.message)
+    expect(messages).toContain('Release Evidence facts disagree')
+    expect(messages).not.toContain('Release Evidence digest does not match its facts')
+  })
+
   it('rejects tampering with an embedded evidence digest or Milestone identity', () => {
     const result = evaluateReleaseEvidencePolicyV1(validInput())
     if (!result.ok) throw new Error('valid release evidence was rejected')

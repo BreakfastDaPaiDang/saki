@@ -23,10 +23,14 @@ import {
   GitHubProviderError,
   githubAppId,
   githubCommitId,
+  githubCommitStatusId,
+  githubIssueStateSetInspectionSchema,
   githubMilestoneId,
   githubPullRequestId,
+  githubProjectItemAddInspectionSchema,
   githubProjectItemStatusSetInspectionSchema,
   githubReleaseTagName,
+  githubReleaseId,
   githubRepositoryDatabaseId,
   githubRepositoryId,
   SakiGitHub,
@@ -44,16 +48,19 @@ import {
   canonicalDigest,
   computeProjectInspectionFingerprint,
   HostOperationAcceptance,
+  pushBranchHostOperationRequestSchema,
   startAgentRunHostOperationRequestSchema,
 } from '@breakfastdapaidang/saki-execution'
 import type {
   HostOperationAdmissionSource,
+  HostOperationChange,
   HostOperationPreparation,
   HostOperationReference,
   HostOperationSnapshot,
   InspectProjectSelectionResult,
   ProjectSelectionInspection,
   ProjectSelectionProjection,
+  PushBranchHostOperationRequest,
   SakiHostExecution,
   SakiHostId,
   StartAgentRunHostOperationRequest,
@@ -76,7 +83,7 @@ import SakiControlPlane, {
 import { SAKI_GIT_REQUEST_FIXTURES, SAKI_PROJECT_PROJECTION_FIXTURES } from '../src/fixtures.ts'
 import { resolveSakiAuthentication, takeSakiCookieHeader } from '../src/host.ts'
 import { DevelopmentProjects } from '../src/projects.ts'
-import { GitHubProjectSynchronization } from '../src/github-sync.ts'
+import { GitHubProjectSynchronization, GitHubSynchronizationConsumer } from '../src/github-sync.ts'
 import { BranchDeliveryOperations, branchDeliveryId } from '../src/branch-delivery.ts'
 import {
   MilestoneDeliveryOperations,
@@ -85,6 +92,7 @@ import {
 } from '../src/milestone-delivery.ts'
 import {
   githubSynchronizationConfigurationIntentRecordSchema,
+  HOST_OPERATOR_ACTIONS,
   registrationIntentRecordSchema,
   resourceBindingRecordSchema,
 } from '../src/spec.ts'
@@ -172,6 +180,16 @@ class FakeBoardGitHub extends SakiGitHub {
     signal: AbortSignal,
   ): Promise<GitHubMutationMap[K]['result']> {
     signal.throwIfAborted()
+    if (request.kind === 'issue-state-set') {
+      const items = this.candidate.items.map(item => item.content.kind === 'issue' && item.content.issue.id === request.issueId
+        ? { ...item, content: { ...item.content, issue: { ...item.content.issue, state: request.desiredState, updatedAt: Date.now() } } }
+        : item)
+      const openIssues = items.flatMap(item => item.content.kind === 'issue' && item.content.issue.state === 'open' ? [item.content.issue] : [])
+      this.candidate = refingerprintCandidate(this.candidate, { items, openIssues,
+        fences: { before: { ...this.candidate.fences.before, openIssueCount: openIssues.length },
+          after: { ...this.candidate.fences.after, openIssueCount: openIssues.length } } })
+      return undefined
+    }
     if (request.kind !== 'project-item-status-set') throw new Error(`unexpected mutation ${request.kind}`)
     if (this.nextMutationFailure !== undefined) {
       const failure = this.nextMutationFailure
@@ -199,6 +217,11 @@ class FakeBoardGitHub extends SakiGitHub {
     signal: AbortSignal,
   ): Promise<GitHubMutationMap[K]['inspection']> {
     signal.throwIfAborted()
+    if (request.kind === 'issue-state-set') {
+      const item = this.candidate.items.find(candidate => candidate.content.kind === 'issue' && candidate.content.issue.id === request.issueId)
+      if (item?.content.kind !== 'issue') throw new Error('Issue state inspection target is missing')
+      return githubIssueStateSetInspectionSchema.parse({ snapshot: { issue: item.content.issue }, observedAt: Date.now() })
+    }
     if (request.kind !== 'project-item-status-set') throw new Error(`unexpected inspection ${request.kind}`)
     return githubProjectItemStatusSetInspectionSchema.parse({
       snapshot: this.targetedSnapshot(request.projectItemId),
@@ -267,6 +290,7 @@ interface Harness {
   readonly control: SakiControlPlaneModule
   readonly authentication: SakiAuthenticationContext
   readonly close: () => Promise<void>
+  readonly restartControlPlane: () => Promise<Harness>
 }
 
 type SakiDomain = Domain<typeof sakiControlPlaneDomainSpec>
@@ -395,6 +419,12 @@ async function mountControlPlane(ctx: Context, config: Config = CONTROL_CONFIG):
     ctx,
     control: ctx.sakiControlPlane,
     authentication: resolution.authentication,
+    restartControlPlane: async () => {
+      await controlFiber.dispose()
+      closed = true
+      openHarnesses.delete(harness)
+      return await mountControlPlane(ctx, config)
+    },
     close: async () => {
       if (closed) return
       closed = true
@@ -816,6 +846,61 @@ function installAgentRunHostFixture(execution: SakiHostExecution): AgentRunHostF
   return state
 }
 
+function installPushHostFixture(execution: SakiHostExecution, notify: (change: HostOperationChange) => void): void {
+  let recoveredInspectionFailed = false
+  let pending: {
+    request: PushBranchHostOperationRequest
+    admission: HostOperationAdmissionSource
+    preparation: HostOperationPreparation<'push-branch'>
+    snapshot: HostOperationSnapshot<'push-branch'>
+    acceptance: TestAgentRunAcceptance
+  } | undefined
+  const prepare = execution.prepareOperation.bind(execution)
+  const start = execution.startOperation.bind(execution)
+  const inspect = execution.inspectOperation.bind(execution)
+  vi.spyOn(execution, 'prepareOperation').mockImplementation(async (request, admission, signal) => {
+    if (request.type !== 'push-branch') return await prepare(request, admission, signal)
+    const parsed = pushBranchHostOperationRequestSchema.parse(request)
+    const operation = { id: 'host-operation-22202020-2020-4020-8020-202020202029',
+      hostId: parsed.expected.binding.hostId, type: 'push-branch' } as HostOperationReference<'push-branch'>
+    const preparation = { operation, preparationRevision: 0, requestFingerprint: {
+      version: 1 as const, digest: canonicalDigest('saki/test-service-push-request/v1', parsed),
+    } }
+    const snapshot = { operation, revision: 0, source: parsed.source,
+      requestFingerprint: preparation.requestFingerprint, bindingId: parsed.expected.binding.id,
+      bindingRevision: parsed.expected.binding.revision, preparedAt: Date.now(), updatedAt: Date.now(),
+      state: 'prepared' as const, admission: { kind: 'not-accepted' as const } }
+    const acceptance = new TestAgentRunAcceptance(operation.id)
+    pending = { request: parsed, admission, preparation, snapshot, acceptance }
+    return { ok: true, preparation, snapshot, acceptance } as never
+  })
+  vi.spyOn(execution, 'startOperation').mockImplementation(async (operation, acceptance, signal) => {
+    if (operation.type !== 'push-branch') return await start(operation, acceptance, signal)
+    if (pending?.preparation.operation.id !== operation.id || pending.acceptance !== acceptance) throw new Error('Push start lacks preparation authority')
+    const decision = await pending.admission({ bindingId: pending.request.expected.binding.id,
+      bindingRevision: pending.request.expected.binding.revision, preparation: pending.preparation,
+      source: pending.request.source }, signal)
+    if (decision.kind !== 'accepted') throw new Error('Push was not admitted')
+    const now = Date.now()
+    pending.snapshot = { ...pending.snapshot, revision: 1, updatedAt: now, completedAt: now,
+      state: 'succeeded', admission: { kind: 'accepted', revision: decision.admissionRevision, acceptedAt: now },
+      result: { type: 'push-branch', repository: pending.request.expected.repository,
+        targetRef: pending.request.targetRef, commitId: pending.request.expected.commitId,
+        previous: { kind: 'absent' }, credential: { helperId: 'git-credential-manager' } } }
+    notify({ operation: pending.snapshot.operation, revision: pending.snapshot.revision })
+    return { ok: true, snapshot: pending.snapshot } as never
+  })
+  vi.spyOn(execution, 'inspectOperation').mockImplementation(async (operation, signal) => {
+    if (operation.type !== 'push-branch') return await inspect(operation, signal)
+    if (pending?.preparation.operation.id !== operation.id) throw new Error('Unknown Push inspection')
+    if (pending.snapshot.state === 'succeeded' && !recoveredInspectionFailed) {
+      recoveredInspectionFailed = true
+      throw new Error('Host Push snapshot read unavailable after notification')
+    }
+    return pending.snapshot
+  })
+}
+
 describe('Development Project registration', { timeout: 60_000 }, () => {
   it('bounds the independent durable-pending targeted polling interval', () => {
     expect(SakiControlPlane.Config(CONTROL_CONFIG).targetedPendingPollIntervalMs).toBe(300_000)
@@ -830,6 +915,8 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
 
   it('owns one non-overlapping targeted-pending loop for each Provider lifetime', async () => {
     vi.useFakeTimers()
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Delegation supplies the original Operations receiver below.
+    const pollMilestone = MilestoneDeliveryOperations.prototype.pollPending
     const branchFailure = new Error('injected Branch polling failure')
     const branchPolling = vi.spyOn(BranchDeliveryOperations.prototype, 'pollPending')
       .mockRejectedValueOnce(branchFailure)
@@ -875,11 +962,41 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     expect(branchPolling).toHaveBeenCalledTimes(2)
     expect(milestonePolling).toHaveBeenCalledTimes(2)
 
-    await providerFiber.dispose()
+    let finishingSignal: AbortSignal | undefined
+    let finishPoll!: () => void
+    const finishing = new Promise<void>((resolve) => { finishPoll = resolve })
+    milestonePolling.mockImplementationOnce(async function (this: MilestoneDeliveryOperations, signal) {
+      await pollMilestone.call(this, signal)
+      finishingSignal = signal
+      await finishing
+    })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(branchPolling).toHaveBeenCalledTimes(3)
+    expect(milestonePolling).toHaveBeenCalledTimes(3)
+    const detaching = providerFiber.dispose()
+    await vi.waitFor(() => { expect(finishingSignal?.aborted).toBe(true) })
+    finishPoll()
+    await detaching
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(branchPolling).toHaveBeenCalledTimes(2)
-    expect(milestonePolling).toHaveBeenCalledTimes(2)
+    expect(branchPolling).toHaveBeenCalledTimes(3)
+    expect(milestonePolling).toHaveBeenCalledTimes(3)
+    let stoppingSignal: AbortSignal | undefined
+    let pollStarted!: () => void
+    const stopping = new Promise<void>((resolve) => { pollStarted = resolve })
+    milestonePolling.mockImplementationOnce(async function (this: MilestoneDeliveryOperations, signal) {
+      await pollMilestone.call(this, signal)
+      stoppingSignal = signal
+      pollStarted()
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => { reject(new Error('Milestone polling stopped', { cause: signal.reason })) }, { once: true })
+      })
+    })
+    await ctx.plugin((providerContext: Context) => {
+      new FakeBoardGitHub(providerContext, githubBoardCandidate(configuration))
+    })
+    await stopping
     await harness.close()
+    expect(stoppingSignal?.aborted).toBe(true)
   })
 
   it('reads Project changes and Diff through the exact trusted active binding while stale reads avoid Host calls', async () => {
@@ -1104,9 +1221,9 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const database = new DatabaseSync(durable.sqlite)
     try {
       expect(database.prepare('SELECT name, version FROM units ORDER BY name').all()).toEqual([
-        { name: 'saki_control_plane', version: 8 },
-        { name: 'saki_host_execution', version: 3 },
-        { name: 'saki_storage_generation', version: 6 },
+        { name: 'saki_control_plane', version: 9 },
+        { name: 'saki_host_execution', version: 4 },
+        { name: 'saki_storage_generation', version: 7 },
       ])
       const tables = database.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
@@ -1116,13 +1233,15 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         'unit_tables',
         'units',
       ])
-      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(22)
+      expect(tables.filter(name => name.startsWith('u2_'))).toHaveLength(26)
       expect(database.prepare(
         'SELECT table_name FROM unit_tables WHERE unit = ? ORDER BY table_name',
       ).all('saki_control_plane')).toEqual([
         { table_name: 'agent_operation_intents' },
         { table_name: 'agent_runs' },
         { table_name: 'binding_write_admissions' },
+        { table_name: 'branch_deliveries' },
+        { table_name: 'branch_delivery_intents' },
         { table_name: 'control_state' },
         { table_name: 'development_project_registry' },
         { table_name: 'execution_dispatches' },
@@ -1136,6 +1255,8 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         { table_name: 'installation_access' },
         { table_name: 'installations' },
         { table_name: 'intervention_requests' },
+        { table_name: 'milestone_deliveries' },
+        { table_name: 'milestone_delivery_intents' },
         { table_name: 'principals' },
         { table_name: 'registration_intents' },
         { table_name: 'work_assignments' },
@@ -1451,13 +1572,28 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     await harness.close()
   })
 
-  it('routes Branch Delivery intents and preserves a safe cached projection when refresh is unavailable', async () => {
+  it.each(['confirmed', 'ambiguous membership'] as const)('routes Branch Delivery intents with %s and preserves safe cached projections', async (mode) => {
     const durable = await paths()
     const repo = await repository(durable.root, 'branch-delivery-control-route')
     const configuration = githubSynchronizationConfiguration()
+    const routeCandidate = () => {
+      const candidate = githubBoardCandidate(configuration)
+      return mode === 'confirmed' ? candidate : refingerprintCandidate(candidate, {
+        items: [], fences: { before: { ...candidate.fences.before, projectItemCount: 0 },
+          after: { ...candidate.fences.after, projectItemCount: 0 } },
+      })
+    }
     const ctx = await context(durable)
+    let github!: FakeBoardGitHub
     const providerFiber = await ctx.plugin((providerContext: Context) => {
-      new FakeBoardGitHub(providerContext, githubBoardCandidate(configuration))
+      github = new FakeBoardGitHub(providerContext, routeCandidate())
+    })
+    const hostListeners = new Set<(change: HostOperationChange) => void>()
+    const subscribeHost = ctx.sakiHostExecution.onChanged.bind(ctx.sakiHostExecution)
+    vi.spyOn(ctx.sakiHostExecution, 'onChanged').mockImplementation((listener) => {
+      hostListeners.add(listener)
+      const dispose = subscribeHost(listener)
+      return () => { hostListeners.delete(listener); dispose() }
     })
     const harness = await mountControlPlane(ctx)
     const registered = await harness.control.submit(harness.authentication, intent(
@@ -1488,7 +1624,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const changedKeys: string[][] = []
     const disposeChanged = harness.control.onChanged((keys) => { changedKeys.push([...keys]) })
 
-    const saved = await harness.control.submit(harness.authentication, {
+    const saveIntent = {
       type: 'save-branch-delivery',
       intentId: 'intent-22222020-2020-4220-8220-202020202020' as SakiControlIntentId,
       projectId: project.id,
@@ -1505,7 +1641,39 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       commitId: githubCommitId(stdout.trim()),
       headRef: 'refs/heads/saki/branch-delivery-control-route',
       baseRef: 'refs/heads/master',
-    }, new AbortController().signal)
+    } as const
+    const missingWorkItemId = `work-item-${'f'.repeat(64)}` as typeof item.id
+    for (const refresh of ['cached', 'interactive'] as const) {
+      expect(await harness.control.query(harness.authentication, {
+        type: 'branch-delivery', projectId: project.id, workItemId: missingWorkItemId, refresh,
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    }
+    expect(await harness.control.submit(harness.authentication, {
+      ...saveIntent, workItemId: missingWorkItemId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'unavailable' })
+    expect(await harness.control.submit(harness.authentication, {
+      ...saveIntent, projectId: 'project-22292020-2020-4920-8920-202020202020' as SakiDevelopmentProjectId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'unavailable' })
+    const actualInspectHead = harness.ctx.sakiHostExecution.inspectProject.bind(harness.ctx.sakiHostExecution)
+    const inspectHead = vi.spyOn(harness.ctx.sakiHostExecution, 'inspectProject')
+    inspectHead.mockImplementationOnce(async (request, signal) => {
+      const observed = await actualInspectHead(request, signal)
+      if (!observed.ok) throw new Error('Host inspection unavailable')
+      return { ...observed, observation: { ...observed.observation,
+        head: { kind: 'unborn', symbolicRef: 'refs/heads/master' } } }
+    })
+    expect(await harness.control.submit(harness.authentication, {
+      ...saveIntent, intentId: 'intent-22273020-2020-4720-8720-202020202020' as SakiControlIntentId,
+    }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'conflict' })
+    for (const reason of ['binding-stale', 'unavailable'] as const) {
+      inspectHead.mockResolvedValueOnce({ ok: false, reason })
+      const probe = reason === 'binding-stale' ? { ...saveIntent,
+        intentId: 'intent-22282020-2020-4820-8820-202020202020' as SakiControlIntentId } : saveIntent
+      expect(await harness.control.submit(harness.authentication, probe, new AbortController().signal))
+        .toMatchObject({ ok: false, reason: reason === 'binding-stale' ? 'conflict' : 'unavailable' })
+    }
+    inspectHead.mockRestore()
+    const saved = await harness.control.submit(harness.authentication, saveIntent, new AbortController().signal)
     expect(saved).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
     if (!saved.ok) throw new Error('Branch Delivery save failed')
     expect(changedKeys).toContainEqual(['branch-delivery', 'milestone-view'])
@@ -1552,6 +1720,16 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         new AbortController().signal,
       )).toMatchObject({ ok: false, reason: 'conflict' })
     }
+    await setGrantActions(harness, ['board:read'])
+    for (const request of [saveIntent, ...routed]) {
+      expect(await harness.control.submit(harness.authentication, request, new AbortController().signal))
+        .toEqual({ ok: false, reason: 'denied' })
+    }
+    await setGrantActions(harness, [])
+    expect(await harness.control.query(harness.authentication, {
+      type: 'branch-delivery', projectId: project.id, workItemId: item.id, refresh: 'cached',
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    await setGrantActions(harness, HOST_OPERATOR_ACTIONS)
     expect(await harness.control.submit(harness.authentication, {
       type: 'push-branch-delivery',
       intentId: registered.receipt.intentId,
@@ -1588,6 +1766,26 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         branchDelivery: { delivery: { revision: 1 } },
       },
     })
+    const read = vi.spyOn(github, 'read')
+    const diagnostic = vi.spyOn(ctx.logger, 'error').mockImplementation(() => ctx.logger)
+    const refreshDefect = new Error('delivery read defect')
+    read.mockRejectedValueOnce(refreshDefect)
+    expect(await harness.control.query(harness.authentication, {
+      type: 'branch-delivery', projectId: project.id, workItemId: item.id, refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true, projection: { refresh: { state: 'unavailable' } } })
+    expect(diagnostic).toHaveBeenCalledWith(`Saki Branch Delivery refresh failed: ${String(refreshDefect)}`)
+    for (const unexpectedFailure of [false, true]) {
+      read.mockImplementationOnce(async () => {
+        await setGrantActions(harness, [])
+        throw unexpectedFailure ? refreshDefect : new GitHubProviderError({ code: 'not-found', resource: 'branch-head' })
+      })
+      expect(await harness.control.query(harness.authentication, {
+        type: 'branch-delivery', projectId: project.id, workItemId: item.id, refresh: 'interactive',
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+      await setGrantActions(harness, HOST_OPERATOR_ACTIONS)
+    }
+    read.mockRestore()
+    diagnostic.mockRestore()
     await providerFiber.dispose()
     expect(await harness.control.query(harness.authentication, {
       type: 'branch-delivery',
@@ -1598,12 +1796,173 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       ok: true,
       projection: {
         refresh: { requested: 'interactive', state: 'unavailable' },
-        branchDelivery: { delivery: { revision: 1 } },
+        branchDelivery: { delivery: { revision: 2 } },
       },
     })
+    const completeProvider = await ctx.plugin((providerContext: Context) => {
+      github = new FakeBoardGitHub(providerContext, routeCandidate())
+    })
+    const deliveryCommit = saveIntent.commitId
+    const pullRequest = {
+      id: githubPullRequestId('PR_delivery_complete'), repositoryId: configuration.repositoryNodeId,
+      number: 32, state: 'open' as const, merged: false, draft: false, title: 'Complete delivery',
+      url: 'https://github.com/BreakfastDaPaiDang/saki/pull/32', updatedAt: Date.now(),
+      head: { repositoryId: configuration.repositoryNodeId, ref: saveIntent.headRef.slice('refs/heads/'.length), commitId: deliveryCommit },
+      base: { repositoryId: configuration.repositoryNodeId, ref: 'master', commitId: deliveryCommit },
+    }
+    vi.spyOn(github, 'read').mockImplementation(async (request) => {
+      const observedAt = Date.now()
+      if (request.kind === 'branch-head') return { state: 'present', repositoryId: request.repositoryId,
+        branch: request.branch, commitId: deliveryCommit, observedAt } as never
+      if (request.kind === 'pull-request-association') return { state: 'unique', pullRequest: { ...pullRequest, observedAt }, observedAt } as never
+      if (request.kind === 'pull-request') return { ...pullRequest, observedAt }
+      if (request.kind === 'commit-ci') return { repositoryId: request.repositoryId, commitId: request.commitId,
+        workflowRuns: [], checkRuns: [], commitStatuses: [{ id: githubCommitStatusId('32'), context: 'ci',
+          state: 'success', createdAt: observedAt, updatedAt: observedAt }], observedAt } as never
+      throw new GitHubProviderError({ code: 'not-found', resource: request.kind })
+    })
+    const recoveryDiagnostic = vi.spyOn(ctx.logger, 'error').mockImplementation(() => ctx.logger)
+    installPushHostFixture(harness.ctx.sakiHostExecution, (change) => {
+      for (const listener of hostListeners) listener(change)
+    })
+    const deliveryRevision = () => {
+      const value = liveSakiDomain(ctx).table('branch_deliveries').get(deliveryId)
+      if (value === undefined) throw new Error('saved delivery is missing')
+      return value.revision
+    }
+    const currentBoard = await harness.control.query<'board'>(harness.authentication, {
+      type: 'board', projectId: project.id, refresh: 'interactive',
+    }, new AbortController().signal)
+    if (!currentBoard.ok || currentBoard.projection.mapping.state !== 'valid') throw new Error('Delivery Board is unavailable')
+    expect(await harness.control.submit(harness.authentication, {
+      ...saveIntent, intentId: 'intent-22293020-2020-4920-8920-202020202020' as SakiControlIntentId,
+      expected: { ...saveIntent.expected, deliveryRevision: deliveryRevision(),
+        synchronizationRevision: currentBoard.projection.synchronizationRevision,
+        mappingRevision: currentBoard.projection.mapping.configurationRevision },
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'push-branch-delivery', intentId: 'intent-22203020-2020-4020-8020-202020202020' as SakiControlIntentId,
+      deliveryId, expectedDeliveryRevision: deliveryRevision(),
+    }, new AbortController().signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'associate-branch-delivery-pull-request', intentId: 'intent-22213020-2020-4120-8120-202020202020' as SakiControlIntentId,
+      deliveryId, expectedDeliveryRevision: deliveryRevision(), pullRequestId: pullRequest.id, pullRequestNumber: pullRequest.number,
+    }, new AbortController().signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(recoveryDiagnostic).toHaveBeenCalledWith('Saki Branch Delivery recovery failed: Error: Host Push snapshot read unavailable after notification')
+    recoveryDiagnostic.mockRestore()
+    if (mode === 'ambiguous membership') {
+      const candidate = routeCandidate()
+      const issue = candidate.openIssues[0]
+      if (issue === undefined) throw new Error('Unjoined Issue fixture is missing')
+      vi.spyOn(github, 'inspectMutation').mockImplementation(async (request) => {
+        if (request.kind !== 'project-item-add') throw new Error(`unexpected membership inspection ${request.kind}`)
+        return githubProjectItemAddInspectionSchema.parse({ snapshot: {
+          repositoryId: configuration.repositoryNodeId, repositoryDatabaseId: configuration.repositoryDatabaseId,
+          projectId: configuration.projectNodeId, issue, membership: { state: 'absent' },
+        }, observedAt: Date.now() })
+      })
+      vi.spyOn(github, 'dispatch').mockRejectedValue(new GitHubProviderError({ code: 'transient-transport' }))
+      expect(await harness.control.submit(harness.authentication, {
+        type: 'mark-branch-delivery-in-review',
+        intentId: 'intent-22223020-2020-4220-8220-202020202020' as SakiControlIntentId,
+        deliveryId, expectedDeliveryRevision: deliveryRevision(), expectedWorkItemRemoteFingerprint: item.remoteFingerprint,
+      }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'reconciliation-required' })
+      expect(await harness.control.query(harness.authentication, {
+        type: 'branch-delivery', projectId: project.id, workItemId: item.id, refresh: 'cached',
+      }, new AbortController().signal)).toMatchObject({ ok: true, projection: { branchDelivery: {
+        delivery: { phase: 'draft', repair: { reason: 'evidence-conflict' } },
+      } } })
+      await completeProvider.dispose()
+      disposeChanged()
+      await harness.close()
+      return
+    }
+    const conflictingReviewId = 'intent-22273020-2020-4720-8720-202020202027' as SakiControlIntentId
+    const childDigest = canonicalDigest('saki/branch-delivery/child-move-intent/v1', {
+      parentIntentId: conflictingReviewId, targetStatus: 'in-review',
+    })
+    const childIntentId = `intent-${childDigest.slice(0, 8)}-${childDigest.slice(8, 12)}-${childDigest.slice(12, 16)}-${childDigest.slice(16, 20)}-${childDigest.slice(20, 32)}` as SakiControlIntentId
+    const reservedMilestoneId = githubMilestoneId('M_reserved_child_identity')
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'save-milestone-delivery', intentId: childIntentId, projectId: project.id,
+      expectedDeliveryRevision: null, expectedRegistryRevision: registry.revision, expectedProjectRevision: project.revision,
+      phase: 'planned', release: { repositoryId: configuration.repositoryNodeId, projectId: configuration.projectNodeId,
+        milestoneId: reservedMilestoneId, milestoneNumber: 1, tagName: githubReleaseTagName('saki-v0.1.0'),
+        releaseCommitId: deliveryCommit, upstreamRepositoryId: githubRepositoryId('R_upstream_delivery'),
+        upstreamRepositoryDatabaseId: githubRepositoryDatabaseId('424242'),
+        upstreamRepositoryNameWithOwner: 'deepseek-ai/deepseek-harness', upstreamCommitId: githubCommitId('b'.repeat(40)) },
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'mark-branch-delivery-in-review', intentId: conflictingReviewId,
+      deliveryId, expectedDeliveryRevision: deliveryRevision(), expectedWorkItemRemoteFingerprint: item.remoteFingerprint,
+    }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'conflict' })
+    await setGrantActions(harness, HOST_OPERATOR_ACTIONS.filter(action => action !== 'work-item:move'))
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'mark-branch-delivery-in-review',
+      intentId: 'intent-22283020-2020-4820-8820-202020202020' as SakiControlIntentId,
+      deliveryId, expectedDeliveryRevision: deliveryRevision(), expectedWorkItemRemoteFingerprint: item.remoteFingerprint,
+    }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'conflict' })
+    await setGrantActions(harness, HOST_OPERATOR_ACTIONS)
+    const review = { type: 'mark-branch-delivery-in-review' as const,
+      intentId: 'intent-22223020-2020-4220-8220-202020202020' as SakiControlIntentId,
+      deliveryId, expectedDeliveryRevision: deliveryRevision(), expectedWorkItemRemoteFingerprint: item.remoteFingerprint }
+    const inspection = vi.spyOn(github, 'inspectMutation').mockRejectedValueOnce(new GitHubProviderError({ code: 'transient-transport' }))
+    expect(await harness.control.submit(harness.authentication, review, new AbortController().signal))
+      .toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(await harness.control.submit(harness.authentication, review, new AbortController().signal))
+      .toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    inspection.mockRestore()
+    const inReview = await harness.control.query<'board'>(harness.authentication, {
+      type: 'board', projectId: project.id, refresh: 'cached',
+    }, new AbortController().signal)
+    if (!inReview.ok || inReview.projection.confirmed === undefined) throw new Error('In Review Board is unavailable')
+    const reviewingItem = inReview.projection.confirmed.items.find(candidate => candidate.id === item.id)
+    if (reviewingItem === undefined) throw new Error('In Review Work Item is missing')
+    expect(reviewingItem.status).toBe('in-review')
+    expect(await harness.control.submit(harness.authentication, {
+      type: 'accept-branch-delivery', intentId: 'intent-22233020-2020-4320-8320-202020202020' as SakiControlIntentId,
+      deliveryId, expectedDeliveryRevision: deliveryRevision(), expectedWorkItemRemoteFingerprint: reviewingItem.remoteFingerprint,
+    }, new AbortController().signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'branch-delivery', projectId: project.id, workItemId: item.id, refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true, projection: { refresh: { state: 'immutable' },
+      branchDelivery: { delivery: { phase: 'accepted' } } } })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'milestone-view', projectId: project.id, milestoneId: reservedMilestoneId, refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true, projection: { refresh: { state: 'confirmed' } } })
+    await completeProvider.dispose()
     disposeChanged()
-    await harness.close()
-  })
+    const recovered = await harness.restartControlPlane()
+    expect(await recovered.control.query(recovered.authentication, {
+      type: 'branch-delivery', projectId: project.id, workItemId: item.id, refresh: 'cached',
+    }, new AbortController().signal)).toMatchObject({ ok: true, projection: { branchDelivery: { delivery: { phase: 'accepted' } } } })
+    const recoveredBoard = await recovered.control.query<'board'>(recovered.authentication, {
+      type: 'board', projectId: project.id, refresh: 'cached',
+    }, new AbortController().signal)
+    if (!recoveredBoard.ok) throw new Error('Recovered Board is unavailable')
+    expect(await recovered.control.submit(recovered.authentication, {
+      type: 'configure-github-synchronization', intentId: 'intent-22243020-2020-4420-8420-202020202020' as SakiControlIntentId,
+      projectId: project.id, expectedSynchronizationRevision: recoveredBoard.projection.synchronizationRevision,
+      patch: { statusFieldNodeId: 'PVTF_replacement_delivery' as typeof configuration.statusFieldNodeId },
+    }, new AbortController().signal)).toMatchObject({ ok: true })
+    expect(await recovered.control.submit(recovered.authentication, {
+      ...saveIntent, intentId: 'intent-22253020-2020-4520-8520-202020202020' as SakiControlIntentId,
+    }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    const retainedMilestone = [...liveSakiDomain(ctx).table('milestone_deliveries').entries()][0]?.[1]
+    if (retainedMilestone === undefined) throw new Error('Reserved Milestone is missing')
+    expect(await recovered.control.submit(recovered.authentication, {
+      type: 'save-milestone-delivery', intentId: 'intent-22263020-2020-4620-8620-202020202020' as SakiControlIntentId,
+      projectId: project.id, expectedDeliveryRevision: retainedMilestone.revision,
+      expectedRegistryRevision: registry.revision, expectedProjectRevision: project.revision,
+      phase: 'planned', release: retainedMilestone.release,
+    }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    vi.spyOn(ctx.sakiHostExecution, 'inspectProjectSelection').mockResolvedValueOnce({ ok: false, reason: 'missing' })
+    const missingBinding = await recovered.restartControlPlane()
+    expect(await missingBinding.control.submit(missingBinding.authentication, {
+      ...saveIntent, intentId: 'intent-22264020-2020-4620-8620-202020202020' as SakiControlIntentId,
+    }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    await missingBinding.close()
+  }, 120_000)
 
   it('routes Milestone Delivery metadata, fresh View reads, and fail-closed finalization', async () => {
     const durable = await paths()
@@ -1651,7 +2010,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const changedKeys: string[][] = []
     const disposeChanged = harness.control.onChanged((keys) => { changedKeys.push([...keys]) })
 
-    const saved = await harness.control.submit(harness.authentication, {
+    const saveIntent = {
       type: 'save-milestone-delivery',
       intentId: 'intent-23222020-2020-4220-8220-202020202020' as SakiControlIntentId,
       projectId: project.id,
@@ -1660,7 +2019,26 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       expectedProjectRevision: project.revision,
       phase: 'ready-to-release',
       release,
-    }, new AbortController().signal)
+    } as const
+    expect(await harness.control.query(harness.authentication, {
+      type: 'milestone-view', projectId: project.id, milestoneId, refresh: 'cached',
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await harness.control.submit(harness.authentication, {
+      ...saveIntent, intentId: registered.receipt.intentId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
+    expect(await harness.control.submit(harness.authentication, {
+      ...saveIntent,
+      intentId: 'intent-23292020-2020-4920-8920-202020202020' as SakiControlIntentId,
+      projectId: 'project-23292020-2020-4920-8920-202020202020' as SakiDevelopmentProjectId,
+    }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'unavailable' })
+    await setGrantActions(harness, [])
+    expect(await harness.control.query(harness.authentication, {
+      type: 'milestone-view', projectId: project.id, milestoneId, refresh: 'cached',
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    expect(await harness.control.submit(harness.authentication, saveIntent, new AbortController().signal))
+      .toEqual({ ok: false, reason: 'denied' })
+    await setGrantActions(harness, HOST_OPERATOR_ACTIONS)
+    const saved = await harness.control.submit(harness.authentication, saveIntent, new AbortController().signal)
     expect(saved).toMatchObject({ ok: true, receipt: { state: 'succeeded', deliveryRevision: 0 } })
     if (!saved.ok) throw new Error('Milestone Delivery save failed')
     expect(changedKeys).toContainEqual(['milestone-view'])
@@ -1698,6 +2076,27 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     })
     expect(github.requests).toHaveLength(scansBeforeView)
 
+    const read = vi.spyOn(github, 'read')
+    const diagnostic = vi.spyOn(ctx.logger, 'error').mockImplementation(() => ctx.logger)
+    const refreshDefect = new Error('milestone read defect')
+    read.mockRejectedValueOnce(refreshDefect)
+    expect(await harness.control.query(harness.authentication, {
+      type: 'milestone-view', projectId: project.id, milestoneId, refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true, projection: { refresh: { state: 'unavailable' } } })
+    expect(diagnostic).toHaveBeenCalledWith(`Saki Milestone Delivery refresh failed: ${String(refreshDefect)}`)
+    for (const unexpectedFailure of [false, true]) {
+      read.mockImplementationOnce(async () => {
+        await setGrantActions(harness, [])
+        throw unexpectedFailure ? refreshDefect : new GitHubProviderError({ code: 'not-found', resource: 'milestone' })
+      })
+      expect(await harness.control.query(harness.authentication, {
+        type: 'milestone-view', projectId: project.id, milestoneId, refresh: 'interactive',
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+      await setGrantActions(harness, HOST_OPERATOR_ACTIONS)
+    }
+    read.mockRestore()
+    diagnostic.mockRestore()
+
     const finalizeIntent = {
       type: 'finalize-milestone-delivery',
       intentId: 'intent-23232020-2020-4320-8320-202020202020' as SakiControlIntentId,
@@ -1705,6 +2104,10 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       expectedDeliveryRevision: 0,
       release,
     } as const
+    const failedFinalizeRead = vi.spyOn(github, 'read').mockRejectedValueOnce(refreshDefect)
+    await expect(harness.control.submit(harness.authentication, finalizeIntent, new AbortController().signal))
+      .rejects.toBe(refreshDefect)
+    failedFinalizeRead.mockRestore()
     expect(await harness.control.submit(
       harness.authentication,
       finalizeIntent,
@@ -1717,6 +2120,11 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     expect(github.requests.length).toBeGreaterThan(scansBeforeView)
 
     await providerFiber.dispose()
+    const unavailableIntentId = 'intent-23282020-2020-4820-8820-202020202020' as SakiControlIntentId
+    expect(await harness.control.submit(harness.authentication, {
+      ...finalizeIntent, intentId: unavailableIntentId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'unavailable' })
+    expect(liveSakiDomain(ctx).table('milestone_delivery_intents').get(unavailableIntentId)).toBeUndefined()
     expect(await harness.control.submit(
       harness.authentication,
       finalizeIntent,
@@ -1798,14 +2206,135 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     expect(liveSakiDomain(restarted.ctx).table('milestone_delivery_intents').get(replacementIntent.intentId))
       .toMatchObject({ phase: 'prepared' })
 
+    let replacementGithub!: FakeBoardGitHub
     const replacementFiber = await restarted.ctx.plugin((providerContext: Context) => {
-      new FakeBoardGitHub(providerContext, githubBoardCandidate(configuration))
+      replacementGithub = new FakeBoardGitHub(providerContext, githubBoardCandidate(configuration))
     })
     await vi.waitFor(() => {
       expect(liveSakiDomain(restarted.ctx).table('milestone_delivery_intents').get(replacementIntent.intentId))
         .toMatchObject({ phase: 'blocked' })
     }, { timeout: 5_000 })
+    replacementGithub.setStatusOption(configuration.statusOptionNodeIds.done)
+    const scan = replacementGithub.scan.bind(replacementGithub)
+    vi.spyOn(replacementGithub, 'scan').mockImplementation(async (request, signal) => {
+      const candidate = await scan(request, signal)
+      return refingerprintCandidate(candidate, { observedAt: Date.now() })
+    })
+    const candidate = githubBoardCandidate(configuration)
+    const issueItem = candidate.items[0]
+    if (issueItem?.content.kind !== 'issue') throw new Error('Milestone Issue fixture is missing')
+    const issue = issueItem.content.issue
+    const installReleaseReads = (provider: FakeBoardGitHub) => vi.spyOn(provider, 'read').mockImplementation(async (request) => {
+      const observedAt = Date.now()
+      if (request.kind === 'milestone') return { id: milestoneId, repositoryId: configuration.repositoryNodeId,
+        number: 1, state: 'open', title: '0.1.0', url: 'https://github.com/BreakfastDaPaiDang/saki/milestone/1',
+        updatedAt: issue.updatedAt, issues: [issue], observedAt } as never
+      if (request.kind === 'tag-reference') return { repositoryId: configuration.repositoryNodeId,
+        tagName: release.tagName, ref: `refs/tags/${release.tagName}`,
+        target: { kind: 'commit', id: release.releaseCommitId }, observedAt } as never
+      if (request.kind === 'tag-object') return { repositoryId: configuration.repositoryNodeId,
+        tagObjects: [], commitId: release.releaseCommitId, observedAt }
+      if (request.kind === 'release-by-tag') return { kind: 'present', release: { id: githubReleaseId('REL_delivery_complete'),
+        repositoryId: configuration.repositoryNodeId, tagName: release.tagName, targetCommitish: release.tagName,
+        draft: false, prerelease: false, publishedAt: issue.updatedAt,
+        url: `https://github.com/BreakfastDaPaiDang/saki/releases/tag/${release.tagName}`, observedAt } } as never
+      if (request.kind === 'commit' || request.kind === 'public-commit') return { id: request.commitId,
+        repositoryId: request.repositoryId, url: `https://github.com/commit/${request.commitId}`,
+        committedAt: issue.updatedAt, observedAt }
+      if (request.kind === 'compare-commits') return { repositoryId: request.repositoryId,
+        baseCommitId: request.baseCommitId, headCommitId: request.headCommitId, status: 'ahead', aheadBy: 1,
+        behindBy: 0, mergeBaseCommitId: request.baseCommitId, observedAt } as never
+      throw new GitHubProviderError({ code: 'not-found', resource: request.kind })
+    })
+    let releaseReads = installReleaseReads(replacementGithub)
+    await restarted.control.query(restarted.authentication, {
+      type: 'milestone-view', projectId: project.id, milestoneId, refresh: 'interactive',
+    }, new AbortController().signal)
+    const completeRead = releaseReads.getMockImplementation()
+    if (completeRead === undefined) throw new Error('Release read fixture is missing')
+    let readStarted!: () => void
+    let continueRead!: () => void
+    const startedRead = new Promise<void>((resolve) => { readStarted = resolve })
+    const resumedRead = new Promise<void>((resolve) => { continueRead = resolve })
+    releaseReads.mockImplementationOnce(async (request) => {
+      const fact = await completeRead(request)
+      readStarted()
+      await resumedRead
+      return fact
+    })
+    const detachedRead = restarted.control.query(restarted.authentication, {
+      type: 'milestone-view', projectId: project.id, milestoneId, refresh: 'interactive',
+    }, new AbortController().signal)
+    await startedRead
     await replacementFiber.dispose()
+    continueRead()
+    await expect(detachedRead).resolves.toMatchObject({ ok: true, projection: { refresh: { state: 'unavailable' } } })
+    const mountReleaseProvider = () => restarted.ctx.plugin((providerContext: Context) => {
+      replacementGithub = new FakeBoardGitHub(providerContext,
+        githubBoardCandidate(configuration, configuration.statusOptionNodeIds.done))
+      const completeScan = replacementGithub.scan.bind(replacementGithub)
+      vi.spyOn(replacementGithub, 'scan').mockImplementation(async (request, signal) => (
+        refingerprintCandidate(await completeScan(request, signal), { observedAt: Date.now() })
+      ))
+      releaseReads = installReleaseReads(replacementGithub)
+    })
+    let completeFiber = await mountReleaseProvider()
+    expect(await restarted.control.submit(restarted.authentication, {
+      ...saveIntent, intentId: 'intent-23253020-2020-4520-8520-202020202020' as SakiControlIntentId,
+      expectedDeliveryRevision: 1,
+    }, new AbortController().signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded', deliveryRevision: 2 } })
+    const releaseFinalization = {
+      ...finalizeIntent, intentId: 'intent-23263020-2020-4620-8620-202020202020' as SakiControlIntentId,
+      expectedDeliveryRevision: 2,
+    }
+    const unavailableScan = vi.spyOn(replacementGithub, 'scan')
+    const completeScan = unavailableScan.getMockImplementation()
+    if (completeScan === undefined) throw new Error('Fresh Board scan fixture is missing')
+    unavailableScan.mockRejectedValue(new Error('Board scan adapter unavailable'))
+    expect(await restarted.control.submit(restarted.authentication, releaseFinalization, new AbortController().signal))
+      .toMatchObject({ ok: false, reason: 'unavailable' })
+    unavailableScan.mockRejectedValue(new GitHubProviderError({ code: 'mapping-mismatch',
+      reason: 'field-missing-or-not-single-select', statusFieldId: configuration.statusFieldNodeId }))
+    expect(await restarted.control.submit(restarted.authentication, releaseFinalization, new AbortController().signal))
+      .toMatchObject({ ok: false, reason: 'unavailable' })
+    const invalidBoard = await restarted.control.query<'board'>(restarted.authentication, {
+      type: 'board', projectId: project.id, refresh: 'cached',
+    }, new AbortController().signal)
+    if (!invalidBoard.ok || invalidBoard.projection.confirmed === undefined) throw new Error('Retained Board is unavailable')
+    expect(invalidBoard.projection.mapping.state).toBe('repair-required')
+    unavailableScan.mockImplementation(completeScan)
+    await restarted.control.query(restarted.authentication, {
+      type: 'board', projectId: project.id, refresh: 'interactive',
+    }, new AbortController().signal)
+    await waitForConfirmedBoard(restarted, project.id, invalidBoard.projection.confirmed.generation + 1)
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Delegation supplies the original Consumer receiver below.
+    const requestFreshBoardScan = GitHubSynchronizationConsumer.prototype.requestFreshBoardScan
+    const detachedScan = vi.spyOn(GitHubSynchronizationConsumer.prototype, 'requestFreshBoardScan')
+      .mockImplementationOnce(async function (this: GitHubSynchronizationConsumer, projectId, signal) {
+        const result = await requestFreshBoardScan.call(this, projectId, signal)
+        await completeFiber.dispose()
+        return result
+      })
+    releaseReads.mockClear()
+    expect(await restarted.control.submit(restarted.authentication, releaseFinalization, new AbortController().signal))
+      .toMatchObject({ ok: false, reason: 'unavailable' })
+    expect(detachedScan).toHaveBeenCalledOnce()
+    expect(releaseReads).not.toHaveBeenCalled()
+    detachedScan.mockRestore()
+    expect(await restarted.control.query(restarted.authentication, {
+      type: 'milestone-view', projectId: project.id, milestoneId, refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true, projection: { refresh: { state: 'unavailable' } } })
+    completeFiber = await mountReleaseProvider()
+    expect(await restarted.control.submit(restarted.authentication, releaseFinalization, new AbortController().signal))
+      .toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(releaseReads).toHaveBeenCalled()
+    releaseReads.mockClear()
+    expect(await restarted.control.query(restarted.authentication, {
+      type: 'milestone-view', projectId: project.id, milestoneId, refresh: 'interactive',
+    }, new AbortController().signal)).toMatchObject({ ok: true, projection: { refresh: { state: 'immutable' },
+      milestoneView: { delivery: { phase: 'released' } } } })
+    expect(releaseReads).not.toHaveBeenCalled()
+    await completeFiber.dispose()
     await restarted.close()
   })
 
@@ -5056,7 +5585,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     })
     expect(invalidations).toEqual([
       {
-        keys: ['my-work', 'attention', 'project-index', 'development-workspace', 'project-changes'],
+        keys: ['my-work', 'attention', 'project-index', 'development-workspace', 'project-changes', 'milestone-view'],
         registryRevision: 1,
         projectIds: [accepted.receipt.projectId],
       },

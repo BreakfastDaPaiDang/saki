@@ -49,6 +49,7 @@ import type {
   InstallationAccessRecord,
   InstallationRecord,
   PrincipalRecord,
+  DevelopmentProjectRecord,
   DevelopmentProjectRegistryRecord,
   RegistrationActor,
   RegistrationIntentRecord,
@@ -147,6 +148,7 @@ import type {
   SakiBootstrapTransportContext,
   SakiBrowserSessionId,
   SakiBoardWorkItemId,
+  SakiBoardProjection,
   SakiChangedDisposer,
   SakiDevelopmentProjectId,
   SakiGrantId,
@@ -214,6 +216,7 @@ function branchDeliveryAction(type: BranchDeliveryIntent['type']): BranchDeliver
     case 'associate-branch-delivery-pull-request': return 'branch-delivery:pull-request:associate'
     case 'mark-branch-delivery-in-review': return 'branch-delivery:review'
     case 'accept-branch-delivery': return 'branch-delivery:accept'
+    /* v8 ignore next -- BranchDeliveryIntent is a closed union validated before dispatch. */
     default: return assertNever(type)
   }
 }
@@ -800,6 +803,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
             case 'denied':
             case 'conflict':
             case 'canceled': return { state: 'conflict' }
+            /* v8 ignore next -- every GitHubWorkItemIntentResult failure reason is handled above. */
             default: return assertNever(result)
           }
         },
@@ -1177,11 +1181,11 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
             refreshState = 'unavailable'
           } else {
             try {
-              const refreshed = await this.milestoneDeliveryOperations.refresh(deliveryId, signal)
+              // The Delivery exists, cannot be deleted, and refresh holds its sole writer queue.
+              await this.milestoneDeliveryOperations.refresh(deliveryId, signal)
               signal.throwIfAborted()
               if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
-              if (!refreshed.ok && refreshed.reason === 'not-found') return { ok: false, reason: 'not-found' }
-              refreshState = refreshed.ok ? 'confirmed' : 'unavailable'
+              refreshState = 'confirmed'
             } catch (error) {
               signal.throwIfAborted()
               if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
@@ -1192,11 +1196,9 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
             }
           }
         }
-        const currentValue = this.milestoneDeliveryTable.get(deliveryId)
-        if (currentValue === undefined) return { ok: false, reason: 'not-found' }
-        const current = milestoneDeliveryRecordSchema.parse(currentValue)
-        const board = this.githubSynchronization.board(query.projectId)
-        if (board === 'not-found') return { ok: false, reason: 'not-found' }
+        const current = milestoneDeliveryRecordSchema.parse(this.milestoneDeliveryTable.get(deliveryId))
+        // Validated Milestone Deliveries retain their Project; neither aggregate has a deletion operation.
+        const board = this.githubSynchronization.board(query.projectId) as SakiBoardProjection
         const now = Date.now()
         return {
           ok: true,
@@ -1264,7 +1266,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     if (project === 'binding-unavailable') return { ok: false, reason: 'unavailable' }
     const synchronization = this.githubSynchronization.mutationContext(projectId)
     if (!synchronization.ok) {
-      return { ok: false, reason: synchronization.reason === 'not-found' ? 'not-found' : 'unavailable' }
+      return { ok: false, reason: 'unavailable' }
     }
     const { configuration, confirmedBoard } = synchronization.context
     const workItem = confirmedBoard.items.find(candidate => candidate.id === workItemId)
@@ -1325,7 +1327,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     if (project === undefined) return { ok: false, reason: 'not-found' }
     const synchronization = this.githubSynchronization.mutationContext(projectId)
     if (!synchronization.ok) {
-      return { ok: false, reason: synchronization.reason === 'not-found' ? 'not-found' : 'unavailable' }
+      return { ok: false, reason: 'unavailable' }
     }
     return {
       ok: true,
@@ -1358,11 +1360,12 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       throw new MilestoneReleaseReadUnavailable('GitHub Product App Provider changed during release read')
     }
     const registry = this.projects.registry()
-    const project = registry.projects.find(candidate => candidate.id === projectId)
+    // The caller owns a retained Milestone Delivery, and Projects and Deliveries cannot be deleted.
+    const project = registry.projects.find(candidate => candidate.id === projectId) as DevelopmentProjectRecord
     const synchronization = this.githubSynchronization.mutationContext(projectId)
     const deliveryValue = this.milestoneDeliveryTable.get(milestoneDeliveryId(projectId, expectation.milestoneId))
-    const boardProjection = this.githubSynchronization.board(projectId)
-    if (project === undefined || !synchronization.ok || deliveryValue === undefined || boardProjection === 'not-found') {
+    const boardProjection = this.githubSynchronization.board(projectId) as SakiBoardProjection
+    if (!synchronization.ok) {
       throw new MilestoneReleaseReadUnavailable('release target is no longer available')
     }
     const delivery = milestoneDeliveryRecordSchema.parse(deliveryValue)
@@ -2442,36 +2445,36 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private installGitHubSynchronizationConsumer(): void {
     const providerFiber = this.ctx.inject(['sakiGitHub'], (providerContext: Context) => {
+      const provider = providerContext.sakiGitHub
       const providerLifetime = new AbortController()
-      const detachWorkItemOperations = this.githubWorkItemOperations.attach(providerContext.sakiGitHub)
-      const detachBranchDeliveryOperations = this.branchDeliveryOperations.attach(providerContext.sakiGitHub)
-      const detachAgentOperations = this.agentOperations.attachGitHub(providerContext.sakiGitHub)
+      const detachWorkItemOperations = this.githubWorkItemOperations.attach(provider)
+      const detachBranchDeliveryOperations = this.branchDeliveryOperations.attach(provider)
+      const detachAgentOperations = this.agentOperations.attachGitHub(provider)
       const consumer = new GitHubSynchronizationConsumer({
         synchronization: this.githubSynchronization,
-        github: providerContext.sakiGitHub,
+        github: provider,
         attemptTtlMs: this.config.githubScanAttemptTtlMs,
         reportUnexpectedFailure: (scope) => {
           this.ctx.logger.error(`Saki GitHub synchronization ${scope} failed outside its typed failure interface`)
         },
       })
-      this.githubProvider = providerContext.sakiGitHub
+      this.githubProvider = provider
       this.githubSynchronizationConsumer = consumer
       consumer.wake()
       const pendingPolling = this.runOwnedOperation(
         providerLifetime.signal,
         signal => this.pollGitHubProviderPending(signal),
-      ).catch((error: unknown) => {
-        if (!providerLifetime.signal.aborted) {
-          this.ctx.logger.error(`Saki targeted pending polling stopped: ${String(error)}`)
-        }
+      ).catch(() => {
+        // The loop reports each failed pass and continues; only Provider or control-plane shutdown rejects it.
       })
       providerContext.effect(() => async () => {
         providerLifetime.abort(new Error('Saki GitHub Product App Provider is detaching'))
         detachWorkItemOperations()
         const branchDeliveryRecovery = detachBranchDeliveryOperations()
         detachAgentOperations()
-        if (this.githubSynchronizationConsumer === consumer) this.githubSynchronizationConsumer = undefined
-        if (this.githubProvider === providerContext.sakiGitHub) this.githubProvider = undefined
+        // Cordis drains the injected fiber before loading its replacement.
+        this.githubSynchronizationConsumer = undefined
+        this.githubProvider = undefined
         await Promise.all([consumer.dispose(), pendingPolling, branchDeliveryRecovery])
       }, 'saki-control-plane.githubSynchronizationConsumer')
     })

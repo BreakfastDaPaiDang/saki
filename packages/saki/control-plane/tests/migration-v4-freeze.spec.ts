@@ -24,7 +24,8 @@ vi.mock('@breakfastdapaidang/saki-execution', async (importOriginal) => {
     safeGitRemoteObservationKey: forbiddenCurrentHelper,
     trustedProjectSelectionObservationSchema: z.never(),
     MAX_DISPLAY_LOCATION_CHARS: 1,
-    MAX_GIT_REF_CHARS: 1,
+    // Current schemas must remain constructible while their accepted range drifts from v4.
+    MAX_GIT_REF_CHARS: 'refs/heads/a'.length,
     MAX_INVENTORY_ENTRIES: 1,
     MAX_REMOTE_COORDINATE_CHARS: 1,
     MAX_SAFE_REMOTES: 1,

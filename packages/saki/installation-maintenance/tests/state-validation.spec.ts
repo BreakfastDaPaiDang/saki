@@ -1033,7 +1033,7 @@ function readonlyTable(entries: readonly (readonly [string, unknown])[]) {
 function branchDomains(
   deliveries: readonly BranchDeliveryRecord[],
   intents: readonly BranchDeliveryIntentRecord[],
-  operations: readonly PushHostOperationRecord[],
+  operations: readonly LocalHostOperationRecord[],
   admissions: readonly BindingWriteAdmissionRecord[],
 ): readonly [Domain<typeof sakiControlPlaneDomainSpec>, Domain<typeof sakiHostExecutionDomainSpec>] {
   const controlTables = new Map<string, ReturnType<typeof readonlyTable>>([
@@ -1074,6 +1074,146 @@ function foreignBranchWriteAdmission(fixture = branchPushFixture()): BindingWrit
 }
 
 describe('current Saki Branch Push cross-domain validation', () => {
+  it('leaves ordinary Git Host Operations to their own validator', () => {
+    const [control, host] = branchDomains([], [], [linkedFixture().operation], [])
+    expect(() => { validateBranchDeliveryOperationLinks(control, host) }).not.toThrow()
+  })
+
+  it('does not demand a Push Host record for an In Review Intent', () => {
+    const fixture = branchPushFixture()
+    const payload = {
+      ...fixture.intent.payload,
+      intent: {
+        type: 'mark-branch-delivery-in-review', intentId: fixture.intent.id,
+        deliveryId: fixture.delivery.id, expectedDeliveryRevision: 0,
+        expectedWorkItemRemoteFingerprint: fixture.delivery.target.workItem.remoteFingerprint,
+      },
+    }
+    const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+      ...fixture.intent, payload,
+      payloadDigest: canonicalDigest('saki/branch-delivery-intent/v1', payload),
+      operation: { kind: 'in-review' }, checkpoint: { state: 'prepared' },
+    })
+    const [control, host] = branchDomains([fixture.delivery], [intent], [], [fixture.availableAdmission])
+    expect(() => { validateBranchDeliveryOperationLinks(control, host) }).not.toThrow()
+  })
+
+  it('rejects a terminal Push after its Binding admission disappears', () => {
+    const fixture = terminalBranchPushFixture()
+    const [control, host] = branchDomains([fixture.delivery], [fixture.intent], [fixture.operation], [])
+    expect(() => { validateBranchDeliveryOperationLinks(control, host) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it('rejects an accepted checkpoint when a different Intent owns the Delivery', () => {
+    const fixture = checkpointedBranchPushFixture()
+    const [control, host] = branchDomains([
+      { ...fixture.delivery, activeIntentId: ALT_INTENT_ID },
+    ], [fixture.intent], [fixture.operation], [fixture.acceptedAdmission])
+    expect(() => { validateBranchDeliveryOperationLinks(control, host) })
+      .toThrow('Branch Push checkpoint has no exact Host and admission window')
+  })
+
+  it.each(['failed', 'canceled'] as const)('retains a no-effect source conflict with a %s Host record', (state) => {
+    const fixture = sourceConflictedBranchPushFixture()
+    const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+      ...fixture.operation,
+      snapshot: {
+        ...fixture.operation.snapshot, state, revision: 1, updatedAt: 4, completedAt: 4, effect: 'none',
+        ...(state === 'failed' ? { failure: { reason: 'binding-stale' } } : { reason: 'source-canceled' }),
+      },
+    })
+    const [control, host] = branchDomains([fixture.delivery], [fixture.intent], [operation], [fixture.reservedAdmission])
+    expect(() => { validateBranchDeliveryOperationLinks(control, host) }).not.toThrow()
+  })
+
+  it.each(['prepared', 'denied'] as const)('accepts a %s Push without Host or reserved admission', (state) => {
+    const fixture = branchPushFixture()
+    const intent = sakiControlPlaneDomainSpec.tables.branch_delivery_intents.valueSchema.parse({
+      ...fixture.intent,
+      checkpoint: state === 'prepared' ? { state } : { state: 'terminal', outcome: state, reason: 'authority' },
+    })
+    const [control, host] = branchDomains([fixture.delivery], [intent], [], [fixture.availableAdmission])
+    expect(() => { validateBranchDeliveryOperationLinks(control, host) }).not.toThrow()
+  })
+
+  it.each([
+    ['missing Delivery', (f: BranchPushFixture) => branchDomains([], [f.intent], [f.operation], [f.reservedAdmission]),
+      'Branch Push Intent has no Branch Delivery'],
+    ['missing admission before Host preparation', (f: BranchPushFixture) => branchDomains([f.delivery], [f.intent], [], []),
+      'Branch Push Intent has no Host Operation'],
+    ['missing Delivery before Host preparation', (f: BranchPushFixture) => branchDomains([], [f.intent], [], []),
+      'Branch Push Intent has no Host Operation'],
+    ['another active Delivery owner', (f: BranchPushFixture) => branchDomains([
+      { ...f.delivery, activeIntentId: ALT_INTENT_ID },
+    ], [f.intent], [], [f.reservedAdmission]), 'Branch Push Intent has no Host Operation'],
+    ['prepared Intent with a Host record', (f: BranchPushFixture) => branchDomains([f.delivery], [
+      { ...f.intent, checkpoint: { state: 'prepared' } },
+    ], [f.operation], [f.reservedAdmission]), 'Branch Push checkpoint has no exact Host and admission window'],
+    ['active admission with a different Binding revision', (f: BranchPushFixture) => branchDomains([f.delivery], [f.intent],
+      [f.operation], [bindingWriteAdmissionRecordSchema.parse({ ...f.reservedAdmission, bindingRevision: 1 })]),
+    'Branch Push checkpoint has no exact Host and admission window'],
+  ])('rejects %s in detached Push recovery state', (_name, domainsFor, message) => {
+    const [control, host] = domainsFor(branchPushFixture())
+    expect(() => { validateBranchDeliveryOperationLinks(control, host) }).toThrow(message)
+  })
+
+  it('rejects a persisted Branch Delivery whose key disagrees with its identity', () => {
+    const fixture = branchPushFixture()
+    const [control, host] = branchDomains([fixture.delivery], [], [], [])
+    const malformed = {
+      ...control,
+      table: () => readonlyTable([['wrong-key', fixture.delivery]]),
+    } as unknown as Domain<typeof sakiControlPlaneDomainSpec>
+    expect(() => { validateBranchDeliveryOperationLinks(malformed, host) })
+      .toThrow('Saki Branch Delivery id disagrees with its table key')
+  })
+
+  it('rejects a persisted Push Host record whose table key disagrees with its identity', () => {
+    const fixture = branchPushFixture()
+    const [control, host] = branchDomains([fixture.delivery], [fixture.intent], [], [fixture.reservedAdmission])
+    const malformed = {
+      ...host,
+      table: () => readonlyTable([['wrong-key', fixture.operation]]),
+    } as unknown as Domain<typeof sakiHostExecutionDomainSpec>
+    expect(() => { validateBranchDeliveryOperationLinks(control, malformed) })
+      .toThrow('Saki Host Operation id disagrees with its table key')
+  })
+
+  it('rejects a Push Host identity that was not derived from its Intent', () => {
+    const fixture = branchPushFixture()
+    const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+      ...fixture.operation,
+      snapshot: { ...fixture.operation.snapshot, operation: { ...fixture.preparation.operation, id: ALT_OPERATION_ID } },
+    })
+    assertPushHostOperationRecord(operation, 'Host identity fixture changed operation type')
+    const [control, host] = branchDomains([fixture.delivery], [fixture.intent], [operation], [fixture.reservedAdmission])
+    expect(() => { validateBranchDeliveryOperationLinks(control, host) })
+      .toThrow('Branch Push Host Operation id disagrees with its Intent source')
+  })
+
+  it.each(['accepted', 'missing', 'foreign'] as const)(
+    'checks the %s Binding admission after Delivery publication and before Intent completion', (state) => {
+      const fixture = appliedBranchPushFixture()
+      const admissions = state === 'accepted' ? [fixture.acceptedAdmission]
+        : state === 'missing' ? [] : [foreignBranchWriteAdmission(fixture)]
+      const [control, host] = branchDomains([fixture.delivery], [fixture.intent], [fixture.operation], admissions)
+      const validate = () => { validateBranchDeliveryOperationLinks(control, host) }
+      if (state === 'accepted') expect(validate).not.toThrow()
+      else expect(validate).toThrow('Branch Push checkpoint has no exact Host and admission window')
+    },
+  )
+
+  it('rejects terminal succeeded Push evidence after its applied Delivery fact disappears', () => {
+    const fixture = terminalBranchPushFixture()
+    const delivery = sakiControlPlaneDomainSpec.tables.branch_deliveries.valueSchema.parse({
+      ...fixture.delivery, push: undefined, phase: 'draft',
+    })
+    const [control, host] = branchDomains([delivery], [fixture.intent], [fixture.operation], [fixture.availableAdmission])
+    expect(() => { validateBranchDeliveryOperationLinks(control, host) })
+      .toThrow('terminal Branch Push disagrees with its applied Delivery evidence')
+  })
+
   it('accepts an active Push before its Binding admission is reserved', () => {
     const fixture = branchPushFixture()
     const [controlPlane, hostExecution] = branchDomains(

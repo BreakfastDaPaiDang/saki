@@ -85,31 +85,22 @@ export async function openLocalProjectCommit(
       signal,
     )
     const observed = decodeGitLine(output.stdout)
-    /* v8 ignore start -- the fixed successful rev-parse emits one exact object-id line;
-     * decodeGitLine unit tests own malformed process bytes while this remains fail closed. */
     if (output.stderr.byteLength !== 0 || observed !== commitId) {
       await repository[Symbol.asyncDispose]()
       return { ok: false, result: { ok: false, reason: 'unavailable' } }
     }
-    /* v8 ignore stop */
     await repository.assertSourceControlUnchanged(signal)
-    /* v8 ignore start -- this requires an external identity swap between consecutive
-     * source-control and administrative-identity checks; the first check covers rejection. */
     if (!await boundRepositoryMatches(dependencies, binding, repository, signal)) {
       await repository[Symbol.asyncDispose]()
       return { ok: false, result: { ok: false, reason: 'binding-stale' } }
     }
-    /* v8 ignore stop */
     return { ok: true, repository }
   } catch (error) {
     await repository[Symbol.asyncDispose]()
-    /* v8 ignore next -- bounded Git cancellation is exercised at the shared runner and Host lifetime boundaries. */
     if (signal.aborted) throw signal.reason
-    /* v8 ignore next -- exact missing Commit failures are exit 128; other runner and source races fail closed below. */
     if (error instanceof GitCommandError && error.code === 'nonzero' && error.exitCode === 128) {
       return { ok: false, result: { ok: false, reason: 'commit-missing' } }
     }
-    /* v8 ignore next -- the remaining bounded runner and source-control failures share one unavailable result. */
     return { ok: false, result: { ok: false, reason: 'unavailable' } }
   }
 }
