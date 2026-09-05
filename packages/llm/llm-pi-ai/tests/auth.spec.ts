@@ -94,15 +94,16 @@ describe('pi-ai credential store over harness records', () => {
     })
   })
 
-  it('passes a genuinely unstorable grant value through to the store\'s loud refusal', async () => {
+  it('rejects grant members with executable JSON serialization', async () => {
     const ctx = await stored()
     const store = credentialStoreFrom(ctx)
-    // A foreign-prototype member is not the undefined idiom: the image leaves
-    // it untouched and the record validator still refuses the write.
-    const granted = { type: 'oauth' as const, access: 'at', refresh: 'rt', expires: 42, issued: new Date(0) }
+    const issued = new Date(0)
+    const serialize = vi.spyOn(issued, 'toJSON')
+    const granted = { type: 'oauth' as const, access: 'at', refresh: 'rt', expires: 42, issued }
 
     await expect(store.modify('github-copilot', () => Promise.resolve(granted)))
-      .rejects.toThrow(/JSON cannot represent/)
+      .rejects.toThrow('exposes executable toJSON')
+    expect(serialize).not.toHaveBeenCalled()
   })
 
   it('shows the mutation the current credential and leaves it alone when declined', async () => {

@@ -57,8 +57,8 @@ function resolveTranslationPairingConflicts(root: string): string[] {
   return resolveTranslationPairingConflictsWithScope(root, () => true)
 }
 
-afterEach(() => {
-  for (const fixture of fixtures.splice(0)) removeFixtureSafely(fixture)
+afterEach(async () => {
+  for (const fixture of fixtures.splice(0)) await removeFixtureSafely(fixture)
 })
 
 function git(fixture: Fixture, args: string[]): string {

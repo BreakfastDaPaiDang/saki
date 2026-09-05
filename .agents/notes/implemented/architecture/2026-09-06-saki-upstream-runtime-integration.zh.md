@@ -20,6 +20,8 @@ POSIX Session 写锁只在其执行路径加载 `fs-ext`。该依赖在安装时
 
 Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 组合及最终工作区预期。断言保留路由后的 `ask-matt`、`handoff` 调用，以及 `to-tickets` 缺少 shell 时的拒绝。不以录制会话为输入的 Host 和凭据预期输出保留在所属方的 expected-output 层。真实 Git 夹具采用能容纳多次仓库观察的请求预算；文件系统、操作回执与重启断言仍决定是否成功。
 
+Git 测试夹具先解除 junction，再等待递归删除，使暂存的 Windows 进程句柄能在有限重试期间释放。夹具迁移只重试 Windows 的访问与共享错误，其他失败仍向上传播。每个 teardown 调用方都等待删除完成。
+
 Saki 包与 DPAPI 提供方依据 [invariant 发布规则](../simplification/2026-08-28-omit-unneeded-invariant-companions.zh.md) 省略空 invariant companion。README 中的原因明确权威解析器或状态拥有方；移除空注册不会移除持久状态校验。
 
 [Saki Actions 成本策略](../process/2026-08-18-saki-actions-cost-policy.zh.md) 拥有触发频率和 runner 分配。上游备用 runner note 保留适用的实现结论，但不会恢复 master-push 工作流。归档 note 保持不可变。

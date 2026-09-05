@@ -20,6 +20,8 @@ Persistent PowerShell uses the upstream headless terminal emulator for protocol 
 
 Saki skill scenarios live in the shared SDK session corpus, with explicit portable shell compositions and final workspace expectations. Their assertions preserve routed `ask-matt` and `handoff` invocations and the `to-tickets` missing-shell refusal. Host and credential expected output without recorded-session input remains owner-local in the expected-output tier. Real-Git fixtures use a request budget that accommodates repeated repository observations; their filesystem, operation-receipt, and restart assertions still decide success.
 
+Git test fixtures unlink junctions before awaiting recursive removal, allowing transient Windows process handles to drain during bounded retries. Fixture relocation retries only Windows access and sharing errors; other failures remain visible. Every teardown caller awaits removal.
+
 Saki packages and the DPAPI provider omit empty invariant companions under the [invariant publication rule](../simplification/2026-08-28-omit-unneeded-invariant-companions.md). Their README reasons identify the authoritative parsers or state owners; removing empty registrations does not remove durable-state validation.
 
 The [Saki Actions cost policy](../process/2026-08-18-saki-actions-cost-policy.md) owns trigger cadence and runner allocation. Upstream standby-runner notes retain applicable implementation findings without recreating a master-push workflow. Archived notes remain immutable.

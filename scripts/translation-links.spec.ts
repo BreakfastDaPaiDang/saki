@@ -14,8 +14,8 @@ import { removeFixtureSafely } from './test-fixture-cleanup.ts'
 
 const roots: string[] = []
 
-afterEach(() => {
-  for (const root of roots.splice(0)) removeFixtureSafely(root)
+afterEach(async () => {
+  for (const root of roots.splice(0)) await removeFixtureSafely(root)
 })
 
 function fixture(): string {

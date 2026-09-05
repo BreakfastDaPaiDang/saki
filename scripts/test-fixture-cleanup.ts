@@ -8,7 +8,8 @@
  * there.
  */
 
-import { lstatSync, readdirSync, rmSync, unlinkSync } from 'node:fs'
+import { lstatSync, readdirSync, unlinkSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /**
@@ -34,16 +35,12 @@ export function unlinkFixtureLinks(path: string): void {
 }
 
 /**
- * Remove one fixture tree after its junctions are unlinked (see
- * {@link unlinkFixtureLinks}). Retries the removal: Windows releases child
- * process and antivirus file handles asynchronously, and an unretried
- * `rmSync` fails immediately with EPERM under load. A 10-second retry window
- * (50 attempts × 200 ms) covers the failover pool's slow handle release;
- * release is one-shot (a terminated child's handles drain, not reacquired),
- * so a bounded window suffices and never pins afterEach cleanup.
+ * Remove one fixture tree after unlinking its junctions. Awaited removal retries
+ * transient Windows process and antivirus handles with bounded delays.
  * @param path - the fixture tree to remove.
+ * @returns completion after the tree is removed.
  */
-export function removeFixtureSafely(path: string): void {
+export async function removeFixtureSafely(path: string): Promise<void> {
   unlinkFixtureLinks(path)
-  rmSync(path, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
+  await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 }

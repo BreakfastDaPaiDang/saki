@@ -7,14 +7,15 @@ import {
   mkdtempSync,
   lstatSync,
   readFileSync,
-  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { removeFixtureSafely, unlinkFixtureLinks } from './test-fixture-cleanup.ts'
 
@@ -37,8 +38,8 @@ interface CommandResult {
   stdout: string
 }
 
-afterEach(() => {
-  for (const fixture of fixtures.splice(0)) removeFixtureSafely(fixture)
+afterEach(async () => {
+  for (const fixture of fixtures.splice(0)) await removeFixtureSafely(fixture)
 })
 
 function commandResult(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): CommandResult {
@@ -185,6 +186,21 @@ async function waitForPath(path: string): Promise<void> {
   while (!existsSync(path)) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`)
     await new Promise(resolveWait => setTimeout(resolveWait, 10))
+  }
+}
+
+async function relocateFixture(source: string, destination: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(source, destination)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (process.platform !== 'win32' || attempt >= 9
+        || (code !== 'EACCES' && code !== 'EBUSY' && code !== 'EPERM')) throw error
+      await delay(200)
+      continue
+    }
+    return
   }
 }
 
@@ -366,7 +382,7 @@ describe('worktree-local Lefthook installer', { timeout: 90_000 }, () => {
     expect(first.status, first.stderr).toBe(0)
     const oldHooks = hooksPath(fixture, oldRoot)
     const movedRoot = join(fixture.container, 'moved-main')
-    renameSync(oldRoot, movedRoot)
+    await relocateFixture(oldRoot, movedRoot)
 
     const moved = await runInstaller(fixture, movedRoot)
 
@@ -392,7 +408,7 @@ describe('worktree-local Lefthook installer', { timeout: 90_000 }, () => {
     linkSync(join(oldHooks, markerName), externalMarker)
     const externalContent = readFileSync(externalMarker, 'utf8')
     const movedRoot = join(fixture.container, 'moved-main')
-    renameSync(oldRoot, movedRoot)
+    await relocateFixture(oldRoot, movedRoot)
 
     const result = await runInstaller(fixture, movedRoot)
 
@@ -431,7 +447,7 @@ describe('worktree-local Lefthook installer', { timeout: 90_000 }, () => {
     const markerName = '.dsh-lefthook-owned'
     const previousMarker = readFileSync(join(oldHooks, markerName), 'utf8')
     const movedRoot = join(fixture.container, 'moved-main')
-    renameSync(oldRoot, movedRoot)
+    await relocateFixture(oldRoot, movedRoot)
 
     const failed = await runInstaller(fixture, movedRoot, { DSH_TEST_LEFTHOOK_FAIL: '1' })
 
@@ -477,7 +493,7 @@ describe('worktree-local Lefthook installer', { timeout: 90_000 }, () => {
     const fixture = createFixture()
     const commonConfig = join(commonDirectory(fixture), 'config')
     const externalConfig = join(fixture.container, 'external-common.gitconfig')
-    renameSync(commonConfig, externalConfig)
+    await rename(commonConfig, externalConfig)
     symlinkSync(externalConfig, commonConfig)
     const externalContent = readFileSync(externalConfig, 'utf8')
 

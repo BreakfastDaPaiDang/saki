@@ -47,7 +47,7 @@ describe('collectPackageGraph', () => {
     const root = fixture({ consumer: ['missing'] })
 
     expect(() => collectPackageGraph(root, ['client'], 'fixture'))
-      .toThrow('fixture: @deepseek-ai/dsh-consumer references missing in-repo peer @deepseek-ai/dsh-missing')
+      .toThrow('fixture: @deepseek-ai/dsh-consumer references missing in-repo peer missing')
   })
 })
 

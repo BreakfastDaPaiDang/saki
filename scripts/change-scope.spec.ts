@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { renderChangeScope } from './change-scope.ts'
+import { removeFixtureSafely } from './test-fixture-cleanup.ts'
 
 interface Report {
   formatVersion: number
@@ -21,8 +22,8 @@ interface Fixture {
 
 const fixtureRoots: string[] = []
 
-afterEach(() => {
-  for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true })
+afterEach(async () => {
+  for (const root of fixtureRoots.splice(0)) await removeFixtureSafely(root)
 })
 
 function git(cwd: string, args: string[], input?: string | Buffer): string {
