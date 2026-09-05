@@ -36,13 +36,22 @@
 - text: "Interjection: include the word ORANGE in your final reply."
 - button "Copy":
   - img
-- textbox "Message or run a task... / commands, @ files or sessions"
-- button "Commands":
-  - img
-- button "Add attachment":
-  - img
-- 'button "Access mode, current: Workspace Write"': Workspace Write
-- button "Select model, current DeepSeek-V4-Flash":
-  - text: DeepSeek-V4-Flash
-  - img
-- button "Stop generating"
+- region "Ready to continue?":
+  - text: Checkpoint
+  - heading "Ready to continue?" [level=2]
+  - button "Collapse the question card" [expanded]:
+    - img
+  - button "Dismiss all questions":
+    - img
+  - radiogroup:
+    - radio "Yes": 1 Yes
+    - radio "No": 2 No
+    - textbox "Type your answer"
+  - button "Previous question" [disabled]:
+    - img
+  - text: 1 / 1
+  - button "Next question" [disabled]:
+    - img
+  - status
+  - button "Skip this question"
+  - button "Submit" [disabled]
