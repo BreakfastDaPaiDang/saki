@@ -372,7 +372,11 @@ describe('experimental Inspector real Worker', () => {
     const secondContext = await clientContext(secondCdp)
     const value = { owner: 'client-console' }
     const marker = 'client-console-event'
-    await client.log(value, marker)
+    // Runtime requests and Console subscriptions share the Client's ordered socket.
+    await cdp.call('Runtime.evaluate', {
+      contextId: firstContext,
+      expression: `console.log(${JSON.stringify(value)}, ${JSON.stringify(marker)})`,
+    })
     let firstEvent: CdpMessage | undefined
     let secondEvent: CdpMessage | undefined
     await vi.waitFor(() => {
