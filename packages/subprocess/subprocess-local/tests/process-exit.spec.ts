@@ -122,6 +122,7 @@ async function runScenario(kind: ManagedKind, trigger: ExitTrigger, coordination
     state = await readTree(join(root, 'tree.json'), hostExited)
     await waitForFile(join(root, 'ready'), hostExited, 'host readiness publication')
     if (process.platform !== 'win32') identities = await captureIdentities(createProcessInspector(), state)
+    await writeFile(join(root, 'observed'), 'observed')
     if (coordination !== 'exit-before-proceed') await writeFile(join(root, 'proceed'), 'proceed')
     const outcome = await child
     settled = true

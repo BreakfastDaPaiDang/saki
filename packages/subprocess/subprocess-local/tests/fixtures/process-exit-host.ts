@@ -79,6 +79,8 @@ if (!Number.isSafeInteger(published.root) || !Number.isSafeInteger(published.des
   throw new Error('managed tree published invalid process ids')
 }
 await writeFile(ready, 'ready')
+// The outer observer needs live identities even when proceed already exists or an early exit is requested.
+await waitForFile(join(root, 'observed'), managedTreeExited, 'process identity observation')
 if (coordination === 'exit-before-proceed') await terminateManagedTree()
 await waitForFile(proceed, managedTreeExited, 'proceed signal')
 
