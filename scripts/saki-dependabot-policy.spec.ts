@@ -28,5 +28,8 @@ describe('Saki Dependabot policy', () => {
     for (const update of ecosystems.values()) {
       expect(update['open-pull-requests-limit']).toBe(0)
     }
+    expect(ecosystems.get('npm')?.groups).toEqual({
+      security: { 'applies-to': 'security-updates', patterns: ['*'] },
+    })
   })
 })
