@@ -24,6 +24,8 @@ Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 
 
 PowerShell 快照保留发行版 headless profile 的工具、权限事件和运行时上下文消息。持久 PowerShell 组合在所有平台禁用普通 `pwsh` 工具，确保只有一个注册。
 
+标准 Web 快照页面显式选择 `Asia/Shanghai`，与保留的 `clientTimeZone` 事件载荷一致。语言环境与时区是浏览器夹具的输入；重放保留日志中的时区，不将其归一化去除。
+
 Loader 配置扫描返回以正斜杠规范化的仓库路径，再按所属 manifest 分类插件引用。CLI 凭据夹具将设置、提问与 DPAPI 插件声明为开发依赖，使全新检出在 Windows 与 POSIX 上校验同一解析关系图。
 
 Git 测试夹具先解除 junction，再等待递归删除，使暂存的 Windows 进程句柄能在有限重试期间释放。夹具迁移只重试 Windows 的访问与共享错误，其他失败仍向上传播。每个 teardown 调用方都等待删除完成。

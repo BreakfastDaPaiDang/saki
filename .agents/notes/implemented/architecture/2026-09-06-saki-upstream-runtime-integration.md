@@ -24,6 +24,8 @@ Connection requires credential storage for its browser-session signing record ev
 
 PowerShell snapshots retain the shipped headless profile's tools, permission events, and runtime-context message. The persistent PowerShell composition disables the ordinary `pwsh` tool on every platform to keep a single registration.
 
+Standard Web snapshot pages explicitly select `Asia/Shanghai`, matching the retained `clientTimeZone` event payloads. Locale and timezone are browser fixture inputs; replay preserves the logged timezone rather than normalizing it away.
+
 Loader configuration discovery returns slash-normalized repository paths before classifying each plugin reference by its owning manifest. CLI credential fixtures declare their settings, questions, and DPAPI plugins as development dependencies, so a fresh checkout validates the same resolution graph on Windows and POSIX.
 
 Git test fixtures unlink junctions before awaiting recursive removal, allowing transient Windows process handles to drain during bounded retries. Fixture relocation retries only Windows access and sharing errors; other failures remain visible. Every teardown caller awaits removal.
