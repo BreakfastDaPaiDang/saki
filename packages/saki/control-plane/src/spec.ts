@@ -49,13 +49,14 @@ import {
   sakiWorkSessionIdSchema,
   startAgentRunHostOperationRequestSchema,
   startAgentRunHostOperationRequestV2Schema,
+  startAgentRunHostOperationRequestV3Schema,
+  startAgentRunInputMessageV2Schema,
   startAgentRunHostOperationResultSchema,
   stageFilesHostOperationRequestSchema,
   selectedProjectGitChangeSchema,
   unstageFilesHostOperationRequestSchema,
 } from '@breakfastdapaidang/saki-execution'
 import {
-  MAX_AGENT_RUN_DISPATCHES,
   MAX_INTERVENTION_ANSWER_CHARS,
   MAX_INTERVENTION_PROMPT_CHARS,
   SAKI_BOARD_WORK_ITEM_LIMIT,
@@ -63,7 +64,6 @@ import {
   SAKI_GITHUB_MAPPING_ISSUE_LIMIT,
 } from './constants.ts'
 export {
-  MAX_AGENT_RUN_DISPATCHES,
   MAX_INTERVENTION_ANSWER_CHARS,
   MAX_INTERVENTION_PROMPT_CHARS,
 } from './constants.ts'
@@ -2428,7 +2428,7 @@ export const gitOperationIntentRecordSchema = z.object({
 /** Parsed durable structured Git Intent. */
 export type GitOperationIntentRecord = z.infer<typeof gitOperationIntentRecordSchema>
 
-const frozenWorkItemDefinitionSchema = z.object({
+const frozenWorkItemDefinitionV1Schema = z.object({
   repositoryId: githubRepositoryIdSchema,
   repositoryDatabaseId: githubRepositoryDatabaseIdSchema,
   issueId: githubIssueIdSchema,
@@ -2445,6 +2445,10 @@ const frozenWorkItemDefinitionSchema = z.object({
   acceptanceCriteria: z.array(z.string().min(1).max(4_096)).min(1).max(128),
   blockage: z.array(z.string().min(1).max(4_096)).max(128),
 }).strict()
+
+const frozenWorkItemDefinitionSchema = frozenWorkItemDefinitionV1Schema.omit({
+  intendedOutcome: true, acceptanceCriteria: true, blockage: true,
+}).extend({ issueState: z.enum(['open', 'closed']) })
 
 const frozenAgentProfileSchema = z.object({
   id: agentProfileId,
@@ -2476,7 +2480,7 @@ const agentOperationIntentRecordObjectSchema = z.object({
   agentRunId: sakiAgentRunIdSchema,
   dispatchId: sakiExecutionDispatchIdSchema,
   inProgressIntentId: controlIntentId,
-  workItemDefinition: frozenWorkItemDefinitionSchema,
+  workItemDefinition: frozenWorkItemDefinitionV1Schema,
   projectContext: z.object({
     projectId: developmentProjectId,
     projectRevision: revision,
@@ -2498,7 +2502,11 @@ const agentOperationIntentRecordObjectSchema = z.object({
 }).strict()
 
 function refineAgentOperationIntent(
-  value: Omit<z.infer<typeof agentOperationIntentRecordObjectSchema>, 'schemaVersion'>,
+  value: Omit<z.infer<typeof agentOperationIntentRecordObjectSchema>,
+    'schemaVersion' | 'inProgressIntentId' | 'workItemDefinition' | 'hostRequest'> & {
+      readonly workItemDefinition: z.infer<typeof frozenWorkItemDefinitionSchema>
+      readonly hostRequest: z.infer<typeof startAgentRunHostOperationRequestSchema>
+    },
   context: z.RefinementCtx,
 ): void {
   refineDurableIntentIdentity(value, context)
@@ -2536,8 +2544,12 @@ export const agentOperationIntentV1RecordSchema = agentOperationIntentRecordObje
 
 /** Durable manual Give-to-Agent Intent authorized through its own Dispatch. */
 export const agentOperationIntentRecordSchema = z.object({
-  ...agentOperationIntentRecordObjectSchema.shape,
+  ...agentOperationIntentRecordObjectSchema.omit({ inProgressIntentId: true }).shape,
   schemaVersion: z.literal(2),
+  workItemDefinition: frozenWorkItemDefinitionSchema,
+  hostRequest: startAgentRunHostOperationRequestSchema.safeExtend({
+    run: startAgentRunHostOperationRequestSchema.shape.run.safeExtend({ input: startAgentRunInputMessageV2Schema }),
+  }),
   phase: z.enum(['prepared', 'dispatching', 'started', 'canceled', 'reconciliation-required']),
 }).strict().superRefine(refineAgentOperationIntent)
 
@@ -2668,7 +2680,7 @@ export const agentRunRecordSchema = z.object({
   profile: frozenAgentProfileSchema,
   sessionId,
   inputPlan: runInputPlanSchema,
-  dispatchIds: z.array(sakiExecutionDispatchIdSchema).min(1).max(MAX_AGENT_RUN_DISPATCHES),
+  dispatchIds: z.array(sakiExecutionDispatchIdSchema).min(1),
   state: z.enum([
     'allocated',
     'starting',
@@ -2705,6 +2717,11 @@ export const agentRunRecordSchema = z.object({
     && value.state !== 'reconciliation-required') {
     context.addIssue({ code: 'custom', message: 'Agent Run Intervention blocker disagrees with state' })
   }
+})
+
+/** Exact v8–v9 Agent Run with its historical Dispatch-count bound. */
+export const agentRunV2RecordSchema = agentRunRecordSchema.safeExtend({
+  dispatchIds: z.array(sakiExecutionDispatchIdSchema).min(1).max(32),
 })
 
 /** Parsed durable Agent Run. */
@@ -2966,7 +2983,9 @@ export const executionDispatchV1RecordSchema = z.object({
 export type ExecutionDispatchV1Record = z.infer<typeof executionDispatchV1RecordSchema>
 
 /** Exact v8–v9 Dispatch whose Host admission belongs to the binding writer. */
-export const executionDispatchV2RecordSchema = executionDispatchRecordObjectSchema.superRefine(refineExecutionDispatch)
+export const executionDispatchV2RecordSchema = executionDispatchRecordObjectSchema.extend({
+  hostRequest: startAgentRunHostOperationRequestV3Schema,
+}).superRefine(refineExecutionDispatch)
 
 /** Parsed exact v8–v9 Dispatch. */
 export type ExecutionDispatchV2Record = z.infer<typeof executionDispatchV2RecordSchema>

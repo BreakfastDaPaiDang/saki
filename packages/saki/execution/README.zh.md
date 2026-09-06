@@ -65,7 +65,7 @@ Service Definition 没有配置。每个 Service Provider 拥有其执行环境�
 <a id="durable-agent-starts"></a>
 ## 持久 Agent 启动
 
-`StartAgentRun` 携带 `execution-dispatch` source、精确可写 Git precondition、预分配的 Agent Run、Work Session、DSH Session 与输入 MessageId、固定 Agent Profile 与 Model Route，以及一条完整的纯文本 `UserMessage`。其 payload digest 覆盖该 message，以及初始 `saki-agent-run` source 或带归因的 `saki-intervention-answer` source。Preparation 保持 inert；start 要求已接受的 Dispatch mapping 和当前 `agent-run` Binding Write Admission。稳定结果会重复 Run、Work Session、Session 与输入这四项 identity。
+`StartAgentRun` 携带 `execution-dispatch` 来源、活跃 Resource Binding、预分配的 Agent Run、Work Session、DSH Session 和输入 MessageId、已固定 Agent Profile 与 Model Route，以及一条完整的纯文本 `UserMessage`。其 payload digest 覆盖该消息，以及初始 `saki-agent-run` 来源或带归因的 `saki-intervention-answer` 来源。准备操作不会产生副作用；启动要求已接受的 Dispatch 映射。Host 会在投递输入前验证仓库与 Workspace 身份，不检查 Git status、HEAD、index 内容或分支保护。稳定结果重复 Run、Work Session、Session 和输入这四项身份。
 
 Host 成功证明目标 Session 与已 dispatch 输入已经持久化，并不表示模型轮次已经完成。精确 replay 会复用一条 Host Operation。Provider 会在交付前检查完整 Session history：只有输入不存在时才允许发送该输入；canceled、replaced、unknown 或 conflicting evidence 一律不得重新发送。参见[手动 dispatch 决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)。
 

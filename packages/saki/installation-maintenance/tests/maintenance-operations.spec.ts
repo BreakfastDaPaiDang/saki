@@ -48,14 +48,14 @@ import {
   sakiAgentRunIdSchema,
   sakiExecutionDispatchIdSchema,
   sakiControlIntentIdSchema,
-  startAgentRunHostOperationRequestSchema,
+  startAgentRunHostOperationRequestV2Schema,
   startAgentRunInputMessageSchema,
 } from '@breakfastdapaidang/saki-execution'
 import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
-  sakiHostExecutionDomainSpec,
+  sakiHostExecutionV4DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import {
   readActiveOperation,
@@ -314,7 +314,7 @@ async function publishSelectedHistorical(
         customized?.hostExecution ?? { tables: { operations: {} }, global: null },
       )
       const controlSpec = stateVersion === 8 ? sakiControlPlaneV8DomainSpec : sakiControlPlaneV9DomainSpec
-      const hostSpec = stateVersion === 8 ? sakiHostExecutionV3DomainSpec : sakiHostExecutionDomainSpec
+      const hostSpec = stateVersion === 8 ? sakiHostExecutionV3DomainSpec : sakiHostExecutionV4DomainSpec
       const sealSpec = stateVersion === 8 ? sakiStorageGenerationV6DomainSpec : sakiStorageGenerationV7DomainSpec
       await facility.materialize(
         controlSpec,
@@ -449,7 +449,7 @@ function withRunningPreviousWritableAgent(
       workSessionId: WORK_SESSION_ID,
     },
   })
-  const hostRequest = startAgentRunHostOperationRequestSchema.parse({
+  const hostRequest = startAgentRunHostOperationRequestV2Schema.parse({
     type: 'start-agent-run',
     source: {
       kind: 'execution-dispatch',
@@ -1256,12 +1256,17 @@ describe('offline Saki Installation operations', () => {
     })
     expect([...current.controlPlane.table('binding_write_admissions').entries()].map(([, row]) => row.state))
       .toEqual(['available'])
-    if (version === 9) {
-      expect(current.hostExecution.table('operations').get(OPERATION_ID))
-        .toEqual(source.hostExecution.table('operations').get(OPERATION_ID))
+    const originalHost = source.hostExecution.table('operations').get(OPERATION_ID)
+    const currentHost = current.hostExecution.table('operations').get(OPERATION_ID)
+    expect(currentHost?.request.expected).toEqual({ binding: originalHost?.request.expected.binding })
+    if (currentHost?.request.type !== 'start-agent-run' || originalHost?.request.type !== 'start-agent-run') {
+      throw new Error('migrated Agent operation is missing')
     }
+    expect(currentHost.request.run.input).toEqual(originalHost.request.run.input)
+    expect(currentHost?.snapshot.admission).toEqual(originalHost?.snapshot.admission)
+
     expect(current.hostExecution.table('operations').get(OPERATION_ID)).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       snapshot: { state: 'succeeded' },
     })
   }, 20_000)

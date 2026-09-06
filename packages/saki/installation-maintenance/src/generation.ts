@@ -88,8 +88,6 @@ async function materializeHostExecutionAndSeal(
       emptySnapshot(hostExecution),
       { targetBackend: 'candidate', signal },
     )
-  } else if (retainedHostExecution.version === hostExecution.version) {
-    await facility.materialize(hostExecution, retainedHostExecution.snapshot, { targetBackend: 'candidate', signal })
   } else {
     await facility.migrate(sakiStateHostExecutionMigrationPlan, {
       sourceBackend: 'source',

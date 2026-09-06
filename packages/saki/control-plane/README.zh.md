@@ -43,7 +43,7 @@ Saki 私有控制面模块拥有本地 Installation 置备、Installation Access
 
 `binding_write_admissions` 为每个 Resource Binding 保存一条直接 Git 与 Branch Push 操作记录。`manual-host-operation` 预留会在 Host 准备前记录 Intent 来源、动作和 Binding 修订号；接受时固定的修订号授权对应副作用。经证实的终态会释放该操作，未知或矛盾证据则保留预留以供对账。Agent Run 使用独立的 Dispatch 准入，可以与其他 Run 和手动操作共用目录。并发编辑可能冲突；需要隔离时使用不同工作树。
 
-手动 Ready-to-Run 路径会重验当前 Issue 与分支安全、活跃 Binding 与继承改动基线、Host Operator 权限、验收条件、阻塞项及默认 Agent Profile。持久接受前，当前 LLM 适配器必须解析精确的 provider/model 路由；失败会返回 `model-route-unavailable`，不会启动生成。Intent 冻结模型可见输入并预分配所有子记录标识。短期 Dispatch Claim 选择一次投递；最终接受要求同一 claim 仍为当前且未过期，并固定该 Dispatch 的 Host 准入修订号。只有 Host 确认精确的 Session、Run 与 MessageId 后，Work Item 才移入 In progress。精确重放复用这些记录；未知证据需要对账。参见[手动分派决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)。
+手动 Give-to-Agent 路径会重验当前 Issue 身份与远端指纹、活跃 Binding、Host Operator 权限和默认 Agent Profile。持久接受前，当前 LLM 适配器必须解析精确的 provider/model 路由；失败会返回 `model-route-unavailable`，不会启动生成。Intent 不要求特定模板，保留完整 Issue 正文，并固定模型可见输入和子记录身份。任务状态、阻塞项、分支保护、detached HEAD 和工作树改动不决定手动输入能否投递，启动 Run 也不改变 Work Item 状态。短期 Dispatch Claim 选择一次投递；最终接受在同一 claim 仍为当前且未过期时固定该 Dispatch 的 Host 准入修订号。精确重放复用这些记录；未知证据需要对账。参见[手动分派决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)。
 
 `intervention_requests` 在重启后保留 Development Agent 问题及其首个已接受回答。工具会在结束轮次前提交 `opening`；精确 Session 证据先把 Run 移入 `waiting`，再把问题设为 `open`。回答会重验请求修订号、Principal、Grant、Assignment、Session 与当前 Binding，随后为同一 Run 和 Session 创建独立准入的 Dispatch 及稳定的回答 MessageId。只有输入投递被确认后才清除阻塞。My Work 与 Attention 从当前记录推导候选动作；提交时重验权限和操作条件。参见[持久 Intervention 决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-durable-intervention-answer.zh.md)。
 

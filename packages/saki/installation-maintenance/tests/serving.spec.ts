@@ -9,7 +9,7 @@ import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
-  sakiHostExecutionDomainSpec,
+  sakiHostExecutionV4DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import {
   sakiControlPlaneMigrationPlan,
@@ -303,7 +303,7 @@ async function materializeHistoricalSealedGeneration(
               },
     ...(stateVersion === 5 || stateVersion === 6 || stateVersion === 7 || stateVersion === 8 || stateVersion === 9
       ? [{
-        spec: stateVersion === 9 ? sakiHostExecutionDomainSpec : stateVersion === 8
+        spec: stateVersion === 9 ? sakiHostExecutionV4DomainSpec : stateVersion === 8
           ? sakiHostExecutionV3DomainSpec
           : stateVersion === 7 ? sakiHostExecutionV2DomainSpec : sakiHostExecutionV1DomainSpec,
         snapshot: {

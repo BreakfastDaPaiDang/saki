@@ -854,12 +854,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           if (llm === undefined) throw new Error('Saki Agent dispatch requires an LLM runtime')
           await llm.resolveModelInfo(route.provider, route.model, signal)
         },
-        moveWorkItem: async (intent, actor, signal) => {
-          if (this.hasControlIntentConflict(intent.intentId, 'work-item')) {
-            return { ok: false, reason: 'conflict' }
-          }
-          return await this.githubWorkItemOperations.submit(intent, actor, signal)
-        },
         claimTtlMs: this.config.agentDispatchClaimTtlMs,
         notifyChanged: () => { this.notify(['my-work', 'attention', 'project-changes', 'board']) },
         lifetime: this.lifetime.signal,

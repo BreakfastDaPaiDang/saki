@@ -15,6 +15,7 @@ export {
   agentOperationIntentV1RecordSchema,
   agentRunRecordSchema,
   agentRunV1RecordSchema,
+  agentRunV2RecordSchema,
   answerInterventionIntentSchema,
   bindingWriteAdmissionRecordSchema,
   bindingWriteAdmissionV3RecordSchema,

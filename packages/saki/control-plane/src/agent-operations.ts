@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { SakiGitHub, GitHubBranchSafetyFact, GitHubIssueDetailFact } from '@breakfastdapaidang/saki-github'
+import type { SakiGitHub, GitHubIssueDetailFact } from '@breakfastdapaidang/saki-github'
 import {
   canonicalDigest,
   computeStartAgentRunPayloadDigest,
@@ -38,7 +38,6 @@ import {
   workAssignmentRecordSchema,
   workSessionRecordSchema,
   interventionRequestRecordSchema,
-  MAX_AGENT_RUN_DISPATCHES,
   MAX_INTERVENTION_ANSWER_CHARS,
 } from './spec.ts'
 import type {
@@ -55,7 +54,6 @@ import type {
 import type {
   AnswerInterventionIntent,
   GiveWorkItemToAgentIntent,
-  MoveWorkItemIntent,
   SakiBoardWorkItemProjection,
   SakiControlIntentId,
   SakiDispatchClaimId,
@@ -66,7 +64,6 @@ import type {
   SakiInterventionRequestId,
   SakiAnswerInterventionIntentReceipt,
   SakiWorkAssignmentId,
-  SakiWorkItemIntentReceipt,
 } from './types.ts'
 
 /** Stable Development Agent request admitted from the model-facing tool. */
@@ -123,11 +120,6 @@ interface AgentOperationsOptions {
     route: NonNullable<AgentProfileRecord['modelRouteRequest']>,
     signal: AbortSignal,
   ) => Promise<void>
-  readonly moveWorkItem: (
-    intent: MoveWorkItemIntent,
-    actor: ControlIntentActor,
-    signal: AbortSignal,
-  ) => Promise<SakiWorkItemIntentReceipt<'move-work-item'>>
   readonly claimTtlMs: number
   readonly notifyChanged: () => void
   readonly lifetime: AbortSignal
@@ -165,7 +157,7 @@ export class AgentOperations {
 
   /**
    * Attach the optional provider-neutral GitHub reader used only for fresh eligibility.
-   * @param github - reader for current Issue detail and branch-safety facts.
+   * @param github - reader for the current Issue title, body, and identity.
    * @returns a disposer that detaches this exact reader.
    */
   attachGitHub(github: GitHubReader): () => void {
@@ -351,9 +343,6 @@ export class AgentOperations {
           && existing.requiredAnswer.prompt === request.prompt
             ? { ok: true, interventionId }
             : { ok: false, reason: 'conflict' }
-        }
-        if (run.dispatchIds.length >= MAX_AGENT_RUN_DISPATCHES) {
-          return { ok: false, reason: 'conflict' }
         }
         if (run.state !== 'starting' && run.state !== 'running' && run.state !== 'resume-pending') {
           return { ok: false, reason: 'conflict' }
@@ -689,6 +678,7 @@ export class AgentOperations {
     }
     | { readonly ok: false; readonly result: InterventionAnswerResult }
   > {
+    signal.throwIfAborted()
     const { answer } = intervention
     let run = this.requireRun(intervention.owner.agentRunId)
     let dispatchValue = this.options.dispatchTable.get(answer.dispatchId)
@@ -704,24 +694,6 @@ export class AgentOperations {
       const current = this.options.projects.currentActiveBinding(intervention.projectId)
       if (typeof current === 'string' || current.binding.id !== run.bindingId) {
         return { ok: false, result: await this.reconcileInterventionAnswer(intervention, undefined, 'protocol') }
-      }
-      let inspected: Awaited<ReturnType<SakiHostExecution['inspectProject']>>
-      try {
-        inspected = await this.options.execution.inspectProject({ binding: current.binding }, signal)
-      } catch {
-        signal.throwIfAborted()
-        return { ok: false, result: answerUnavailable(intervention) }
-      }
-      signal.throwIfAborted()
-      if (!inspected.ok) {
-        return inspected.reason === 'unavailable'
-          ? { ok: false, result: answerUnavailable(intervention) }
-          : { ok: false, result: await this.reconcileInterventionAnswer(intervention, undefined, 'protocol') }
-      }
-      if (inspected.observation.index.kind !== 'tree'
-        || inspected.preEffectBaseline.kind !== 'complete'
-        || !inspected.observation.structuredMutation.available) {
-        return { ok: false, result: answerUnavailable(intervention) }
       }
       const input = interventionAnswerInput(
         intervention,
@@ -741,11 +713,6 @@ export class AgentOperations {
         },
         expected: {
           binding: current.binding,
-          status: inspected.observation.fingerprint,
-          head: inspected.observation.head,
-          index: inspected.observation.index,
-          worktree: inspected.observation.worktree,
-          preEffectBaseline: inspected.preEffectBaseline,
         },
         run: {
           agentRunId: run.id,
@@ -1026,10 +993,7 @@ export class AgentOperations {
       readonly profile: AgentProfileRecord & { readonly modelRouteRequest: NonNullable<AgentProfileRecord['modelRouteRequest']> }
       readonly item: SakiBoardWorkItemProjection
       readonly detail: GitHubIssueDetailFact
-      readonly definition: ParsedDefinition
       readonly binding: ReturnType<DevelopmentProjects['currentActiveBinding']> & object
-      readonly inspected: Extract<Awaited<ReturnType<SakiHostExecution['inspectProject']>>, { readonly ok: true }>
-      readonly branchName: string
     }
   > {
     const registry = this.options.projects.registry()
@@ -1054,26 +1018,8 @@ export class AgentOperations {
     if (item === undefined || item.remoteFingerprint !== intent.expectedRemoteFingerprint) {
       return { ok: false, result: conflict(intent, 'stale-remote') }
     }
-    if (item.status !== 'ready' || item.issueState !== 'open' || item.archived || item.notInProject) {
-      return { ok: false, result: conflict(intent, 'work-item-not-ready') }
-    }
     const binding = this.options.projects.currentActiveBinding(intent.projectId)
     if (typeof binding === 'string' || binding.projectRevision !== intent.expectedProjectRevision) {
-      return { ok: false, result: conflict(intent, 'binding-unavailable') }
-    }
-    const inspected = await this.options.execution.inspectProject({ binding: binding.binding }, signal)
-    signal.throwIfAborted()
-    if (!inspected.ok) {
-      return inspected.reason === 'unavailable'
-        ? { ok: false, result: { ok: false, reason: 'unavailable', detail: 'host-unavailable' } }
-        : { ok: false, result: conflict(intent, 'binding-unavailable') }
-    }
-    if (inspected.preEffectBaseline.kind !== 'complete'
-      || !inspected.observation.structuredMutation.available
-      || inspected.observation.index.kind !== 'tree') {
-      return { ok: false, result: conflict(intent, 'inherited-changes-unsafe') }
-    }
-    if (inspected.observation.branch.kind !== 'attached') {
       return { ok: false, result: conflict(intent, 'binding-unavailable') }
     }
     const github = this.github
@@ -1110,41 +1056,13 @@ export class AgentOperations {
       || detail.updatedAt > item.updatedAt) {
       return { ok: false, result: conflict(intent, 'stale-remote') }
     }
-    const definition = parseDefinition(detail.body)
-    if (definition.acceptanceCriteria.length === 0) {
-      return { ok: false, result: conflict(intent, 'acceptance-criteria-missing') }
-    }
-    if (definition.blockage.length > 0) {
-      return { ok: false, result: conflict(intent, 'work-item-blocked') }
-    }
-    let branch: GitHubBranchSafetyFact
-    try {
-      branch = await github.read<'branch-safety'>({
-        kind: 'branch-safety',
-        installation,
-        repositoryId: mutation.context.configuration.repositoryNodeId,
-        repositoryDatabaseId: mutation.context.configuration.repositoryDatabaseId,
-        branch: inspected.observation.branch.name,
-      }, signal)
-    } catch {
-      signal.throwIfAborted()
-      return { ok: false, result: { ok: false, reason: 'unavailable', detail: 'branch-safety-unavailable' } }
-    }
-    signal.throwIfAborted()
-    if (branch.kind === 'protected') return { ok: false, result: conflict(intent, 'branch-protected') }
-    if (branch.kind === 'legacy-protection-unknown') {
-      return { ok: false, result: conflict(intent, 'legacy-protection-unknown') }
-    }
     return {
       ok: true,
       project,
       profile: resolvedProfile,
       item,
       detail,
-      definition,
       binding,
-      inspected,
-      branchName: inspected.observation.branch.name,
     }
   }
 
@@ -1169,9 +1087,7 @@ export class AgentOperations {
           projectTitle: eligible.project.projectTitle,
           item: eligible.item,
           detail: eligible.detail,
-          definition: eligible.definition,
           profile,
-          branch: eligible.branchName,
         }),
       }],
       source: {
@@ -1187,11 +1103,6 @@ export class AgentOperations {
       source: { kind: 'execution-dispatch', dispatchId: ids.dispatchId, payloadDigest: runPayloadDigest },
       expected: {
         binding: eligible.binding.binding,
-        status: eligible.inspected.observation.fingerprint,
-        head: eligible.inspected.observation.head,
-        index: eligible.inspected.observation.index,
-        worktree: eligible.inspected.observation.worktree,
-        preEffectBaseline: eligible.inspected.preEffectBaseline,
       },
       run: {
         agentRunId: ids.agentRunId,
@@ -1214,9 +1125,6 @@ export class AgentOperations {
       body: eligible.detail.body,
       updatedAt: eligible.detail.updatedAt,
       remoteFingerprint: intent.expectedRemoteFingerprint,
-      intendedOutcome: eligible.definition.intendedOutcome,
-      acceptanceCriteria: eligible.definition.acceptanceCriteria,
-      blockage: eligible.definition.blockage,
     }
     const projectContext = {
       projectId: eligible.project.id,
@@ -1237,7 +1145,6 @@ export class AgentOperations {
       workSessionId: ids.workSessionId,
       agentRunId: ids.agentRunId,
       dispatchId: ids.dispatchId,
-      inProgressIntentId: ids.inProgressIntentId,
       workItemDefinition,
       projectContext,
       profile,
@@ -1544,7 +1451,7 @@ export class AgentOperations {
     const inspected = await this.options.execution.inspectOperation(preparation.operation, signal)
     signal.throwIfAborted()
     assertSnapshot(record, inspected)
-    if (inspected.state === 'succeeded') return await this.finishStarted(record, dispatch, inspected.result, inspected, signal)
+    if (inspected.state === 'succeeded') return await this.finishStarted(record, dispatch, inspected.result, inspected)
     if (inspected.state === 'reconciliation-required') return resultFor(await this.reconcile(record, inspected.reason))
     if (inspected.state === 'failed' || inspected.state === 'canceled') {
       return await this.finishNoEffect(record, dispatch, inspected, signal)
@@ -1561,7 +1468,7 @@ export class AgentOperations {
     assertSnapshot(record, started.snapshot)
     dispatch = await this.updateDispatch(dispatch, { operationSnapshot: started.snapshot })
     if (started.snapshot.state === 'succeeded') {
-      return await this.finishStarted(record, dispatch, started.snapshot.result, started.snapshot, signal)
+      return await this.finishStarted(record, dispatch, started.snapshot.result, started.snapshot)
     }
     if (started.snapshot.state === 'reconciliation-required') {
       return resultFor(await this.reconcile(record, started.snapshot.reason))
@@ -1574,7 +1481,7 @@ export class AgentOperations {
       const canceled = await this.options.execution.cancelOperation(preparation.operation, reason, signal)
       assertSnapshot(record, canceled)
       if (canceled.state === 'succeeded') {
-        return await this.finishStarted(record, dispatch, canceled.result, canceled, signal)
+        return await this.finishStarted(record, dispatch, canceled.result, canceled)
       }
       if (canceled.state === 'failed' || canceled.state === 'canceled') {
         return await this.finishNoEffect(record, dispatch, canceled, signal)
@@ -1591,7 +1498,6 @@ export class AgentOperations {
     dispatch: ExecutionDispatchRecord,
     result: StartAgentRunHostOperationResult,
     snapshot: HostOperationSnapshot<'start-agent-run'>,
-    signal: AbortSignal,
   ): Promise<AgentResult> {
     if (result.agentRunId !== record.agentRunId
       || result.workSessionId !== record.workSessionId
@@ -1603,21 +1509,6 @@ export class AgentOperations {
     const run = this.requireRun(record.agentRunId)
     if (run.state !== 'running') {
       await this.updateRun(run, { state: 'running', hostResult: result })
-    }
-    const move: MoveWorkItemIntent = {
-      type: 'move-work-item',
-      intentId: record.inProgressIntentId,
-      projectId: record.payload.intent.projectId,
-      workItemId: record.payload.intent.workItemId,
-      expectedRemoteFingerprint: record.payload.intent.expectedRemoteFingerprint,
-      targetStatus: 'in-progress',
-    }
-    const moved = await this.options.moveWorkItem(move, record.payload.actor, signal)
-    if (!moved.ok) {
-      if (moved.reason === 'unavailable') return unavailable(record)
-      return resultFor(await this.reconcile(record, moved.reason === 'reconciliation-required'
-        ? moved.receipt.reason === 'evidence-conflict' ? 'evidence-conflict' : 'effect-unknown'
-        : 'protocol'))
     }
     const assignment = this.requireAssignment(record.assignmentId)
     if (assignment.state !== 'active') await this.updateAssignment(assignment, { state: 'active' })
@@ -1663,7 +1554,7 @@ export class AgentOperations {
       signal,
     )
     assertSnapshot(record, snapshot)
-    if (snapshot.state === 'succeeded') return await this.finishStarted(record, dispatch, snapshot.result, snapshot, signal)
+    if (snapshot.state === 'succeeded') return await this.finishStarted(record, dispatch, snapshot.result, snapshot)
     if (snapshot.state === 'reconciliation-required') return resultFor(await this.reconcile(record, snapshot.reason))
     if (snapshot.state !== 'failed' && snapshot.state !== 'canceled') return unavailable(record)
     const terminalSnapshot = snapshot
@@ -2528,72 +2419,24 @@ function terminalPrefixChildrenAreMonotonic(
   return session.state !== 'open' || run.state !== 'canceled'
 }
 
-interface ParsedDefinition {
-  readonly intendedOutcome: string
-  readonly acceptanceCriteria: readonly string[]
-  readonly blockage: readonly string[]
-}
-
-/**
- * Parse the bounded Issue body into the exact normalized definition shown to the Agent.
- * @param body - complete validated GitHub Issue body.
- * @returns intended outcome, acceptance criteria, and nonempty blockage entries.
- */
-function parseDefinition(body: string): ParsedDefinition {
-  const sections = new Map<string, string[]>()
-  let current = ''
-  for (const line of body.split(/\r?\n/u)) {
-    if (/^#{1,6}\s+.+?\s*$/u.test(line)) {
-      current = line.replace(/^#{1,6}\s+/u, '').trim().toLowerCase()
-      if (!sections.has(current)) sections.set(current, [])
-      continue
-    }
-    const lines = sections.get(current)
-    if (lines !== undefined) lines.push(line)
-  }
-  const section = (...names: readonly string[]): string => names
-    .flatMap(name => sections.get(name) ?? [])
-    .join('\n')
-    .trim()
-  const intendedOutcome = section('intended outcome', 'user story / outcome', 'outcome')
-  const criteria = listItems(section('acceptance criteria', 'acceptance'))
-  const blockage = listItems(section('blocked by', 'blockage', 'blockers', 'blocked'))
-    .filter(value => !/^(?:none|n\/a|not blocked|无|无阻塞)$/iu.test(value))
-  return {
-    intendedOutcome: intendedOutcome === '' ? 'Complete the Work Item as specified.' : intendedOutcome,
-    acceptanceCriteria: criteria,
-    blockage,
-  }
-}
-
-function listItems(value: string): readonly string[] {
-  return value.split(/\r?\n/u)
-    .map(line => line.trim().replace(/^[-*+]\s+(?:\[[ xX]\]\s*)?/u, '').trim())
-    .filter(line => line !== '')
-}
-
 function renderRunInput(input: {
   readonly projectTitle: string
   readonly item: SakiBoardWorkItemProjection
   readonly detail: GitHubIssueDetailFact
-  readonly definition: ParsedDefinition
   readonly profile: AgentOperationIntentRecord['profile']
-  readonly branch: string
 }): string {
   return [
     `Project: ${input.projectTitle}`,
     `Work Item: #${String(input.detail.number)} ${input.detail.title}`,
     `URL: ${input.detail.url}`,
-    `Current branch: ${input.branch}`,
     `Development Agent Profile: ${input.profile.id} v${String(input.profile.version)}; preset ${input.profile.agentPresetId}; route ${input.profile.modelRoute.provider}/${input.profile.modelRoute.model}`,
     '',
-    'Intended outcome:',
-    input.definition.intendedOutcome,
+    `Issue state: ${input.detail.state}; workflow status: ${input.item.status}`,
     '',
-    'Acceptance criteria:',
-    ...input.definition.acceptanceCriteria.map(value => `- ${value}`),
+    'Issue description:',
+    input.detail.body,
     '',
-    'Implement the frozen Work Item definition in the bound repository. Preserve unrelated existing changes.',
+    'Work on the supplied Work Item in the bound repository. Preserve unrelated existing changes.',
   ].join('\n')
 }
 
@@ -2776,7 +2619,6 @@ function childIds(intent: GiveWorkItemToAgentIntent) {
     dispatchId: `dispatch-${id('dispatch')}` as SakiExecutionDispatchId,
     sessionId: `session-${id('dsh-session')}` as StartAgentRunHostOperationRequest['run']['sessionId'],
     messageId: id('message') as StartAgentRunHostOperationRequest['run']['input']['id'],
-    inProgressIntentId: `intent-${id('in-progress-intent')}` as SakiControlIntentId,
   }
 }
 

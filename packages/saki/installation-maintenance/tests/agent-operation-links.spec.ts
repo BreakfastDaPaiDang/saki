@@ -21,6 +21,7 @@ import {
   hostOperationSnapshotSchema,
   startAgentRunInputMessageSchema,
   startAgentRunHostOperationRequestSchema,
+  startAgentRunHostOperationRequestV3Schema,
   type HostOperationPreparation,
   type HostOperationSnapshot,
   type StartAgentRunHostOperationRequest,
@@ -116,11 +117,7 @@ function fixture(): Fixture {
         },
         inheritedChangeBaseline: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline,
       },
-      status: { version: 1, digest: '2'.repeat(64) },
-      head: { kind: 'commit', objectId: '3'.repeat(40), symbolicRef: 'refs/heads/main' },
-      index: { kind: 'tree', treeId: '4'.repeat(40) },
-      worktree: { version: 1, digest: '5'.repeat(64) },
-      preEffectBaseline: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline,
+
     },
     run: {
       agentRunId: AGENT_RUN_ID,
@@ -228,7 +225,7 @@ function preparedOperation(
     admission: { kind: 'not-accepted' },
   })
   const record = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 4,
+    schemaVersion: 5,
     request,
     preparationRevision: 0,
     snapshot,
@@ -488,10 +485,7 @@ describe('current StartAgentRun cross-domain validation', () => {
     const current = fixture()
     const mismatchedRequest = startAgentRunHostOperationRequestSchema.parse({
       ...current.request,
-      expected: {
-        ...current.request.expected,
-        status: { version: 1, digest: 'f'.repeat(64) },
-      },
+      run: { ...current.request.run, profile: { ...current.request.run.profile, agentPresetId: 'other-preset' } },
     })
     const mismatchedHost = preparedOperation(mismatchedRequest).record
     const [controlPlane, hostExecution] = domains({
@@ -509,10 +503,7 @@ describe('current StartAgentRun cross-domain validation', () => {
     const current = fixture()
     const mismatchedRequest = startAgentRunHostOperationRequestSchema.parse({
       ...current.request,
-      expected: {
-        ...current.request.expected,
-        status: { version: 1, digest: 'f'.repeat(64) },
-      },
+      run: { ...current.request.run, profile: { ...current.request.run.profile, agentPresetId: 'other-preset' } },
     })
     const mismatchedHost = preparedOperation(mismatchedRequest).record
     const [controlPlane, hostExecution] = domains({
@@ -659,10 +650,10 @@ describe('historical v7 StartAgentRun cross-domain validation', () => {
   it('accepts the exact v1 Run, v1 Dispatch, and Host v2 relationship', () => {
     const running = runningState(fixture())
     const run = agentRunV1RecordSchema.parse({ ...running.runs[0], schemaVersion: 1 })
-    const { admissionRevision: _admissionRevision, ...retainedDispatch } = running.dispatches[0]!
+    const retainedDispatch = historicalDispatch(running.dispatches[0]!)
     const dispatch = executionDispatchV1RecordSchema.parse({ ...retainedDispatch, schemaVersion: 1 })
     const hostOperation = sakiHostExecutionV2DomainSpec.tables.operations.valueSchema.parse({
-      ...running.hostOperations[0],
+      ...historicalHost(running.hostOperations[0]!),
       schemaVersion: 2,
     })
     const admission = running.admissions[0]
@@ -694,18 +685,55 @@ describe('historical v7 StartAgentRun cross-domain validation', () => {
   })
 })
 
+function historicalRequest(request: StartAgentRunHostOperationRequest) {
+  return startAgentRunHostOperationRequestV3Schema.parse({
+    ...request,
+    expected: {
+      ...request.expected,
+      status: { version: 1, digest: '2'.repeat(64) },
+      head: { kind: 'commit', objectId: '3'.repeat(40), symbolicRef: 'refs/heads/main' },
+      index: { kind: 'tree', treeId: '4'.repeat(40) },
+      worktree: { version: 1, digest: '5'.repeat(64) },
+      preEffectBaseline: SAKI_PROJECT_PROJECTION_FIXTURES.cleanSelection.baseline,
+    },
+  })
+}
+
+function historicalDispatch(record: ExecutionDispatchRecord) {
+  const { admissionRevision: _admissionRevision, ...retained } = record
+  const hostRequest = historicalRequest(record.hostRequest)
+  const requestFingerprint = { version: 1, digest: canonicalDigest('saki/host-operation-request/v1', hostRequest) }
+  return executionDispatchV2RecordSchema.parse({
+    ...retained, schemaVersion: 1, hostRequest,
+    ...(record.preparation === undefined ? {} : { preparation: { ...record.preparation, requestFingerprint } }),
+    ...(record.operationSnapshot === undefined ? {} : { operationSnapshot: { ...record.operationSnapshot, requestFingerprint } }),
+  })
+}
+
+function historicalHost(record: LocalHostOperationRecord) {
+  if (record.request.type !== 'start-agent-run') throw new Error('historical fixture requires an Agent operation')
+  const request = historicalRequest(record.request)
+  const requestFingerprint = { version: 1, digest: canonicalDigest('saki/host-operation-request/v1', request) }
+  return { ...record, schemaVersion: 3, request, snapshot: { ...record.snapshot, requestFingerprint } }
+}
+
 function historicalDomains(state: LinkedState): ReturnType<typeof domains> {
   const [controlPlane, hostExecution] = domains(state)
   const dispatches = (state.dispatches ?? []).map((record) => {
-    const { admissionRevision: _admissionRevision, ...retained } = record
-    const dispatch = executionDispatchV2RecordSchema.parse({ ...retained, schemaVersion: 1 })
+    const dispatch = historicalDispatch(record)
     return [dispatch.id, dispatch] as const
+  })
+  const operations = (state.hostOperations ?? []).map((record) => {
+    const historical = historicalHost(record)
+    return [historical.snapshot.operation.id, historical] as const
   })
   return [{
     ...controlPlane,
     table: (name: string) => name === 'execution_dispatches'
       ? readonlyTable(dispatches) : controlPlane.table(name as keyof typeof sakiControlPlaneDomainSpec.tables),
-  } as unknown as Domain<typeof sakiControlPlaneDomainSpec>, hostExecution]
+  } as unknown as Domain<typeof sakiControlPlaneDomainSpec>, {
+    ...hostExecution, table: () => readonlyTable(operations),
+  } as unknown as Domain<typeof sakiHostExecutionDomainSpec>]
 }
 
 describe('retained Agent write admission validation', () => {
@@ -743,7 +771,7 @@ describe('retained Agent write admission validation', () => {
       const current = fixture()
       const request = startAgentRunHostOperationRequestSchema.parse({
         ...current.request,
-        expected: { ...current.request.expected, status: { version: 1, digest: 'f'.repeat(64) } },
+        run: { ...current.request.run, profile: { ...current.request.run.profile, agentPresetId: 'other-preset' } },
       })
       const changes = {
         matching: {}, missing: {},

@@ -42,7 +42,7 @@ Saki 私有 Installation 维护与对外服务准备包。该包拥有 Installat
 | 7 | 精确 `saki_control_plane@7` 加 `saki_host_execution@2` 与 `saki_storage_generation@5` | 只读校验、Recovery Backup 与离线迁移 |
 | 8 | 精确 `saki_control_plane@8` 加 `saki_host_execution@3` 与 `saki_storage_generation@6` | 只读校验、Recovery Backup 与离线迁移 |
 | 9 | 精确 `saki_control_plane@9` 加 `saki_host_execution@4` 与 `saki_storage_generation@7` | 只读校验、Recovery Backup 与离线迁移 |
-| 10 | `saki_control_plane@10` 加 `saki_host_execution@4` 与必需的 `saki_storage_generation@8` seal | 全新配置、对外服务、backup 与验证 |
+| 10 | `saki_control_plane@10` 加 `saki_host_execution@5` 与必需的 `saki_storage_generation@8` seal | 全新配置、对外服务、backup 与验证 |
 
 v2 reader 只接受精确 B03 schema 与 SQLite 物理 v1 子集。它校验选中的 Installation owner 与 Foundation reference，并执行 Access aggregate 与 Project Registry/Intent 的跨记录 invariant。首次引导尚未完成时，缺少 bootstrap-completion summary 仍是有效状态。如果已消费 evidence 表明引导已经完成但 summary 缺失，则必须恰好有一对一致的初始 challenge 与 Browser Session 可供确定性重建。登记 Actor 的 generation 归因必须指向初始或当前历史 generation，而终态 Access challenge 或 Browser Session 的归因可以指向其他符合 schema 的历史 generation。Reader 不会把 v3 的全局约束施加到无关历史 Foundation 记录上。
 

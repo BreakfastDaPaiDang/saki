@@ -22,7 +22,7 @@ Dispatch 采用至少一次交付。本地 scheduler、恢复后的 poller 或�
 
 [带 fencing 的幂等 admission 提案](2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)拥有确切的 `pending`、`claimed`、`accepted`、cancellation、rejection 与 reconciliation 转换。它要求 Host 在产生副作用前准备一条持久 Host Operation，并要求控制面在 Host 启动 operation 前使用当前 fencing token 接受该映射。
 
-[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)通过 Work Assignment、主要 Work Session、Agent Run、Execution Dispatch、expected-revision Dispatch Claim、共享 Host Operation 生命周期与独立 Dispatch admission，实现了一项显式 Ready-to-Run 操作。[持久 Intervention 回答决策](../../implemented/feature/2026-08-18-saki-durable-intervention-answer.zh.md)增加了文本输入 Intervention Request、同一 Run 与 Session 上的后续回答 Dispatch，以及 Principal-scoped Host Operator My Work 与 Attention Projection。自动领取、持久 Agent Identity 交付、通知 adapter 与通用恢复交互仍处于 proposed 状态。
+[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)通过 Work Assignment、主要 Work Session、Agent Run、Execution Dispatch、expected-revision Dispatch Claim、共享 Host Operation 生命周期与独立 Dispatch admission，实现了一项显式 Give-to-Agent 操作。[持久 Intervention 回答决策](../../implemented/feature/2026-08-18-saki-durable-intervention-answer.zh.md)增加了文本输入 Intervention Request、同一 Run 与 Session 上的后续回答 Dispatch，以及 Principal-scoped Host Operator My Work 与 Attention Projection。自动领取、持久 Agent Identity 交付、通知 adapter 与通用恢复交互仍处于 proposed 状态。
 
 Intervention Request 是持久控制面记录，包含稳定 id、kind、Project 与 subject reference、目标 Principal 或角色、所需决定或 input schema、阻塞范围、因果 Intent、Dispatch、Work Session 或 Agent Run reference、当前 revision、生命周期状态、可选 deadline 与 escalation policy。初始 kind 覆盖输入、审批、凭据授权、验收、冲突解决和对账。通知确认与请求解决是不同事实，过期不能产生批准。
 

@@ -3105,13 +3105,7 @@ const giveWorkItemToAgentConflictReceiptSchema = z.object({
   reason: z.enum([
     'expected-revision',
     'stale-remote',
-    'work-item-not-ready',
-    'work-item-blocked',
-    'acceptance-criteria-missing',
     'binding-unavailable',
-    'inherited-changes-unsafe',
-    'branch-protected',
-    'legacy-protection-unknown',
   ]),
 }).strict()
 
@@ -3130,7 +3124,6 @@ export const sakiGiveWorkItemToAgentResultSchema = z.union([
     reason: z.literal('unavailable'),
     detail: z.enum([
       'work-item-detail-unavailable',
-      'branch-safety-unavailable',
       'agent-profile-unavailable',
       'model-route-unavailable',
       'host-unavailable',

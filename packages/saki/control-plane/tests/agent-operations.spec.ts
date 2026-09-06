@@ -62,7 +62,6 @@ import type { DomainMigrationSnapshot } from '@deepseek-ai/dsh-storage-domain'
 import type {
   AnswerInterventionIntent,
   GiveWorkItemToAgentIntent,
-  MoveWorkItemIntent,
   SakiAgentRunId,
   SakiBoardWorkItemProjection,
   SakiControlIntentId,
@@ -75,7 +74,6 @@ import type {
   SakiResourceBindingId,
   SakiStorageGenerationId,
   SakiWorkAssignmentId,
-  SakiWorkItemIntentReceipt,
   SakiWorkSessionId,
 } from '../src/types.ts'
 
@@ -149,7 +147,7 @@ describe('manual Give-to-Agent operations', () => {
   })
 
   it.each(['running', 'waiting', 'claimed', 'accepted', 'pending', 'reconciliation', 'canceled'] as const)(
-    'migrates a v9 %s Run without changing its Host request or Session identity', async (state) => {
+    'migrates a v9 %s Run preserving its input and Session identity', async (state) => {
       const test = harness()
       if (state === 'pending') {
         test.dispatches.simulateCrashAfterPutWhen(record => record.state === 'pending')
@@ -203,7 +201,7 @@ describe('manual Give-to-Agent operations', () => {
       ...historical,
       tables: {
         ...historical.tables,
-        agent_operation_intents: { [original.id]: { ...original, schemaVersion: 1, phase: 'admission-reserved' } },
+        agent_operation_intents: { [original.id]: { ...historical.tables['agent_operation_intents']![original.id] as object, phase: 'admission-reserved' } },
       },
     })
     test.intents.records.set(original.id, agentOperationIntentRecordSchema.parse(
@@ -280,6 +278,21 @@ describe('manual Give-to-Agent operations', () => {
         else tables['binding_write_admissions'] = {}
       }
       expect(() => migrateSakiV9ToV10(historical)).toThrow()
+    },
+  )
+
+  it.each(['updated-before-reserved', 'accepted-before-reserved', 'accepted-after-updated'] as const)(
+    'rejects a v9 Agent admission with %s timestamps', async (corruption) => {
+      const test = harness()
+      await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+      const historical = historicalAgentSnapshot(test)
+      const admission = historical.tables['binding_write_admissions']![BINDING_ID] as Record<string, unknown>
+      Object.assign(admission, {
+        reservedAt: 2, acceptedAt: 3, updatedAt: 4,
+        ...(corruption === 'updated-before-reserved' ? { updatedAt: 1 }
+          : corruption === 'accepted-before-reserved' ? { acceptedAt: 1 } : { acceptedAt: 5 }),
+      })
+      expect(() => migrateSakiV9ToV10(historical)).toThrow('Agent Run admission timestamps are not monotonic')
     },
   )
 
@@ -391,8 +404,8 @@ describe('manual Give-to-Agent operations', () => {
         workSessionId: initialRun.workSessionId,
       },
     })
-    expect([...test.dispatches.records.values()].at(-1)?.hostRequest.expected.status)
-      .toEqual(dirty.observation.fingerprint)
+    expect([...test.dispatches.records.values()].at(-1)?.hostRequest.expected)
+      .toEqual({ binding: only(test.intents).hostRequest.expected.binding })
     expect(interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId)))
       .toMatchObject({ state: 'resolved' })
     expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
@@ -940,10 +953,10 @@ describe('manual Give-to-Agent operations', () => {
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
   })
 
-  it('rejects an Intervention that could not reserve one later answer Dispatch', async () => {
+  it('continues beyond thirty-two Dispatches and restores the Run', async () => {
     const test = harness()
     await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
-    for (let index = 1; index < 32; index += 1) {
+    for (let index = 1; index <= 33; index += 1) {
       const run = only(test.runs)
       const requested = await test.operations.requestIntervention({
         sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
@@ -969,22 +982,13 @@ describe('manual Give-to-Agent operations', () => {
       )).toMatchObject({ ok: true, receipt: { state: 'resolved' } })
     }
     const fullRun = only(test.runs)
-    expect(fullRun.dispatchIds).toHaveLength(32)
-    const retainedCount = test.interventions.size
-
-    expect(await test.operations.requestIntervention({
-      sessionId: fullRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
-      toolCallId: ToolCallId('call_capacity_overflow'),
-      prompt: 'This answer would require a thirty-third Dispatch.',
-    }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'conflict' })
-    expect(test.interventions.size).toBe(retainedCount)
-
+    expect(fullRun.dispatchIds).toHaveLength(34)
     test.restart()
     const recovered = test.operations.validateDurableState(new Set(), test.registry)
     expect(recovered.openingInterventionIds).toEqual([])
     expect(recovered.answerPendingInterventionIds).toEqual([])
     await test.operations.initializeValidated(recovered)
-  })
+  }, 30_000)
 
   it('recovers the opening write split without allocating another Intervention', async () => {
     const test = harness()
@@ -1037,6 +1041,31 @@ describe('manual Give-to-Agent operations', () => {
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'unavailable' })
     expect(unavailable.interventions.size).toBe(0)
   })
+
+  it.each(['canceled-session', 'assignment-run', 'primary-session'] as const)(
+    'rejects an Intervention whose ownership changed at %s', async (corruption) => {
+      const test = harness()
+      await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+      const run = only(test.runs)
+      if (corruption === 'canceled-session') {
+        const session = only(test.sessions)
+        test.sessions.records.set(session.id, workSessionRecordSchema.parse({ ...session, state: 'canceled' }))
+      } else {
+        const assignment = only(test.assignments)
+        test.assignments.records.set(assignment.id, workAssignmentRecordSchema.parse({
+          ...assignment,
+          ...(corruption === 'assignment-run'
+            ? { agentRunId: 'agent-run-43434343-4343-4343-8343-434343434343' }
+            : { primaryWorkSessionId: 'work-session-43434343-4343-4343-8343-434343434343' }),
+        }))
+      }
+      expect(await test.operations.requestIntervention({
+        sessionId: run.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+        toolCallId: ToolCallId('call_changed_ownership'), prompt: 'Continue the owned Session?',
+      }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'unavailable' })
+      expect(test.interventions.size).toBe(0)
+    },
+  )
 
   it('reconciles confirmed opening evidence that cannot attach to the retained Run prefix', async () => {
     const test = harness()
@@ -1559,13 +1588,13 @@ describe('manual Give-to-Agent operations', () => {
   it.each([
     ['an unavailable inspection', (test: Harness) => {
       test.eligibility.projectInspection = { ok: false, reason: 'unavailable' }
-    }, 'answered', undefined],
+    }],
     ['a thrown inspection', (test: Harness) => {
       test.execution.projectInspectionError = new Error('test inspection failed')
-    }, 'answered', undefined],
+    }],
     ['a stale Binding inspection', (test: Harness) => {
       test.eligibility.projectInspection = { ok: false, reason: 'binding-stale' }
-    }, 'reconciliation-required', 'protocol'],
+    }],
     ['an unavailable structured mutation', (test: Harness) => {
       updateProjectInspection(test, current => ({
         ...current,
@@ -1574,10 +1603,10 @@ describe('manual Give-to-Agent operations', () => {
           structuredMutation: { available: false, blockers: ['unmerged'] },
         },
       }))
-    }, 'answered', undefined],
-  ] as const)('keeps the answer durable after %s', async (_description, arrange, state, reason) => {
+    }],
+  ] as const)('delivers an answer despite %s', async (_description, arrange) => {
     const test = harness()
-    const { open } = await createOpenIntervention(test, `call_inspection_${state}_${_description}`)
+    const { open } = await createOpenIntervention(test, `call_inspection_${_description}`)
     const answer = interventionAnswer(
       open,
       'intent-23232323-2323-4323-8323-232323232323',
@@ -1588,13 +1617,10 @@ describe('manual Give-to-Agent operations', () => {
 
     const result = await test.operations.answerIntervention(answer, actor(), AbortSignal.timeout(5_000))
 
-    expect(result).toMatchObject(state === 'answered'
-      ? { ok: false, reason: 'unavailable', receipt: { state: 'answered' } }
-      : { ok: false, reason: 'reconciliation-required', receipt: { state, reason } })
+    expect(result).toMatchObject({ ok: true, receipt: { state: 'resolved' } })
     expect(interventionRequestRecordSchema.parse(test.interventions.get(open.id)))
-      .toMatchObject({ state, ...(reason === undefined ? {} : { reason }), answer: { payload: { intent: answer } } })
-    expect(test.operations.validateDurableState(new Set(), test.registry).answerPendingInterventionIds)
-      .toEqual(state === 'answered' ? [open.id] : [])
+      .toMatchObject({ state: 'resolved', answer: { payload: { intent: answer } } })
+    expect(test.operations.validateDurableState(new Set(), test.registry).answerPendingInterventionIds).toEqual([])
   })
 
   it.each([
@@ -2190,6 +2216,20 @@ describe('manual Give-to-Agent operations', () => {
       },
     }), 'Execution Dispatch disagrees with its immutable Host request')
     expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch, admissionRevision: undefined,
+    }), 'Execution Dispatch acceptance lacks its Host admission revision')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
+      ...acceptedDispatch,
+      operationSnapshot: {
+        ...acceptedDispatch.operationSnapshot,
+        state: 'accepted',
+        admission: {
+          kind: 'accepted', revision: acceptedDispatch.admissionRevision! + 1,
+          acceptedAt: acceptedDispatch.operationSnapshot.updatedAt,
+        },
+      },
+    }), 'Execution Dispatch Host admission revision disagrees with its snapshot')
+    expectSchemaIssue(executionDispatchRecordSchema.safeParse({
       ...acceptedDispatch,
       preparation: undefined,
     }), 'accepted Execution Dispatch lacks admission evidence')
@@ -2259,7 +2299,7 @@ describe('manual Give-to-Agent operations', () => {
 
   })
 
-  it('freezes repeated definition headings and a default outcome through submission', async () => {
+  it('freezes the full Issue body without interpreting headings', async () => {
     const test = harness()
     test.execution.prepareMode = 'unavailable'
     test.issueBody = [
@@ -2275,18 +2315,13 @@ describe('manual Give-to-Agent operations', () => {
     expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
       .toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } })
     const retained = only(test.intents)
-    expect(retained.workItemDefinition).toMatchObject({
-      intendedOutcome: 'Complete the Work Item as specified.',
-      acceptanceCriteria: ['First criterion', 'Second criterion'],
-      blockage: [],
-    })
+    expect(retained.workItemDefinition.body).toBe(test.issueBody)
     const content = retained.hostRequest.run.input.content[0]
     if (content?.type !== 'text') throw new Error('frozen Agent Run input is not text')
-    expect(content.text).toContain('Intended outcome:\nComplete the Work Item as specified.')
-    expect(content.text).toContain('Acceptance criteria:\n- First criterion\n- Second criterion')
+    expect(content.text).toContain(`Issue description:\n${test.issueBody}`)
   })
 
-  it('persists one exact Run and moves the Work Item only after Host success', async () => {
+  it('persists one exact Run and preserves the Work Item status', async () => {
     const test = harness()
     const submitted = intent()
 
@@ -2296,13 +2331,7 @@ describe('manual Give-to-Agent operations', () => {
     if (!result.ok) throw new Error('test Agent operation did not start')
     expect(test.execution.prepareCount).toBe(2)
     expect(test.execution.startCount).toBe(1)
-    expect(test.moves).toHaveLength(1)
-    expect(test.moves[0]).toMatchObject({
-      type: 'move-work-item',
-      workItemId: submitted.workItemId,
-      expectedRemoteFingerprint: submitted.expectedRemoteFingerprint,
-      targetStatus: 'in-progress',
-    })
+    expect(test.eligibility.mutationContext).toMatchObject({ ok: true, context: { confirmedBoard: { items: [expect.objectContaining({ status: 'ready' })] } } })
     expect(test.dispatches.size).toBe(1)
     expect(test.runs.size).toBe(1)
     const run = test.runs.get(result.receipt.agentRunId)
@@ -2333,7 +2362,6 @@ describe('manual Give-to-Agent operations', () => {
     expect(await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))).toEqual(result)
     expect(test.execution.prepareCount).toBe(2)
     expect(test.execution.startCount).toBe(1)
-    expect(test.moves).toHaveLength(1)
   })
 
   it('rejects an unresolved exact Model Route before accepting the Intent', async () => {
@@ -2440,26 +2468,10 @@ describe('manual Give-to-Agent operations', () => {
       reason: 'conflict',
       receipt: { state: 'conflict', reason: 'stale-remote' },
     }],
-    ['a non-Ready Work Item', (test: Harness) => { patchBoardItem(test, { status: 'backlog' }) }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'work-item-not-ready' },
-    }],
-    ['a closed Issue', (test: Harness) => { patchBoardItem(test, { issueState: 'closed' }) }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'work-item-not-ready' },
-    }],
-    ['an archived Work Item', (test: Harness) => { patchBoardItem(test, { archived: true }) }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'work-item-not-ready' },
-    }],
-    ['a Work Item outside the Project', (test: Harness) => { patchBoardItem(test, { notInProject: true }) }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'work-item-not-ready' },
-    }],
+
+
+
+
   ] as const)('rejects %s before durable acceptance', async (_condition, mutate, expected) => {
     const test = harness()
     mutate(test)
@@ -2480,70 +2492,12 @@ describe('manual Give-to-Agent operations', () => {
       reason: 'conflict',
       receipt: { state: 'conflict', reason: 'binding-unavailable' },
     }],
-    ['an unavailable Host inspection', (test: Harness) => {
-      test.eligibility.projectInspection = { ok: false, reason: 'unavailable' }
-    }, {
-      ok: false,
-      reason: 'unavailable',
-      detail: 'host-unavailable',
-    }],
-    ['a stale Host Binding inspection', (test: Harness) => {
-      test.eligibility.projectInspection = { ok: false, reason: 'binding-stale' }
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'binding-unavailable' },
-    }],
-    ['an incomplete inherited-change baseline', (test: Harness) => {
-      updateProjectInspection(test, current => ({
-        ...current,
-        preEffectBaseline: {
-          kind: 'unavailable',
-          reason: 'io-failure',
-          observed: current.preEffectBaseline.observed,
-        },
-      }))
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'inherited-changes-unsafe' },
-    }],
-    ['a blocked structured-mutation observation', (test: Harness) => {
-      updateProjectInspection(test, current => ({
-        ...current,
-        observation: {
-          ...current.observation,
-          structuredMutation: { available: false, blockers: ['unmerged'] },
-        },
-      }))
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'inherited-changes-unsafe' },
-    }],
-    ['an unmerged index', (test: Harness) => {
-      updateProjectInspection(test, current => ({
-        ...current,
-        observation: {
-          ...current.observation,
-          index: { kind: 'unmerged', stagesDigest: { version: 1, digest: '9'.repeat(64) } },
-        },
-      }))
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'inherited-changes-unsafe' },
-    }],
-    ['a detached HEAD', (test: Harness) => {
-      updateProjectInspection(test, current => ({
-        ...current,
-        observation: { ...current.observation, branch: { kind: 'detached' } },
-      }))
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'binding-unavailable' },
-    }],
+
+
+
+
+
+
   ] as const)('rejects %s before Host preparation', async (_condition, mutate, expected) => {
     const test = harness()
     mutate(test)
@@ -2585,43 +2539,11 @@ describe('manual Give-to-Agent operations', () => {
     ['a newer Issue revision', (test: Harness) => {
       patchIssueDetail(test, { updatedAt: test.eligibility.issueDetail.updatedAt + 1 })
     }, staleRemote()],
-    ['an Issue without acceptance criteria', (test: Harness) => {
-      patchIssueDetail(test, { body: '# Intended outcome\nShip the vertical slice.' })
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'acceptance-criteria-missing' },
-    }],
-    ['an Issue with a nonempty blocker', (test: Harness) => {
-      patchIssueDetail(test, {
-        body: '# Intended outcome\nShip the vertical slice.\n# Acceptance criteria\n- It ships\n# Blocked by\n- Upstream API',
-      })
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'work-item-blocked' },
-    }],
-    ['an unavailable branch-safety observation', (test: Harness) => {
-      test.eligibility.githubReadFailure = 'branch-safety'
-    }, {
-      ok: false,
-      reason: 'unavailable',
-      detail: 'branch-safety-unavailable',
-    }],
-    ['a protected current branch', (test: Harness) => {
-      test.eligibility.branchSafety = { kind: 'protected', branchExists: true, observedAt: 2 }
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'branch-protected' },
-    }],
-    ['an unknown legacy branch protection', (test: Harness) => {
-      test.eligibility.branchSafety = { kind: 'legacy-protection-unknown', branchExists: false, observedAt: 2 }
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'legacy-protection-unknown' },
-    }],
+
+
+
+
+
   ] as const)('rejects %s before durable acceptance', async (_condition, mutate, expected) => {
     const test = harness()
     mutate(test)
@@ -2670,6 +2592,79 @@ describe('manual Give-to-Agent operations', () => {
       detail: 'work-item-detail-unavailable',
     })
     expect(test.intents.size).toBe(0)
+  })
+
+  it.each([
+    ['a non-Ready Work Item', (test: Harness) => { patchBoardItem(test, { status: 'backlog' }) }],
+    ['a closed Issue', (test: Harness) => { patchBoardItem(test, { issueState: 'closed' }); patchIssueDetail(test, { state: 'closed' }) }],
+    ['an archived Work Item', (test: Harness) => { patchBoardItem(test, { archived: true }) }],
+    ['a Work Item outside the Project', (test: Harness) => { patchBoardItem(test, { notInProject: true }) }],
+    ['an unavailable Host inspection', (test: Harness) => {
+      test.eligibility.projectInspection = { ok: false, reason: 'unavailable' }
+    }],
+    ['a stale Host Binding inspection', (test: Harness) => {
+      test.eligibility.projectInspection = { ok: false, reason: 'binding-stale' }
+    }],
+    ['an incomplete inherited-change baseline', (test: Harness) => {
+      updateProjectInspection(test, current => ({
+        ...current,
+        preEffectBaseline: {
+          kind: 'unavailable',
+          reason: 'io-failure',
+          observed: current.preEffectBaseline.observed,
+        },
+      }))
+    }],
+    ['a blocked structured-mutation observation', (test: Harness) => {
+      updateProjectInspection(test, current => ({
+        ...current,
+        observation: {
+          ...current.observation,
+          structuredMutation: { available: false, blockers: ['unmerged'] },
+        },
+      }))
+    }],
+    ['an unmerged index', (test: Harness) => {
+      updateProjectInspection(test, current => ({
+        ...current,
+        observation: {
+          ...current.observation,
+          index: { kind: 'unmerged', stagesDigest: { version: 1, digest: '9'.repeat(64) } },
+        },
+      }))
+    }],
+    ['a detached HEAD', (test: Harness) => {
+      updateProjectInspection(test, current => ({
+        ...current,
+        observation: { ...current.observation, branch: { kind: 'detached' } },
+      }))
+    }],
+    ['an Issue without acceptance criteria', (test: Harness) => {
+      patchIssueDetail(test, { body: '# Intended outcome\nShip the vertical slice.' })
+    }],
+    ['an Issue with a nonempty blocker', (test: Harness) => {
+      patchIssueDetail(test, {
+        body: '# Intended outcome\nShip the vertical slice.\n# Acceptance criteria\n- It ships\n# Blocked by\n- Upstream API',
+      })
+    }],
+    ['an unavailable branch-safety observation', (test: Harness) => {
+      test.eligibility.githubReadFailure = 'branch-safety'
+    }],
+    ['a protected current branch', (test: Harness) => {
+      test.eligibility.branchSafety = { kind: 'protected', branchExists: true, observedAt: 2 }
+    }],
+    ['an unknown legacy branch protection', (test: Harness) => {
+      test.eligibility.branchSafety = { kind: 'legacy-protection-unknown', branchExists: false, observedAt: 2 }
+    }],
+  ] as const)('starts with %s without consulting Git admission policy', async (_condition, mutate) => {
+    const test = harness()
+    mutate(test)
+    const inspect = vi.spyOn(test.execution, 'inspectProject')
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({ ok: true, receipt: { state: 'started' } })
+    expect(inspect).not.toHaveBeenCalled()
+    expect(test.execution.request?.expected).toEqual({ binding: only(test.intents).hostRequest.expected.binding })
+    expect(test.runs.size).toBe(1)
   })
 
   it('rejects a replayed Intent id carrying different browser input', async () => {
@@ -3228,7 +3223,6 @@ describe('manual Give-to-Agent operations', () => {
     expect(only(test.admissions)).toMatchObject({ state: 'available' })
     expect(test.execution.startCount).toBe(1)
     expect(test.execution.cancelCount).toBe(1)
-    expect(test.moves).toHaveLength(0)
   })
 
   it.each([
@@ -3269,7 +3263,6 @@ describe('manual Give-to-Agent operations', () => {
       reason: 'reconciliation-required',
       receipt: { state: 'reconciliation-required', reason: 'protocol' },
     })
-    expect(test.moves).toHaveLength(0)
   })
 
   it.each([
@@ -3280,7 +3273,6 @@ describe('manual Give-to-Agent operations', () => {
     test.execution.beforeAdmission = () => { remove(test) }
 
     await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).rejects.toThrow('missing-key')
-    expect(test.moves).toHaveLength(0)
   })
 
   it.each([
@@ -3295,7 +3287,6 @@ describe('manual Give-to-Agent operations', () => {
       reason: 'reconciliation-required',
       receipt: { state: 'reconciliation-required', reason: 'protocol' },
     })
-    expect(test.moves).toHaveLength(0)
   })
 
   it.each([
@@ -3303,7 +3294,6 @@ describe('manual Give-to-Agent operations', () => {
       result: { ok: true, receipt: { state: 'started' } },
       intentState: 'started',
       runState: 'running',
-      moves: 1,
     }],
     ['reconciliation', {
       result: {
@@ -3313,13 +3303,11 @@ describe('manual Give-to-Agent operations', () => {
       },
       intentState: 'reconciliation-required',
       runState: 'reconciliation-required',
-      moves: 0,
     }],
     ['nonterminal', {
       result: { ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } },
       intentState: 'dispatching',
       runState: 'starting',
-      moves: 0,
     }],
   ] as const)('adopts a %s Host cancellation result after effect-boundary authority denial', async (
     cancelMode,
@@ -3333,7 +3321,6 @@ describe('manual Give-to-Agent operations', () => {
       .toMatchObject(expected.result)
     expect(only(test.intents)).toMatchObject({ phase: expected.intentState })
     expect(only(test.runs)).toMatchObject({ state: expected.runState })
-    expect(test.moves).toHaveLength(expected.moves)
   })
 
   it('replays a lost final acceptance acknowledgement without a second Host start', async () => {
@@ -3397,7 +3384,6 @@ describe('manual Give-to-Agent operations', () => {
     expect(await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000)))
       .toMatchObject({ ok: true, receipt: { state: 'started' } })
     expect(test.execution.startCount).toBe(1)
-    expect(test.moves).toHaveLength(1)
     expect(test.runs.size).toBe(1)
     expect(only(test.runs)).toMatchObject({ state: 'running' })
     expect(only(test.dispatches)).toMatchObject({
@@ -3421,7 +3407,6 @@ describe('manual Give-to-Agent operations', () => {
 
     expect(only(test.intents)).toMatchObject({ phase: 'started' })
     expect(only(test.runs)).toMatchObject({ state: 'running' })
-    expect(test.moves).toHaveLength(1)
   })
 
   it('reacts only to relevant nonterminal Host wake-ups and contains recovery failure', async () => {
@@ -3460,7 +3445,6 @@ describe('manual Give-to-Agent operations', () => {
     recovered.operations.hostChanged({ operation: recoveredOperation, revision: 1 })
     await recovered.operations.dispose()
     expect(only(recovered.intents)).toMatchObject({ phase: 'started' })
-    expect(recovered.moves).toHaveLength(1)
 
     const failed = harness()
     failed.execution.startMode = 'unavailable'
@@ -3540,7 +3524,6 @@ describe('manual Give-to-Agent operations', () => {
     expect(only(test.dispatches)).toMatchObject(expected.dispatch)
     expect(only(test.runs)).toMatchObject({ state: expected.runState })
     expect(only(test.admissions)).toMatchObject({ state: expected.admissionState })
-    expect(test.moves).toHaveLength(0)
   })
 
   it.each([
@@ -3598,7 +3581,6 @@ describe('manual Give-to-Agent operations', () => {
       .toMatchObject({ ok: true, receipt: { state: 'started' } })
     expect(only(test.runs)).toMatchObject({ state: 'running', revision: 2 })
     expect(only(test.assignments)).toMatchObject({ state: 'active', revision: 1 })
-    expect(test.moves).toHaveLength(2)
   })
 
   it('stops startup before Intent replay when a proven running Run cannot resume', async () => {
@@ -3615,7 +3597,6 @@ describe('manual Give-to-Agent operations', () => {
       ...retainedAssignment,
       state: 'assigned',
     }))
-    test.moves.splice(0)
     const state = test.operations.validateDurableState(new Set(), test.registry)
     expect(state.runningAgentRuns).toHaveLength(1)
     test.execution.resumeError = new Error('simulated running Agent resume failure')
@@ -3623,7 +3604,6 @@ describe('manual Give-to-Agent operations', () => {
     await expect(test.operations.initializeValidated(state))
       .rejects.toThrow('simulated running Agent resume failure')
     expect(test.execution.resumeCount).toBe(1)
-    expect(test.moves).toHaveLength(0)
     expect(only(test.intents)).toMatchObject({ phase: 'dispatching' })
     expect(only(test.assignments)).toMatchObject({ state: 'assigned' })
   })
@@ -3689,7 +3669,6 @@ describe('manual Give-to-Agent operations', () => {
     expect(test.execution.startCount).toBe(1)
     expect(test.execution.prepareCount).toBe(2)
     expect(test.runs.size).toBe(1)
-    expect(test.moves).toHaveLength(0)
   })
 
   it.each([
@@ -3738,7 +3717,6 @@ describe('manual Give-to-Agent operations', () => {
     })
     expect(only(test.runs)).toMatchObject({ state: expected.runState })
     expect(only(test.admissions)).toMatchObject({ state: expected.admissionState })
-    expect(test.moves).toHaveLength(0)
   })
 
   it('preserves an accepted Dispatch while revoked Host cancellation proves no effect', async () => {
@@ -3816,7 +3794,6 @@ describe('manual Give-to-Agent operations', () => {
       intentState: 'started',
       runState: 'running',
       admissionState: 'available',
-      moves: 1,
     }],
     ['reconciliation', {
       result: {
@@ -3828,7 +3805,6 @@ describe('manual Give-to-Agent operations', () => {
       intentState: 'reconciliation-required',
       runState: 'reconciliation-required',
       admissionState: 'available',
-      moves: 0,
     }],
     ['failed', {
       result: { ok: false, reason: 'canceled', receipt: { state: 'canceled' } },
@@ -3836,7 +3812,6 @@ describe('manual Give-to-Agent operations', () => {
       intentState: 'canceled',
       runState: 'canceled',
       admissionState: 'available',
-      moves: 0,
     }],
     ['nonterminal', {
       result: { ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } },
@@ -3844,7 +3819,6 @@ describe('manual Give-to-Agent operations', () => {
       intentState: 'dispatching',
       runState: 'starting',
       admissionState: 'available',
-      moves: 0,
     }],
   ] as const)('adopts a %s Host cancellation outcome after authority revocation', async (cancelMode, expected) => {
     const test = harness()
@@ -3859,7 +3833,6 @@ describe('manual Give-to-Agent operations', () => {
     expect(only(test.intents)).toMatchObject({ phase: expected.intentState })
     expect(only(test.runs)).toMatchObject({ state: expected.runState })
     expect(only(test.admissions)).toMatchObject({ state: expected.admissionState })
-    expect(test.moves).toHaveLength(expected.moves)
   })
 
   it('recovers after stopping before recording a Host source conflict', async () => {
@@ -3913,33 +3886,6 @@ describe('manual Give-to-Agent operations', () => {
     expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
   })
 
-  it('preserves a proven running Run when the in-progress move needs reconciliation', async () => {
-    const test = harness()
-    test.moveMode = 'reconciliation'
-    const submitted = intent('intent-cccccccc-cccc-4ccc-8ccc-cccccccccccc' as SakiControlIntentId)
-
-    const result = await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
-
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'reconciliation-required',
-      receipt: { state: 'reconciliation-required', reason: 'effect-unknown' },
-    })
-    expect(only(test.runs)).toMatchObject({ state: 'running', hostResult: { type: 'start-agent-run' } })
-    expect(only(test.dispatches)).toMatchObject({
-      state: 'reconciliation-required',
-      operationSnapshot: { state: 'succeeded' },
-    })
-    const validated = test.operations.validateDurableState(new Set(), test.registry)
-    expect(validated.runningAgentRuns).toEqual([{
-      operation: only(test.dispatches).preparation?.operation,
-      request: only(test.dispatches).hostRequest,
-    }])
-    expect(await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))).toEqual(result)
-    expect(test.execution.startCount).toBe(1)
-    expect(test.runs.size).toBe(1)
-  })
-
   it('reconciles Host success whose result identifies another Agent Run', async () => {
     const test = harness()
     test.execution.startMode = 'mismatched-result'
@@ -3955,28 +3901,6 @@ describe('manual Give-to-Agent operations', () => {
       operationSnapshot: { state: 'succeeded' },
     })
     expect(only(test.runs)).toMatchObject({ state: 'reconciliation-required' })
-    expect(test.moves).toHaveLength(0)
-  })
-
-  it.each([
-    ['unavailable', { ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } }],
-    ['conflict', {
-      ok: false,
-      reason: 'reconciliation-required',
-      receipt: { state: 'reconciliation-required', reason: 'protocol' },
-    }],
-    ['evidence-conflict', {
-      ok: false,
-      reason: 'reconciliation-required',
-      receipt: { state: 'reconciliation-required', reason: 'evidence-conflict' },
-    }],
-  ] as const)('projects an in-progress move %s outcome onto the Agent operation', async (moveMode, expected) => {
-    const test = harness()
-    test.moveMode = moveMode
-
-    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject(expected)
-    expect(only(test.runs)).toMatchObject({ state: 'running' })
-    expect(test.moves).toHaveLength(1)
   })
 
   it('rejects tampering with the frozen Work Item and Profile context', async () => {
@@ -4651,6 +4575,15 @@ describe('manual Give-to-Agent operations', () => {
       '# Acceptance criteria',
       '- remains bounded',
     ].join('\n')],
+  ])('accepts %s within the input budget', async (_description, body) => {
+    const test = harness()
+    test.issueBody = body()
+    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .toMatchObject({ ok: true, receipt: { state: 'started' } })
+    expect(only(test.intents).workItemDefinition.body).toBe(test.issueBody)
+  })
+
+  it.each([
     ['a legal Issue body whose rendered input exceeds the UTF-8 budget', () => [
       '# Intended outcome',
       'o'.repeat(32_768),
@@ -4843,7 +4776,7 @@ class FakeAgentExecution extends SakiHostExecution {
       } as HostOperationReference<'start-agent-run'>
       const requestFingerprint = {
         version: 1 as const,
-        digest: canonicalDigest('saki/test-agent-host-request/v1', parsed),
+        digest: canonicalDigest('saki/host-operation-request/v1', parsed),
       }
       this.preparation = { operation, preparationRevision: 0, requestFingerprint }
       this.snapshot = {
@@ -5133,12 +5066,10 @@ interface Harness {
   readonly execution: FakeAgentExecution
   readonly registry: DevelopmentProjectRegistryRecord
   readonly eligibility: EligibilityState
-  readonly moves: MoveWorkItemIntent[]
   readonly resolvedModelRoutes: { readonly provider: string; readonly model: string }[]
   restart(): void
   attachDuplicateGitHub(): void
   detachGitHub(): void
-  moveMode: 'success' | 'unavailable' | 'conflict' | 'reconciliation' | 'evidence-conflict'
   authorityCurrent: boolean
   bindingCurrent: boolean
   bindingProjectRevision: number
@@ -5282,11 +5213,9 @@ function harness(): Harness {
       updatedAt: 1,
     }),
   ]])
-  const moves: MoveWorkItemIntent[] = []
   const resolvedModelRoutes: { provider: string; model: string }[] = []
-  const state: Pick<Harness, 'moveMode' | 'authorityCurrent' | 'bindingCurrent' | 'bindingProjectRevision'
+  const state: Pick<Harness, 'authorityCurrent' | 'bindingCurrent' | 'bindingProjectRevision'
   | 'modelRouteAvailable' | 'afterResolveModelRoute'> = {
-    moveMode: 'success',
     authorityCurrent: true,
     bindingCurrent: true,
     bindingProjectRevision: PROJECT.revision,
@@ -5328,41 +5257,6 @@ function harness(): Harness {
         state.afterResolveModelRoute = undefined
         afterResolveModelRoute?.()
       },
-      moveWorkItem: async (move): Promise<SakiWorkItemIntentReceipt<'move-work-item'>> => {
-        moves.push(move)
-        if (state.moveMode === 'unavailable') return { ok: false, reason: 'unavailable' }
-        if (state.moveMode === 'conflict') return { ok: false, reason: 'conflict' }
-        if (state.moveMode === 'reconciliation' || state.moveMode === 'evidence-conflict') {
-          return {
-            ok: false,
-            reason: 'reconciliation-required',
-            receipt: {
-              id: move.intentId.replace(/^intent-/u, 'receipt-') as never,
-              intentId: move.intentId,
-              type: 'move-work-item',
-              projectId: move.projectId,
-              state: 'reconciliation-required',
-              reason: state.moveMode === 'evidence-conflict' ? 'evidence-conflict' : 'effect-unknown',
-              workItemId: move.workItemId,
-              stage: 'project-item-status-set',
-            },
-          }
-        }
-        return {
-          ok: true,
-          receipt: {
-            id: move.intentId.replace(/^intent-/u, 'receipt-') as never,
-            intentId: move.intentId,
-            type: 'move-work-item',
-            projectId: move.projectId,
-            state: 'succeeded',
-            workItemId: move.workItemId,
-            issueNumber: item.issueNumber,
-            url: item.url,
-            remoteFingerprint: item.remoteFingerprint,
-          },
-        }
-      },
       claimTtlMs: 30_000,
       notifyChanged: () => {},
       lifetime: new AbortController().signal,
@@ -5383,13 +5277,10 @@ function harness(): Harness {
     execution,
     get registry() { return eligibility.registry },
     eligibility,
-    moves,
     resolvedModelRoutes,
     restart() { operations = createOperations() },
     attachDuplicateGitHub() { operations.attachGitHub(githubReader) },
     detachGitHub() { detachGitHubReader() },
-    get moveMode() { return state.moveMode },
-    set moveMode(value) { state.moveMode = value },
     get authorityCurrent() { return state.authorityCurrent },
     set authorityCurrent(value) { state.authorityCurrent = value },
     get bindingCurrent() { return state.bindingCurrent },
@@ -5463,15 +5354,37 @@ function historicalAgentSnapshot(test: Harness): DomainMigrationSnapshot {
   const intent = only(test.intents)
   const dispatch = only(test.dispatches)
   const { admissionRevision, ...historicalDispatch } = dispatch
+  const inspection = test.eligibility.projectInspection
+  if (!inspection.ok) throw new Error('historical fixture needs a Git observation')
+  const hostRequest = { ...intent.hostRequest, expected: {
+    ...intent.hostRequest.expected,
+    status: inspection.observation.fingerprint,
+    head: inspection.observation.head,
+    index: inspection.observation.index,
+    worktree: inspection.observation.worktree,
+    preEffectBaseline: inspection.preEffectBaseline,
+  } }
+  const requestFingerprint = { version: 1, digest: canonicalDigest('saki/host-operation-request/v1', hostRequest) }
+  const workItemDefinition = { ...intent.workItemDefinition,
+    intendedOutcome: 'Ship the vertical slice.', acceptanceCriteria: ['Delivers the exact input once'], blockage: [],
+  }
   const accepted = admissionRevision !== undefined
   const now = Date.now()
   return {
     global: null,
     tables: {
       development_project_registry: { 'development-project-registry': test.registry },
-      agent_operation_intents: { [intent.id]: { ...intent, schemaVersion: 1 } },
+      agent_operation_intents: { [intent.id]: { ...intent, schemaVersion: 1, hostRequest, workItemDefinition,
+        inProgressIntentId: 'intent-42424242-4242-4242-8242-424242424242',
+        contextDigest: canonicalDigest('saki/agent-operation-context/v1', {
+          workItemDefinition, projectContext: intent.projectContext, profile: intent.profile,
+        }),
+      } },
       agent_runs: Object.fromEntries(test.runs.entries()),
-      execution_dispatches: { [dispatch.id]: { ...historicalDispatch, schemaVersion: 1 } },
+      execution_dispatches: { [dispatch.id]: { ...historicalDispatch, schemaVersion: 1, hostRequest,
+        ...(dispatch.preparation === undefined ? {} : { preparation: { ...dispatch.preparation, requestFingerprint } }),
+        ...(dispatch.operationSnapshot === undefined ? {} : { operationSnapshot: { ...dispatch.operationSnapshot, requestFingerprint } }),
+      } },
       binding_write_admissions: {
         [BINDING_ID]: intent.phase === 'canceled' ? {
           id: BINDING_ID,

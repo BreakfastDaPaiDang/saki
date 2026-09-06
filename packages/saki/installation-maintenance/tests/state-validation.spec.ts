@@ -205,7 +205,7 @@ function branchPushFixture(): BranchPushFixture {
     updatedAt: 2,
   })
   const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 4,
+    schemaVersion: 5,
     request,
     preparationRevision: preparation.preparationRevision,
     snapshot: preparedSnapshot,
@@ -550,7 +550,7 @@ function sourceConflictedBranchPushFixture(fixture = branchPushFixture()): Branc
     digest: canonicalDigest('saki/host-operation-request/v1', parsedRequest),
   }
   const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 4,
+    schemaVersion: 5,
     request: parsedRequest,
     preparationRevision: 0,
     snapshot: {
@@ -771,7 +771,7 @@ function linkedFixture(requestType: GitHostOperationRequest['type'] = 'stage-fil
     updatedAt: 2,
   })
   const operationRecord = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 4,
+    schemaVersion: 5,
     request,
     preparationRevision: 0,
     snapshot: preparedSnapshot,
@@ -889,7 +889,7 @@ function preparedOperation(request: GitHostOperationRequest, updatedAt = 2): Loc
     digest: canonicalDigest('saki/host-operation-request/v1', request),
   }
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     request,
     preparationRevision: 0,
     snapshot: {

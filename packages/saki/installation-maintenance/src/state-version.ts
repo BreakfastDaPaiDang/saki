@@ -26,6 +26,7 @@ import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionV4DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 
 /** One complete readable Saki product-state format. */
@@ -95,11 +96,11 @@ export type SakiStateVersionSpec =
     version: 9
     domains: readonly [
       typeof sakiControlPlaneV9DomainSpec,
-      typeof sakiHostExecutionDomainSpec,
+      typeof sakiHostExecutionV4DomainSpec,
       typeof sakiStorageGenerationV7DomainSpec,
     ]
     controlPlane: typeof sakiControlPlaneV9DomainSpec
-    hostExecution: typeof sakiHostExecutionDomainSpec
+    hostExecution: typeof sakiHostExecutionV4DomainSpec
     storageGeneration: typeof sakiStorageGenerationV7DomainSpec
   }>
   | Readonly<{
@@ -200,11 +201,11 @@ const V9_STATE_SPEC = Object.freeze({
   version: 9,
   domains: Object.freeze([
     sakiControlPlaneV9DomainSpec,
-    sakiHostExecutionDomainSpec,
+    sakiHostExecutionV4DomainSpec,
     sakiStorageGenerationV7DomainSpec,
   ] as const),
   controlPlane: sakiControlPlaneV9DomainSpec,
-  hostExecution: sakiHostExecutionDomainSpec,
+  hostExecution: sakiHostExecutionV4DomainSpec,
   storageGeneration: sakiStorageGenerationV7DomainSpec,
 }) satisfies SakiStateVersionSpec
 

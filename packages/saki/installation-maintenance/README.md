@@ -42,7 +42,7 @@ The state capability, rather than a build id, decides format compatibility. This
 | 7 | Exact `saki_control_plane@7` plus `saki_host_execution@2` and `saki_storage_generation@5` | Read-only validation, Recovery Backup, and offline migration only |
 | 8 | Exact `saki_control_plane@8` plus `saki_host_execution@3` and `saki_storage_generation@6` | Read-only validation, Recovery Backup, and offline migration only |
 | 9 | Exact `saki_control_plane@9` plus `saki_host_execution@4` and `saki_storage_generation@7` | Read-only validation, Recovery Backup, and offline migration only |
-| 10 | `saki_control_plane@10` plus `saki_host_execution@4` and the required `saki_storage_generation@8` seal | Fresh provisioning, serving, backup, and verification |
+| 10 | `saki_control_plane@10` plus `saki_host_execution@5` and the required `saki_storage_generation@8` seal | Fresh provisioning, serving, backup, and verification |
 
 The v2 reader accepts only the exact B03 schema and physical SQLite-v1 subset. It validates the selected Installation owner and Foundation references together with the Access aggregate and Project Registry/Intent cross-record invariants. A missing bootstrap-completion summary remains valid before bootstrap has completed. If consumed evidence shows completion without its summary, exactly one consistent initial challenge and Browser Session pair must reconstruct it deterministically. Registration Actor generation attribution must name the initial or current historical generation, while terminal Access challenge or Browser Session attribution may name another schema-valid historical generation. The reader does not impose v3-wide constraints on unrelated historical Foundation records.
 

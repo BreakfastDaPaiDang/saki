@@ -1,20 +1,21 @@
-/** Adjacent migration from binding-owned Runs to independently admitted Dispatches. */
+/** Adjacent migration to independently admitted Agent inputs without Git preconditions. */
 
+import { canonicalDigest } from '@breakfastdapaidang/saki-execution'
 import type { DomainMigrationSnapshot } from '@deepseek-ai/dsh-storage-domain'
 import {
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
   agentOperationIntentV1RecordSchema,
-  agentRunRecordSchema,
+  agentRunV2RecordSchema as agentRunRecordSchema,
   bindingWriteAdmissionV3RecordSchema,
   developmentProjectRegistryRecordSchema,
   executionDispatchV2RecordSchema,
 } from './spec.ts'
 
 /**
- * Preserve accepted Host credentials while removing Agent-owned binding reservations.
+ * Preserve accepted Host credentials while removing Agent Git preconditions and binding reservations.
  * Historical ownership is checked before the records carrying that evidence are removed.
  * @param snapshot - exact v9 source snapshot validated by the migration runner.
- * @returns v10 records retaining original Session, Run, request, and Host evidence.
+ * @returns v10 records retaining Session, Run, input, and admission identities with matching request fingerprints.
  */
 export function migrateSakiV9ToV10(snapshot: DomainMigrationSnapshot): DomainMigrationSnapshot {
   const tables = snapshot.tables as Readonly<Record<
@@ -72,11 +73,21 @@ export function migrateSakiV9ToV10(snapshot: DomainMigrationSnapshot): DomainMig
     global: snapshot.global,
     tables: {
       ...snapshot.tables,
-      agent_operation_intents: Object.fromEntries([...intents].map(([key, intent]) => [key, {
-        ...intent,
-        schemaVersion: 2,
-        phase: intent.phase === 'admission-reserved' ? 'prepared' : intent.phase,
-      }])),
+      agent_operation_intents: Object.fromEntries([...intents].map(([key, intent]) => {
+        const { inProgressIntentId: _inProgressIntentId, ...retained } = intent
+        const { intendedOutcome: _outcome, acceptanceCriteria: _criteria, blockage: _blockage, ...workItemDefinition }
+          = intent.workItemDefinition
+        return [key, {
+          ...retained,
+          schemaVersion: 2,
+          phase: intent.phase === 'admission-reserved' ? 'prepared' : intent.phase,
+          workItemDefinition,
+          contextDigest: canonicalDigest('saki/agent-operation-context/v1', {
+            workItemDefinition, projectContext: intent.projectContext, profile: intent.profile,
+          }),
+          hostRequest: { ...intent.hostRequest, expected: { binding: intent.hostRequest.expected.binding } },
+        }]
+      })),
       execution_dispatches: Object.fromEntries([...dispatches].map(([key, dispatch]) => {
         if (key !== dispatch.id) throw new Error('v9 Dispatch id disagrees with its table key')
         const binding = admissions.get(dispatch.bindingId)
@@ -85,9 +96,16 @@ export function migrateSakiV9ToV10(snapshot: DomainMigrationSnapshot): DomainMig
           : admittedHost?.kind === 'accepted' ? admittedHost.revision
             : binding?.state === 'agent-run' && binding.agentRunId === dispatch.agentRunId && binding.phase === 'accepted'
               ? binding.revision : dispatch.revision
+        const hostRequest = { ...dispatch.hostRequest, expected: { binding: dispatch.hostRequest.expected.binding } }
+        const requestFingerprint = { version: 1, digest: canonicalDigest('saki/host-operation-request/v1', hostRequest) }
         return [key, {
           ...dispatch,
           schemaVersion: 2,
+          hostRequest,
+          ...(dispatch.preparation === undefined ? {} : { preparation: { ...dispatch.preparation, requestFingerprint } }),
+          ...(dispatch.operationSnapshot === undefined ? {} : {
+            operationSnapshot: { ...dispatch.operationSnapshot, requestFingerprint },
+          }),
           ...(admissionRevision === undefined ? {} : { admissionRevision }),
         }]
       })),

@@ -26,7 +26,7 @@ import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
   agentOperationIntentV1RecordSchema,
-  agentRunRecordSchema,
+  agentRunV2RecordSchema as agentRunRecordSchema,
   agentRunV1RecordSchema,
   bindingWriteAdmissionV1RecordSchema,
   bindingWriteAdmissionV2RecordSchema,

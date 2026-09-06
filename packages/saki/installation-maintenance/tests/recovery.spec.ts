@@ -17,7 +17,7 @@ import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV3DomainSpec,
-  sakiHostExecutionDomainSpec,
+  sakiHostExecutionV4DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import type {
   SakiBuildId,
@@ -379,7 +379,7 @@ async function materializePreviousWritableGeneration(
   const units: readonly { readonly spec: DomainSpec; readonly snapshot: KvUnitSnapshot }[] = [
     { spec: stateVersion === 9 ? sakiControlPlaneV9DomainSpec : sakiControlPlaneV8DomainSpec, snapshot: controlPlaneSnapshot },
     {
-      spec: stateVersion === 9 ? sakiHostExecutionDomainSpec : sakiHostExecutionV3DomainSpec,
+      spec: stateVersion === 9 ? sakiHostExecutionV4DomainSpec : sakiHostExecutionV3DomainSpec,
       snapshot: {
         global: null,
         tables: Object.fromEntries(

@@ -42,7 +42,7 @@ import {
   type SakiStorageGenerationId,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
-  sakiHostExecutionDomainSpec,
+  sakiHostExecutionV4DomainSpec,
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
@@ -252,7 +252,7 @@ export interface ClosedSakiV9State {
   /** Read-only facade over schema-validated exact `saki_control_plane@9` data. */
   readonly controlPlane: Domain<typeof sakiControlPlaneV9DomainSpec>
   /** Read-only facade over schema-validated exact `saki_host_execution@4` data. */
-  readonly hostExecution: Domain<typeof sakiHostExecutionDomainSpec>
+  readonly hostExecution: Domain<typeof sakiHostExecutionV4DomainSpec>
   /** Read-only facade over schema-validated exact `saki_storage_generation@7` data. */
   readonly storageGeneration: Domain<typeof sakiStorageGenerationV7DomainSpec>
   /** Detached exact v9 control-plane data. */
@@ -307,7 +307,7 @@ interface DetachedV8Domains {
 
 interface DetachedV9Domains {
   readonly controlPlane: DetachedDomain<typeof sakiControlPlaneV9DomainSpec>
-  readonly hostExecution: DetachedDomain<typeof sakiHostExecutionDomainSpec>
+  readonly hostExecution: DetachedDomain<typeof sakiHostExecutionV4DomainSpec>
   readonly storageGeneration: DetachedDomain<typeof sakiStorageGenerationV7DomainSpec>
 }
 
@@ -405,7 +405,7 @@ export async function readClosedSakiV2State(
     try {
       const controlPlaneSnapshot = await readExactDomain(backend, sakiControlPlaneV2DomainSpec, signal)
       await assertDomainMissing(backend, sakiStorageGenerationDomainSpec.name, signal)
-      await assertDomainMissing(backend, sakiHostExecutionDomainSpec.name, signal)
+      await assertDomainMissing(backend, sakiHostExecutionV4DomainSpec.name, signal)
       const controlPlane = detachDomain(sakiControlPlaneV2DomainSpec, controlPlaneSnapshot)
       return {
         controlPlane: controlPlane.domain,
@@ -443,7 +443,7 @@ export async function readClosedSakiV3State(
         sakiStorageGenerationV1DomainSpec,
         signal,
       )
-      await assertDomainMissing(backend, sakiHostExecutionDomainSpec.name, signal)
+      await assertDomainMissing(backend, sakiHostExecutionV4DomainSpec.name, signal)
       validateSakiV3SourceState(
         domains.controlPlane.domain,
         domains.storageGeneration.domain,
@@ -481,7 +481,7 @@ export async function readClosedSakiV4State(
         sakiStorageGenerationV2DomainSpec,
         signal,
       )
-      await assertDomainMissing(backend, sakiHostExecutionDomainSpec.name, signal)
+      await assertDomainMissing(backend, sakiHostExecutionV4DomainSpec.name, signal)
       validateSakiV4SourceState(
         domains.controlPlane.domain,
         domains.storageGeneration.domain,
@@ -694,11 +694,11 @@ async function readDetachedV9Domains(
   signal: AbortSignal,
 ): Promise<DetachedV9Domains> {
   const controlPlaneSnapshot = await readExactDomain(backend, sakiControlPlaneV9DomainSpec, signal)
-  const hostExecutionSnapshot = await readExactDomain(backend, sakiHostExecutionDomainSpec, signal)
+  const hostExecutionSnapshot = await readExactDomain(backend, sakiHostExecutionV4DomainSpec, signal)
   const storageGenerationSnapshot = await readExactDomain(backend, sakiStorageGenerationV7DomainSpec, signal)
   return {
     controlPlane: detachDomain(sakiControlPlaneV9DomainSpec, controlPlaneSnapshot),
-    hostExecution: detachDomain(sakiHostExecutionDomainSpec, hostExecutionSnapshot),
+    hostExecution: detachDomain(sakiHostExecutionV4DomainSpec, hostExecutionSnapshot),
     storageGeneration: detachDomain(sakiStorageGenerationV7DomainSpec, storageGenerationSnapshot),
   }
 }

@@ -11,7 +11,6 @@ import {
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiGiveWorkItemToAgentResultSchema,
   sakiMyWorkResultSchema,
-  sakiMoveWorkItemResultSchema,
   sakiProjectIndexResultSchema,
 } from '@breakfastdapaidang/saki-host-api'
 import type {
@@ -323,7 +322,7 @@ async function transcript(): Promise<string> {
     await waitForModelRequests(first, 1)
     const firstOpen = await waitForOpenIntervention(port, cookie, workItem.id)
     const mutation = await readSakiBoardSnapshotMutationState(providerStatePath)
-    expect(mutation.dispatchCount).toBe(1)
+    expect(mutation.dispatchCount).toBe(0)
     await setProviderState(providerStatePath, 'hold')
     const firstProcess = first
     await firstProcess.stop()
@@ -375,7 +374,7 @@ async function transcript(): Promise<string> {
     expect(replayed).toEqual(given)
     const replayModelRequests = modelRequestCount(second)
     expect(replayModelRequests).toBe(0)
-    expect((await readSakiBoardSnapshotMutationState(providerStatePath)).dispatchCount).toBe(1)
+    expect((await readSakiBoardSnapshotMutationState(providerStatePath)).dispatchCount).toBe(0)
 
     const recommendation = restartedOpen.work.recommendation
     if (!recommendation.available || recommendation.offer.type !== 'answer-intervention') {
@@ -413,25 +412,12 @@ async function transcript(): Promise<string> {
     const activeItem = activeOverlay?.state === 'targeted-confirmed' ? activeOverlay.workItem
       : activeBoard.confirmed.items.find(item => item.id === workItem.id)
     if (activeItem === undefined) throw new Error('active Work Item evidence is absent')
-    const readyIntentId = 'intent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-    const readyResponse = await rpc(port, 'control/submit', {
-      type: 'move-work-item',
-      intentId: readyIntentId,
-      projectId: project.id,
-      workItemId: workItem.id,
-      expectedRemoteFingerprint: activeItem.remoteFingerprint,
-      targetStatus: 'ready',
-    }, { cookie, requestToken: exchangeValue.access.requestToken })
-    expect(sakiMoveWorkItemResultSchema.parse(readyResponse.value)).toMatchObject({ ok: true })
+    expect(activeItem.status).toBe(workItem.status)
     await setProviderState(providerStatePath, 'complete')
-    const readyBoard = await waitForConfirmedBoard(port, cookie, project.id, projection =>
-      projection.confirmed.items.some(item => item.id === workItem.id && item.status === 'ready'))
-    const readyItem = readyBoard.confirmed.items.find(item => item.id === workItem.id)
-    if (readyItem === undefined) throw new Error('Ready Work Item evidence is absent')
     const siblingResponse = await rpc(port, 'control/submit', {
       ...intent,
       intentId: 'intent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-      expectedRemoteFingerprint: readyItem.remoteFingerprint,
+      expectedRemoteFingerprint: activeItem.remoteFingerprint,
     }, { cookie, requestToken: exchangeValue.access.requestToken })
     const sibling = sakiGiveWorkItemToAgentResultSchema.parse(siblingResponse.value)
     if (!sibling.ok) throw new Error(`shared-binding Agent start failed: ${JSON.stringify(sibling)}`)
@@ -462,6 +448,7 @@ async function transcript(): Promise<string> {
         step: 'shared-binding-independent-runs',
         result: {
           sameProject: sibling.receipt.projectId === given.receipt.projectId,
+          workItemStatusUnchanged: activeItem.status === workItem.status,
           distinctRuns: sibling.receipt.agentRunId !== given.receipt.agentRunId,
           distinctSessions: new Set(secondSummary.durableInputSessionIds).size,
           durableInputs: secondSummary.durableInputs.length,

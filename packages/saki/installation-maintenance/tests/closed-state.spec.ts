@@ -11,6 +11,7 @@ import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionV4DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import {
   canonicalDigest,
@@ -340,7 +341,7 @@ function closedBranchPushCorruption(): {
     type: 'push-branch' as const,
   }
   const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 4,
+    schemaVersion: 5,
     request: mismatchedRequest,
     preparationRevision: 0,
     snapshot: hostOperationSnapshotSchema.parse({
@@ -420,11 +421,7 @@ function orphanAgentIntentRecord(): unknown {
         },
         inheritedChangeBaseline: baseline,
       },
-      status: { version: 1, digest: '2'.repeat(64) },
-      head: { kind: 'commit', objectId: '3'.repeat(40), symbolicRef: 'refs/heads/main' },
-      index: { kind: 'tree', treeId: '4'.repeat(40) },
-      worktree: { version: 1, digest: '5'.repeat(64) },
-      preEffectBaseline: baseline,
+
     },
     run: {
       agentRunId,
@@ -465,9 +462,6 @@ function orphanAgentIntentRecord(): unknown {
     body: '# Acceptance criteria\n- remains bounded',
     updatedAt: item.updatedAt,
     remoteFingerprint: item.remoteFingerprint,
-    intendedOutcome: 'Complete the Work Item.',
-    acceptanceCriteria: ['remains bounded'],
-    blockage: [],
   }
   const projectContext = {
     projectId,
@@ -489,7 +483,6 @@ function orphanAgentIntentRecord(): unknown {
     workSessionId,
     agentRunId,
     dispatchId,
-    inProgressIntentId: 'intent-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
     workItemDefinition,
     projectContext,
     profile,
@@ -762,7 +755,7 @@ function v7SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapsho
 async function materializeV9(path: string, storageGenerationSnapshot = v7SealSnapshot()): Promise<void> {
   await materialize(path, [
     { spec: sakiControlPlaneV9DomainSpec, snapshot: emptySnapshot(sakiControlPlaneV9DomainSpec) },
-    { spec: sakiHostExecutionDomainSpec, snapshot: emptySnapshot(sakiHostExecutionDomainSpec) },
+    { spec: sakiHostExecutionV4DomainSpec, snapshot: emptySnapshot(sakiHostExecutionV4DomainSpec) },
     { spec: sakiStorageGenerationV7DomainSpec, snapshot: storageGenerationSnapshot },
   ])
 }

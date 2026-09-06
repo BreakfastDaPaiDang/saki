@@ -19,6 +19,7 @@ import { inspectLocalProjectSelection } from '../src/inspection.ts'
 import {
   gitAlternatePath,
   isSafeLocalRepositoryPath,
+  inspectRepositoryResource,
   openSafeRepositoryView,
   RepositoryControlChangedError,
 } from '../src/safe-repository.ts'
@@ -262,6 +263,41 @@ function withoutLstatSize(fs: FileSystem, path: string): FileSystem {
 }
 
 describe('safe repository admission', () => {
+  it('reads resource identity despite invalid Git configuration and index contents', async () => {
+    const root = await repository({ unborn: true })
+    const canonical = await realpath(root)
+    const { fs } = await localHarness(root)
+    await writeFile(join(root, '.git', 'config'), 'not valid Git configuration\n')
+    await writeFile(join(root, '.git', 'index'), 'not an index\n')
+    expect(await inspectRepositoryResource(fs, canonical, MAX_CONTROL_FILE_BYTES, new AbortController().signal))
+      .toEqual({ kind: 'repository', paths: {
+        topLevelPath: canonical, gitDirectoryPath: join(canonical, '.git'), commonDirectoryPath: join(canonical, '.git'),
+      } })
+  })
+
+  it('reports malformed repository pointer files during resource identity inspection', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'saki-resource-pointer-'))
+    roots.push(root)
+    const { fs } = await localHarness(root)
+    await writeFile(join(root, '.git'), 'invalid pointer\n')
+    expect(await inspectRepositoryResource(fs, root, MAX_CONTROL_FILE_BYTES, new AbortController().signal))
+      .toEqual({ kind: 'malformed' })
+  })
+
+  it.each(['io-failure', 'aborted'] as const)('reports resource identity %s without hiding caller cancellation', async (failure) => {
+    const root = await mkdtemp(join(tmpdir(), 'saki-resource-unavailable-'))
+    roots.push(root)
+    const { fs } = await localHarness(root)
+    const lifetime = new AbortController()
+    vi.spyOn(fs, 'lstat').mockImplementation(async () => {
+      if (failure === 'aborted') lifetime.abort(new Error('resource read canceled'))
+      throw new Error('filesystem unavailable')
+    })
+    const result = inspectRepositoryResource(fs, root, MAX_CONTROL_FILE_BYTES, lifetime.signal)
+    if (failure === 'aborted') await expect(result).rejects.toThrow('resource read canceled')
+    else await expect(result).resolves.toEqual({ kind: 'unavailable' })
+  })
+
   it('validates POSIX and Windows local path spellings without filesystem access', () => {
     expect(isSafeLocalRepositoryPath('/srv/repository', 'linux')).toBe(true)
     expect(isSafeLocalRepositoryPath('\\\\server\\share\\repository', 'linux')).toBe(true)

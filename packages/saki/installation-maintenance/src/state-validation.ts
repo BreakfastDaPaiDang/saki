@@ -5,6 +5,7 @@ import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import {
   agentRunRecordSchema,
   agentRunV1RecordSchema,
+  agentRunV2RecordSchema,
   bindingWriteAdmissionV3RecordSchema,
   executionDispatchRecordSchema,
   executionDispatchV1RecordSchema,
@@ -29,24 +30,27 @@ import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionV4DomainSpec,
   type LocalHostGitOperationRecordV1,
   type LocalHostOperationRecord,
   type LocalHostOperationRecordV2,
   type LocalHostOperationRecordV3,
+  type LocalHostOperationRecordV4,
 } from '@breakfastdapaidang/saki-execution-local'
 
 type CurrentControlPlaneDomain = Domain<typeof sakiControlPlaneDomainSpec>
 type CurrentHostExecutionDomain = Domain<typeof sakiHostExecutionDomainSpec>
+type HistoricalV4HostExecutionDomain = Domain<typeof sakiHostExecutionV4DomainSpec>
 type HistoricalV1HostExecutionDomain = Domain<typeof sakiHostExecutionV1DomainSpec>
 type HistoricalV2HostExecutionDomain = Domain<typeof sakiHostExecutionV2DomainSpec>
 type HistoricalV3HostExecutionDomain = Domain<typeof sakiHostExecutionV3DomainSpec>
 type CurrentStorageGenerationDomain = Domain<typeof sakiStorageGenerationDomainSpec>
 type CurrentGitHostOperationRecord = Exclude<
-  LocalHostOperationRecord,
+  LocalHostOperationRecord | LocalHostOperationRecordV4,
   { readonly request: { readonly type: 'start-agent-run' | 'push-branch' } }
 >
 type CurrentPushHostOperationRecord = Extract<
-  LocalHostOperationRecord,
+  LocalHostOperationRecord | LocalHostOperationRecordV4,
   { readonly request: { readonly type: 'push-branch' } }
 >
 type CurrentBranchDeliveryRecord = ReturnType<
@@ -75,7 +79,7 @@ type GitHostOperationRecord = LocalHostGitOperationRecordV1
   | HistoricalV3GitHostOperationRecord
   | CurrentGitHostOperationRecord
 type AgentHostOperationRecord = Extract<
-  LocalHostOperationRecord,
+  LocalHostOperationRecord | LocalHostOperationRecordV4,
   { readonly request: { readonly type: 'start-agent-run' } }
 >
 type HistoricalAgentHostOperationRecord = Extract<
@@ -103,7 +107,7 @@ interface BranchDeliveryControlPlaneDomain {
  * Validate complete current product relationships across Control Plane, Host Execution, and generation identity.
  * Recoverable write-order gaps are accepted only when the Host still proves that no effect was admitted.
  * @param controlPlane - opened exact `saki_control_plane@10` domain.
- * @param hostExecution - opened exact `saki_host_execution@4` domain.
+ * @param hostExecution - opened exact `saki_host_execution@5` domain.
  * @param storageGeneration - opened exact `saki_storage_generation@8` domain.
  * @param expectedInstallationId - Installation selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation selected by maintenance metadata.
@@ -138,7 +142,7 @@ export function validateCurrentSakiProductState(
  */
 export function validateBranchDeliveryOperationLinks(
   controlPlane: BranchDeliveryControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain,
 ): void {
   const deliveries = identifiedRecords(
     controlPlane.table('branch_deliveries'),
@@ -269,7 +273,7 @@ function isBranchPushIntent(record: CurrentBranchDeliveryIntentRecord): record i
 }
 
 function isCurrentPushHostOperation(
-  operation: LocalHostOperationRecord,
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV4,
 ): operation is CurrentPushHostOperationRecord {
   return operation.request.type === 'push-branch'
 }
@@ -494,8 +498,8 @@ function branchPushAcceptedAdmissionMatches(
  */
 export function validateGitOperationLinks(
   controlPlane: GitOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain | HistoricalV1HostExecutionDomain | HistoricalV2HostExecutionDomain
-    | HistoricalV3HostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain | HistoricalV1HostExecutionDomain
+    | HistoricalV2HostExecutionDomain | HistoricalV3HostExecutionDomain,
 ): void {
   const intents = new Map([...controlPlane.table('git_operation_intents').entries()].map(([key, value]) => {
     const intent = gitOperationIntentRecordSchema.parse(value)
@@ -567,7 +571,7 @@ export function validateGitOperationLinks(
  */
 export function validateAgentOperationLinks(
   controlPlane: AgentOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain | HistoricalV3HostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain | HistoricalV3HostExecutionDomain,
 ): void {
   validateAgentOperationLinksWithSchemas(
     controlPlane,
@@ -602,16 +606,17 @@ export function validateSakiV7AgentOperationLinks(
  */
 export function validateSakiV8AgentOperationLinks(
   controlPlane: AgentOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain | HistoricalV3HostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain | HistoricalV3HostExecutionDomain,
 ): void {
   validateAgentOperationLinksWithSchemas(
-    controlPlane, hostExecution, agentRunRecordSchema, executionDispatchV2RecordSchema,
+    controlPlane, hostExecution, agentRunV2RecordSchema, executionDispatchV2RecordSchema,
   )
 }
 
 function validateAgentOperationLinksWithSchemas(
   controlPlane: AgentOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain | HistoricalV2HostExecutionDomain | HistoricalV3HostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain
+    | HistoricalV2HostExecutionDomain | HistoricalV3HostExecutionDomain,
   runSchema: { parse(value: unknown): LinkedAgentRunRecord },
   dispatchSchema: { parse(value: unknown): LinkedExecutionDispatchRecord },
 ): void {
@@ -702,7 +707,7 @@ function retainedAgentSourceConflict(
 }
 
 function isAgentHostOperation(
-  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostOperationRecordV3,
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV4 | LocalHostOperationRecordV2 | LocalHostOperationRecordV3,
 ): operation is LinkedAgentHostOperationRecord {
   return operation.request.type === 'start-agent-run'
 }
@@ -758,7 +763,7 @@ function validateAgentHostAdmission(
 }
 
 function isGitHostOperation(
-  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV4 | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
     | LocalHostGitOperationRecordV1,
 ): operation is GitHostOperationRecord {
   return operation.request.type !== 'start-agent-run' && operation.request.type !== 'push-branch'
@@ -812,7 +817,7 @@ function validateSourceConflictHostRecord(
 }
 
 function operationPreparation(
-  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV4 | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
     | LocalHostGitOperationRecordV1,
 ) {
   return {

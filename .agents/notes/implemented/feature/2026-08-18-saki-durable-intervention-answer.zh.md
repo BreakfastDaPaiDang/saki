@@ -20,11 +20,11 @@ Local Host 可能在控制面记录输入交付完成前就开始执行一份已
 
 `intervention_requests` 在 Agent 轮次之外独立拥有问题。v8 record 是 Agent 请求的文本输入；其 owner、subject、blocking scope 与 return address 都命名精确 Agent Run，cause 则命名同一 Run 与 Work Session，并带上物理 Session 和 branded Tool Call id。它还保留 Project、目标 Principal、有界且 well-formed 的文本要求、revision、时间戳与生命周期状态。Return address 只包含稳定产品 id，不包含路径、凭据、浏览器 draft 或 provider 对象。该格式不编码通用 subject、Dispatch 拥有的恢复请求、deadline 或 escalation policy。
 
-回答是一条独立的 `answer-intervention` Control Intent，并携带预期 Intervention revision。已认证请求不能提供 Actor 或 Grant 字段；控制面会派生不可变 Actor 归因，并重新检查当前 Principal、target、Grant、Assignment、Work Session、Resource Binding revision 与 operation condition。一次 Intervention compare-and-set 会选定首个已授权且 revision 精确的回答。精确 replay 返回同一 receipt；发生变化、陈旧、未授权、超出长度限制或改变 owner 的输入都不能替换胜者。
+回答是一条独立的 `answer-intervention` Control Intent，并携带预期 Intervention revision。已认证请求不能提供 Actor 或 Grant 字段；控制面会派生不可变 Actor 归因，并重新检查当前 Principal、target、Grant、Assignment、Work Session、Resource Binding revision 与输入投递能力。一次 Intervention compare-and-set 会选定首个已授权且 revision 精确的回答。精确 replay 返回同一 receipt；发生变化、陈旧、未授权、超出长度限制或改变 owner 的输入都不能替换胜者。
 
 ## Delivery and projections
 
-已接受回答复用所属 Run 的持久 `RunInputPlan`。系统派生稳定 MessageId 与一条新的有序 Execution Dispatch，把受阻 Run 改为 `resume-pending`，并通过回答自身的 Dispatch 准入，不受同一 Binding 上其他 Run 的阻挡。普通 `StartAgentRun` Host Operation 会把带归因的回答作为新 user message 追加到同一个 Agent Run、Work Session 与物理 Session。Local Host 会 flush 并检查该精确 message，随后才报告成功。只有确认交付后，Run 才会恢复为 `running`、清除 blocker 并解析 Intervention；每个已 resolved 的历史回答都保留自己已接受的 Dispatch 与精确 succeeded Host evidence。未知或矛盾 evidence 必须进入 reconciliation；如果回答 Dispatch 与 Run 已进入 reconciliation，而 Intervention 尚未写入，启动流程会完成该精确崩溃前缀。
+已接受回答复用所属 Run 的持久 `RunInputPlan`。系统派生稳定 MessageId 与一条新的有序 Execution Dispatch，把受阻 Run 改为 `resume-pending`，并通过回答自身的 Dispatch 准入，不受同一 Binding 上其他 Run 的阻挡。普通 `StartAgentRun` Host Operation 会把带归因的回答作为新 user message 追加到同一个 Agent Run、Work Session 与物理 Session。Local Host 会 flush 并检查该精确 message，随后才报告成功。Run 没有固定的对话次数上限；每个回答都保留自身的持久输入及重放证据。只有确认交付后，Run 才会恢复为 `running`、清除 blocker 并解析 Intervention；每个已 resolved 的历史回答都保留自己已接受的 Dispatch 与精确 succeeded Host evidence。未知或矛盾 evidence 必须进入 reconciliation；如果回答 Dispatch 与 Run 已进入 reconciliation，而 Intervention 尚未写入，启动流程会完成该精确崩溃前缀。
 
 My Work 与 Attention 是根据当前 Project、已同步 Work Item、Assignment、Run、Dispatch、Grant、Binding 与 Intervention 派生的纯 Principal-scoped Projection。它们没有 inbox table 或全局 inbox revision。My Work 为每个 item 分配四种展示分组之一，并最多给出一个带原因的 Action Offer。活动或正在恢复的 Run 优先于更新但尚未接受的 Give 前缀；只有 assigned/allocated/pending 的前缀不会成为当前工作。本地可用事实可以在不执行网络操作的前提下生成候选 offer，但 offer 不构成 authority，提交时仍会重复实时 authorization 与 operation 检查。在 acceptance action 尚不存在时，In-review work 不公开该操作；Done 与 Canceled work 不公开 acceptance offer。
 
