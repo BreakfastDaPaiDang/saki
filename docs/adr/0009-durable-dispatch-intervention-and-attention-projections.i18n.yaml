@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/adr/0009-durable-dispatch-intervention-and-attention-projections.md
-0009-durable-dispatch-intervention-and-attention-projections.md: c25d7faa5f270b697de5e17156420f91173ddccd
-0009-durable-dispatch-intervention-and-attention-projections.zh.md: 68d8b68d105921e45ba74839b5fb5c9ca13cd5c9
+0009-durable-dispatch-intervention-and-attention-projections.md: f42131f090ca2ad3d0b61fd1e0dc8393053177f4
+0009-durable-dispatch-intervention-and-attention-projections.zh.md: b6274826b8d2844c5c5ea8c55ebc460dd0a5a90c

@@ -1608,7 +1608,7 @@ interface SakiGiveWorkItemToAgentReceiptBase {
 /** Durable browser-safe lifecycle for one manual Agent assignment. */
 export type SakiGiveWorkItemToAgentReceipt =
   | (SakiGiveWorkItemToAgentReceiptBase & {
-    readonly state: 'prepared' | 'admission-reserved' | 'dispatching'
+    readonly state: 'prepared' | 'dispatching'
   })
   | (SakiGiveWorkItemToAgentReceiptBase & { readonly state: 'started' })
   | (SakiGiveWorkItemToAgentReceiptBase & {
@@ -1621,7 +1621,6 @@ export type SakiGiveWorkItemToAgentReceipt =
       | 'acceptance-criteria-missing'
       | 'binding-unavailable'
       | 'inherited-changes-unsafe'
-      | 'writable-run-active'
       | 'branch-protected'
       | 'legacy-protection-unknown'
   })
@@ -1651,7 +1650,7 @@ export type SakiGiveWorkItemToAgentIntentReceipt =
       | 'model-route-unavailable'
       | 'host-unavailable') | undefined
     readonly receipt?: Extract<SakiGiveWorkItemToAgentReceipt, {
-      readonly state: 'prepared' | 'admission-reserved' | 'dispatching'
+      readonly state: 'prepared' | 'dispatching'
     }> | undefined
   }
   | {

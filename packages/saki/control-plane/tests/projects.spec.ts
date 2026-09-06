@@ -2664,7 +2664,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       const admission = admissions.get(bindingId)
       if (admission === undefined) throw new Error('Binding admission fixture is absent')
       await admissions.delete(bindingId)
-      expect(await recommendation()).toEqual({ available: false, reason: 'binding-unavailable' })
+      expect(await recommendation()).toMatchObject({ available: true })
       await admissions.put(bindingId, admission)
     }
     expect(await harness.control.query<'my-work'>(harness.authentication, {

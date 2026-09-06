@@ -3096,7 +3096,7 @@ const giveWorkItemToAgentReceiptBase = {
 
 const giveWorkItemToAgentNonterminalReceiptSchema = z.object({
   ...giveWorkItemToAgentReceiptBase,
-  state: z.enum(['prepared', 'admission-reserved', 'dispatching']),
+  state: z.enum(['prepared', 'dispatching']),
 }).strict()
 
 const giveWorkItemToAgentConflictReceiptSchema = z.object({
@@ -3110,7 +3110,6 @@ const giveWorkItemToAgentConflictReceiptSchema = z.object({
     'acceptance-criteria-missing',
     'binding-unavailable',
     'inherited-changes-unsafe',
-    'writable-run-active',
     'branch-protected',
     'legacy-protection-unknown',
   ]),

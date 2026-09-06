@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/adr/0014-stable-resource-bindings-over-canonical-worktrees.md
-0014-stable-resource-bindings-over-canonical-worktrees.md: 667ce5abe94a4a330d1dcfe952367186e9abb367
-0014-stable-resource-bindings-over-canonical-worktrees.zh.md: bb90f4693639c9242d48d41d0877173a05efe259
+0014-stable-resource-bindings-over-canonical-worktrees.md: 229c9aa6b00420be12c358ae961a3beca2f2b076
+0014-stable-resource-bindings-over-canonical-worktrees.zh.md: 05d692d1d37ae80e70fa66887847906927148619

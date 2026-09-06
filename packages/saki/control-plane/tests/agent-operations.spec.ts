@@ -57,6 +57,8 @@ import type {
   WorkAssignmentRecord,
   WorkSessionRecord,
 } from '../src/spec.ts'
+import { migrateSakiV9ToV10 } from '../src/migration-v10.ts'
+import type { DomainMigrationSnapshot } from '@deepseek-ai/dsh-storage-domain'
 import type {
   AnswerInterventionIntent,
   GiveWorkItemToAgentIntent,
@@ -78,6 +80,209 @@ import type {
 } from '../src/types.ts'
 
 describe('manual Give-to-Agent operations', () => {
+  it('starts an Agent Run without reserving the binding for its lifetime', async () => {
+    const test = harness()
+    const before = structuredClone(only(test.admissions))
+
+    const started = await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+
+    expect(started).toMatchObject({ ok: true, receipt: { state: 'started' } })
+    expect(only(test.admissions)).toEqual(before)
+    expect(test.operations.validateDurableState(new Set(), test.registry).runningAgentRuns).toHaveLength(1)
+  })
+
+  it('admits overlapping starts on one binding and restores both independent Runs', async () => {
+    const test = harness()
+    const reached = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    test.execution.afterStart = async () => {
+      reached.resolve(undefined)
+      await release.promise
+    }
+    const first = test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+    try {
+      await reached.promise
+      test.execution.beginNextOperation()
+      const second = await test.operations.submit(
+        intent('intent-12121212-1212-4212-8212-121212121212' as SakiControlIntentId),
+        actor(),
+        AbortSignal.timeout(5_000),
+      )
+      expect(second).toMatchObject({ ok: true, receipt: { state: 'started' } })
+      expect(test.execution.startCount).toBe(2)
+    } finally {
+      release.resolve(undefined)
+      await first
+    }
+    expect(await first).toMatchObject({ ok: true, receipt: { state: 'started' } })
+    const runs = [...test.runs.records.values()]
+    expect(new Set(runs.map(run => run.sessionId)).size).toBe(2)
+    expect(new Set(runs.map(run => run.bindingId))).toEqual(new Set([BINDING_ID]))
+    test.restart()
+    const restored = test.operations.validateDurableState(new Set(), test.registry)
+    expect(restored.runningAgentRuns).toHaveLength(2)
+    await test.operations.initializeValidated(restored)
+    expect(test.execution.resumeCount).toBe(2)
+    expect(test.execution.startCount).toBe(2)
+    expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
+  })
+
+  it('answers an Intervention while another Run and a manual Git admission share the binding', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'call_shared_binding')
+    test.execution.beginNextOperation()
+    expect(await test.operations.submit(
+      intent('intent-13131313-1313-4313-8313-131313131313' as SakiControlIntentId),
+      actor(),
+      AbortSignal.timeout(5_000),
+    )).toMatchObject({ ok: true, receipt: { state: 'started' } })
+    const manual = manualWriteAdmission()
+    test.admissions.records.set(BINDING_ID, manual)
+    test.execution.beginNextOperation()
+    expect(await test.operations.answerIntervention(
+      interventionAnswer(open, 'intent-14141414-1414-4414-8414-141414141414', 'Continue in this shared directory.'),
+      actor(),
+      AbortSignal.timeout(5_000),
+    )).toMatchObject({ ok: true, receipt: { state: 'resolved' } })
+    expect(only(test.admissions)).toEqual(manual)
+    expect(test.operations.validateDurableState(new Set(), test.registry).runningAgentRuns).toHaveLength(2)
+  })
+
+  it.each(['running', 'waiting', 'claimed', 'accepted', 'pending', 'reconciliation', 'canceled'] as const)(
+    'migrates a v9 %s Run without changing its Host request or Session identity', async (state) => {
+      const test = harness()
+      if (state === 'pending') {
+        test.dispatches.simulateCrashAfterPutWhen(record => record.state === 'pending')
+        await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+          .rejects.toThrow(SimulatedProcessCrash)
+      } else if (state === 'waiting') {
+        await createOpenIntervention(test, 'call_migrated_waiting')
+      } else {
+        if (state === 'claimed') test.execution.prepareMode = 'unavailable'
+        if (state === 'accepted' || state === 'canceled') test.execution.startMode = 'unavailable'
+        if (state === 'reconciliation') test.execution.startMode = 'reconciliation'
+        await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+        if (state === 'canceled') {
+          test.authorityCurrent = false
+          await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+        }
+      }
+      const historical = historicalAgentSnapshot(test)
+      if (state === 'pending' || state === 'reconciliation' || state === 'canceled') {
+        const original = historical.tables['agent_operation_intents']![only(test.intents).id] as Record<string, unknown>
+        original['phase'] = 'dispatching'
+        Reflect.deleteProperty(original, 'terminalReason')
+      }
+      const before = structuredClone(historical)
+      const migrated = migrateSakiV9ToV10(historical)
+      expect(historical).toEqual(before)
+      const dispatch = executionDispatchRecordSchema.parse(migrated.tables['execution_dispatches']![only(test.dispatches).id])
+      expect(dispatch.hostRequest).toEqual(only(test.dispatches).hostRequest)
+      expect(dispatch.operationSnapshot).toEqual(only(test.dispatches).operationSnapshot)
+      expect(dispatch.admissionRevision).toBe(state === 'canceled'
+        ? only(test.dispatches).revision : only(test.dispatches).admissionRevision)
+      expect(migrated.tables['agent_runs']).toEqual(historical.tables['agent_runs'])
+      for (const [key, value] of Object.entries(migrated.tables['agent_operation_intents']!)) {
+        test.intents.records.set(key as SakiControlIntentId, agentOperationIntentRecordSchema.parse(value))
+      }
+      test.dispatches.records.set(dispatch.id, dispatch)
+      expect(migrated.tables['binding_write_admissions']![BINDING_ID]).toMatchObject({ state: 'available' })
+      test.restart()
+      expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
+    },
+  )
+
+  it('recovers a v9 reserved start through its existing Dispatch without a binding reservation', async () => {
+    const test = harness()
+    test.dispatches.simulateCrashAfterPutWhen(record => record.state === 'pending')
+    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+      .rejects.toThrow(SimulatedProcessCrash)
+    const historical = historicalAgentSnapshot(test)
+    const original = only(test.intents)
+    const migrated = migrateSakiV9ToV10({
+      ...historical,
+      tables: {
+        ...historical.tables,
+        agent_operation_intents: { [original.id]: { ...original, schemaVersion: 1, phase: 'admission-reserved' } },
+      },
+    })
+    test.intents.records.set(original.id, agentOperationIntentRecordSchema.parse(
+      migrated.tables['agent_operation_intents']![original.id],
+    ))
+    const dispatch = executionDispatchRecordSchema.parse(migrated.tables['execution_dispatches']![original.dispatchId])
+    test.dispatches.records.set(dispatch.id, dispatch)
+    test.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse(
+      migrated.tables['binding_write_admissions']![BINDING_ID],
+    ))
+    expect(only(test.intents).phase).toBe('prepared')
+    test.restart()
+    await test.operations.initializeValidated(test.operations.validateDurableState(new Set(), test.registry))
+    expect(only(test.runs)).toMatchObject({ id: original.agentRunId, state: 'running' })
+    expect(test.execution.startCount).toBe(1)
+    expect(only(test.admissions).state).toBe('available')
+  })
+
+  it('preserves a v9 manual Git reservation during the Agent admission migration', () => {
+    const manual = manualWriteAdmission()
+    const migrated = migrateSakiV9ToV10({
+      global: null,
+      tables: {
+        development_project_registry: {},
+        agent_operation_intents: {},
+        agent_runs: {},
+        execution_dispatches: {},
+        binding_write_admissions: { [BINDING_ID]: manual },
+      },
+    })
+    expect(migrated.tables['binding_write_admissions']![BINDING_ID]).toEqual(manual)
+  })
+
+  it.each(['missing owner', 'wrong Run', 'wrong revision', 'reserved instead of accepted'] as const)(
+    'rejects v9 %s before removing the evidence of binding ownership', async (corruption) => {
+      const test = harness()
+      await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
+      const historical = historicalAgentSnapshot(test)
+      const admissions = historical.tables['binding_write_admissions']!
+      const admission = admissions[BINDING_ID] as Record<string, unknown>
+      if (corruption === 'missing owner') Reflect.deleteProperty(admissions, BINDING_ID)
+      if (corruption === 'wrong Run') admission['agentRunId'] = 'agent-run-12121212-1212-4212-8212-121212121212'
+      if (corruption === 'wrong revision') admission['bindingRevision'] = 999
+      if (corruption === 'reserved instead of accepted') {
+        admission['phase'] = 'reserved'
+        delete admission['acceptedAt']
+      }
+      expect(() => migrateSakiV9ToV10(historical)).toThrow()
+    },
+  )
+
+  it.each(['Binding key', 'Intent key', 'Dispatch key', 'reserved owner', 'pending owner', 'Dispatch'] as const)(
+    'rejects historical %s inconsistency instead of discarding its migration evidence', async (corruption) => {
+      const test = harness()
+      test.dispatches.simulateCrashAfterPutWhen(record => record.state === 'pending')
+      await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
+        .rejects.toThrow(SimulatedProcessCrash)
+      const historical = historicalAgentSnapshot(test)
+      const tables = historical.tables as Record<string, Record<string, unknown>>
+      const intents = tables['agent_operation_intents']!
+      const admissions = tables['binding_write_admissions']!
+      const dispatches = tables['execution_dispatches']!
+      const original = intents[only(test.intents).id] as Record<string, unknown>
+      if (corruption === 'Binding key') {
+        tables['binding_write_admissions'] = { 'wrong-binding-key': admissions[BINDING_ID] }
+      } else if (corruption === 'Intent key') {
+        tables['binding_write_admissions'] = {}
+        tables['agent_operation_intents'] = { 'wrong-intent-key': original }
+      } else if (corruption === 'Dispatch key') {
+        tables['execution_dispatches'] = { 'wrong-dispatch-key': dispatches[only(test.dispatches).id] }
+      } else {
+        original['phase'] = corruption === 'reserved owner' ? 'admission-reserved' : 'dispatching'
+        if (corruption === 'Dispatch') tables['execution_dispatches'] = {}
+        else tables['binding_write_admissions'] = {}
+      }
+      expect(() => migrateSakiV9ToV10(historical)).toThrow()
+    },
+  )
+
   it('accepts only the minimal browser Intent and rejects execution authority', () => {
     const intent = {
       type: 'give-work-item-to-agent',
@@ -104,7 +309,7 @@ describe('manual Give-to-Agent operations', () => {
     }
   })
 
-  it('uses the sole Binding admission row for a long-lived Agent Run holder', () => {
+  it('rejects a long-lived Agent Run holder in the current Binding admission schema', () => {
     const admission = {
       id: 'binding-11111111-1111-4111-8111-111111111111',
       schemaVersion: 1,
@@ -120,7 +325,7 @@ describe('manual Give-to-Agent operations', () => {
       updatedAt: 110,
     } as const
 
-    expect(bindingWriteAdmissionRecordSchema.parse(admission)).toEqual(admission)
+    expect(bindingWriteAdmissionRecordSchema.safeParse(admission).success).toBe(false)
     expect(bindingWriteAdmissionRecordSchema.safeParse({
       ...admission,
       dispatchId: 'dispatch-55555555-5555-4555-8555-555555555555',
@@ -190,7 +395,7 @@ describe('manual Give-to-Agent operations', () => {
       .toEqual(dirty.observation.fingerprint)
     expect(interventionRequestRecordSchema.parse(test.interventions.get(requested.interventionId)))
       .toMatchObject({ state: 'resolved' })
-    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+    expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
     const finalDispatch = [...test.dispatches.records.values()].at(-1)
     const validated = test.operations.validateDurableState(new Set(), test.registry)
     expect(validated.interventions).toHaveLength(1)
@@ -1533,11 +1738,13 @@ describe('manual Give-to-Agent operations', () => {
     const requesting = harness()
     await requesting.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
     const requestingRun = only(requesting.runs)
-    requesting.admissions.records.delete(requestingRun.bindingId)
+    requesting.assignments.records.set(requestingRun.assignmentId, workAssignmentRecordSchema.parse({
+      ...only(requesting.assignments), state: 'canceled',
+    }))
     expect(await requesting.operations.requestIntervention({
       sessionId: requestingRun.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
       toolCallId: ToolCallId('call_missing_request_admission'),
-      prompt: 'This request has lost its write admission.',
+      prompt: 'This request has lost its Assignment.',
     }, AbortSignal.timeout(5_000))).toEqual({ ok: false, reason: 'unavailable' })
 
     const opening = harness()
@@ -1554,7 +1761,9 @@ describe('manual Give-to-Agent operations', () => {
 
     const answering = harness()
     const { open } = await createOpenIntervention(answering, 'call_missing_answer_admission')
-    answering.admissions.records.delete(only(answering.runs).bindingId)
+    answering.assignments.records.set(only(answering.runs).assignmentId, workAssignmentRecordSchema.parse({
+      ...only(answering.assignments), state: 'canceled',
+    }))
     expect(await answering.operations.answerIntervention(
       interventionAnswer(open, 'intent-45454545-4545-4545-8545-454545454545', 'Do not deliver without an owner.'),
       actor(),
@@ -1866,6 +2075,7 @@ describe('manual Give-to-Agent operations', () => {
       state: 'pending',
       latestFencingToken: 0,
       acceptedFencingToken: undefined,
+      admissionRevision: undefined,
       preparation: undefined,
       operationSnapshot: undefined,
     }))
@@ -1897,6 +2107,7 @@ describe('manual Give-to-Agent operations', () => {
       state: 'pending',
       latestFencingToken: 0,
       acceptedFencingToken: undefined,
+      admissionRevision: undefined,
       preparation: undefined,
       operationSnapshot: undefined,
     }))
@@ -1915,7 +2126,6 @@ describe('manual Give-to-Agent operations', () => {
     const retainedSession = only(started.sessions)
     const retainedRun = only(started.runs)
     const retainedDispatch = only(started.dispatches)
-    const retainedAdmission = only(started.admissions)
     if (retainedRun.hostResult === undefined) throw new Error('test Agent Run lacks Host success')
 
     expectSchemaIssue(agentOperationIntentRecordSchema.safeParse({
@@ -2047,13 +2257,6 @@ describe('manual Give-to-Agent operations', () => {
       claim: { ...claimedDispatch.claim, fencingToken: claimedDispatch.latestFencingToken + 1 },
     }), 'Execution Dispatch claim has a stale fencing token')
 
-    if (retainedAdmission.state !== 'agent-run' || retainedAdmission.phase !== 'accepted') {
-      throw new Error('test write admission is not accepted by its Agent Run')
-    }
-    expectSchemaIssue(bindingWriteAdmissionRecordSchema.safeParse({
-      ...retainedAdmission,
-      acceptedAt: retainedAdmission.updatedAt + 1,
-    }), 'Agent Run admission timestamps are not monotonic')
   })
 
   it('freezes repeated definition headings and a default outcome through submission', async () => {
@@ -2081,128 +2284,6 @@ describe('manual Give-to-Agent operations', () => {
     if (content?.type !== 'text') throw new Error('frozen Agent Run input is not text')
     expect(content.text).toContain('Intended outcome:\nComplete the Work Item as specified.')
     expect(content.text).toContain('Acceptance criteria:\n- First criterion\n- Second criterion')
-  })
-
-  it('validates inverse write-admission ownership across the Agent lifecycle', async () => {
-    const replaceWithAvailable = (test: Harness): void => {
-      const current = only(test.admissions)
-      test.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
-        id: BINDING_ID,
-        schemaVersion: 1,
-        revision: current.revision + 1,
-        state: 'available',
-        updatedAt: current.updatedAt + 1,
-      }))
-    }
-
-    const reserved = harness()
-    reserved.execution.prepareMode = 'unavailable'
-    await reserved.operations.submit(
-      intent('intent-18181818-1818-4818-8818-181818181818' as SakiControlIntentId),
-      actor(),
-      AbortSignal.timeout(5_000),
-    )
-    const reservedIntent = only(reserved.intents)
-    reserved.intents.records.set(reservedIntent.id, agentOperationIntentRecordSchema.parse({
-      ...reservedIntent,
-      phase: 'admission-reserved',
-    }))
-    const reservedDispatch = only(reserved.dispatches)
-    reserved.dispatches.records.set(reservedDispatch.id, executionDispatchRecordSchema.parse({
-      ...reservedDispatch,
-      state: 'pending',
-      claim: undefined,
-    }))
-    expect(() => reserved.operations.validateDurableState(new Set(), reserved.registry)).not.toThrow()
-    reserved.intents.records.set(reservedIntent.id, agentOperationIntentRecordSchema.parse({
-      ...reservedIntent,
-      phase: 'dispatching',
-    }))
-    expect(() => reserved.operations.validateDurableState(new Set(), reserved.registry)).not.toThrow()
-    const pendingAdmission = only(reserved.admissions)
-    if (pendingAdmission.state !== 'agent-run') throw new Error('test admission is not owned by the Agent Run')
-    reserved.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
-      ...pendingAdmission,
-      phase: 'accepted',
-      acceptedAt: pendingAdmission.updatedAt,
-    }))
-    expect(() => reserved.operations.validateDurableState(new Set(), reserved.registry))
-      .toThrow('incompatible write admission')
-    reserved.intents.records.set(reservedIntent.id, agentOperationIntentRecordSchema.parse({
-      ...reservedIntent,
-      phase: 'admission-reserved',
-    }))
-    replaceWithAvailable(reserved)
-    expect(() => reserved.operations.validateDurableState(new Set(), reserved.registry))
-      .toThrow('exact reserved write admission')
-
-    const dispatching = harness()
-    dispatching.execution.prepareMode = 'unavailable'
-    await dispatching.operations.submit(
-      intent('intent-19191919-1919-4919-8919-191919191919' as SakiControlIntentId),
-      actor(),
-      AbortSignal.timeout(5_000),
-    )
-    replaceWithAvailable(dispatching)
-    expect(() => dispatching.operations.validateDurableState(new Set(), dispatching.registry))
-      .toThrow('incompatible write admission')
-
-    const accepted = harness()
-    accepted.execution.startMode = 'unavailable'
-    await accepted.operations.submit(
-      intent('intent-20202020-2020-4020-8020-202020202020' as SakiControlIntentId),
-      actor(),
-      AbortSignal.timeout(5_000),
-    )
-    const acceptedAdmission = only(accepted.admissions)
-    if (acceptedAdmission.state !== 'agent-run') throw new Error('test admission is not owned by the Agent Run')
-    accepted.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
-      id: acceptedAdmission.id,
-      schemaVersion: 1,
-      revision: acceptedAdmission.revision,
-      state: 'agent-run',
-      phase: 'reserved',
-      bindingRevision: acceptedAdmission.bindingRevision,
-      originIntentId: acceptedAdmission.originIntentId,
-      agentRunId: acceptedAdmission.agentRunId,
-      payloadDigest: acceptedAdmission.payloadDigest,
-      reservedAt: acceptedAdmission.reservedAt,
-      updatedAt: acceptedAdmission.updatedAt,
-    }))
-    expect(() => accepted.operations.validateDurableState(new Set(), accepted.registry))
-      .toThrow('incompatible write admission')
-
-    const started = harness()
-    await started.operations.submit(
-      intent('intent-21212121-2121-4121-8121-212121212121' as SakiControlIntentId),
-      actor(),
-      AbortSignal.timeout(5_000),
-    )
-    replaceWithAvailable(started)
-    expect(() => started.operations.validateDurableState(new Set(), started.registry))
-      .toThrow('exact accepted write admission')
-
-    const reconciling = harness()
-    reconciling.execution.startMode = 'reconciliation'
-    await reconciling.operations.submit(
-      intent('intent-22222222-2222-4222-8222-222222222223' as SakiControlIntentId),
-      actor(),
-      AbortSignal.timeout(5_000),
-    )
-    replaceWithAvailable(reconciling)
-    expect(() => reconciling.operations.validateDurableState(new Set(), reconciling.registry))
-      .toThrow('exact accepted write admission')
-
-    const canceled = harness()
-    canceled.execution.startMode = 'unavailable'
-    const canceledIntent = intent('intent-23232323-2323-4323-8323-232323232323' as SakiControlIntentId)
-    await canceled.operations.submit(canceledIntent, actor(), AbortSignal.timeout(5_000))
-    const retainedOwner = only(canceled.admissions)
-    canceled.authorityCurrent = false
-    await canceled.operations.submit(canceledIntent, actor(), AbortSignal.timeout(5_000))
-    canceled.admissions.records.set(BINDING_ID, retainedOwner)
-    expect(() => canceled.operations.validateDurableState(new Set(), canceled.registry))
-      .toThrow('retains its write admission')
   })
 
   it('persists one exact Run and moves the Work Item only after Host success', async () => {
@@ -2239,12 +2320,7 @@ describe('manual Give-to-Agent operations', () => {
       agentRunId: result.receipt.agentRunId,
       workSessionId: result.receipt.workSessionId,
     })
-    expect(test.admissions.get(BINDING_ID)).toMatchObject({
-      state: 'agent-run',
-      phase: 'accepted',
-      originIntentId: submitted.intentId,
-      agentRunId: result.receipt.agentRunId,
-    })
+    expect(test.admissions.get(BINDING_ID)).toMatchObject({ state: 'available', revision: 0 })
     const validated = test.operations.validateDurableState(new Set(), test.registry)
     expect(validated.intents).toHaveLength(1)
     expect(validated.runningAgentRuns).toEqual([{
@@ -2403,18 +2479,6 @@ describe('manual Give-to-Agent operations', () => {
       ok: false,
       reason: 'conflict',
       receipt: { state: 'conflict', reason: 'binding-unavailable' },
-    }],
-    ['a missing write-admission row', (test: Harness) => { test.admissions.records.delete(BINDING_ID) }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'binding-unavailable' },
-    }],
-    ['a direct Git operation holding write admission', (test: Harness) => {
-      test.admissions.records.set(BINDING_ID, manualWriteAdmission())
-    }, {
-      ok: false,
-      reason: 'conflict',
-      receipt: { state: 'conflict', reason: 'writable-run-active' },
     }],
     ['an unavailable Host inspection', (test: Harness) => {
       test.eligibility.projectInspection = { ok: false, reason: 'unavailable' }
@@ -2685,75 +2749,6 @@ describe('manual Give-to-Agent operations', () => {
     expect(only(test.intents)).toMatchObject({ revision: 1, phase: 'prepared' })
   })
 
-  it.each([
-    ['a deleted admission row', (test: Harness) => { test.admissions.records.delete(BINDING_ID) }],
-    ['a direct Git operation', (test: Harness) => {
-      test.admissions.records.set(BINDING_ID, manualWriteAdmission())
-    }],
-    ['another Agent Run', (test: Harness) => {
-      test.admissions.records.set(BINDING_ID, foreignAgentWriteAdmission())
-    }],
-  ] as const)('keeps a prepared operation retryable when %s wins after eligibility', async (_holder, occupy) => {
-    const test = harness()
-    test.afterResolveModelRoute = () => { occupy(test) }
-
-    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
-      ok: false,
-      reason: 'unavailable',
-      receipt: { state: 'prepared' },
-    })
-    expect(only(test.intents)).toMatchObject({ phase: 'prepared' })
-    expect(test.execution.prepareCount).toBe(0)
-  })
-
-  it('adopts an exact admission reservation whose storage acknowledgement was lost', async () => {
-    const test = harness()
-    test.afterResolveModelRoute = () => {
-      test.admissions.afterNextUpdate = () => { throw new Error('simulated admission acknowledgement loss') }
-    }
-
-    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
-      .toMatchObject({ ok: true, receipt: { state: 'started' } })
-    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
-    expect(test.execution.startCount).toBe(1)
-  })
-
-  it('propagates an admission storage failure that did not commit its reservation', async () => {
-    const test = harness()
-    test.afterResolveModelRoute = () => {
-      test.admissions.beforeNextUpdate = () => { throw new Error('simulated admission storage failure') }
-    }
-
-    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
-      .rejects.toThrow('simulated admission storage failure')
-    expect(only(test.admissions)).toMatchObject({ state: 'available' })
-    expect(only(test.intents)).toMatchObject({ phase: 'prepared' })
-    expect(test.execution.prepareCount).toBe(0)
-  })
-
-  it('rejects a stale Binding revision in a replayed admission reservation', async () => {
-    const test = harness()
-    test.afterResolveModelRoute = () => {
-      test.admissions.afterNextUpdate = () => {
-        const reserved = only(test.admissions)
-        if (reserved.state !== 'agent-run') throw new Error('test admission was not reserved')
-        test.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
-          ...reserved,
-          revision: reserved.revision + 1,
-          bindingRevision: reserved.bindingRevision + 1,
-          updatedAt: reserved.updatedAt + 1,
-        }))
-        throw new Error('simulated stale reservation acknowledgement')
-      }
-    }
-
-    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
-      .rejects.toThrow('simulated stale reservation acknowledgement')
-    expect(only(test.intents)).toMatchObject({ phase: 'prepared' })
-    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'reserved' })
-    expect(test.execution.prepareCount).toBe(0)
-  })
-
   it('advances the fencing token after an expired claim without allocating a second Run', async () => {
     const test = harness()
     const submitted = intent('intent-99999999-9999-4999-8999-999999999999' as SakiControlIntentId)
@@ -2783,10 +2778,10 @@ describe('manual Give-to-Agent operations', () => {
     expect(test.execution.startCount).toBe(1)
   })
 
-  it('returns the admission-reserved receipt while another executor owns the current claim', async () => {
+  it('returns the prepared receipt while another executor owns the current claim', async () => {
     const test = harness()
     const submitted = intent('intent-62626262-6262-4262-8262-626262626262' as SakiControlIntentId)
-    test.intents.simulateCrashAfterUpdateWhen(record => record.phase === 'admission-reserved')
+    test.dispatches.simulateCrashAfterPutWhen(record => record.state === 'pending')
     await expect(test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000)))
       .rejects.toThrow(SimulatedProcessCrash)
     const pending = only(test.dispatches)
@@ -2810,7 +2805,7 @@ describe('manual Give-to-Agent operations', () => {
     expect(await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))).toMatchObject({
       ok: false,
       reason: 'unavailable',
-      receipt: { state: 'admission-reserved' },
+      receipt: { state: 'prepared' },
     })
     expect(test.execution.prepareCount).toBe(0)
   })
@@ -2985,14 +2980,14 @@ describe('manual Give-to-Agent operations', () => {
       expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
         .toMatchObject({ ok: false, reason: 'unavailable', receipt: { state: 'dispatching' } })
       expect(only(test.dispatches)).toMatchObject({ state: 'claimed' })
-      expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'reserved' })
+      expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
       expect(test.execution.prepareCount).toBe(1)
       expect(test.execution.startCount).toBe(0)
     },
   )
 
   it.each(['source-conflict', 'terminal-failed'] as const)(
-    'retains write ownership when Host preparation reports %s',
+    'retains reconciliation evidence when Host preparation reports %s',
     async (prepareMode) => {
       const test = harness()
       test.execution.prepareMode = prepareMode
@@ -3003,7 +2998,7 @@ describe('manual Give-to-Agent operations', () => {
         receipt: { state: 'reconciliation-required', reason: 'protocol' },
       })
       expect(only(test.dispatches)).toMatchObject({ state: 'reconciliation-required', terminalReason: 'protocol' })
-      expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+      expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
       expect(only(test.runs)).toMatchObject({ state: 'reconciliation-required' })
       expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
     },
@@ -3087,7 +3082,7 @@ describe('manual Give-to-Agent operations', () => {
   it('adopts an accepted Dispatch whose storage acknowledgement was lost', async () => {
     const test = harness()
     test.execution.afterPrepare = () => {
-      test.admissions.afterNextUpdate = () => {
+      test.dispatches.afterNextUpdate = () => {
         test.dispatches.afterNextUpdate = () => { throw new Error('simulated acceptance acknowledgement loss') }
       }
     }
@@ -3101,7 +3096,7 @@ describe('manual Give-to-Agent operations', () => {
   it('propagates a final Dispatch acceptance write failure that committed no state', async () => {
     const test = harness()
     test.execution.afterPrepare = () => {
-      test.admissions.afterNextUpdate = () => {
+      test.dispatches.afterNextUpdate = () => {
         test.dispatches.beforeNextUpdate = () => { throw new Error('simulated final acceptance storage failure') }
       }
     }
@@ -3109,37 +3104,6 @@ describe('manual Give-to-Agent operations', () => {
     await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
       .rejects.toThrow('simulated final acceptance storage failure')
     expect(only(test.dispatches)).toMatchObject({ state: 'claimed', operationSnapshot: { state: 'prepared' } })
-    expect(test.execution.startCount).toBe(0)
-  })
-
-  it.each([
-    ['replacement', (current: Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }>) =>
-      bindingWriteAdmissionRecordSchema.parse({
-        id: BINDING_ID,
-        schemaVersion: 1,
-        revision: current.revision + 1,
-        state: 'available',
-        updatedAt: current.updatedAt + 1,
-      }), { state: 'available' }],
-    ['binding-revision tampering', (current: Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }>) =>
-      bindingWriteAdmissionRecordSchema.parse({
-        ...current,
-        revision: current.revision + 1,
-        bindingRevision: current.bindingRevision + 1,
-        updatedAt: current.updatedAt + 1,
-      }), { state: 'agent-run', phase: 'reserved' }],
-  ] as const)('rejects write-admission %s after Host preparation', async (_condition, mutate, expectedAdmission) => {
-    const test = harness()
-    test.execution.afterPrepare = () => {
-      const current = only(test.admissions)
-      if (current.state !== 'agent-run') throw new Error('test admission is not reserved for its Agent Run')
-      test.admissions.records.set(BINDING_ID, mutate(current))
-    }
-
-    await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000)))
-      .rejects.toThrow()
-    expect(only(test.dispatches)).toMatchObject({ state: 'claimed', operationSnapshot: { state: 'prepared' } })
-    expect(only(test.admissions)).toMatchObject(expectedAdmission)
     expect(test.execution.startCount).toBe(0)
   })
 
@@ -3163,7 +3127,7 @@ describe('manual Give-to-Agent operations', () => {
       preparation: { operation: { type: 'start-agent-run' } },
       operationSnapshot: { state: 'prepared' },
     })
-    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'reserved' })
+    expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
     expect(test.execution.startCount).toBe(0)
 
     const recovered = await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
@@ -3185,7 +3149,9 @@ describe('manual Give-to-Agent operations', () => {
       const test = harness()
       const submitted = intent('intent-28282828-2828-4828-8828-282828282828' as SakiControlIntentId)
       test.execution.afterPrepare = () => {
-        test.admissions.afterNextUpdate = () => { vi.setSystemTime(31_000) }
+        test.dispatches.afterNextUpdate = () => {
+          test.dispatches.beforeNextUpdate = () => { vi.setSystemTime(31_000) }
+        }
       }
 
       expect(await test.operations.submit(submitted, actor(), new AbortController().signal))
@@ -3196,7 +3162,7 @@ describe('manual Give-to-Agent operations', () => {
         preparation: { operation: { type: 'start-agent-run' } },
         operationSnapshot: { state: 'prepared' },
       })
-      expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+      expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
       expect(test.execution.startCount).toBe(0)
       expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
 
@@ -3232,7 +3198,7 @@ describe('manual Give-to-Agent operations', () => {
         preparation: { operation: { type: 'start-agent-run' } },
         operationSnapshot: { state: 'prepared' },
       })
-      expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'reserved' })
+      expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
       expect(test.execution.startCount).toBe(0)
 
       test.authorityCurrent = true
@@ -3263,31 +3229,6 @@ describe('manual Give-to-Agent operations', () => {
     expect(test.execution.startCount).toBe(1)
     expect(test.execution.cancelCount).toBe(1)
     expect(test.moves).toHaveLength(0)
-  })
-
-  it('denies Host admission after its retained Binding revision changes', async () => {
-    const test = harness()
-    test.execution.beforeAdmission = () => {
-      const accepted = only(test.admissions)
-      if (accepted.state !== 'agent-run') throw new Error('test admission was not accepted')
-      test.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
-        ...accepted,
-        revision: accepted.revision + 1,
-        bindingRevision: accepted.bindingRevision + 1,
-        updatedAt: accepted.updatedAt + 1,
-      }))
-    }
-
-    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
-      ok: false,
-      reason: 'reconciliation-required',
-      receipt: { state: 'reconciliation-required', reason: 'protocol' },
-    })
-    expect(test.moves).toHaveLength(0)
-    expect(only(test.dispatches)).toMatchObject({
-      state: 'reconciliation-required',
-      operationSnapshot: { state: 'canceled', reason: 'source-canceled', effect: 'none' },
-    })
   })
 
   it.each([
@@ -3339,21 +3280,6 @@ describe('manual Give-to-Agent operations', () => {
     test.execution.beforeAdmission = () => { remove(test) }
 
     await expect(test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).rejects.toThrow('missing-key')
-    expect(test.moves).toHaveLength(0)
-  })
-
-  it.each([
-    ['is missing', (test: Harness) => { test.admissions.records.clear() }],
-    ['is malformed', (test: Harness) => { test.admissions.records.set(BINDING_ID, { malformed: true } as never) }],
-  ] as const)('returns unavailable when the accepted admission %s at the Host boundary', async (_state, mutate) => {
-    const test = harness()
-    test.execution.beforeAdmission = () => { mutate(test) }
-
-    expect(await test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))).toMatchObject({
-      ok: false,
-      reason: 'unavailable',
-      receipt: { state: 'dispatching' },
-    })
     expect(test.moves).toHaveLength(0)
   })
 
@@ -3414,7 +3340,7 @@ describe('manual Give-to-Agent operations', () => {
     const test = harness()
     const submitted = intent('intent-37373737-3737-4737-8737-373737373737' as SakiControlIntentId)
     test.execution.afterPrepare = () => {
-      test.admissions.afterNextUpdate = () => {
+      test.dispatches.afterNextUpdate = () => {
         test.dispatches.afterNextUpdate = () => { throw new Error('simulated acceptance acknowledgement loss') }
       }
     }
@@ -3436,12 +3362,6 @@ describe('manual Give-to-Agent operations', () => {
       test.dispatches.simulateCrashAfterUpdateWhen(dispatch => dispatch.state === 'claimed'
         && dispatch.preparation === undefined)
     }],
-    ['after admission reservation', (test: Harness) => {
-      test.afterResolveModelRoute = () => {
-        test.admissions.simulateCrashAfterUpdateWhen(admission => admission.state === 'agent-run'
-          && admission.phase === 'reserved')
-      }
-    }],
     ['after Host preparation', (test: Harness) => {
       test.execution.afterPrepare = () => {
         throw new SimulatedProcessCrash('Host preparation committed before the process stopped')
@@ -3450,19 +3370,8 @@ describe('manual Give-to-Agent operations', () => {
     ['after recording Host preparation', (test: Harness) => {
       test.execution.afterPrepare = () => {
         test.dispatches.afterNextUpdate = () => {
-          test.admissions.beforeNextUpdate = () => {
-            throw new SimulatedProcessCrash('process stopped before accepting the prepared operation')
-          }
-        }
-      }
-    }],
-    ['after admission acceptance', (test: Harness) => {
-      test.execution.afterPrepare = () => {
-        test.dispatches.afterNextUpdate = () => {
-          test.admissions.afterNextUpdate = () => {
-            test.dispatches.beforeNextUpdate = () => {
-              throw new SimulatedProcessCrash('process stopped before accepting the prepared Dispatch')
-            }
+          test.dispatches.beforeNextUpdate = () => {
+            throw new SimulatedProcessCrash('process stopped before accepting the prepared Dispatch')
           }
         }
       }
@@ -3573,7 +3482,7 @@ describe('manual Give-to-Agent operations', () => {
       },
       dispatch: { state: 'reconciliation-required', terminalReason: 'effect-unknown' },
       runState: 'reconciliation-required',
-      admissionState: 'agent-run',
+      admissionState: 'available',
     }],
     ['failed', 'failed', {
       result: {
@@ -3587,7 +3496,7 @@ describe('manual Give-to-Agent operations', () => {
         operationSnapshot: { state: 'failed', effect: 'none' },
       },
       runState: 'reconciliation-required',
-      admissionState: 'agent-run',
+      admissionState: 'available',
     }],
     ['source-canceled', 'canceled-source', {
       result: {
@@ -3601,7 +3510,7 @@ describe('manual Give-to-Agent operations', () => {
         operationSnapshot: { state: 'canceled', reason: 'source-canceled', effect: 'none' },
       },
       runState: 'reconciliation-required',
-      admissionState: 'agent-run',
+      admissionState: 'available',
     }],
     ['authority-canceled', 'canceled-authority', {
       result: {
@@ -3792,7 +3701,7 @@ describe('manual Give-to-Agent operations', () => {
       },
       dispatchState: 'reconciliation-required',
       runState: 'reconciliation-required',
-      admissionState: 'agent-run',
+      admissionState: 'available',
     }],
     ['canceled-source', {
       result: {
@@ -3802,7 +3711,7 @@ describe('manual Give-to-Agent operations', () => {
       },
       dispatchState: 'reconciliation-required',
       runState: 'reconciliation-required',
-      admissionState: 'agent-run',
+      admissionState: 'available',
     }],
     ['canceled-authority', {
       result: {
@@ -3901,72 +3810,12 @@ describe('manual Give-to-Agent operations', () => {
   })
 
   it.each([
-    ['disappears', (test: Harness) => { test.admissions.records.clear() }, false],
-    ['changes owner', (test: Harness) => { test.admissions.records.set(BINDING_ID, foreignAgentWriteAdmission()) }, true],
-  ] as const)('protects terminal admission release when its row %s before the read', async (
-    _change,
-    mutate,
-    completes,
-  ) => {
-    const test = harness()
-    test.execution.beforeAdmission = () => {
-      test.authorityCurrent = false
-      test.runs.afterNextUpdate = () => { mutate(test) }
-    }
-    const submitted = test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
-
-    if (completes) {
-      await expect(submitted).resolves.toMatchObject({ ok: false, reason: 'canceled' })
-      expect(only(test.admissions)).toMatchObject({ state: 'agent-run' })
-    } else {
-      await expect(submitted).rejects.toThrow()
-    }
-  })
-
-  it.each([
-    ['becomes available', (test: Harness) => {
-      const current = only(test.admissions)
-      test.admissions.records.set(BINDING_ID, bindingWriteAdmissionRecordSchema.parse({
-        id: BINDING_ID,
-        schemaVersion: 1,
-        revision: current.revision + 1,
-        state: 'available',
-        updatedAt: current.updatedAt + 1,
-      }))
-    }, true],
-    ['changes owner', (test: Harness) => {
-      test.admissions.records.set(BINDING_ID, foreignAgentWriteAdmission())
-    }, false],
-  ] as const)('protects terminal admission release when its row %s during the write', async (
-    _change,
-    mutate,
-    completes,
-  ) => {
-    const test = harness()
-    test.execution.beforeAdmission = () => {
-      test.authorityCurrent = false
-      test.runs.afterNextUpdate = () => {
-        test.admissions.beforeNextUpdate = () => { mutate(test) }
-      }
-    }
-    const submitted = test.operations.submit(intent(), actor(), AbortSignal.timeout(5_000))
-
-    if (completes) {
-      await expect(submitted).resolves.toMatchObject({ ok: false, reason: 'canceled' })
-      expect(only(test.admissions)).toMatchObject({ state: 'available' })
-    } else {
-      await expect(submitted).rejects.toThrow()
-      expect(only(test.admissions)).toMatchObject({ state: 'agent-run' })
-    }
-  })
-
-  it.each([
     ['succeeded', {
       result: { ok: true, receipt: { state: 'started' } },
       dispatch: { state: 'accepted', operationSnapshot: { state: 'succeeded' } },
       intentState: 'started',
       runState: 'running',
-      admissionState: 'agent-run',
+      admissionState: 'available',
       moves: 1,
     }],
     ['reconciliation', {
@@ -3978,7 +3827,7 @@ describe('manual Give-to-Agent operations', () => {
       dispatch: { state: 'reconciliation-required', terminalReason: 'effect-unknown' },
       intentState: 'reconciliation-required',
       runState: 'reconciliation-required',
-      admissionState: 'agent-run',
+      admissionState: 'available',
       moves: 0,
     }],
     ['failed', {
@@ -3994,7 +3843,7 @@ describe('manual Give-to-Agent operations', () => {
       dispatch: { state: 'accepted', operationSnapshot: { state: 'prepared' } },
       intentState: 'dispatching',
       runState: 'starting',
-      admissionState: 'agent-run',
+      admissionState: 'available',
       moves: 0,
     }],
   ] as const)('adopts a %s Host cancellation outcome after authority revocation', async (cancelMode, expected) => {
@@ -4013,7 +3862,7 @@ describe('manual Give-to-Agent operations', () => {
     expect(test.moves).toHaveLength(expected.moves)
   })
 
-  it('recovers accepted admission ownership after stopping before recording a Host source conflict', async () => {
+  it('recovers after stopping before recording a Host source conflict', async () => {
     const test = harness()
     test.execution.prepareMode = 'unavailable'
     const submitted = intent('intent-41414141-4141-4141-8141-414141414141' as SakiControlIntentId)
@@ -4024,17 +3873,15 @@ describe('manual Give-to-Agent operations', () => {
 
     test.authorityCurrent = false
     test.execution.prepareMode = 'source-conflict'
-    test.admissions.afterNextUpdate = () => {
-      test.dispatches.beforeNextUpdate = () => {
-        throw new SimulatedProcessCrash('process stopped before recording Host source conflict')
-      }
+    test.dispatches.beforeNextUpdate = () => {
+      throw new SimulatedProcessCrash('process stopped before recording Host source conflict')
     }
 
     await expect(test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000)))
       .rejects.toThrow(SimulatedProcessCrash)
     expect(only(test.dispatches)).toMatchObject({ state: 'claimed' })
     expect(only(test.dispatches).preparation).toBeUndefined()
-    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+    expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
 
     test.restart()
     expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
@@ -4043,11 +3890,11 @@ describe('manual Give-to-Agent operations', () => {
       reason: 'reconciliation-required',
       receipt: { state: 'reconciliation-required', reason: 'protocol' },
     })
-    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+    expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
     expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
   })
 
-  it('retains the accepted Run owner when Host cancellation cannot drain it', async () => {
+  it('retains the accepted Dispatch when Host cancellation cannot drain it', async () => {
     const test = harness()
     const submitted = intent('intent-32323232-3232-4232-8232-323232323232' as SakiControlIntentId)
     test.execution.startMode = 'unavailable'
@@ -4062,7 +3909,7 @@ describe('manual Give-to-Agent operations', () => {
     expect(only(test.assignments)).toMatchObject({ state: 'assigned' })
     expect(only(test.sessions)).toMatchObject({ state: 'open' })
     expect(only(test.runs)).toMatchObject({ state: 'starting' })
-    expect(only(test.admissions)).toMatchObject({ state: 'agent-run', phase: 'accepted' })
+    expect(only(test.admissions)).toMatchObject({ state: 'available', revision: 0 })
     expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
   })
 
@@ -4332,14 +4179,6 @@ describe('manual Give-to-Agent operations', () => {
 
     expect(() => test.operations.validateDurableState(new Set(), test.registry))
       .toThrow('running Saki Agent Run lacks its exact succeeded Dispatch evidence')
-  })
-
-  it('rejects an Agent admission whose retained owner does not exist', () => {
-    const test = harness()
-    test.admissions.records.set(BINDING_ID, foreignAgentWriteAdmission())
-
-    expect(() => test.operations.validateDurableState(new Set(), test.registry))
-      .toThrow('write admission has inconsistent ownership')
   })
 
   it('orders same-time retained Intents deterministically for recovery', async () => {
@@ -4746,21 +4585,16 @@ describe('manual Give-to-Agent operations', () => {
     ['Assignment', 1],
     ['Work Session', 2],
     ['Agent Run', 3],
-    ['write admission', 4],
-    ['Intent', 5],
+    ['Intent', 4],
   ] as const)('recovers accepted cancellation after the %s terminal write committed', async (_boundary, stage) => {
     const test = harness()
     test.execution.startMode = 'unavailable'
     const submitted = intent('intent-30303030-3030-4030-8030-303030303030' as SakiControlIntentId)
     await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
-    const retainedAdmission = only(test.admissions)
-    if (retainedAdmission.state !== 'agent-run' || retainedAdmission.phase !== 'accepted') {
-      throw new Error('test Agent Run does not own accepted write admission')
-    }
     test.authorityCurrent = false
     await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))
 
-    if (stage < 5) {
+    if (stage < 4) {
       const retained = only(test.intents)
       test.intents.records.set(retained.id, agentOperationIntentRecordSchema.parse({
         ...retained,
@@ -4783,7 +4617,6 @@ describe('manual Give-to-Agent operations', () => {
       ...run,
       state: stage >= 3 ? 'canceled' : 'starting',
     }))
-    if (stage < 4) test.admissions.records.set(BINDING_ID, retainedAdmission)
 
     expect(() => test.operations.validateDurableState(new Set(), test.registry)).not.toThrow()
     expect(await test.operations.submit(submitted, actor(), AbortSignal.timeout(5_000))).toMatchObject({
@@ -4931,6 +4764,7 @@ class FakeAgentExecution extends SakiHostExecution {
     | 'canceled-source' | 'unavailable' = 'success'
   inspectMode: 'current' | 'reconciliation' | 'failed' | 'canceled-authority' | 'canceled-source' = 'current'
   cancelMode: 'canceled' | 'succeeded' | 'reconciliation' | 'failed' | 'nonterminal' = 'canceled'
+  acceptedRevision: (() => number) | undefined
   prepareCount = 0
   startCount = 0
   cancelCount = 0
@@ -5127,10 +4961,11 @@ class FakeAgentExecution extends SakiHostExecution {
               inputMessageId: request.run.input.id,
             },
           }
+    const startedSnapshot = this.snapshot
     const afterStart = this.afterStart
     this.afterStart = undefined
     await afterStart?.()
-    return { ok: true, snapshot: this.snapshot } as HostOperationStartResult<K>
+    return { ok: true, snapshot: startedSnapshot } as HostOperationStartResult<K>
   }
 
   async inspectOperation<K extends HostOperationKind>(): Promise<HostOperationSnapshot<K>> {
@@ -5151,7 +4986,7 @@ class FakeAgentExecution extends SakiHostExecution {
       ? {
         ...common,
         state: 'reconciliation-required',
-        admission: { kind: 'accepted', revision: 2, acceptedAt: 2 },
+        admission: { kind: 'accepted', revision: this.acceptedRevision!(), acceptedAt: 2 },
         observedAt: 3,
         reason: 'effect-unknown',
       }
@@ -5208,7 +5043,7 @@ class FakeAgentExecution extends SakiHostExecution {
       this.snapshot = {
         ...common,
         state: 'succeeded',
-        admission: { kind: 'accepted', revision: 2, acceptedAt: 2 },
+        admission: { kind: 'accepted', revision: this.acceptedRevision!(), acceptedAt: 2 },
         completedAt: 4,
         result: {
           type: 'start-agent-run',
@@ -5224,7 +5059,7 @@ class FakeAgentExecution extends SakiHostExecution {
       this.snapshot = {
         ...common,
         state: 'reconciliation-required',
-        admission: { kind: 'accepted', revision: 2, acceptedAt: 2 },
+        admission: { kind: 'accepted', revision: this.acceptedRevision!(), acceptedAt: 2 },
         observedAt: 4,
         reason: 'effect-unknown',
       }
@@ -5431,6 +5266,11 @@ function harness(): Harness {
   const sessions = new MemoryTable<SakiWorkSessionId, WorkSessionRecord>()
   const runs = new MemoryTable<SakiAgentRunId, AgentRunRecord>()
   const dispatches = new MemoryTable<SakiExecutionDispatchId, ExecutionDispatchRecord>()
+  execution.acceptedRevision = () => {
+    const revision = dispatches.get(execution.request!.source.dispatchId)?.admissionRevision
+    if (revision === undefined) throw new Error('test Dispatch lacks accepted admission revision')
+    return revision
+  }
   const interventions = new MemoryTable<SakiInterventionRequestId, InterventionRequestRecord>()
   const admissions = new MemoryTable<SakiResourceBindingId, BindingWriteAdmissionRecord>([[
     BINDING_ID,
@@ -5468,7 +5308,6 @@ function harness(): Harness {
       agentRunTable: runs,
       dispatchTable: dispatches,
       interventionTable: interventions,
-      admissionTable: admissions,
       execution,
       projects: {
         registry: () => eligibility.registry,
@@ -5620,6 +5459,45 @@ function updateProjectInspection(
   test.eligibility.projectInspection = update(current)
 }
 
+function historicalAgentSnapshot(test: Harness): DomainMigrationSnapshot {
+  const intent = only(test.intents)
+  const dispatch = only(test.dispatches)
+  const { admissionRevision, ...historicalDispatch } = dispatch
+  const accepted = admissionRevision !== undefined
+  const now = Date.now()
+  return {
+    global: null,
+    tables: {
+      development_project_registry: { 'development-project-registry': test.registry },
+      agent_operation_intents: { [intent.id]: { ...intent, schemaVersion: 1 } },
+      agent_runs: Object.fromEntries(test.runs.entries()),
+      execution_dispatches: { [dispatch.id]: { ...historicalDispatch, schemaVersion: 1 } },
+      binding_write_admissions: {
+        [BINDING_ID]: intent.phase === 'canceled' ? {
+          id: BINDING_ID,
+          schemaVersion: 1,
+          revision: 3,
+          state: 'available',
+          updatedAt: now,
+        } : {
+          id: BINDING_ID,
+          schemaVersion: 1,
+          revision: admissionRevision ?? 1,
+          state: 'agent-run',
+          phase: accepted ? 'accepted' : 'reserved',
+          bindingRevision: intent.projectContext.bindingRevision,
+          originIntentId: intent.id,
+          agentRunId: intent.agentRunId,
+          payloadDigest: intent.hostRequest.source.payloadDigest,
+          reservedAt: intent.createdAt,
+          ...(accepted ? { acceptedAt: now } : {}),
+          updatedAt: now,
+        },
+      },
+    },
+  }
+}
+
 function manualWriteAdmission(): Extract<
   BindingWriteAdmissionRecord,
   { readonly state: 'manual-host-operation'; readonly phase: 'reserved' }
@@ -5646,23 +5524,6 @@ function manualWriteAdmission(): Extract<
   >
 }
 
-function foreignAgentWriteAdmission(): Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> {
-  const candidate = bindingWriteAdmissionRecordSchema.parse({
-    id: BINDING_ID,
-    schemaVersion: 1,
-    revision: 1,
-    state: 'agent-run',
-    phase: 'reserved',
-    bindingRevision: 0,
-    originIntentId: 'intent-49494949-4949-4949-8949-494949494949',
-    agentRunId: 'agent-run-50505050-5050-4050-8050-505050505050',
-    payloadDigest: '5'.repeat(64),
-    reservedAt: 1,
-    updatedAt: 1,
-  })
-  if (candidate.state !== 'agent-run') throw new Error('test admission is not owned by an Agent Run')
-  return candidate
-}
 
 function expectSchemaIssue(
   result: { readonly success: boolean; readonly error?: { readonly issues: readonly { readonly message: string }[] } },

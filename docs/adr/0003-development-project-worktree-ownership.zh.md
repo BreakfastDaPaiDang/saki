@@ -6,12 +6,12 @@ status: accepted
 
 [English](0003-development-project-worktree-ownership.md) | 中文
 
-每个 Development Project 把一个 DSH Workspace 绑定到一个 Git 工作树。同一 Repository 的多个 worktree 可以登记为不同 Development Project，但一个工作树最多只有一个活动可写 Agent Run。
+每个 Development Project 把一个 DSH Workspace 绑定到一个 Git 工作树。同一仓库的多个工作树可以登记为不同 Development Project。独立的 Agent Run 与 Session 可以共用同一 Project 和工作树。
 
 ## 考虑过的方案
 
-允许多个 Agent Run 写入同一工作树，会迫使 Saki 事后推断未暂存文件、index 修改、分支移动和冲突的归属。以整个 Repository 作为 Project 也会隐藏哪个 worktree 和 Session 拥有修改。一个 Project 对应一个 worktree 可以明确位置与写入所有权，同时通过 Git worktree 保留 Repository 级并行能力。
+每个工作树对应一个 Project，使命令拥有稳定的位置和仓库身份。Agent 归因属于各自的 Run 与 Session，并不证明文件由其独占创作。贯穿运行期的工作树预留会阻止普通并行对话和手动 Git 操作，却无法阻止编辑器及外部进程写入该目录。Dispatch 幂等性与 Git 操作校验保护各自的副作用，无需施加这种预留。
 
 ## 影响
 
-并行可写 Work Item 必须使用不同 worktree，因此登记为不同 Development Project。只读 Session 可以并存，但第一个可写 Agent Run 结束或迁移到其他工作树前，Saki 必须拒绝第二个可写 Agent Run。
+并行 Run 可能编辑同一文件并遇到改动冲突。用户需要隔离时自行选择不同工作树。直接 Git 操作保留预期观察校验、Git 原子发布和操作范围内的恢复。参见[手动分派决策](../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)。

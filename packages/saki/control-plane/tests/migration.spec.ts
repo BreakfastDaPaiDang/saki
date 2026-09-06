@@ -435,9 +435,9 @@ function v5GitHubSyncRecord() {
 }
 
 describe('Saki control-plane retained migrations', () => {
-  it('keeps v8 exact while current v9 adds only the four Delivery tables', () => {
+  it('keeps v8 table membership exact through Delivery and independent Dispatch admissions', () => {
     expect(sakiControlPlaneV8DomainSpec.version).toBe(8)
-    expect(sakiControlPlaneDomainSpec.version).toBe(9)
+    expect(sakiControlPlaneDomainSpec.version).toBe(10)
     expect(Object.keys(sakiControlPlaneDomainSpec.tables).sort()).toEqual([
       ...Object.keys(sakiControlPlaneV8DomainSpec.tables),
       'branch_deliveries',
@@ -519,7 +519,7 @@ describe('Saki control-plane retained migrations', () => {
 
     const migrated = sakiControlPlaneMigrationPlan.steps[6]!.migrate(v8)
 
-    expect(sakiControlPlaneMigrationPlan.current).toMatchObject({ name: 'saki_control_plane', version: 9 })
+    expect(sakiControlPlaneMigrationPlan.current).toMatchObject({ name: 'saki_control_plane', version: 10 })
     expect(sakiControlPlaneMigrationPlan.steps[6]).toMatchObject({
       from: { name: 'saki_control_plane', version: 8 },
       to: { name: 'saki_control_plane', version: 9 },
@@ -599,7 +599,7 @@ describe('Saki control-plane retained migrations', () => {
     expect(sakiControlPlaneV6DomainSpec.version).toBe(6)
     expect(sakiControlPlaneV7DomainSpec.version).toBe(7)
     expect(sakiControlPlaneV8DomainSpec.version).toBe(8)
-    expect(sakiControlPlaneDomainSpec.version).toBe(9)
+    expect(sakiControlPlaneDomainSpec.version).toBe(10)
     expect(sakiControlPlaneMigrationPlan.steps[3]).toMatchObject({
       from: { name: 'saki_control_plane', version: 5 },
       to: { name: 'saki_control_plane', version: 6 },
@@ -821,7 +821,7 @@ describe('Saki control-plane retained migrations', () => {
     }).toThrow('deterministic bootstrap completion evidence')
   })
 
-  it('declares strict adjacent v2 through current v9 steps and keeps historical action vocabularies frozen', () => {
+  it('declares strict adjacent v2 through current v10 steps and keeps historical action vocabularies frozen', () => {
     expect(sakiControlPlaneV2DomainSpec.version).toBe(2)
     expect(sakiControlPlaneV3DomainSpec.version).toBe(3)
     expect(sakiControlPlaneV4DomainSpec.version).toBe(4)
@@ -829,8 +829,8 @@ describe('Saki control-plane retained migrations', () => {
     expect(sakiControlPlaneV6DomainSpec.version).toBe(6)
     expect(sakiControlPlaneV7DomainSpec.version).toBe(7)
     expect(sakiControlPlaneV8DomainSpec.version).toBe(8)
-    expect(sakiControlPlaneDomainSpec.version).toBe(9)
-    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(7)
+    expect(sakiControlPlaneDomainSpec.version).toBe(10)
+    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(8)
     expect(sakiControlPlaneMigrationPlan.steps[0]).toMatchObject({
       from: { name: 'saki_control_plane', version: 2 },
       to: { name: 'saki_control_plane', version: 3 },

@@ -14,7 +14,7 @@ Control Intent and Execution Dispatch answer different questions. A Control Inte
 
 DSH already supplies several narrower mechanisms. Schedule stores reminder state in a Session log but only delivers while the Session is live. Workflow persists observational history while its live run remains holder-owned and cannot resume after restart. The shipped Jobs Provider is process-local. A continuable subagent can cold-resume from a durable Session, but its Agent inbox orders turns for one runtime lineage and is not an offline, authorized Project mailbox. User questions and approvals wait inside an open Agent turn; their audit events do not make the pending request independently answerable after the process disappears.
 
-Saki therefore needs product-level records before it can promise automatic work, restart recovery, future remote Hosts, or a Project Coordinator. Persisting the dispatch before wake-up allows delivery to repeat without losing the accepted work. A stable dispatch identity and bounded Dispatch Claim prevent repeated delivery from creating multiple Agent Runs. That claim is distinct from an Execution Lease: the former selects one consumer for one command, while the latter protects a Resource Binding from concurrent writable Runs.
+Saki therefore needs product-level records before it can promise automatic work, restart recovery, future remote Hosts, or a Project Coordinator. Persisting the dispatch before wake-up allows delivery to repeat without losing the accepted work. A stable dispatch identity and bounded Dispatch Claim prevent repeated delivery from creating multiple Agent Runs. The claim selects one consumer for one command; distinct Runs may share the same Resource Binding.
 
 Human intervention has the same durability requirement. An Agent, automatic policy, provider login, or reconciliation path may need input after the originating process or model turn ends. The request must retain its subject, target, requested decision, blocking scope, status, deadline or escalation policy, and causal references. Notification delivery is not an answer, and timeout never means approval.
 
@@ -30,7 +30,7 @@ Responsibility is separate again. A Work Assignment identifies the human Princip
 
 **Make Attention Inbox entries authoritative queue records.** A copied queue item would create another lifecycle beside its Work Assignment, Intervention Request, Dispatch, or recovery owner. Projection rebuild and refetch preserve one source for each fact and let different users receive different Views without duplicating commands.
 
-**Merge Dispatch Claim with Execution Lease.** The two claims protect different invariants. A read-only Execution still needs fenced, idempotent dispatch admission without a worktree lease, while one writable Run may hold its Execution Lease across several Host Operations after its start dispatch has settled.
+**Hold a Dispatch Claim for an entire Run.** One Run can receive several independent Dispatches. Extending a claim across the conversation couples command delivery to Session lifetime and delays recovery after failure.
 
 **Treat notification delivery or timeout as a response.** A browser, Feishu, or QQ adapter can confirm transport at most. It cannot prove that an authorized subject decided, and automatic approval on timeout would turn an availability failure into authority.
 

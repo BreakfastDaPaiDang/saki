@@ -1564,7 +1564,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'abstract readonly stateVersion: 9',
+        signature: 'abstract readonly stateVersion: 10',
         description: 'State-format version selected by the Installation manifest.',
         parameters: [],
       },

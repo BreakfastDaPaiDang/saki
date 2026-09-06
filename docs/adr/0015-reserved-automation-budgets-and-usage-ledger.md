@@ -24,7 +24,7 @@ An Automation Policy is versioned and names applicable limits, windows, pause ru
 
 Reservations and ledger entries are Saki control-plane records. DSH Session usage events, GitHub observations, provider Usage Snapshots, Generation Job results, and Host Operation results remain the evidence owners for their respective facts. Corrections append a compensating entry rather than rewriting the observation used by an earlier admission decision.
 
-Budgets may apply per operation, Agent Run, Work Item, Project rolling window, or Provider Account Profile. One reservation may consume several scopes atomically. Project concurrency claims and Resource Binding Execution Leases remain separate records because one limits aggregate automation while the other prevents two writers from sharing a worktree.
+Budgets may apply per operation, Agent Run, Work Item, Project rolling window, or Provider Account Profile. One reservation may consume several scopes atomically. Project concurrency limits bound aggregate automation; Agent Runs may share a worktree within those configured limits.
 
 ### Required version 0.1.0 dimensions
 

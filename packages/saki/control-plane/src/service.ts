@@ -844,7 +844,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         agentRunTable: this.agentRunTable,
         dispatchTable: this.executionDispatchTable,
         interventionTable: this.interventionRequestTable,
-        admissionTable: this.bindingWriteAdmissionTable,
         execution: this.ctx.sakiHostExecution,
         projects: this.projects,
         mutationContext: projectId => this.githubSynchronization.mutationContext(projectId),
@@ -1404,11 +1403,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     }
     const binding = this.projects.currentActiveBinding(project.id)
     if (typeof binding === 'string') return { available: false, reason: 'binding-unavailable' }
-    const admission = this.bindingWriteAdmissionTable.get(binding.binding.id)
-    if (admission === undefined) return { available: false, reason: 'binding-unavailable' }
-    if (admission.state !== 'available') {
-      return { available: false, reason: 'operation-conditions-unavailable' }
-    }
     return { available: true }
   }
 

@@ -10,7 +10,7 @@ Agent Operations 定义一个 Saki Installation 如何指挥已登记 Host，以
 
 **Saki Host**：具有稳定 Host identity、信任状态、可重新验证的 capability inventory，并拥有机器本地资源与凭据解析的已登记执行节点。Local Host 可以和控制面共享进程，但不会因此成为 Saki Installation。_避免_：Saki Installation、浏览器 client、Workspace
 
-**Resource Binding**：从 Project 到具名 Saki Host 上一项资源的稳定关联。其带 revision locator 与健康观察可以通过 rebind 改变，而其身份拥有 execution reference 与 lease。_避免_：路径、DSH Workspace、Execution Lease
+**Resource Binding**：从 Project 到具名 Saki Host 上一项资源的稳定关联。其带 revision locator 与健康观察可以通过 rebind 改变，而其身份拥有 execution reference。_避免_：路径、DSH Workspace
 
 **Installation State Generation**：Saki 自有 Installation 状态的一份完整、带版本副本。恰好一个 generation 被选为活动且可写；candidate、保留 generation 与 Recovery Backup 都不会因为文件名或较新时间戳而自动成为活动状态。_避免_：数据库版本、backup
 
@@ -46,11 +46,9 @@ Agent Operations 定义一个 Saki Installation 如何指挥已登记 Host，以
 
 **Execution Dispatch**：根据已接受 Control Intent 产生、要求已登记 Host 创建或恢复一次 Execution 的持久命令。它记录交付与恢复状态，不证明 Execution 成功。_避免_：Control Intent、Agent Run
 
-**Dispatch Claim**：允许一个当前执行器协调 Execution Dispatch 的 Host admission 的有界、带 revision 与 fencing 的 claim。它不提供 exactly-once 保证，也不授予 Resource Binding 访问权。_避免_：Execution Lease、Work Assignment
+**Dispatch Claim**：允许一个当前执行器协调 Execution Dispatch 的 Host admission 的有界、带 revision 与 fencing 的 claim。它不提供 exactly-once 保证，也不授予 Resource Binding 访问权。_避免_：Work Assignment
 
 **Host Operation**：Host 为一条 Execution Dispatch 拥有的持久 admission 记录。它在产生外部副作用前把稳定 dispatch identity 绑定到目标 Execution，并提供幂等 inspection 与 cancellation reference；它不是 Execution outcome。_避免_：Execution Dispatch、Agent Run、进程
-
-**Execution Lease**：授予一个 Agent Run 对 Resource Binding 写入权的持久声明。一个 binding 最多由一个活动可写 Agent Run 持有 Lease；只读 Session 不需要 Lease。_避免_：进程锁、Agent Run
 
 **Intervention Request**：要求具名对象提供输入、审批、凭据授权、验收或恢复操作的持久、可寻址请求。系统单独记录回答的归因，而且回答不能扩大响应者的 Grant。_避免_：实时问题、通知
 

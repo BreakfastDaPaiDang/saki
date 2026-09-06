@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-18-saki-durable-intervention-answer.md
-2026-08-18-saki-durable-intervention-answer.md: abd058aabe6d2dc805b3e7cdb0ce8df09cac2c39
-2026-08-18-saki-durable-intervention-answer.zh.md: 85f9be76398960a8a0cdd723b21257352f4111ca
+2026-08-18-saki-durable-intervention-answer.md: d12da7c56c9c618a16feedd2e93d40f7e858f4f9
+2026-08-18-saki-durable-intervention-answer.zh.md: 195f1c1932419e1e3e4855461aee883b0e345b6b

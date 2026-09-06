@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-stable-resource-bindings.md
-2026-08-18-saki-stable-resource-bindings.md: 5608cbeaba11236d977a0d6ef8edf5949dd7664e
-2026-08-18-saki-stable-resource-bindings.zh.md: 08558dab32220df5c6b5461f6e010256f48322ec
+2026-08-18-saki-stable-resource-bindings.md: 209ab30aef1a5b9ed24ee9e0858ccb8885756361
+2026-08-18-saki-stable-resource-bindings.zh.md: e3b4a27cf60a3f6f6160a333e55e4731d6853e02

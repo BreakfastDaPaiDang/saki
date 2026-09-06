@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/adr/0003-development-project-worktree-ownership.md
-0003-development-project-worktree-ownership.md: 80918c12eb2686bf6f098e2348363cfbf53a6167
-0003-development-project-worktree-ownership.zh.md: ae3b9f927407dc62983e1b6c6305cb56fe8cdc66
+0003-development-project-worktree-ownership.md: 1b898fc7a806a456bc557bdf058f70a650a40076
+0003-development-project-worktree-ownership.zh.md: a02b7ab71739e9aad3e8f2f836e4c4d528a58e8a

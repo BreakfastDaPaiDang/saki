@@ -6,21 +6,21 @@ Status: proposed
 
 ## 问题
 
-一个 worktree 可以通过多个路径别名寻址，而路径与 Git 管理位置也可能发生合法变化。直接按路径确定 Development Project 或 Execution Lease 键，要么会准入重复 writer，要么会让位置迁移重写产品身份。DSH Workspace 路径与历史 Session cwd 被有意设为不可变，因此 Saki 也不能原地移动它们。
+一个 worktree 可以通过多个路径别名寻址，而路径与 Git 管理位置也可能发生合法变化。直接按路径确定 Development Project 键，要么会重复登记资源身份，要么会让位置迁移重写产品身份。DSH Workspace 路径与历史 Session cwd 被有意设为不可变，因此 Saki 也不能原地移动它们。
 
 ## 提案
 
-每个 Development Project 与 Execution Lease 都寻址一个生成且稳定的 Resource Binding id。登记已有目录时，组合 `fs.realpath`、Git top level、每 worktree Git directory、common Git directory 与 `git worktree list --porcelain -z` 创建带 revision 观察，并拒绝同 Host 别名。每 worktree Git directory 区分 linked worktree；common Git directory 只对其 Repository 家族分组。路径不会转换为小写，因为文件系统可能区分大小写。
+每个 Development Project 都寻址一个生成且稳定的 Resource Binding id。登记已有目录时，组合 `fs.realpath`、Git top level、每 worktree Git directory、common Git directory 与 `git worktree list --porcelain -z` 创建带 revision 观察，并拒绝同 Host 别名。每 worktree Git directory 区分 linked worktree；common Git directory 只对其 Repository 家族分组。路径不会转换为小写，因为文件系统可能区分大小写。
 
 绑定健康状态为 `active`、`missing`、`repair-required`、`needs-rebind` 或 `retired`。Mutation 准入会重新验证观察与 revision。带归因的 rebind 操作要求执行完全停稳，选择已有目录，推进 Project 的 DSH Workspace 引用，并在路径无法证明连续性时记录 operator 确认。历史 DSH Session 保留旧 Workspace 与 cwd；后续轮次在新位置使用后继 Session。
 
 0.1.0 版本登记、rebind 和退役 Project，但不实际创建、移动、repair、移除或 prune worktree。自动模式要求 clean tree。手动接管已有变更会记录其有界指纹与归因限制；任何歧义混合都会继续使自动 staging 和 completion 不可用。[ADR 0014](../../../../docs/adr/0014-stable-resource-bindings-over-canonical-worktrees.zh.md)拥有该生命周期。
 
-提议中的 [domain KV 存储与 Workspace](2026-07-24-domain-kv-storage-and-workspace.zh.md) Agent Note 拥有 DSH Workspace 的 `fs.realpath` 唯一性与不可变记录；本提案拥有 Saki 更高层的绑定身份、Git 观察、rebind 与 lease 语义。提议中的 [Installation 维护](2026-08-18-saki-forward-migrations-and-installation-maintenance.zh.md) Agent Note 拥有替换 Host 恢复，并把 `needs-rebind` 接入该生命周期。
+提议中的 [domain KV 存储与 Workspace](2026-07-24-domain-kv-storage-and-workspace.zh.md) Agent Note 拥有 DSH Workspace 的 `fs.realpath` 唯一性与不可变记录；本提案拥有 Saki 更高层的绑定身份、Git 观察、rebind 语义。提议中的 [Installation 维护](2026-08-18-saki-forward-migrations-and-installation-maintenance.zh.md) Agent Note 拥有替换 Host 恢复，并把 `needs-rebind` 接入该生命周期。
 
-已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.zh.md)建立首个稳定 Project 与 Resource Binding id、重复 worktree 身份检查和启动重新验证。已实现的[结构化 Git 决策](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.zh.md)会为已绑定状态、Diff 与直接 mutation 重新验证精确 active Binding 及其 revision，并为每个 Binding 设置一个持久 write-admission owner。
+已实现的[已有目录 Project 登记](../../implemented/architecture/2026-08-20-saki-existing-directory-project-registration.zh.md)建立首个稳定 Project 与 Resource Binding id、重复 worktree 身份检查和启动重新验证。已实现的[结构化 Git 决策](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.zh.md)会为已绑定状态、Diff 与直接 mutation 重新验证精确 active Binding 及其 revision，并通过每个 Binding 的一条持久准入记录串行协调直接 Git mutation。
 
-[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)把 `BindingWriteAdmission.agent-run` 设为一次手动 Agent 启动的长期可写所有者，使其与直接 Git operation 竞争同一条 row。独立 Execution Lease、rebind、retirement、repair、后继 Session 与物理 worktree 生命周期仍处于 proposed 状态。
+[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)对每条 Dispatch 独立准入，允许 Agent Run 使用独立 Session 共享一个目录。rebind、retirement、repair、后继 Session 与物理 worktree 生命周期仍处于 proposed 状态。
 
 ## 考虑过的方案
 
@@ -34,7 +34,7 @@ Status: proposed
 
 ## 验收标准
 
-- 同一个可用 worktree 的不同别名拼写不能创建两个 Resource Binding 或 lease。
+- 同一个可用 worktree 的不同别名拼写不能创建两个 Resource Binding。
 - 同一个 Repository 中的两个 linked worktree 保持独立，并可在不同绑定下并行运行。
 - 缺失、移动、repair、替换 clone、dirty 与替换 Host 情况会明确停止或 rebind，且不会重写历史 Session。
 - Rebind 与退役不能和活动可写 Run、terminal、Dispatch 或 Host Operation 竞态。

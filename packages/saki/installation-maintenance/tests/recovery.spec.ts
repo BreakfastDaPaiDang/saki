@@ -17,6 +17,7 @@ import { SqliteStorageBackend } from '@deepseek-ai/dsh-storage-sqlite'
 import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionDomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import type {
   SakiBuildId,
@@ -55,17 +56,20 @@ import {
   sakiControlPlaneV5DomainSpec,
   sakiControlPlaneV6DomainSpec,
   sakiControlPlaneV8DomainSpec,
+  sakiControlPlaneV9DomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
   sakiStorageGenerationV6DomainSpec,
+  sakiStorageGenerationV7DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
   storageGenerationV3SealRecordSchema,
   storageGenerationV4SealRecordSchema,
   storageGenerationV6SealRecordSchema,
+  storageGenerationV7SealRecordSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
   captureSqliteArtifactSet,
@@ -370,11 +374,12 @@ async function materializePreviousWritableGeneration(
   storageGenerationId: SakiStorageGenerationId,
   controlPlaneSnapshot: KvUnitSnapshot,
   signal: AbortSignal,
+  stateVersion: 8 | 9 = 8,
 ): Promise<void> {
   const units: readonly { readonly spec: DomainSpec; readonly snapshot: KvUnitSnapshot }[] = [
-    { spec: sakiControlPlaneV8DomainSpec, snapshot: controlPlaneSnapshot },
+    { spec: stateVersion === 9 ? sakiControlPlaneV9DomainSpec : sakiControlPlaneV8DomainSpec, snapshot: controlPlaneSnapshot },
     {
-      spec: sakiHostExecutionV3DomainSpec,
+      spec: stateVersion === 9 ? sakiHostExecutionDomainSpec : sakiHostExecutionV3DomainSpec,
       snapshot: {
         global: null,
         tables: Object.fromEntries(
@@ -383,16 +388,17 @@ async function materializePreviousWritableGeneration(
       },
     },
     {
-      spec: sakiStorageGenerationV6DomainSpec,
+      spec: stateVersion === 9 ? sakiStorageGenerationV7DomainSpec : sakiStorageGenerationV6DomainSpec,
       snapshot: {
         global: null,
         tables: {
           storage_generation: {
-            [STORAGE_GENERATION_KEY]: storageGenerationV6SealRecordSchema.parse({
-              schemaVersion: 6,
+            [STORAGE_GENERATION_KEY]: (stateVersion === 9
+              ? storageGenerationV7SealRecordSchema : storageGenerationV6SealRecordSchema).parse({
+              schemaVersion: stateVersion - 2,
               installationId: INSTALLATION_ID,
               storageGenerationId,
-              stateVersion: 8,
+              stateVersion,
               createdByBuildId: PREVIOUS_WRITABLE_BUILD_ID,
             }),
           },
@@ -415,12 +421,12 @@ async function materializePreviousWritableGeneration(
   }
 }
 
-function previousWritableControlPlaneSnapshot(source: 'fresh' | 'upgrade'): KvUnitSnapshot {
+function previousWritableControlPlaneSnapshot(source: 'fresh' | 'upgrade', stateVersion: 8 | 9): KvUnitSnapshot {
   if (source === 'fresh') {
     return {
       global: null,
       tables: Object.fromEntries(
-        Object.keys(sakiControlPlaneV8DomainSpec.tables).map(table => [table, {}]),
+        Object.keys((stateVersion === 9 ? sakiControlPlaneV9DomainSpec : sakiControlPlaneV8DomainSpec).tables).map(table => [table, {}]),
       ),
     }
   }
@@ -429,7 +435,8 @@ function previousWritableControlPlaneSnapshot(source: 'fresh' | 'upgrade'): KvUn
   const v5Snapshot = sakiControlPlaneMigrationPlan.steps[2]!.migrate(v4Snapshot)
   const v6Snapshot = sakiControlPlaneMigrationPlan.steps[3]!.migrate(v5Snapshot)
   const v7Snapshot = sakiControlPlaneMigrationPlan.steps[4]!.migrate(v6Snapshot)
-  return sakiControlPlaneMigrationPlan.steps[5]!.migrate(v7Snapshot)
+  const v8Snapshot = sakiControlPlaneMigrationPlan.steps[5]!.migrate(v7Snapshot)
+  return stateVersion === 9 ? sakiControlPlaneMigrationPlan.steps[6]!.migrate(v8Snapshot) : v8Snapshot
 }
 
 async function publishPreviousWritableCandidate(
@@ -437,6 +444,7 @@ async function publishPreviousWritableCandidate(
   phase: 'provisioning' | 'ready' | undefined,
   source: 'fresh' | 'upgrade',
   signal: AbortSignal,
+  stateVersion: 8 | 9 = 8,
 ): Promise<string> {
   const generationDirectory = join(root, 'generations', CANDIDATE_ID)
   await mkdir(generationDirectory, { recursive: true })
@@ -444,13 +452,14 @@ async function publishPreviousWritableCandidate(
   await materializePreviousWritableGeneration(
     databasePath,
     CANDIDATE_ID,
-    previousWritableControlPlaneSnapshot(source),
+    previousWritableControlPlaneSnapshot(source, stateVersion),
     signal,
+    stateVersion,
   )
   const generationBytes = renderGenerationManifest(
     INSTALLATION_ID,
     CANDIDATE_ID,
-    8,
+    stateVersion,
     PREVIOUS_WRITABLE_BUILD_ID,
   )
   await writeFile(join(generationDirectory, 'generation.json'), generationBytes)
@@ -863,7 +872,7 @@ describe('active Saki operation recovery', () => {
     await expect(readFile(candidate.databasePath)).resolves.not.toHaveLength(0)
   })
 
-  it('settles a previous writable build fresh journal after its v8 manifest was published', async () => {
+  it.each([8, 9] as const)('settles a previous writable build fresh journal after its v%i manifest was published', async (stateVersion) => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(5_000)
     const journal = createOperationJournal({
@@ -878,6 +887,7 @@ describe('active Saki operation recovery', () => {
       'provisioning',
       'fresh',
       signal,
+      stateVersion,
     )
 
     await recoverActiveSakiOperation(root, join(root, 'legacy.sqlite'), signal)
@@ -886,7 +896,7 @@ describe('active Saki operation recovery', () => {
     await expect(readInstallationManifest(root, signal)).resolves.toMatchObject({
       value: {
         phase: 'provisioning',
-        stateVersion: 8,
+        stateVersion,
         storageGenerationId: CANDIDATE_ID,
       },
     })
@@ -1095,7 +1105,7 @@ describe('active Saki operation recovery', () => {
     }, signal, async () => undefined)).rejects.toMatchObject({ code: 'upgrade-required' })
   })
 
-  it('rolls back a previous writable build v8 candidate before its authority commit', async () => {
+  it.each([8, 9] as const)('rolls back a previous writable build v%i candidate before its authority commit', async (stateVersion) => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(10_000)
     const legacyPath = join(root, 'legacy.sqlite')
@@ -1116,6 +1126,7 @@ describe('active Saki operation recovery', () => {
       undefined,
       'upgrade',
       signal,
+      stateVersion,
     )
     const candidatePath = dirname(databasePath)
 
@@ -1432,7 +1443,7 @@ describe('active Saki operation recovery', () => {
   it.each([
     ['provisioning', 'provisioning', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
     ['another Installation', 'ready', OTHER_INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 2],
-    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 9],
+    ['a non-historical state version', 'ready', INSTALLATION_ID, OLD_STORAGE_GENERATION_ID, 10],
     ['the candidate generation', 'ready', INSTALLATION_ID, CANDIDATE_ID, 2],
   ] as const)(
     'retains an upgrade when published authority selects %s',
@@ -1631,7 +1642,7 @@ describe('active Saki operation recovery', () => {
     })
   })
 
-  it('settles a previous writable build upgrade journal after its v8 authority commit', async () => {
+  it.each([8, 9] as const)('settles a previous writable build upgrade journal after its v%i authority commit', async (stateVersion) => {
     const root = await createRoot()
     const signal = AbortSignal.timeout(10_000)
     const legacyPath = join(root, 'legacy.sqlite')
@@ -1652,6 +1663,7 @@ describe('active Saki operation recovery', () => {
       'ready',
       'upgrade',
       signal,
+      stateVersion,
     )
 
     await recoverActiveSakiOperation(root, legacyPath, signal)
@@ -1660,7 +1672,7 @@ describe('active Saki operation recovery', () => {
     await expect(readInstallationManifest(root, signal)).resolves.toMatchObject({
       value: {
         phase: 'ready',
-        stateVersion: 8,
+        stateVersion,
         storageGenerationId: CANDIDATE_ID,
       },
     })

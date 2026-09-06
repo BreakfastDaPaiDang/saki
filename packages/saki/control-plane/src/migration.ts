@@ -20,17 +20,19 @@ import {
 import { v4Source } from './migration-v4-source.ts'
 import { sakiAgentProfileIdSchema, sakiStorageGenerationIdSchema } from './ids.ts'
 import { sakiControlPlaneDomainSpec } from './domain-spec.ts'
+import { sakiControlPlaneV9DomainSpec } from './migration-v9-source.ts'
+import { migrateSakiV9ToV10 } from './migration-v10.ts'
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
-  agentOperationIntentRecordSchema,
+  agentOperationIntentV1RecordSchema,
   agentRunRecordSchema,
   agentRunV1RecordSchema,
   bindingWriteAdmissionV1RecordSchema,
   bindingWriteAdmissionV2RecordSchema,
   controlStateRecordSchema,
   developmentProjectRegistryRecordSchema,
-  executionDispatchRecordSchema,
+  executionDispatchV2RecordSchema,
   executionDispatchV1RecordSchema,
   developmentProjectRegistryV1RecordSchema,
   gitOperationIntentRecordSchema,
@@ -64,7 +66,6 @@ import {
 } from './spec.ts'
 import type {
   ControlStateRecord,
-  AgentOperationIntentRecord,
   AgentRunRecord,
   BindingWriteAdmissionV2Record,
   DevelopmentProjectRegistryRecord,
@@ -74,7 +75,6 @@ import type {
   GitHubSynchronizationConfigurationIntentRecord,
   GitHubWorkItemIntentRecord,
   GitHubWorkItemRecoveryRecord,
-  ExecutionDispatchRecord,
   GrantRecord,
   HostRecord,
   InstallationAccessRecord,
@@ -756,8 +756,8 @@ export const sakiControlPlaneV7DomainSpec = defineDomain({
     github_work_item_recovery: domainTable<SakiWorkItemRecoveryId, GitHubWorkItemRecoveryRecord>(
       githubWorkItemRecoveryRecordSchema,
     ),
-    agent_operation_intents: domainTable<SakiControlIntentId, AgentOperationIntentRecord>(
-      agentOperationIntentRecordSchema,
+    agent_operation_intents: domainTable<SakiControlIntentId, z.infer<typeof agentOperationIntentV1RecordSchema>>(
+      agentOperationIntentV1RecordSchema,
     ),
     work_assignments: domainTable<SakiWorkAssignmentId, z.infer<typeof workAssignmentV1RecordSchema>>(
       workAssignmentV1RecordSchema,
@@ -803,14 +803,14 @@ export const sakiControlPlaneV8DomainSpec = defineDomain({
     github_work_item_recovery: domainTable<SakiWorkItemRecoveryId, GitHubWorkItemRecoveryRecord>(
       githubWorkItemRecoveryRecordSchema,
     ),
-    agent_operation_intents: domainTable<SakiControlIntentId, AgentOperationIntentRecord>(
-      agentOperationIntentRecordSchema,
+    agent_operation_intents: domainTable<SakiControlIntentId, z.infer<typeof agentOperationIntentV1RecordSchema>>(
+      agentOperationIntentV1RecordSchema,
     ),
     work_assignments: domainTable<SakiWorkAssignmentId, WorkAssignmentRecord>(workAssignmentRecordSchema),
     work_sessions: domainTable<SakiWorkSessionId, WorkSessionRecord>(workSessionRecordSchema),
     agent_runs: domainTable<SakiAgentRunId, AgentRunRecord>(agentRunRecordSchema),
-    execution_dispatches: domainTable<SakiExecutionDispatchId, ExecutionDispatchRecord>(
-      executionDispatchRecordSchema,
+    execution_dispatches: domainTable<SakiExecutionDispatchId, z.infer<typeof executionDispatchV2RecordSchema>>(
+      executionDispatchV2RecordSchema,
     ),
     intervention_requests: domainTable<SakiInterventionRequestId, InterventionRequestRecord>(
       interventionRequestRecordSchema,
@@ -960,7 +960,7 @@ function migrateGrantsToV9(snapshot: DomainMigrationSnapshot): Record<string, Gr
 }
 
 function migrateWorkAssignmentsToV8(snapshot: DomainMigrationSnapshot): Record<string, Record<string, unknown>> {
-  const intents = sourceTable<AgentOperationIntentRecord>(snapshot, 'agent_operation_intents')
+  const intents = sourceTable<z.infer<typeof agentOperationIntentV1RecordSchema>>(snapshot, 'agent_operation_intents')
   return mapTable(
     sourceTable<z.infer<typeof workAssignmentV1RecordSchema>>(snapshot, 'work_assignments'),
     (assignment) => {
@@ -1111,7 +1111,7 @@ function migrateGitHubProjectSyncToV6(
   )
 }
 
-/** Pure retained migration chain from exact B03 v2 media through frozen adjacent formats to current v9 records. */
+/** Pure retained migration chain from exact B03 v2 media through frozen adjacent formats to current v10 records. */
 export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
   current: sakiControlPlaneDomainSpec,
   steps: [
@@ -1238,7 +1238,7 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
     },
     {
       from: sakiControlPlaneV8DomainSpec,
-      to: sakiControlPlaneDomainSpec,
+      to: sakiControlPlaneV9DomainSpec,
       migrate: snapshot => ({
         global: snapshot.global,
         tables: {
@@ -1250,6 +1250,11 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
           milestone_delivery_intents: {},
         },
       }),
+    },
+    {
+      from: sakiControlPlaneV9DomainSpec,
+      to: sakiControlPlaneDomainSpec,
+      migrate: migrateSakiV9ToV10,
     },
   ],
 })

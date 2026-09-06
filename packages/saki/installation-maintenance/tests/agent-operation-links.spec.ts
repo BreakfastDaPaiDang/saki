@@ -3,13 +3,14 @@ import { describe, expect, it } from 'vitest'
 import {
   agentRunRecordSchema,
   agentRunV1RecordSchema,
-  bindingWriteAdmissionRecordSchema,
+  bindingWriteAdmissionV3RecordSchema,
   executionDispatchRecordSchema,
   executionDispatchV1RecordSchema,
+  executionDispatchV2RecordSchema,
   sakiControlPlaneDomainSpec,
   sakiControlPlaneV7DomainSpec,
   type AgentRunRecord,
-  type BindingWriteAdmissionRecord,
+  type BindingWriteAdmissionV3Record,
   type ExecutionDispatchRecord,
 } from '@breakfastdapaidang/saki-control-plane'
 import { SAKI_PROJECT_PROJECTION_FIXTURES } from '@breakfastdapaidang/saki-control-plane/src/fixtures.ts'
@@ -34,6 +35,7 @@ import * as stateValidation from '../src/state-validation.ts'
 import {
   validateGitOperationLinks,
   validateSakiV7AgentOperationLinks,
+  validateSakiV8AgentOperationLinks,
 } from '../src/state-validation.ts'
 
 const INTENT_ID = 'intent-11111111-1111-4111-8111-111111111111'
@@ -72,13 +74,13 @@ interface Fixture {
   readonly hostOperation: LocalHostOperationRecord
   readonly dispatch: ExecutionDispatchRecord
   readonly run: AgentRunRecord
-  readonly reservedAdmission: BindingWriteAdmissionRecord
+  readonly reservedAdmission: BindingWriteAdmissionV3Record
 }
 
 interface LinkedState {
   readonly runs?: readonly AgentRunRecord[]
   readonly dispatches?: readonly ExecutionDispatchRecord[]
-  readonly admissions?: readonly BindingWriteAdmissionRecord[]
+  readonly admissions?: readonly BindingWriteAdmissionV3Record[]
   readonly hostOperations?: readonly LocalHostOperationRecord[]
 }
 
@@ -131,7 +133,7 @@ function fixture(): Fixture {
   const prepared = preparedOperation(request)
   const dispatch = executionDispatchRecordSchema.parse({
     id: DISPATCH_ID,
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 1,
     intentId: INTENT_ID,
     agentRunId: AGENT_RUN_ID,
@@ -170,7 +172,7 @@ function fixture(): Fixture {
     createdAt: 1,
     updatedAt: 1,
   })
-  const reservedAdmission = bindingWriteAdmissionRecordSchema.parse({
+  const reservedAdmission = bindingWriteAdmissionV3RecordSchema.parse({
     id: BINDING_ID,
     schemaVersion: 1,
     revision: 1,
@@ -275,11 +277,12 @@ function runningState(current: Fixture): Required<LinkedState> {
       state: 'accepted',
       claim: undefined,
       acceptedFencingToken: 1,
+      admissionRevision: 2,
       preparation: current.preparation,
       operationSnapshot: snapshot,
       updatedAt: 6,
     })],
-    admissions: [bindingWriteAdmissionRecordSchema.parse({
+    admissions: [bindingWriteAdmissionV3RecordSchema.parse({
       ...current.reservedAdmission,
       revision: 2,
       phase: 'accepted',
@@ -315,6 +318,7 @@ function acceptedHostState(current: Fixture): Required<LinkedState> {
       state: 'accepted',
       claim: undefined,
       acceptedFencingToken: 1,
+      admissionRevision: 2,
       preparation: current.preparation,
       operationSnapshot: snapshot,
       updatedAt: 3,
@@ -594,20 +598,20 @@ describe('current StartAgentRun cross-domain validation', () => {
       .toThrow('StartAgentRun Host Operation id disagrees with its Execution Dispatch source')
   })
 
-  it('rejects a nonterminal accepted Host operation without its accepted Agent Run admission', () => {
+  it('accepts a nonterminal Host operation using its own Dispatch admission', () => {
     const validateAgentOperationLinks = validator()
     const [controlPlane, hostExecution] = domains(acceptedHostState(fixture()))
 
-    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) }).toThrow()
+    expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) }).not.toThrow()
   })
 
-  it('rejects a nonterminal Agent Host Operation after its write admission disappears', () => {
+  it('accepts a nonterminal Agent Host Operation without a binding write admission', () => {
     const validateAgentOperationLinks = validator()
     const state = acceptedHostState(fixture())
     const [controlPlane, hostExecution] = domains({ ...state, admissions: [] })
 
     expect(() => { validateAgentOperationLinks(controlPlane, hostExecution) })
-      .toThrow('StartAgentRun Host Operation lost its Agent Run write admission')
+      .not.toThrow()
   })
 
   it('accepts released write admission after a canceled no-effect Host Operation', () => {
@@ -655,7 +659,8 @@ describe('historical v7 StartAgentRun cross-domain validation', () => {
   it('accepts the exact v1 Run, v1 Dispatch, and Host v2 relationship', () => {
     const running = runningState(fixture())
     const run = agentRunV1RecordSchema.parse({ ...running.runs[0], schemaVersion: 1 })
-    const dispatch = executionDispatchV1RecordSchema.parse(running.dispatches[0])
+    const { admissionRevision: _admissionRevision, ...retainedDispatch } = running.dispatches[0]!
+    const dispatch = executionDispatchV1RecordSchema.parse({ ...retainedDispatch, schemaVersion: 1 })
     const hostOperation = sakiHostExecutionV2DomainSpec.tables.operations.valueSchema.parse({
       ...running.hostOperations[0],
       schemaVersion: 2,
@@ -686,5 +691,99 @@ describe('historical v7 StartAgentRun cross-domain validation', () => {
     } as unknown as Domain<typeof sakiControlPlaneV7DomainSpec>
     expect(() => { validateSakiV7AgentOperationLinks(withoutRun, hostExecution) })
       .toThrow('StartAgentRun Host Operation has no Agent Run')
+  })
+})
+
+function historicalDomains(state: LinkedState): ReturnType<typeof domains> {
+  const [controlPlane, hostExecution] = domains(state)
+  const dispatches = (state.dispatches ?? []).map((record) => {
+    const { admissionRevision: _admissionRevision, ...retained } = record
+    const dispatch = executionDispatchV2RecordSchema.parse({ ...retained, schemaVersion: 1 })
+    return [dispatch.id, dispatch] as const
+  })
+  return [{
+    ...controlPlane,
+    table: (name: string) => name === 'execution_dispatches'
+      ? readonlyTable(dispatches) : controlPlane.table(name as keyof typeof sakiControlPlaneDomainSpec.tables),
+  } as unknown as Domain<typeof sakiControlPlaneDomainSpec>, hostExecution]
+}
+
+describe('retained Agent write admission validation', () => {
+  it('rejects a current Host acceptance with a different Dispatch admission revision', () => {
+    const state = acceptedHostState(fixture())
+    const dispatches = [fixture().dispatch]
+    expect(() => { validator()(...domains({ ...state, dispatches })) })
+      .toThrow('StartAgentRun Host Operation disagrees with its Dispatch admission')
+  })
+
+  it.each(['missing', 'intent', 'run', 'binding', 'digest', 'phase', 'revision'] as const)(
+    'rejects a historical accepted Host operation with %s admission evidence', (difference) => {
+      const state = runningState(fixture())
+      const admission = state.admissions[0]
+      if (admission === undefined) throw new Error('admission fixture is missing')
+      const changes = {
+        missing: {}, intent: { originIntentId: 'intent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+        run: { agentRunId: 'agent-run-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+        binding: { bindingRevision: 1 }, digest: { payloadDigest: 'f'.repeat(64) },
+        phase: { phase: 'reserved', acceptedAt: undefined }, revision: { revision: 3 },
+      }
+      const admissions = difference === 'missing' ? [] : difference === 'phase'
+        ? [fixture().reservedAdmission] : [bindingWriteAdmissionV3RecordSchema.parse({
+          ...admission, ...changes[difference],
+        })]
+      expect(() => { validateSakiV8AgentOperationLinks(...historicalDomains({ ...state, admissions })) })
+        .toThrow(difference === 'phase' || difference === 'revision'
+          ? 'accepted StartAgentRun Host Operation disagrees with its write admission'
+          : 'StartAgentRun Host Operation lost its Agent Run write admission')
+    },
+  )
+
+  it.each(['matching', 'missing', 'intent', 'run', 'binding', 'digest'] as const)(
+    'retains a historical source conflict only with matching admission: %s', (difference) => {
+      const current = fixture()
+      const request = startAgentRunHostOperationRequestSchema.parse({
+        ...current.request,
+        expected: { ...current.request.expected, status: { version: 1, digest: 'f'.repeat(64) } },
+      })
+      const changes = {
+        matching: {}, missing: {},
+        intent: { originIntentId: 'intent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+        run: { agentRunId: 'agent-run-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+        binding: { bindingRevision: 1 }, digest: { payloadDigest: 'f'.repeat(64) },
+      }
+      const state: LinkedState = {
+        runs: [agentRunRecordSchema.parse({ ...current.run, state: 'reconciliation-required' })],
+        dispatches: [executionDispatchRecordSchema.parse({
+          ...current.dispatch, state: 'reconciliation-required', claim: undefined, terminalReason: 'protocol',
+        })],
+        admissions: difference === 'missing' ? [] : [bindingWriteAdmissionV3RecordSchema.parse({
+          ...current.reservedAdmission, ...changes[difference],
+        })],
+        hostOperations: [preparedOperation(request).record],
+      }
+      const validate = () => { validateSakiV8AgentOperationLinks(...historicalDomains(state)) }
+      if (difference === 'matching') expect(validate).not.toThrow()
+      else expect(validate).toThrow('StartAgentRun Host Operation request disagrees with its Execution Dispatch')
+    },
+  )
+
+  it.each(['failed', 'canceled'] as const)('accepts released historical admission after %s without effect', (state) => {
+    const current = fixture()
+    const snapshot = hostOperationSnapshotSchema.parse({
+      ...current.preparedSnapshot, revision: 1, updatedAt: 3, state, completedAt: 3,
+      ...(state === 'failed' ? { failure: { reason: 'binding-stale' } } : { reason: 'authority-revoked' }),
+      effect: 'none',
+    })
+    const linked: LinkedState = {
+      runs: [agentRunRecordSchema.parse({ ...current.run, state: 'canceled' })],
+      dispatches: [executionDispatchRecordSchema.parse({
+        ...current.dispatch, state: 'canceled', claim: undefined,
+        preparation: current.preparation, operationSnapshot: snapshot, terminalReason: 'authority-revoked',
+      })],
+      hostOperations: [sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
+        ...current.hostOperation, snapshot,
+      })],
+    }
+    expect(() => { validateSakiV8AgentOperationLinks(...historicalDomains(linked)) }).not.toThrow()
   })
 })

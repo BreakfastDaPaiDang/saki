@@ -2453,8 +2453,7 @@ const frozenAgentProfileSchema = z.object({
   modelRoute: agentModelRouteRequestSchema,
 }).strict()
 
-/** Durable accepted manual Give-to-Agent Intent and all preallocated child identities. */
-export const agentOperationIntentRecordSchema = z.object({
+const agentOperationIntentRecordObjectSchema = z.object({
   id: controlIntentId,
   schemaVersion: z.literal(1),
   revision,
@@ -2496,7 +2495,12 @@ export const agentOperationIntentRecordSchema = z.object({
   ]).optional(),
   createdAt: timestamp,
   updatedAt: timestamp,
-}).strict().superRefine((value, context) => {
+}).strict()
+
+function refineAgentOperationIntent(
+  value: Omit<z.infer<typeof agentOperationIntentRecordObjectSchema>, 'schemaVersion'>,
+  context: z.RefinementCtx,
+): void {
   refineDurableIntentIdentity(value, context)
   if (canonicalDigest('saki/agent-operation-intent/v1', value.payload) !== value.payloadDigest) {
     context.addIssue({ code: 'custom', message: 'Agent operation Intent payload digest is stale' })
@@ -2524,7 +2528,18 @@ export const agentOperationIntentRecordSchema = z.object({
   if (value.updatedAt < value.createdAt) {
     context.addIssue({ code: 'custom', message: 'Agent operation timestamps are not monotonic' })
   }
-})
+}
+
+/** Exact v7–v9 manual Give-to-Agent Intent with binding reservation phases. */
+export const agentOperationIntentV1RecordSchema = agentOperationIntentRecordObjectSchema
+  .superRefine(refineAgentOperationIntent)
+
+/** Durable manual Give-to-Agent Intent authorized through its own Dispatch. */
+export const agentOperationIntentRecordSchema = z.object({
+  ...agentOperationIntentRecordObjectSchema.shape,
+  schemaVersion: z.literal(2),
+  phase: z.enum(['prepared', 'dispatching', 'started', 'canceled', 'reconciliation-required']),
+}).strict().superRefine(refineAgentOperationIntent)
 
 /** Parsed durable manual Give-to-Agent Intent. */
 export type AgentOperationIntentRecord = z.infer<typeof agentOperationIntentRecordSchema>
@@ -2886,7 +2901,7 @@ const executionDispatchRecordObjectSchema = z.object({
 }).strict()
 
 function refineExecutionDispatch(
-  value: z.infer<typeof executionDispatchRecordObjectSchema>,
+  value: Omit<z.infer<typeof executionDispatchRecordObjectSchema>, 'schemaVersion'>,
   context: z.RefinementCtx,
 ): void {
   if (value.hostRequest.source.dispatchId !== value.id
@@ -2950,8 +2965,27 @@ export const executionDispatchV1RecordSchema = z.object({
 /** Parsed exact Execution Dispatch retained by `saki_control_plane@7`. */
 export type ExecutionDispatchV1Record = z.infer<typeof executionDispatchV1RecordSchema>
 
-/** Durable one-Host delivery of one preallocated or resumed Agent Run. */
-export const executionDispatchRecordSchema = executionDispatchRecordObjectSchema.superRefine(refineExecutionDispatch)
+/** Exact v8–v9 Dispatch whose Host admission belongs to the binding writer. */
+export const executionDispatchV2RecordSchema = executionDispatchRecordObjectSchema.superRefine(refineExecutionDispatch)
+
+/** Parsed exact v8–v9 Dispatch. */
+export type ExecutionDispatchV2Record = z.infer<typeof executionDispatchV2RecordSchema>
+
+/** Durable one-Host delivery with its own immutable Host admission revision. */
+export const executionDispatchRecordSchema = z.object({
+  ...executionDispatchRecordObjectSchema.shape,
+  schemaVersion: z.literal(2),
+  admissionRevision: revision.optional(),
+}).strict().superRefine((value, context) => {
+  refineExecutionDispatch(value, context)
+  if ((value.acceptedFencingToken !== undefined) !== (value.admissionRevision !== undefined)) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch acceptance lacks its Host admission revision' })
+  }
+  if (value.operationSnapshot?.admission.kind === 'accepted'
+    && value.operationSnapshot.admission.revision !== value.admissionRevision) {
+    context.addIssue({ code: 'custom', message: 'Execution Dispatch Host admission revision disagrees with its snapshot' })
+  }
+})
 
 /** Parsed durable Execution Dispatch. */
 export type ExecutionDispatchRecord = z.infer<typeof executionDispatchRecordSchema>
@@ -3078,8 +3112,28 @@ export const bindingWriteAdmissionV2RecordSchema = z.union([
 /** Parsed exact v7 and v8 Binding write-admission row. */
 export type BindingWriteAdmissionV2Record = z.infer<typeof bindingWriteAdmissionV2RecordSchema>
 
-/** Single current local write owner for one Resource Binding; unknown variants fail closed. */
-export const bindingWriteAdmissionRecordSchema = z.union([
+function refineStructuredGitBindingWriteAdmission(
+  value: z.infer<(typeof historicalBindingWriteAdmissionVariants)[number]
+    | (typeof pushBindingWriteAdmissionVariants)[number]>,
+  context: z.RefinementCtx,
+): void {
+  if (value.state === 'available') return
+  if (value.action !== 'project-branch:push') {
+    refineHistoricalBindingWriteAdmission(value, context)
+    return
+  }
+  if (value.updatedAt < value.reservedAt
+    || (value.phase === 'accepted'
+      && (value.acceptedAt < value.reservedAt || value.acceptedAt > value.updatedAt))) {
+    context.addIssue({ code: 'custom', message: 'Push write admission timestamps are not monotonic' })
+  }
+  if (value.phase === 'accepted' && value.preparation.operation.type !== 'push-branch') {
+    context.addIssue({ code: 'custom', message: 'Push write admission disagrees with Host preparation' })
+  }
+}
+
+/** Exact v9 binding writer retained for adjacent migration. */
+export const bindingWriteAdmissionV3RecordSchema = z.union([
   ...historicalBindingWriteAdmissionVariants,
   ...agentRunBindingWriteAdmissionVariants,
   ...pushBindingWriteAdmissionVariants,
@@ -3093,19 +3147,19 @@ export const bindingWriteAdmissionRecordSchema = z.union([
     }
     return
   }
-  if (value.action !== 'project-branch:push') {
-    refineHistoricalBindingWriteAdmission(value, context)
-    return
-  }
-  if (value.updatedAt < value.reservedAt
-    || (value.phase === 'accepted'
-      && (value.acceptedAt < value.reservedAt || value.acceptedAt > value.updatedAt))) {
-    context.addIssue({ code: 'custom', message: 'Push write admission timestamps are not monotonic' })
-  }
-  if (value.phase === 'accepted' && value.preparation.operation.type !== 'push-branch') {
-    context.addIssue({ code: 'custom', message: 'Push write admission disagrees with Host preparation' })
-  }
+  refineStructuredGitBindingWriteAdmission(value, context)
 })
 
-/** Parsed single-writer admission row. */
+/** Exact v9 binding writer retained for adjacent migration. */
+export type BindingWriteAdmissionV3Record = z.infer<typeof bindingWriteAdmissionV3RecordSchema>
+
+/** Current structured Git operation reservation; Agent Runs do not reserve bindings. */
+export const bindingWriteAdmissionRecordSchema = z.union([
+  ...historicalBindingWriteAdmissionVariants,
+  ...pushBindingWriteAdmissionVariants,
+]).superRefine((value, context) => {
+  refineStructuredGitBindingWriteAdmission(value, context)
+})
+
+/** Parsed structured Git operation reservation. */
 export type BindingWriteAdmissionRecord = z.infer<typeof bindingWriteAdmissionRecordSchema>

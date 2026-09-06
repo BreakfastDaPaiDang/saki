@@ -6,12 +6,12 @@ status: accepted
 
 English | [中文](0003-development-project-worktree-ownership.zh.md)
 
-Each Development Project binds one DSH Workspace to one Git worktree. Multiple worktrees from the same repository may be registered as separate Development Projects, but a worktree has at most one active writable Agent Run.
+Each Development Project binds one DSH Workspace to one Git worktree. Multiple worktrees from one repository may be registered as separate Development Projects. Independent Agent Runs and Sessions may share one Project and worktree.
 
 ## Considered options
 
-Allowing several Agent Runs to write one worktree would require Saki to infer ownership of unstaged files, index changes, branch movement, and conflicts after the fact. A repository-wide Project would also hide which worktree and Session own a change. One Project per worktree makes location and write ownership explicit while retaining repository-level parallelism through Git worktrees.
+One Project per worktree gives commands a stable location and repository identity. Agent attribution belongs to each Run and Session; it does not prove exclusive authorship of files. A lifetime worktree reservation would block ordinary parallel conversations and manual Git operations while leaving editors and external processes free to write the directory. Dispatch idempotency and Git operation checks protect their own effects without imposing that reservation.
 
 ## Consequences
 
-Parallel writable Work Items require separate worktrees and therefore separate Development Projects. Read-only Sessions may coexist, but Saki must reject a second writable Agent Run until the first ends or moves to another worktree.
+Parallel Runs can edit the same files and encounter conflicting changes. Users choose separate worktrees when they need isolation. Direct Git operations retain expected-observation checks, atomic Git publication, and operation-scoped recovery. See the [manual dispatch decision](../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md).

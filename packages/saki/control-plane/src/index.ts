@@ -12,11 +12,14 @@ export { SakiInstallationState } from './installation-state.ts'
 export type { SakiGitHubFailureProjection } from './github-failure-projection.ts'
 export {
   agentOperationIntentRecordSchema,
+  agentOperationIntentV1RecordSchema,
   agentRunRecordSchema,
   agentRunV1RecordSchema,
   answerInterventionIntentSchema,
   bindingWriteAdmissionRecordSchema,
+  bindingWriteAdmissionV3RecordSchema,
   executionDispatchRecordSchema,
+  executionDispatchV2RecordSchema,
   executionDispatchV1RecordSchema,
   giveWorkItemToAgentIntentSchema,
   interventionRequestRecordSchema,
@@ -111,6 +114,7 @@ export {
   sakiStorageGenerationV4DomainSpec,
   sakiStorageGenerationV5DomainSpec,
   sakiStorageGenerationV6DomainSpec,
+  sakiStorageGenerationV7DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationSealRecordSchema,
   storageGenerationV1SealRecordSchema,
@@ -119,6 +123,7 @@ export {
   storageGenerationV4SealRecordSchema,
   storageGenerationV5SealRecordSchema,
   storageGenerationV6SealRecordSchema,
+  storageGenerationV7SealRecordSchema,
 } from './state-version.ts'
 export type {
   StorageGenerationSealRecord,
@@ -128,6 +133,7 @@ export type {
   StorageGenerationV4SealRecord,
   StorageGenerationV5SealRecord,
   StorageGenerationV6SealRecord,
+  StorageGenerationV7SealRecord,
 } from './state-version.ts'
 export {
   validateCurrentSakiState,
@@ -286,6 +292,8 @@ export {
   sakiControlPlaneV7DomainSpec,
   sakiControlPlaneV8DomainSpec,
 } from './migration.ts'
+export { sakiControlPlaneV9DomainSpec } from './migration-v9-source.ts'
+export type { BindingWriteAdmissionV3Record, ExecutionDispatchV2Record } from './spec.ts'
 export { SakiBootstrapHandoff } from './secrets.ts'
 
 import type { SakiControlPlaneModule } from './service.ts'

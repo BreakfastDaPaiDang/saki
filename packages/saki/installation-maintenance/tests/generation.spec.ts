@@ -53,8 +53,8 @@ describe('closed Saki generation creation', () => {
 
     await materializeFreshSakiGeneration(databasePath, identity, signal)
 
-    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 9 }, signal))
-      .resolves.toMatchObject({ stateVersion: 9 })
+    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 10 }, signal))
+      .resolves.toMatchObject({ stateVersion: 10 })
   })
 
   it('migrates a different closed v2 database and materializes the current seal', async () => {
@@ -76,11 +76,11 @@ describe('closed Saki generation creation', () => {
 
     await migrateSakiGeneration(sourcePath, targetPath, identity, signal, undefined)
 
-    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 9 }, signal))
-      .resolves.toMatchObject({ stateVersion: 9 })
+    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 10 }, signal))
+      .resolves.toMatchObject({ stateVersion: 10 })
   })
 
-  it('migrates an exact retained v3 generation into current v9 state', async () => {
+  it('migrates an exact retained v3 generation into current v10 state', async () => {
     const directory = await root()
     const sourcePath = join(directory, 'source-v3.sqlite')
     const targetPath = join(directory, 'target-v9.sqlite')
@@ -113,8 +113,8 @@ describe('closed Saki generation creation', () => {
 
     await migrateSakiGeneration(sourcePath, targetPath, identity, signal, undefined)
 
-    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 9 }, signal)
-    expect(current.stateVersion).toBe(9)
+    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 10 }, signal)
+    expect(current.stateVersion).toBe(10)
     expect(current.controlPlane.table('github_project_sync').size).toBe(0)
     expect(current.controlPlane.table('github_sync_configuration_intents').size).toBe(0)
     expect(current.controlPlane.table('git_operation_intents').size).toBe(0)
@@ -122,7 +122,7 @@ describe('closed Saki generation creation', () => {
     expect(current.hostExecution.table('operations').size).toBe(0)
   })
 
-  it('migrates an exact retained v4 generation into current v9 state', async () => {
+  it('migrates an exact retained v4 generation into current v10 state', async () => {
     const directory = await root()
     const sourcePath = join(directory, 'source-v4.sqlite')
     const targetPath = join(directory, 'target-v9.sqlite')
@@ -155,8 +155,8 @@ describe('closed Saki generation creation', () => {
 
     await migrateSakiGeneration(sourcePath, targetPath, identity, signal, undefined)
 
-    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 9 }, signal)
-    expect(current.stateVersion).toBe(9)
+    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 10 }, signal)
+    expect(current.stateVersion).toBe(10)
     expect(current.hostExecution.table('operations').size).toBe(0)
   })
 
@@ -226,7 +226,7 @@ describe('closed Saki generation creation', () => {
       join(directory, 'target-v9.sqlite'),
       identity,
       signal,
-      retainedHostExecution,
+      { version: 1, snapshot: retainedHostExecution },
     )
 
     expect(migrate).toHaveBeenNthCalledWith(2, sakiStateHostExecutionMigrationPlan, {

@@ -9,6 +9,7 @@ import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionDomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import {
   sakiControlPlaneMigrationPlan,
@@ -18,12 +19,14 @@ import {
   sakiControlPlaneV6DomainSpec,
   sakiControlPlaneV7DomainSpec,
   sakiControlPlaneV8DomainSpec,
+  sakiControlPlaneV9DomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
   sakiStorageGenerationV3DomainSpec,
   sakiStorageGenerationV4DomainSpec,
   sakiStorageGenerationV5DomainSpec,
   sakiStorageGenerationV6DomainSpec,
+  sakiStorageGenerationV7DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
@@ -31,6 +34,7 @@ import {
   storageGenerationV4SealRecordSchema,
   storageGenerationV5SealRecordSchema,
   storageGenerationV6SealRecordSchema,
+  storageGenerationV7SealRecordSchema,
 } from '@breakfastdapaidang/saki-control-plane'
 import type {
   SakiBuildId,
@@ -162,7 +166,7 @@ async function publishSelectedGeneration(
 async function materializeHistoricalSealedGeneration(
   databasePath: string,
   legacyDatabasePath: string,
-  stateVersion: 3 | 4 | 5 | 6 | 7 | 8,
+  stateVersion: 3 | 4 | 5 | 6 | 7 | 8 | 9,
   signal: AbortSignal,
 ): Promise<void> {
   const historical = await readClosedSakiV2State(legacyDatabasePath, signal)
@@ -174,6 +178,7 @@ async function materializeHistoricalSealedGeneration(
   const v6Snapshot = sakiControlPlaneMigrationPlan.steps[3]!.migrate(v5Snapshot)
   const v7Snapshot = sakiControlPlaneMigrationPlan.steps[4]!.migrate(v6Snapshot)
   const v8Snapshot = sakiControlPlaneMigrationPlan.steps[5]!.migrate(v7Snapshot)
+  const v9Snapshot = sakiControlPlaneMigrationPlan.steps[6]!.migrate(v8Snapshot)
   const units: readonly { readonly spec: DomainSpec; readonly snapshot: KvUnitSnapshot }[] = [
     stateVersion === 3
       ? { spec: sakiControlPlaneV3DomainSpec, snapshot: v3Snapshot }
@@ -185,7 +190,9 @@ async function materializeHistoricalSealedGeneration(
             ? { spec: sakiControlPlaneV6DomainSpec, snapshot: v6Snapshot }
             : stateVersion === 7
               ? { spec: sakiControlPlaneV7DomainSpec, snapshot: v7Snapshot }
-              : { spec: sakiControlPlaneV8DomainSpec, snapshot: v8Snapshot },
+              : stateVersion === 8
+                ? { spec: sakiControlPlaneV8DomainSpec, snapshot: v8Snapshot }
+                : { spec: sakiControlPlaneV9DomainSpec, snapshot: v9Snapshot },
     stateVersion === 3
       ? {
         spec: sakiStorageGenerationV1DomainSpec,
@@ -277,25 +284,26 @@ async function materializeHistoricalSealedGeneration(
                 },
               }
               : {
-                spec: sakiStorageGenerationV6DomainSpec,
+                spec: stateVersion === 9 ? sakiStorageGenerationV7DomainSpec : sakiStorageGenerationV6DomainSpec,
                 snapshot: {
                   global: null,
                   tables: {
                     storage_generation: {
-                      [STORAGE_GENERATION_KEY]: storageGenerationV6SealRecordSchema.parse({
-                        schemaVersion: 6,
+                      [STORAGE_GENERATION_KEY]: (stateVersion === 9
+                        ? storageGenerationV7SealRecordSchema : storageGenerationV6SealRecordSchema).parse({
+                        schemaVersion: stateVersion - 2,
                         installationId: B03_INSTALLATION_ID,
                         storageGenerationId: B03_STORAGE_GENERATION_ID,
-                        stateVersion: 8,
+                        stateVersion,
                         createdByBuildId: BUILD_ID,
                       }),
                     },
                   },
                 },
               },
-    ...(stateVersion === 5 || stateVersion === 6 || stateVersion === 7 || stateVersion === 8
+    ...(stateVersion === 5 || stateVersion === 6 || stateVersion === 7 || stateVersion === 8 || stateVersion === 9
       ? [{
-        spec: stateVersion === 8
+        spec: stateVersion === 9 ? sakiHostExecutionDomainSpec : stateVersion === 8
           ? sakiHostExecutionV3DomainSpec
           : stateVersion === 7 ? sakiHostExecutionV2DomainSpec : sakiHostExecutionV1DomainSpec,
         snapshot: {
@@ -404,7 +412,7 @@ describe('Saki serving Installation scope', () => {
     })
 
     await expect(readInstallationManifest(installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 9 },
+      value: { phase: 'ready', stateVersion: 10 },
     })
   })
 
@@ -416,7 +424,7 @@ describe('Saki serving Installation scope', () => {
     const signal = AbortSignal.timeout(10_000)
     const published = await publishSelectedGeneration(
       installationRoot,
-      9,
+      10,
       'ready',
       async (databasePath, activeSignal) => {
         await migrateSakiGeneration(sourcePath, databasePath, {
@@ -566,7 +574,7 @@ describe('Saki serving Installation scope', () => {
         const otherRoot = await root()
         await publishSelectedGeneration(
           otherRoot,
-          9,
+          10,
           'ready',
           async (databasePath) => {
             await writeFile(databasePath, 'unsupported')
@@ -601,7 +609,7 @@ describe('Saki serving Installation scope', () => {
       const signal = AbortSignal.timeout(5_000)
       const published = await publishSelectedGeneration(
         installationRoot,
-        9,
+        10,
         'provisioning',
         async (databasePath, activeSignal) => {
           await materializeFreshSakiGeneration(databasePath, {
@@ -807,7 +815,7 @@ describe('Saki serving Installation scope', () => {
     expect(serve).not.toHaveBeenCalled()
   })
 
-  it('rejects a valid selected v8 generation until offline upgrade without invoking the server', async () => {
+  it.each([8, 9] as const)('rejects a valid selected v%i generation until offline upgrade without invoking the server', async (stateVersion) => {
     const installationRoot = await root()
     const sourceRoot = await root()
     const legacyDatabasePath = join(sourceRoot, 'control.sqlite')
@@ -815,10 +823,10 @@ describe('Saki serving Installation scope', () => {
     const signal = AbortSignal.timeout(10_000)
     await publishSelectedGeneration(
       installationRoot,
-      8,
+      stateVersion,
       'ready',
       async (databasePath, activeSignal) => {
-        await materializeHistoricalSealedGeneration(databasePath, legacyDatabasePath, 8, activeSignal)
+        await materializeHistoricalSealedGeneration(databasePath, legacyDatabasePath, stateVersion, activeSignal)
       },
       signal,
       B03_INSTALLATION_ID,
@@ -832,7 +840,7 @@ describe('Saki serving Installation scope', () => {
       currentBuildId: BUILD_ID,
     }, signal, serve)).rejects.toMatchObject({
       code: 'upgrade-required',
-      message: 'Saki state version 8 is valid but requires the offline upgrade command before serving',
+      message: `Saki state version ${stateVersion} is valid but requires the offline upgrade command before serving`,
     })
     expect(serve).not.toHaveBeenCalled()
   })
@@ -842,7 +850,7 @@ describe('Saki serving Installation scope', () => {
     const signal = AbortSignal.timeout(5_000)
     await publishSelectedGeneration(
       installationRoot,
-      10,
+      11,
       'ready',
       async (databasePath) => {
         await writeFile(databasePath, 'unsupported')

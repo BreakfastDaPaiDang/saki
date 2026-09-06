@@ -1,5 +1,7 @@
-/** Current Saki control-plane domain assembly. @module @breakfastdapaidang/saki-control-plane/src/domain-spec */
+/** Exact v9 Saki control-plane migration source. @module @breakfastdapaidang/saki-control-plane/migration-v9-source */
 
+/* jscpd:ignore-start -- frozen adjacent migration imports and table assembly. */
+import type { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import {
   branchDeliveryIntentRecordSchema,
@@ -18,12 +20,12 @@ import {
 import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
-  agentOperationIntentRecordSchema,
+  agentOperationIntentV1RecordSchema,
   agentRunRecordSchema,
-  bindingWriteAdmissionRecordSchema,
+  bindingWriteAdmissionV3RecordSchema,
   controlStateRecordSchema,
   developmentProjectRegistryRecordSchema,
-  executionDispatchRecordSchema,
+  executionDispatchV2RecordSchema,
   gitOperationIntentRecordSchema,
   githubProjectSyncRecordSchema,
   githubSynchronizationConfigurationIntentRecordSchema,
@@ -38,12 +40,9 @@ import {
   registrationIntentRecordSchema,
   workAssignmentRecordSchema,
   workSessionRecordSchema,
-  type AgentOperationIntentRecord,
   type AgentRunRecord,
-  type BindingWriteAdmissionRecord,
   type ControlStateRecord,
   type DevelopmentProjectRegistryRecord,
-  type ExecutionDispatchRecord,
   type GitHubProjectSyncRecord,
   type GitHubSynchronizationConfigurationIntentRecord,
   type GitHubWorkItemIntentRecord,
@@ -76,10 +75,10 @@ import type {
   SakiWorkSessionId,
 } from './types.ts'
 
-/** Exact current Saki control-plane domain declaration. */
-export const sakiControlPlaneDomainSpec = defineDomain({
+/** Exact v9 declaration; only the adjacent migration consumes these binding owners. */
+export const sakiControlPlaneV9DomainSpec = defineDomain({
   name: 'saki_control_plane',
-  version: 10,
+  version: 9,
   tables: {
     control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
     installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
@@ -100,22 +99,22 @@ export const sakiControlPlaneDomainSpec = defineDomain({
     git_operation_intents: domainTable<SakiControlIntentId, GitOperationIntentRecord>(gitOperationIntentRecordSchema),
     binding_write_admissions: domainTable<
       SakiResourceBindingId,
-      BindingWriteAdmissionRecord
-    >(bindingWriteAdmissionRecordSchema),
+      z.infer<typeof bindingWriteAdmissionV3RecordSchema>
+    >(bindingWriteAdmissionV3RecordSchema),
     github_work_item_intents: domainTable<SakiControlIntentId, GitHubWorkItemIntentRecord>(
       githubWorkItemIntentRecordSchema,
     ),
     github_work_item_recovery: domainTable<SakiWorkItemRecoveryId, GitHubWorkItemRecoveryRecord>(
       githubWorkItemRecoveryRecordSchema,
     ),
-    agent_operation_intents: domainTable<SakiControlIntentId, AgentOperationIntentRecord>(
-      agentOperationIntentRecordSchema,
+    agent_operation_intents: domainTable<SakiControlIntentId, z.infer<typeof agentOperationIntentV1RecordSchema>>(
+      agentOperationIntentV1RecordSchema,
     ),
     work_assignments: domainTable<SakiWorkAssignmentId, WorkAssignmentRecord>(workAssignmentRecordSchema),
     work_sessions: domainTable<SakiWorkSessionId, WorkSessionRecord>(workSessionRecordSchema),
     agent_runs: domainTable<SakiAgentRunId, AgentRunRecord>(agentRunRecordSchema),
-    execution_dispatches: domainTable<SakiExecutionDispatchId, ExecutionDispatchRecord>(
-      executionDispatchRecordSchema,
+    execution_dispatches: domainTable<SakiExecutionDispatchId, z.infer<typeof executionDispatchV2RecordSchema>>(
+      executionDispatchV2RecordSchema,
     ),
     intervention_requests: domainTable<SakiInterventionRequestId, InterventionRequestRecord>(
       interventionRequestRecordSchema,
@@ -132,3 +131,4 @@ export const sakiControlPlaneDomainSpec = defineDomain({
     ),
   },
 })
+/* jscpd:ignore-end */
