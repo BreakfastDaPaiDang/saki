@@ -240,6 +240,7 @@
       "@breakfastdapaidang/saki-*/constants": ["./packages/saki/*/src/constants.ts"],
       "@breakfastdapaidang/saki-*/invariant": ["./packages/saki/*/src/invariant.ts"],
       "@breakfastdapaidang/saki-*/bin": ["./packages/saki/*/src/bin.ts"],
+      "@breakfastdapaidang/saki-*/launcher": ["./packages/saki/*/src/launcher.ts"],
       "@breakfastdapaidang/saki-*/host": ["./packages/saki/*/src/host.ts"],
       "@breakfastdapaidang/saki-*/fixtures": ["./packages/saki/*/src/fixtures.ts"],
       "@breakfastdapaidang/saki-*/wire": ["./packages/saki/*/src/wire.ts"],

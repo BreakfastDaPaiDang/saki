@@ -73,6 +73,6 @@ pnpm run saki
 
 不发布 runtime invariant companion，因为该包拥有静态组合元数据，并将可变状态交给挂载的服务。
 
-根入口导出 `sakiServingInstallationOptions`、`sakiPreparedStoragePatch` 和 `sakiAgentPresetsPatch`，供应用夹具通过构建后的包导出使用启动器的 Installation 路径、存储选择与预设资源。
+`./launcher` 导出提供 `sakiServingInstallationOptions`、`sakiPreparedStoragePatch` 和 `sakiAgentPresetsPatch`，供应用夹具通过构建后的包导出使用启动器的 Installation 路径、存储选择与预设资源。就绪插件不加载启动器依赖。
 
 </details>

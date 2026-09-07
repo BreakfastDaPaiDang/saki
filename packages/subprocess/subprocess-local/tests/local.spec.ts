@@ -884,11 +884,17 @@ describe('LocalSubprocessRuntime', () => {
   it('disposal contains a spawn-failure rejection that races teardown', async () => {
     const ctx = new Context()
     const fiber = await ctx.plugin(LocalSubprocessRuntime)
+    // This rejection-order fixture uses direct spawn; native startup failures have separate coverage.
+    ;(ctx.subprocess as LocalSubprocessRuntime).internals = { platform: 'darwin' }
     // Dispose before the rejection continuation removes the handle from the
     // live set, so teardown itself must swallow the rejected done.
     const handle = ctx.subprocess.spawn(spec('true', { cwd: '/nonexistent-dir-dsh-subprocess-test' }))
-    await fiber.dispose()
-    await expect(handle.done).rejects.toThrow()
+    try {
+      await fiber.dispose()
+      await expect(handle.done).rejects.toThrow()
+    } finally {
+      await fiber.dispose()
+    }
   })
 
   it('loading a second implementation throws (one processes service per context — cordis standard)', async () => {

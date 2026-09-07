@@ -21,6 +21,7 @@ import SubprocessRuntime from '@deepseek-ai/dsh-subprocess'
 import type { SubprocessHandle, SubprocessOutcome, SubprocessOutputReader, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import type { ShellProcess } from '@deepseek-ai/dsh-shell'
+import { observeSubprocessStdout } from '../../../../scripts/fixtures/subprocess-stdout.ts'
 
 const spillDir = mkdtempSync(join(tmpdir(), 'dsh-pwsh-exec-spec-'))
 
@@ -337,24 +338,35 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.run', () => {
   })
 
   it('per-call timeout takes precedence under the cap and kills on expiry', async () => {
-    const { bash } = await setup({ timeoutMs: 60_000 })
-    const result = await bash.run(bash.resolve({ command: 'Start-Sleep -Seconds 60', timeoutMs: 100 }))
-    expect(result.timedOut).toBe(true)
-    // Mutually exclusive: a timeout classifies as timedOut, never also aborted.
-    expect(result.aborted).toBe(false)
-    expect(result.timeoutMs).toBe(100)
-  })
+    const { ctx, bash } = await setup({ timeoutMs: 60_000 })
+    try {
+      const result = await bash.run(bash.resolve({ command: 'Write-Output ready; Start-Sleep -Seconds 60', timeoutMs: 5_000 }))
+      expect(result.stdout.text).toContain('ready')
+      expect(result.timedOut).toBe(true)
+      expect(result.aborted).toBe(false)
+      expect(result.timeoutMs).toBe(5_000)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 20_000)
 
   it('propagates abort signals', async () => {
-    const { bash } = await setup()
+    const { ctx, bash } = await setup()
     const controller = new AbortController()
-    const pending = bash.run(bash.resolve({ command: 'Start-Sleep -Seconds 60', signal: controller.signal }))
-    setTimeout(() => { controller.abort() }, 50)
-    const result = await pending
-    expect(result.aborted).toBe(true)
-    // Mutually exclusive: an upstream cancel classifies as aborted, never also timedOut.
-    expect(result.timedOut).toBe(false)
-  })
+    using stdout = observeSubprocessStdout(ctx.subprocess)
+    const pending = bash.run(bash.resolve({ command: 'Write-Output ready; Start-Sleep -Seconds 60', signal: controller.signal }))
+    try {
+      await expect.poll(stdout.text, { timeout: 10_000 }).toContain('ready')
+      controller.abort()
+      const result = await pending
+      expect(result.aborted).toBe(true)
+      expect(result.timedOut).toBe(false)
+    } finally {
+      controller.abort()
+      await Promise.allSettled([pending])
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('classifies a self-killed command as neither timed out nor aborted', async () => {
     const { bash } = await setup({ timeoutMs: 60_000 })

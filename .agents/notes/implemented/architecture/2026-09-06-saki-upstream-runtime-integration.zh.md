@@ -24,7 +24,9 @@ Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 
 
 完整 Delivery 转录显式请求证据刷新，并将 `targetedPendingPollIntervalMs` 设为用例期限。后台刷新会推进 Delivery 版本，因此在 Push 回执与下一次变更之间自动刷新，会使转录的预期版本失效。单元测试独立验证这种过期变更的拒绝行为。
 
-原生子进程夹具先观察目标输出，再测试取消或释放。假终端生命周期用例选择进程组实现；专门的 Linux scope 用例验证原生启动与结果处理。超时输出用例为原生引导进程在受测期限内启动目标留出时间。
+原生子进程和 shell 夹具先观察目标输出，再测试取消或释放。假终端生命周期与启动失败释放顺序用例选择进程组实现；专门的 Linux scope 用例验证原生启动与结果处理。超时输出用例为原生引导进程在受测期限内启动目标留出时间。前台输出观察器会恢复实例上的 spawn spy，夹具清理先等待所属进程退出，再移除目录。
+
+bundle 的 `./launcher` 入口拥有启动环境依赖。就绪插件在干净检出中仍可独立从 TypeScript 加载，完整进程夹具则通过构建入口解析启动器辅助函数。
 
 bundle 显式设置 `personaPrefix` 与 `personaSuffix`；development preset 通过 Persona 插件的 `prefix` 字段提供稳定提示。Connection 在 WebServer 可用时安装 HTTP 路由，并将已验证的恢复配置发布到浏览器 bootstrap。Saki 路由身份认证也适用于派发前失败。
 

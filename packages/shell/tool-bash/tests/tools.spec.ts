@@ -23,6 +23,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
 import * as BashEnvPlugin from '@deepseek-ai/dsh-shell-env'
 import { processOutcome } from '../src/background.ts'
+import { observeSubprocessStdout } from '../../../../scripts/fixtures/subprocess-stdout.ts'
 import { renderProcessRead, renderResult } from '../src/render.ts'
 
 const testToolSignal = new AbortController().signal
@@ -317,12 +318,7 @@ describe('bash tool', () => {
   it('surfaces foreground aborts as the structured TOOL_ABORTED error', async () => {
     const ctx = await setup()
     const controller = new AbortController()
-    const spawn = ctx.subprocess.spawn.bind(ctx.subprocess)
-    let child: ReturnType<typeof spawn> | undefined
-    const observedSpawn = vi.spyOn(ctx.subprocess, 'spawn').mockImplementation((spec) => {
-      child = spawn(spec)
-      return child
-    })
+    using stdout = observeSubprocessStdout(ctx.subprocess)
     const pending = ctx.tools.execute({
       callId: ToolCallId('call-abort'),
       name: 'bash',
@@ -330,7 +326,7 @@ describe('bash tool', () => {
       signal: controller.signal,
     })
     try {
-      await expect.poll(() => child?.collected.stdout?.readFrom(0).text, { timeout: 10_000 }).toContain('ready')
+      await expect.poll(stdout.text, { timeout: 10_000 }).toContain('ready')
       controller.abort()
       const result = await pending
       expect(result.isError).toBe(true)
@@ -340,8 +336,7 @@ describe('bash tool', () => {
       })
     } finally {
       controller.abort()
-      await pending
-      observedSpawn.mockRestore()
+      await Promise.allSettled([pending])
       await ctx.fiber.dispose()
     }
   }, 30_000)

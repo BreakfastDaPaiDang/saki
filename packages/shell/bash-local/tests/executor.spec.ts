@@ -8,6 +8,7 @@ import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import type { SubprocessHandle, SubprocessOutputReader } from '@deepseek-ai/dsh-subprocess'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import type { ShellProcess } from '@deepseek-ai/dsh-shell'
+import { observeSubprocessStdout } from '../../../../scripts/fixtures/subprocess-stdout.ts'
 
 const spillDir = mkdtempSync(join(tmpdir(), 'dsh-bash-exec-spec-'))
 
@@ -102,24 +103,35 @@ describe('LocalBashExecutor.run', () => {
   })
 
   it('per-call timeout takes precedence under the cap and kills on expiry', async () => {
-    const { bash } = await setup({ timeoutMs: 60_000 })
-    const result = await bash.run(bash.resolve({ command: 'sleep 60', timeoutMs: 100 }))
-    expect(result.timedOut).toBe(true)
-    // Mutually exclusive: a timeout classifies as timedOut, never also aborted.
-    expect(result.aborted).toBe(false)
-    expect(result.timeoutMs).toBe(100)
-  })
+    const { ctx, bash } = await setup({ timeoutMs: 60_000 })
+    try {
+      const result = await bash.run(bash.resolve({ command: 'echo ready; sleep 60', timeoutMs: 5_000 }))
+      expect(result.stdout.text).toContain('ready')
+      expect(result.timedOut).toBe(true)
+      expect(result.aborted).toBe(false)
+      expect(result.timeoutMs).toBe(5_000)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 20_000)
 
   it('propagates abort signals', async () => {
-    const { bash } = await setup()
+    const { ctx, bash } = await setup()
     const controller = new AbortController()
-    const pending = bash.run(bash.resolve({ command: 'sleep 60', signal: controller.signal }))
-    setTimeout(() => { controller.abort() }, 50)
-    const result = await pending
-    expect(result.aborted).toBe(true)
-    // Mutually exclusive: an upstream cancel classifies as aborted, never also timedOut.
-    expect(result.timedOut).toBe(false)
-  })
+    using stdout = observeSubprocessStdout(ctx.subprocess)
+    const pending = bash.run(bash.resolve({ command: 'echo ready; sleep 60', signal: controller.signal }))
+    try {
+      await expect.poll(stdout.text, { timeout: 10_000 }).toContain('ready')
+      controller.abort()
+      const result = await pending
+      expect(result.aborted).toBe(true)
+      expect(result.timedOut).toBe(false)
+    } finally {
+      controller.abort()
+      await Promise.allSettled([pending])
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('classifies a self-killed command as neither timed out nor aborted', async () => {
     // The command kills itself (SIGTERM) with no timeout and no upstream abort:
@@ -244,14 +256,19 @@ describe('LocalBashExecutor.start (background process handles)', () => {
   })
 
   it('kill() requests managed-range termination: true once, false after settlement', async () => {
-    const { bash } = await setup()
-    const proc = bash.start(bash.resolve({ command: 'sleep 60' }))
-    expect(proc.kill()).toBe(true)
-    await proc.done
-    expect(proc.status).toBe('killed')
-    expect(proc.signal).toBe('SIGTERM')
-    expect(proc.kill()).toBe(false)
-  })
+    const { ctx, bash } = await setup()
+    const proc = bash.start(bash.resolve({ command: 'echo ready; sleep 60' }))
+    try {
+      await readUntil(proc, 'ready', 10_000)
+      expect(proc.kill()).toBe(true)
+      await proc.done
+      expect(proc.status).toBe('killed')
+      expect(proc.signal).toBe('SIGTERM')
+      expect(proc.kill()).toBe(false)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('kill() returns false for a naturally completed process', async () => {
     const { bash } = await setup()
@@ -275,14 +292,20 @@ describe('LocalBashExecutor.start (background process handles)', () => {
   })
 
   it('a spec.signal abort settles the handle as killed, not completed', async () => {
-    const { bash } = await setup()
+    const { ctx, bash } = await setup()
     const controller = new AbortController()
-    const proc = bash.start(bash.resolve({ command: 'sleep 60', signal: controller.signal }))
-    controller.abort()
-    await proc.done
-    expect(proc.status).toBe('killed')
-    expect(proc.signal).toBe('SIGTERM')
-  })
+    const proc = bash.start(bash.resolve({ command: 'echo ready; sleep 60', signal: controller.signal }))
+    try {
+      await readUntil(proc, 'ready', 10_000)
+      controller.abort()
+      await proc.done
+      expect(proc.status).toBe('killed')
+      expect(proc.signal).toBe('SIGTERM')
+    } finally {
+      controller.abort()
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('a self-signal exit settles the handle as killed, not completed', async () => {
     const { bash } = await setup()

@@ -11,12 +11,12 @@ import {
 } from '@breakfastdapaidang/saki-installation-maintenance'
 import { boot, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
+import { announceSakiReadiness } from '@breakfastdapaidang/saki-bundle'
 import {
-  announceSakiReadiness,
   sakiAgentPresetsPatch,
   sakiPreparedStoragePatch,
   sakiServingInstallationOptions,
-} from '@breakfastdapaidang/saki-bundle'
+} from '@breakfastdapaidang/saki-bundle/launcher'
 import type {} from './controllable-fake-llm.ts'
 import { installLocalGitPushInternals } from '@breakfastdapaidang/saki-execution-local'
 import { sakiBoardSnapshotGitPushTransport } from './saki-board-fake-github.ts'

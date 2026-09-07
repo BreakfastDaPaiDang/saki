@@ -18,6 +18,10 @@
       "types": "./lib/types/bin.d.ts",
       "default": "./lib/bin.js"
     },
+    "./launcher": {
+      "types": "./lib/types/launcher.d.ts",
+      "default": "./lib/launcher.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
@@ -26,6 +30,7 @@
     "lib/index.js",
     "lib/bin.js",
     "cordis.patch.yml",
+    "lib/launcher.js",
     "cordis.yml",
     "config/agent-presets/**/*.yml",
     "lib/types/**/*.d.ts"

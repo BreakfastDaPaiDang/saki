@@ -24,7 +24,9 @@ On Linux, real-Git behavior unit fixtures select the process-group implementatio
 
 The assembled Delivery transcript requests evidence refreshes explicitly and sets `targetedPendingPollIntervalMs` to its case deadline. Background refresh advances the Delivery revision, so an automatic pass between a Push receipt and the next mutation would invalidate the transcript's expected revision. Unit tests verify that stale mutation refusal independently.
 
-Native subprocess fixtures observe target output before testing cancellation or disposal. Fake-terminal lifecycle cases select the process-group implementation; dedicated Linux scope cases verify native launch and outcome handling. Timeout-output cases allow the native bootstrap to start the target within the deadline under test.
+Native subprocess and shell fixtures observe target output before testing cancellation or disposal. Fake-terminal lifecycle and spawn-failure disposal-order cases select the process-group implementation; dedicated Linux scope cases verify native launch and outcome handling. Timeout-output cases allow the native bootstrap to start the target within the deadline under test. Foreground output observers restore their instance-scoped spawn spies, and fixture teardown awaits owned processes before removing their directories.
+
+The bundle's `./launcher` entry owns launch-environment dependencies. Its readiness plugin remains independently loadable from TypeScript on a clean checkout, while assembled process fixtures resolve launcher helpers through the built entry.
 
 The bundle sets `personaPrefix` and `personaSuffix` explicitly; the development preset supplies its stable prompt through the Persona plugin’s `prefix` field. Connection installs HTTP routes when WebServer becomes available and publishes its validated recovery configuration into the browser bootstrap. Saki route authentication also applies to pre-dispatch failures.
 
