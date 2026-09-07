@@ -87,7 +87,7 @@ export interface ClosedCurrentSakiState {
   readonly stateVersion: 10
   /** Read-only facade over schema-validated `saki_control_plane@10` data. */
   readonly controlPlane: Domain<typeof currentControlSpec>
-  /** Read-only facade over schema-validated `saki_host_execution@4` data. */
+  /** Read-only facade over schema-validated `saki_host_execution@5` data. */
   readonly hostExecution: Domain<typeof currentHostExecutionSpec>
   /** Read-only facade over schema-validated `saki_storage_generation@8` data. */
   readonly storageGeneration: Domain<typeof sakiStorageGenerationDomainSpec>
@@ -107,7 +107,7 @@ export interface ClosedProvisioningSakiState {
   readonly stateVersion: 10
   /** Read-only facade over schema-valid, possibly incomplete `saki_control_plane@10` data. */
   readonly controlPlane: Domain<typeof currentControlSpec>
-  /** Read-only facade over schema-valid, possibly incomplete `saki_host_execution@4` data. */
+  /** Read-only facade over schema-valid, possibly incomplete `saki_host_execution@5` data. */
   readonly hostExecution: Domain<typeof currentHostExecutionSpec>
   /** Read-only facade over the exact selected `saki_storage_generation@8` seal. */
   readonly storageGeneration: Domain<typeof sakiStorageGenerationDomainSpec>
