@@ -1,12 +1,14 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { LocalBashExecutor } from '@deepseek-ai/dsh-bash-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import type { SubprocessHandle, SubprocessOutputReader } from '@deepseek-ai/dsh-subprocess'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import type { ShellProcess } from '@deepseek-ai/dsh-shell'
+import { observeSubprocessStdout } from '../../../../scripts/fixtures/subprocess-stdout.ts'
 
 const spillDir = mkdtempSync(join(tmpdir(), 'dsh-bash-exec-spec-'))
 
@@ -101,24 +103,35 @@ describe('LocalBashExecutor.run', () => {
   })
 
   it('per-call timeout takes precedence under the cap and kills on expiry', async () => {
-    const { bash } = await setup({ timeoutMs: 60_000 })
-    const result = await bash.run(bash.resolve({ command: 'sleep 60', timeoutMs: 100 }))
-    expect(result.timedOut).toBe(true)
-    // Mutually exclusive: a timeout classifies as timedOut, never also aborted.
-    expect(result.aborted).toBe(false)
-    expect(result.timeoutMs).toBe(100)
-  })
+    const { ctx, bash } = await setup({ timeoutMs: 60_000 })
+    try {
+      const result = await bash.run(bash.resolve({ command: 'echo ready; sleep 60', timeoutMs: 5_000 }))
+      expect(result.stdout.text).toContain('ready')
+      expect(result.timedOut).toBe(true)
+      expect(result.aborted).toBe(false)
+      expect(result.timeoutMs).toBe(5_000)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 20_000)
 
   it('propagates abort signals', async () => {
-    const { bash } = await setup()
+    const { ctx, bash } = await setup()
     const controller = new AbortController()
-    const pending = bash.run(bash.resolve({ command: 'sleep 60', signal: controller.signal }))
-    setTimeout(() => { controller.abort() }, 50)
-    const result = await pending
-    expect(result.aborted).toBe(true)
-    // Mutually exclusive: an upstream cancel classifies as aborted, never also timedOut.
-    expect(result.timedOut).toBe(false)
-  })
+    using stdout = observeSubprocessStdout(ctx.subprocess)
+    const pending = bash.run(bash.resolve({ command: 'echo ready; sleep 60', signal: controller.signal }))
+    try {
+      await expect.poll(stdout.text, { timeout: 10_000 }).toContain('ready')
+      controller.abort()
+      const result = await pending
+      expect(result.aborted).toBe(true)
+      expect(result.timedOut).toBe(false)
+    } finally {
+      controller.abort()
+      await Promise.allSettled([pending])
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('classifies a self-killed command as neither timed out nor aborted', async () => {
     // The command kills itself (SIGTERM) with no timeout and no upstream abort:
@@ -242,15 +255,20 @@ describe('LocalBashExecutor.start (background process handles)', () => {
     expect(read.delta).toContain('[stderr]')
   })
 
-  it('kill() terminates the process group: true once, false after settlement', async () => {
-    const { bash } = await setup()
-    const proc = bash.start(bash.resolve({ command: 'sleep 60' }))
-    expect(proc.kill()).toBe(true)
-    await proc.done
-    expect(proc.status).toBe('killed')
-    expect(proc.signal).toBe('SIGTERM')
-    expect(proc.kill()).toBe(false)
-  })
+  it('kill() requests managed-range termination: true once, false after settlement', async () => {
+    const { ctx, bash } = await setup()
+    const proc = bash.start(bash.resolve({ command: 'echo ready; sleep 60' }))
+    try {
+      await readUntil(proc, 'ready', 10_000)
+      expect(proc.kill()).toBe(true)
+      await proc.done
+      expect(proc.status).toBe('killed')
+      expect(proc.signal).toBe('SIGTERM')
+      expect(proc.kill()).toBe(false)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('kill() returns false for a naturally completed process', async () => {
     const { bash } = await setup()
@@ -274,14 +292,20 @@ describe('LocalBashExecutor.start (background process handles)', () => {
   })
 
   it('a spec.signal abort settles the handle as killed, not completed', async () => {
-    const { bash } = await setup()
+    const { ctx, bash } = await setup()
     const controller = new AbortController()
-    const proc = bash.start(bash.resolve({ command: 'sleep 60', signal: controller.signal }))
-    controller.abort()
-    await proc.done
-    expect(proc.status).toBe('killed')
-    expect(proc.signal).toBe('SIGTERM')
-  })
+    const proc = bash.start(bash.resolve({ command: 'echo ready; sleep 60', signal: controller.signal }))
+    try {
+      await readUntil(proc, 'ready', 10_000)
+      controller.abort()
+      await proc.done
+      expect(proc.status).toBe('killed')
+      expect(proc.signal).toBe('SIGTERM')
+    } finally {
+      controller.abort()
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('a self-signal exit settles the handle as killed, not completed', async () => {
     const { bash } = await setup()
@@ -292,13 +316,72 @@ describe('LocalBashExecutor.start (background process handles)', () => {
     expect(proc.signal).toBe('SIGTERM')
   })
 
-  it('a background spawn failure settles as killed with the error readable on stderr', async () => {
+  it('reports both unread stderr and an asynchronous provider rejection exactly once', async () => {
+    const { ctx, bash } = await setup()
+    const emptyReader: SubprocessOutputReader = {
+      readFrom: () => ({ text: '', nextOffset: 0, lossy: false }),
+    }
+    const stderrText = 'target stderr'
+    const stderrReader: SubprocessOutputReader = {
+      readFrom: offset => ({
+        text: stderrText.slice(offset),
+        nextOffset: stderrText.length,
+        lossy: false,
+      }),
+    }
+    vi.spyOn(ctx.subprocess, 'spawn').mockReturnValue({
+      stdin: undefined,
+      stdout: undefined,
+      stderr: undefined,
+      collected: { stdout: emptyReader, stderr: stderrReader },
+      done: Promise.reject(new Error('provider lost the direct outcome')),
+      terminate: vi.fn(),
+      waitForExit: async () => true,
+    } satisfies SubprocessHandle)
+
+    const proc = bash.start(bash.resolve({ command: 'true' }))
+    await expect(proc.done).resolves.toBeUndefined()
+    expect(proc.status).toBe('killed')
+    const output = proc.readOutput().delta
+    expect(output).toContain('target stderr')
+    expect(output).toContain('subprocess failed before reporting an outcome:')
+    expect(output).not.toContain('spawn failed:')
+    expect(proc.readOutput().delta).toBe('')
+  })
+
+  it('settles an unprintable provider rejection instead of rejecting done', async () => {
+    const { ctx, bash } = await setup()
+    const emptyReader: SubprocessOutputReader = {
+      readFrom: () => ({ text: '', nextOffset: 0, lossy: false }),
+    }
+    const providerError = new Error('unprintable provider error')
+    Object.defineProperty(providerError, Symbol.toPrimitive, {
+      value: () => { throw new Error('provider formatting must not escape') },
+    })
+    vi.spyOn(ctx.subprocess, 'spawn').mockReturnValue({
+      stdin: undefined,
+      stdout: undefined,
+      stderr: undefined,
+      collected: { stdout: emptyReader, stderr: emptyReader },
+      done: Promise.reject(providerError),
+      terminate: vi.fn(),
+      waitForExit: async () => true,
+    } satisfies SubprocessHandle)
+
+    const proc = bash.start(bash.resolve({ command: 'true' }))
+    await expect(proc.done).resolves.toBeUndefined()
+    expect(proc.status).toBe('killed')
+    expect(proc.readOutput().delta).toContain('unprintable provider failure')
+    expect(proc.readOutput().delta).toBe('')
+  })
+
+  it('an asynchronous creation failure settles as killed with a stage-neutral note', async () => {
     const { bash } = await setup()
     const proc = bash.start(bash.resolve({ command: 'true', workdir: '/nonexistent-dsh' }))
     // done resolves (never rejects) even though the process never ran.
     await expect(proc.done).resolves.toBeUndefined()
     expect(proc.status).toBe('killed')
-    expect(proc.readOutput().delta).toContain('spawn failed:')
+    expect(proc.readOutput().delta).toContain('subprocess failed before reporting an outcome:')
   })
 })
 

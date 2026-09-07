@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { Context } from '@deepseek-ai/cordis'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SakiGitFixtureSubprocess from '../../../../scripts/fixtures/saki-git-subprocess.ts'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import {
   computeProjectGitChangeFingerprint,
@@ -1762,7 +1762,7 @@ async function provider(
   contexts.push(ctx)
   await mountLocalHostOperationStorage(ctx, roots)
   await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-  await ctx.plugin(LocalSubprocessRuntime)
+  await ctx.plugin(SakiGitFixtureSubprocess)
   ctx.provide('workspaceRegistry', { list: () => [{ id: WORKSPACE_ID, path: root }] })
   await ctx.plugin(LocalSakiHostExecution, config)
   return ctx.sakiHostExecution as LocalSakiHostExecution

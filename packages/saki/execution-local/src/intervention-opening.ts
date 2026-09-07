@@ -25,7 +25,7 @@ export async function inspectLocalInterventionOpening(
   signal.throwIfAborted()
   if (await persistence.stat(request.sessionId, { signal }) === undefined) return { kind: 'absent' }
   await using handle = await persistence.open(request.sessionId, 'read', { signal })
-  const events = await handle.read(0, undefined, { signal })
+  const { events } = await handle.read(0, undefined, { signal })
   if (!request.expectedToolResult.content[0].text.includes(request.interventionId)) {
     return { kind: 'conflict' }
   }

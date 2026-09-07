@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-09-05-saki-maintenance-work-ownership.md
-2026-09-05-saki-maintenance-work-ownership.md: 212ed77f695c141b6aca0ff3b9a22472a4f601fa
-2026-09-05-saki-maintenance-work-ownership.zh.md: 2d0a1c65ee14fb71076db205038000c9f0218417
+2026-09-05-saki-maintenance-work-ownership.md: 705d3df11bee98cf0466f473d5620a04254b06d4
+2026-09-05-saki-maintenance-work-ownership.zh.md: 4991cb659fc8cea0eba8272446831fa73aa72a1c

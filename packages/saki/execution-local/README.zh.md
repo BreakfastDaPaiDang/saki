@@ -58,7 +58,7 @@ Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ct
 
 `start-agent-run` Host Operation 会在接触 DSH 前保存一份 schema version 5 record，其中包含 `agent-run` effect plan。精确重放会挂载已固定 Agent Preset、应用已固定 Model Route，并在 Binding 的规范工作树 cwd 创建或恢复预分配 Session。版本 2 至 4 保留为精确的离线迁移 schema；迁移至版本 5 会移除 Agent 的 Git 前置条件并重新计算请求指纹，同时保留输入和已接受凭据。物理 Session header 必须证明该 cwd 与 preset，live Agent option 也必须匹配 route。不匹配、同一 Session id 下的其他 live Agent 或冲突的消息来源证据都会成为 conflict，不会产生另一个 Run。
 
-Provider 会通过完整 snapshot 与 event-history 读取，分离读取精确输入 MessageId 的物理 Session persistence。只有完全不存在时才允许插入一次 `next-turn`。初始输入与带归因的 Intervention answer 共用这条路径；answer 使用新的 Dispatch 与 Host Operation，同时保留 Run、Work Session、Session 及其稳定 MessageId。获取 live Agent 后，Provider 会在插入输入前和后续唤醒 pending 输入前，立即重新验证唯一 Workspace 映射、规范仓库路径及 Git 管理目录身份。Git 内容和分支状态独立于这项资源检查。插入后会 flush 并重新检查；只有该输入仍为 pending 时才使用确定性 `next-step` wake，Agent-scoped pre-step listener 会在模型组装前移除这些 wake message。已 recorded 的输入证明 Host 成功。Canceled、removed、replaced、claimed-without-record、attempt 后缺失及 conflicting evidence 会被取消或进入对账，而且不会重发输入。
+Provider 为物理 Session persistence 打开读取句柄，读取 header 与完整的 `SessionHandleReadResult.events` 切片以查找精确输入 MessageId，并关闭句柄。它只观察事件值，包括共享的冻结值。只有完全不存在时才允许插入一次 `next-turn`。初始输入与带归因的 Intervention answer 共用这条路径；answer 使用新的 Dispatch 与 Host Operation，同时保留 Run、Work Session、Session 及其稳定 MessageId。获取 live Agent 后，Provider 会在插入输入前和后续唤醒 pending 输入前，立即重新验证唯一 Workspace 映射、规范仓库路径及 Git 管理目录身份。Git 内容和分支状态独立于这项资源检查。插入后会 flush 并重新检查；只有该输入仍为 pending 时才使用确定性 `next-step` wake，Agent-scoped pre-step listener 会在模型组装前移除这些 wake message。已 recorded 的输入证明 Host 成功。Canceled、removed、replaced、claimed-without-record、attempt 后缺失及 conflicting evidence 会被取消或进入对账，而且不会重发输入。
 
 Inspection 绝不创建、恢复或唤醒 Agent。`inspectInterventionOpening` 会读取分离的物理 Session history；只有一条精确 `request_intervention` call 的非 error 模型可见 result 后跟随匹配的最终 step end 与 completed turn end 时，它才返回确认，并且只返回闭合 evidence，不暴露 Session。启动 resume 是一项独立 operation，它要求精确的 succeeded Host result、匹配的物理 Session header 与输入，以及匹配且可用的 live Agent；Host 会在对外服务前恢复该 Agent，并使其保持 model-idle。因此，持久 `not-started` plan 可以在不归因无关 Session 的情况下证明取消；publishing 或终态 replay 会重新检查精确持久输入与 id。取消会在终态持久化前停止并排空所拥有的 live Agent。disposal 失败时，Host 会继续跟踪 handle，并让 operation 保持可重试。Host 成功只报告 Run 与输入已经持久存在，并不表示模型执行完成。
 
@@ -122,5 +122,7 @@ Inspection 与模型请求相互独立。每条 Agent 输入都会在可复用 p
 <summary>维护者工作上下文——点击展开</summary>
 
 不发布 runtime invariant companion，因为领域解析器在打开及写入前校验 Host Operation 记录；实时接纳回调不属于持久状态。
+
+应用夹具通过根入口的内部导出 `installLocalGitPushInternals` 安装作用于应用根 Context 的 Push 传输。该导出使夹具与构建后的提供方使用同一个适配器注册表。
 
 </details>

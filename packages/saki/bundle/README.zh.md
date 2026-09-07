@@ -54,7 +54,7 @@ pnpm run saki
 
 #### KV Cache 影响
 
-基础 Host 不安装模型 adapter，因此启动 Session 或恢复已经 running 的 Run 不会发起模型请求、wake 或产生模型可见消息。配置模型 provider 后，恢复已接受但尚未交付的 Intervention 回答时可以只追加该条精确回答、唤醒其所属 Run，并发起对应请求。其他 Agent Run 输入仍通过显式配置的 route 进入。`development` preset 会加入稳定的 persona 与工具 schema 前缀，其中包括持久 `request_intervention` 以及 `read`、`write`、`edit` 和 Windows `pwsh`；仓库指令和当前 sandbox／approval 事实仍属于请求上下文，提供方特定的缓存行为由所选 route 负责，而 Intervention 回答是既有 Session prefix 之后仅追加的输入。
+基础 Host 不安装模型 adapter，因此启动 Session 或恢复已经 running 的 Run 不会发起模型请求、wake 或产生模型可见消息。配置模型 provider 后，恢复已接受但尚未交付的 Intervention 回答时可以只追加该条精确回答、唤醒其所属 Run，并发起对应请求。其他 Agent Run 输入仍通过显式配置的 route 进入。bundle 显式配置 `personaPrefix` 与 `personaSuffix`。`development` preset 提供 Persona 插件的 `prefix`，并加入稳定的工具 schema 前缀，其中包括持久 `request_intervention` 以及 `read`、`write`、`edit` 和 Windows `pwsh`；仓库指令和当前 sandbox／approval 事实仍属于请求上下文，提供方特定的缓存行为由所选 route 负责，而 Intervention 回答是既有 Session prefix 之后仅追加的输入。
 
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延后工作
@@ -72,5 +72,7 @@ pnpm run saki
 <summary>维护者工作上下文——点击展开</summary>
 
 不发布 runtime invariant companion，因为该包拥有静态组合元数据，并将可变状态交给挂载的服务。
+
+`./launcher` 导出提供 `sakiServingInstallationOptions`、`sakiPreparedStoragePatch` 和 `sakiAgentPresetsPatch`，供应用夹具通过构建后的包导出使用启动器的 Installation 路径、存储选择与预设资源。就绪插件不加载启动器依赖。
 
 </details>

@@ -53,7 +53,7 @@ None, as the local Host composition delegates every model-facing input and reque
 
 #### KV Cache effect
 
-The base Host installs no model adapter, so starting a Session or restoring an already-running Run makes no model request, wake, or model-visible message. When a model provider is configured, recovery of an accepted but undelivered Intervention answer may append only that exact answer, wake its owning Run, and issue the corresponding request. Other Agent Run input still enters through an explicitly configured route. The `development` preset adds its stable persona and tool-schema prefix, including durable `request_intervention` plus `read`, `write`, `edit`, and Windows `pwsh`; repository instructions and current sandbox/approval facts remain request context, provider-specific cache behavior belongs to the selected route, and an Intervention answer is append-only input after the existing Session prefix.
+The base Host installs no model adapter, so starting a Session or restoring an already-running Run makes no model request, wake, or model-visible message. When a model provider is configured, recovery of an accepted but undelivered Intervention answer may append only that exact answer, wake its owning Run, and issue the corresponding request. Other Agent Run input still enters through an explicitly configured route. The bundle configures `personaPrefix` and `personaSuffix` explicitly. The `development` preset supplies the Persona plugin’s `prefix` and adds a stable tool-schema prefix, including durable `request_intervention` plus `read`, `write`, `edit`, and Windows `pwsh`; repository instructions and current sandbox/approval facts remain request context, provider-specific cache behavior belongs to the selected route, and an Intervention answer is append-only input after the existing Session prefix.
 
 ## Known Limitations and Deferred Work
 
@@ -69,5 +69,7 @@ The base Host installs no model adapter, so starting a Session or restoring an a
 <summary>Working context for maintainers — click to expand</summary>
 
 No runtime invariant companion is published because the package owns static composition metadata and delegates mutable state to its mounted services.
+
+The `./launcher` export provides `sakiServingInstallationOptions`, `sakiPreparedStoragePatch`, and `sakiAgentPresetsPatch` so application fixtures use the launcher's Installation paths, storage selection, and preset assets through built package exports. The readiness plugin does not load launcher dependencies.
 
 </details>

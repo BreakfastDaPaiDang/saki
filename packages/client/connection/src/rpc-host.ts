@@ -61,11 +61,12 @@ declare module '@deepseek-ai/cordis' {
 
 /** Host Connection service whose channel registrations belong to the caller fiber. */
 export class HostConnectionService extends Service implements HostConnectionHandle {
+  private readonly channels = new Set<string>()
   private readonly interceptors = new Map<string, ConnectionRpcInterceptor>()
   private readonly fetchRoutes = new Map<string, RegisteredFetchRoute>()
 
   /**
-   * Provide the Host half over the active HTTP server.
+   * Provide Host registries independently of an HTTP server.
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by the Host/Origin fence.
    * @param browserAuth - process token and persistent browser-session owner.
@@ -80,7 +81,8 @@ export class HostConnectionService extends Service implements HostConnectionHand
 
   /** Generic channel registry scoped to the Context reading this service. */
   get rpc(): HostConnectionRpc {
-    const owner = this.ctx
+    // Child injections use the caller scope, without the service's dependency shadow.
+    const owner = this.ctx.reflect.trace(this.ctx)
     return {
       handle: (channel, handler, options) => this.register(owner, channel, handler, options),
       intercept: (channel, matches, handler, options) =>
@@ -90,7 +92,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
 
   /** Exact Fetch-route registry scoped to the Context reading this service. */
   get fetch(): HostConnectionFetch {
-    const owner = this.ctx
+    const owner = this.ctx.reflect.trace(this.ctx)
     return {
       register: route => this.registerFetchRoute(owner, route),
     }
@@ -205,10 +207,17 @@ export class HostConnectionService extends Service implements HostConnectionHand
         })
       },
     }
-    return owner.effect(
-      () => owner.webServer.register(route),
-      `client-connection: ${channel} rpc channel`,
-    )
+    return owner.effect(() => {
+      if (this.channels.has(channel)) throw new Error(`connection: duplicate route ${channel}`)
+      this.channels.add(channel)
+      const carrier = owner.inject(['webServer'], (webCtx) => {
+        webCtx.effect(() => webCtx.webServer.register(route), `client-connection: ${channel} HTTP route`)
+      })
+      return async () => {
+        await carrier.dispose()
+        this.channels.delete(channel)
+      }
+    }, `client-connection: ${channel} rpc channel`)
   }
 
   private registerInterceptor(

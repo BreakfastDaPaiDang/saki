@@ -24,6 +24,7 @@ import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { PwshLocalExecutor, resolvePwshPath } from '@deepseek-ai/dsh-pwsh-local'
 import * as ToolPwsh from '@deepseek-ai/dsh-tool-pwsh'
 import * as BashEnvPlugin from '@deepseek-ai/dsh-shell-env'
+import { observeSubprocessStdout } from '../../../../scripts/fixtures/subprocess-stdout.ts'
 
 const testToolSignal = new AbortController().signal
 
@@ -69,6 +70,7 @@ describe.skipIf(!hasPwsh)('pwsh tool over the real pwsh executor', () => {
   })
 
   afterEach(async () => {
+    await ctx.fiber.dispose()
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -102,29 +104,37 @@ describe.skipIf(!hasPwsh)('pwsh tool over the real pwsh executor', () => {
 
   it('a per-call timeout kills the run and reports the timed-out marker, not an error', async () => {
     const result = await call('pwsh', {
-      command: 'Start-Sleep -Seconds 60',
+      command: 'Write-Output ready; Start-Sleep -Seconds 60',
       description: 'sleep forever',
-      timeoutMs: 100,
+      timeoutMs: 5_000,
     }, agent())
     expect(result.isError).toBe(false)
     if (result.isError) throw new Error('expected a timed-out foreground result')
     expect(result.value).toMatchObject({ kind: 'foreground', timedOut: true, aborted: false })
+    expect(lf(text(result))).toContain('ready')
     // Windows reports the forced termination as exit 1 without a signal;
     // POSIX reports SIGTERM — the timeout marker is the stable fact.
-    expect(lf(text(result))).toContain('[timed out after 100ms]')
-  })
+    expect(lf(text(result))).toContain('[timed out after 5000ms]')
+  }, 20_000)
 
   it('an upstream cancellation aborts the run', async () => {
     const controller = new AbortController()
+    using stdout = observeSubprocessStdout(ctx.subprocess)
     const pending = call('pwsh', {
-      command: 'Start-Sleep -Seconds 60',
+      command: 'Write-Output ready; Start-Sleep -Seconds 60',
       description: 'sleep forever',
     }, agent(), controller.signal)
-    setTimeout(() => { controller.abort() }, 50)
-    const result = await pending
-    expect(result.isError).toBe(true)
-    expect(result.error).toMatchObject({ info: { name: 'AbortError', code: TOOL_ABORTED } })
-  })
+    try {
+      await expect.poll(stdout.text, { timeout: 10_000 }).toContain('ready')
+      controller.abort()
+      const result = await pending
+      expect(result.isError).toBe(true)
+      expect(result.error).toMatchObject({ info: { name: 'AbortError', code: TOOL_ABORTED } })
+    } finally {
+      controller.abort()
+      await Promise.allSettled([pending])
+    }
+  }, 30_000)
 
   it('a background run settles through the REAL job_output tool', async () => {
     const started = await call('pwsh', {

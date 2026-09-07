@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { Context } from '@deepseek-ai/cordis'
 import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SakiGitFixtureSubprocess from '../../../../scripts/fixtures/saki-git-subprocess.ts'
 import {
   canonicalDigest,
   MAX_GIT_REF_CHARS,
@@ -125,7 +125,7 @@ async function localHarness(cwd = process.cwd()): Promise<{ readonly fs: FileSys
   const context = new Context()
   contexts.push(context)
   await context.plugin(LocalFileSystem, { cwd })
-  await context.plugin(LocalSubprocessRuntime)
+  await context.plugin(SakiGitFixtureSubprocess)
   const executable = await context.subprocess.resolveExecutable('git')
   return {
     fs: context.fs,

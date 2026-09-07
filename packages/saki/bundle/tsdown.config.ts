@@ -14,4 +14,5 @@ const shared = {
 export default defineConfig([
   { ...shared, entry: ['lib/types/index.js'] },
   { ...shared, entry: ['lib/types/bin.js'] },
+  { ...shared, entry: ['lib/types/launcher.js'] },
 ])

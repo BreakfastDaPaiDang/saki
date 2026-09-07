@@ -29,7 +29,7 @@ import {
   SAKI_DELIVERY_SNAPSHOT_RELEASE_TARGET,
   initializeSakiBoardSnapshotMutationState,
   readSakiBoardSnapshotMutationState,
-} from './fixtures/saki-board-fake-github.ts'
+} from '../packages/saki/bundle/tests/fixtures/saki-board-fake-github.ts'
 import {
   cleanupSnapshot,
   createRepository,
@@ -46,7 +46,7 @@ import {
 } from './fixtures/saki-host-snapshot.ts'
 
 const root = resolve(import.meta.dirname, '..')
-const driver = join(root, 'scripts/fixtures/saki-board-snapshot-driver.ts')
+const driver = join(root, 'packages/saki/bundle/tests/fixtures/saki-board-snapshot-driver.ts')
 const expected = join(root, 'scripts/tests/expected/saki-delivery/delivery.expected.jsonl')
 const refreshing = process.env.DSH_SNAPSHOT === 'record' || process.env.DSH_SNAPSHOT === 'refresh'
 
@@ -278,7 +278,11 @@ async function transcript(): Promise<string> {
     }, { cookie, requestToken: exchangeValue.access.requestToken })
     const pullRequestCreated = sakiBranchDeliveryIntentResultSchema.parse(pullRequestResponse.value)
     if (!pullRequestCreated.ok || pullRequestCreated.receipt.deliveryRevision === undefined) {
-      throw new Error(`Saki Delivery snapshot Pull Request create failed: ${JSON.stringify(pullRequestCreated)}`)
+      throw new Error(`Saki Delivery snapshot Pull Request create failed: ${JSON.stringify({
+        result: pullRequestCreated,
+        expectedRevision: pushed.receipt.deliveryRevision,
+        delivery: pushedDelivery.branchDelivery.delivery,
+      })}`)
     }
     const pullRequestDelivery = await queryBranchDelivery(port, cookie, project.id, workItem.id)
     const pullRequestRemote = await readSakiBoardSnapshotMutationState(providerStatePath)

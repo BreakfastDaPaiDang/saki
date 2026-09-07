@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { Context } from '@deepseek-ai/cordis'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SakiGitFixtureSubprocess from '../../../../scripts/fixtures/saki-git-subprocess.ts'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import {
   canonicalDigest,
@@ -57,7 +57,7 @@ async function fixture() {
   const context = new Context()
   contexts.push(context)
   await context.plugin(LocalFileSystem, { cwd: root })
-  await context.plugin(LocalSubprocessRuntime)
+  await context.plugin(SakiGitFixtureSubprocess)
   const executable = await context.subprocess.resolveExecutable('git')
   const workspaceId = WorkspaceId('commit-inspection-workspace')
   const workspaces = [{ id: workspaceId, path: root }]

@@ -852,3 +852,5 @@ export type {
 } from './operation-state.ts'
 
 export default LocalSakiHostExecution
+
+export { installLocalGitPushInternals } from './git-push-internals.ts'

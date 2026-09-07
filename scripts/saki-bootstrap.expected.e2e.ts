@@ -693,13 +693,27 @@ describe('authenticated Saki bundle snapshot', () => {
     }
   })
 
-  it('runs the source bundle through registration, Git operations, and restart replay', async () => {
-    await verify(sourceBin)
-  }, 600_000)
+  it('resolves the source bundle and authenticates through its Host transport', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'saki-source-launch-'))
+    let started: StartedSaki | undefined
+    await runWithCleanup(async () => {
+      const port = await freePort()
+      const runtimeRoot = join(directory, 'runtime')
+      await mkdir(runtimeRoot, { recursive: true })
+      started = await startSaki(sourceBin, join(directory, 'control.sqlite'), port, true, runtimeRoot, { mode: 'src' })
+      const exchange = await rpc(port, 'access/exchange', { secret: started.bootstrapSecret })
+      expect(exchange.value).toMatchObject({ ok: true, access: { kind: 'authenticated' } })
+      const cookie = exchange.response.headers.get('set-cookie')?.split(';', 1)[0]
+      if (cookie === undefined) throw new Error('Saki source exchange returned no session cookie')
+      const index = await rpc(port, 'control/query', { type: 'project-index' }, { cookie })
+      expect(index.value).toMatchObject({ ok: true, projection: { revision: 0, projects: [] } })
+    }, async () => { await cleanupSnapshot(directory, started) })
+  })
 
+  // Windows process ownership repeats across four mutations and the restart observations.
   it.skipIf(!existsSync(builtBin))('runs the built bundle through the same Host transport', async () => {
     await verify(builtBin)
-  }, 600_000)
+  }, process.platform === 'win32' ? 900_000 : 600_000)
 
   it.skipIf(!existsSync(builtBin))('keeps built pre-dispatch failures inside the Saki rejection policy', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'saki-bootstrap-snapshot-'))

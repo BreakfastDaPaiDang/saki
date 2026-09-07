@@ -1816,6 +1816,28 @@ describe('BranchDeliveryOperations', () => {
     await test.detachOperations()
   })
 
+  it('rejects a Push receipt revision after polling refreshes the Delivery', async () => {
+    const test = harness()
+    const signal = new AbortController().signal
+    try {
+      await test.operations.submit(saveIntent(), ACTOR, signal)
+      expect(await test.operations.submit(pushIntent(), ACTOR, signal))
+        .toMatchObject({ ok: true, receipt: { state: 'succeeded', deliveryRevision: 2 } })
+
+      await test.operations.pollPending(signal)
+
+      expect(test.operations.project(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID), 100)?.delivery.revision).toBe(3)
+      expect(await test.operations.submit(createPullRequestIntent(2), ACTOR, signal))
+        .toEqual({ ok: false, reason: 'conflict' })
+      expect(test.github.dispatches).toBe(0)
+      expect(await test.operations.submit(createPullRequestIntent(3), ACTOR, signal))
+        .toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+      expect(test.github.dispatches).toBe(1)
+    } finally {
+      await test.detachOperations()
+    }
+  })
+
   it('validates the submitted Actor reference before admitting an Intent', async () => {
     const test = harness()
 

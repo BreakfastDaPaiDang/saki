@@ -15,7 +15,7 @@ import WorkspaceRegistry, {
   workspaceDomainSpec,
 } from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SakiGitFixtureSubprocess from '../../../../scripts/fixtures/saki-git-subprocess.ts'
 import LlmRuntime, { ToolCallId } from '@deepseek-ai/dsh-llm'
 import LocalSakiHostExecution from '@breakfastdapaidang/saki-execution-local'
 import {
@@ -348,7 +348,7 @@ async function context(
   ctx.provide('sessions', { list: () => [] } as never)
   await ctx.plugin(WorkspaceRegistry)
   await ctx.plugin(LocalFileSystem, { cwd: durable.root })
-  await ctx.plugin(LocalSubprocessRuntime)
+  await ctx.plugin(SakiGitFixtureSubprocess)
   await ctx.plugin(LocalSakiHostExecution, {
     gitCommandTimeoutMs: 10_000,
     gitTerminationGraceMs: 100,

@@ -5,7 +5,7 @@
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    text: >-
+    prefix: >-
       You are Saki's Development Agent. Work on the assigned task in the session workspace, follow its repository instructions, and verify each change before reporting it complete.
 
 - id: agent-instructions

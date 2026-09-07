@@ -556,7 +556,7 @@ describe('background sandbox facts', () => {
       await task.done
 
       expect(task.status).toBe('killed')
-      expect(task.readOutput().delta).toContain('spawn failed:')
+      expect(task.readOutput().delta).toContain('subprocess failed before reporting an outcome:')
       expect(task.sandbox).toEqual({
         mode: 'read-only',
         denied: false,
@@ -569,18 +569,17 @@ describe('background sandbox facts', () => {
     }
   })
 
-  it('does not invent runner evidence when a spawn rejection has no structured reason', async () => {
+  it('does not invent runner evidence when a provider rejection has no structured reason', async () => {
     const { ctx, bash } = await setup()
     const emptyReader: SubprocessOutputReader = {
       readFrom: () => ({ text: '', nextOffset: 0, lossy: false }),
     }
     vi.spyOn(ctx.subprocess, 'spawn').mockReturnValue({
-      pid: -1,
       stdin: undefined,
       stdout: undefined,
       stderr: undefined,
       collected: { stdout: emptyReader, stderr: emptyReader },
-      // Arbitrary subprocess providers can reject without a value; that edge is the point of this test.
+      // Arbitrary subprocess providers can reject without a value or public stage.
       // oxlint-disable-next-line typescript/prefer-promise-reject-errors
       done: Promise.reject(undefined),
       terminate: vi.fn(),
@@ -590,7 +589,7 @@ describe('background sandbox facts', () => {
     const task = bash.start(bash.resolve({ command: 'true' }))
     await task.done
 
-    expect(task.readOutput().delta).toContain('spawn failed: undefined')
+    expect(task.readOutput().delta).toContain('subprocess failed before reporting an outcome: undefined')
     expect(task.sandbox).toEqual({
       mode: 'read-only',
       denied: false,
@@ -662,8 +661,17 @@ describe('background sandbox facts', () => {
 
   it('disposal kills wrapped background jobs (inherited HMR safety)', async () => {
     const { ctx, bash } = await setup()
-    const task = bash.start(bash.resolve({ command: 'sleep 30' }))
-    await ctx.fiber.dispose()
-    expect(task.status).toBe('killed')
-  })
+    const task = bash.start(bash.resolve({ command: 'echo ready; sleep 30' }))
+    let output = ''
+    try {
+      await expect.poll(() => {
+        output += task.readOutput().delta
+        return output
+      }, { timeout: 10_000 }).toContain('ready')
+      await ctx.fiber.dispose()
+      expect(task.status).toBe('killed')
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 })

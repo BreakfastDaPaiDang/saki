@@ -31,11 +31,12 @@ const MANIFEST_BIN_ALLOWLIST = new Map<string, ManifestBin>([
   ['packages/experimental/webworker-packer/package.json', { 'dsh-pack-vfs-image': './bin.js' }],
 ])
 
-/** Every executable in a Node application workspace has one explicit role. */
+/** Every JavaScript executable in an application or packaging workspace has one explicit role. */
 const EXECUTABLE_SOURCE_ALLOWLIST = new Map<string, string>([
   ['apps/cli/src/bin.ts', 'supported dsh application launcher'],
   ['apps/cli/tests/profiles/headless/tests/fixtures/credentials/credentials-windows-dpapi/driver.ts', 'test-only subprocess driver'],
   ['packages/saki/bundle/src/bin.ts', 'private Saki Host launcher with Installation lease ownership'],
+  ['packages/saki/bundle/tests/fixtures/saki-board-snapshot-driver.ts', 'test-only subprocess driver'],
   ['packages/saki/installation-maintenance/src/bin.ts', 'offline Installation maintenance authority'],
   ['packages/context/time-context/tests/fixtures/driver.ts', 'test-only subprocess driver'],
   ['packages/experimental/webworker-packer/bin.js', 'private build-only wrapper'],
@@ -49,6 +50,7 @@ const EXECUTABLE_SOURCE_ALLOWLIST = new Map<string, string>([
   ['packages/subagent/subagent-dsh-sdk/tests/fixtures/loader/driver.ts', 'test-only subprocess driver'],
   ['packages/test-support/loader-smoke/tests/fixtures/headless-driver.ts', 'test-only subprocess driver'],
   ['packages/test-support/llm-mock-server/src/bin.ts', 'test-only model server'],
+  ['python/sdk-runtime/runtime-bootstrap.mjs', 'private packaging-only runtime dispatcher'],
 ])
 
 /** Root demos are application wrappers and therefore must visibly select dsh. */
@@ -70,6 +72,7 @@ const SOURCE_PATTERNS = [
   'packages/**/*.js',
   'packages/**/*.mjs',
   'packages/**/*.cjs',
+  'python/sdk-runtime/*.mjs',
 ]
 
 const SOURCE_EXCLUDES = [

@@ -453,7 +453,7 @@ async function inspectDurableSession(
   }
   if (await dependencies.sessionPersistence.stat(sessionId, { signal }) === undefined) return { kind: 'absent' }
   await using handle = await dependencies.sessionPersistence.open(sessionId, 'read', { signal })
-  const events = await handle.read(0, undefined, { signal })
+  const { events } = await handle.read(0, undefined, { signal })
   return { kind: 'present', events, meta: handle.header }
 }
 

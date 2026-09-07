@@ -22,4 +22,4 @@ Dependabot 为共享 pnpm 锁文件分组提出 npm 安全更新。Saki 禁用�
 
 对于每项安全提案，确认漏洞公告、受影响包路径、修复版本及生成的锁文件范围。若解析器带入了无关的刚发布依赖，保留发布时长检查，把更新缩小到包管理器为受影响依赖闭包生成的解析结果。确认包元数据与完整性，运行 frozen install，并为发生变化的 Consumer 选择测试。生成的声明内容变化时更新声明。不要仅因无关升级出现在同一个安全 Pull Request 中就合入它们。
 
-合入后再次检查漏洞警报；GitHub 依赖扫描可能晚于合并完成。将未解决警报作为新工作前，先记录警报及其当前包路径。[依赖政策](../../.agents/notes/implemented/process/2026-07-27-dependabot-version-updates.zh.md)负责供应链与 vendoring 约束；[维护工作归属](../../.agents/notes/implemented/process/2026-09-05-saki-maintenance-work-ownership.zh.md)解释任务连续性。
+合入后再次检查漏洞警报；GitHub 依赖扫描可能晚于合并完成。将未解决警报作为新工作前，先记录警报及其当前包路径。[依赖政策](../../.agents/notes/archived/process/2026-07-27-dependabot-version-updates.md)负责供应链与 vendoring 约束；[维护工作归属](../../.agents/notes/implemented/process/2026-09-05-saki-maintenance-work-ownership.zh.md)解释任务连续性。

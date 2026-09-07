@@ -18,9 +18,10 @@ import { Context } from '@deepseek-ai/cordis'
 import { PwshLocalExecutor, ENCODING_PREAMBLE, candidatePwshPaths, resolvePwshPath } from '@deepseek-ai/dsh-pwsh-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import SubprocessRuntime from '@deepseek-ai/dsh-subprocess'
-import type { SubprocessHandle, SubprocessOutputReader, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import type { SubprocessHandle, SubprocessOutcome, SubprocessOutputReader, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import type { ShellProcess } from '@deepseek-ai/dsh-shell'
+import { observeSubprocessStdout } from '../../../../scripts/fixtures/subprocess-stdout.ts'
 
 const spillDir = mkdtempSync(join(tmpdir(), 'dsh-pwsh-exec-spec-'))
 
@@ -168,20 +169,28 @@ describe('spawn construction (pure, every platform)', () => {
   /** A subprocess service that records spawn specs and settles instantly. */
   class CapturingSubprocessRuntime extends SubprocessRuntime {
     specs: SubprocessSpawnSpec[] = []
+    done: Promise<SubprocessOutcome> = Promise.resolve({ exitCode: 0, signal: null })
+    stderrText = ''
     override async resolveExecutable(command: string): Promise<string> { return command }
     override spawnTerminal(): Promise<never> { throw new Error('pwsh spawns pipes, never terminals') }
-    private readonly reader: SubprocessOutputReader = {
+    private readonly stdoutReader: SubprocessOutputReader = {
       readFrom: () => ({ text: '', lossy: false, nextOffset: 0 }),
+    }
+    private readonly stderrReader: SubprocessOutputReader = {
+      readFrom: offset => ({
+        text: this.stderrText.slice(offset),
+        lossy: false,
+        nextOffset: this.stderrText.length,
+      }),
     }
     override spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
       this.specs.push(spec)
       return {
-        pid: -1,
         stdin: undefined,
         stdout: undefined,
         stderr: undefined,
-        collected: { stdout: this.reader, stderr: this.reader },
-        done: Promise.resolve({ exitCode: 0, signal: null }),
+        collected: { stdout: this.stdoutReader, stderr: this.stderrReader },
+        done: this.done,
         terminate: () => {},
         waitForExit: async () => true,
       }
@@ -199,6 +208,67 @@ describe('spawn construction (pure, every platform)', () => {
     expect(argv[5]).toBe(`${ENCODING_PREAMBLE}Write-Output 你好`)
     expect(ENCODING_PREAMBLE).toContain('[Console]::OutputEncoding')
     expect(ENCODING_PREAMBLE).toContain('$OutputEncoding')
+  })
+
+  it('reports both unread stderr and an asynchronous provider rejection exactly once', async () => {
+    const ctx = new Context()
+    const subprocess = new CapturingSubprocessRuntime(ctx)
+    await ctx.plugin(PwshLocalExecutor)
+    subprocess.stderrText = 'target stderr'
+    subprocess.done = Promise.reject(new Error('provider lost the direct outcome'))
+
+    const proc = ctx.shell.start(ctx.shell.resolve({ command: 'Write-Output maybe-ran' }))
+    await expect(proc.done).resolves.toBeUndefined()
+    expect(proc.status).toBe('killed')
+    const output = proc.readOutput().delta
+    expect(output).toContain('target stderr')
+    expect(output).toContain('subprocess failed before reporting an outcome:')
+    expect(output).not.toContain('spawn failed:')
+    expect(proc.readOutput().delta).toBe('')
+  })
+
+  it('settles an unprintable provider rejection instead of rejecting done', async () => {
+    const ctx = new Context()
+    const subprocess = new CapturingSubprocessRuntime(ctx)
+    await ctx.plugin(PwshLocalExecutor)
+    const providerError = new Error('unprintable provider error')
+    Object.defineProperty(providerError, Symbol.toPrimitive, {
+      value: () => { throw new Error('provider formatting must not escape') },
+    })
+    subprocess.done = Promise.reject(providerError)
+
+    const proc = ctx.shell.start(ctx.shell.resolve({ command: 'Write-Output maybe-ran' }))
+    await expect(proc.done).resolves.toBeUndefined()
+    expect(proc.status).toBe('killed')
+    expect(proc.readOutput().delta).toContain('unprintable provider failure')
+    expect(proc.readOutput().delta).toBe('')
+  })
+
+  it('preserves an explicit kill stamp and maps an aborted direct outcome to killed', async () => {
+    const ctx = new Context()
+    const subprocess = new CapturingSubprocessRuntime(ctx)
+    await ctx.plugin(PwshLocalExecutor)
+
+    const killedOutcome = Promise.withResolvers<SubprocessOutcome>()
+    subprocess.done = killedOutcome.promise
+    const killed = ctx.shell.start(ctx.shell.resolve({ command: 'Write-Output maybe-ran' }))
+    expect(killed.kill()).toBe(true)
+    killedOutcome.resolve({ exitCode: 0, signal: null })
+    await killed.done
+    expect(killed.status).toBe('killed')
+    expect(killed.exitCode).toBe(0)
+
+    const abortedOutcome = Promise.withResolvers<SubprocessOutcome>()
+    subprocess.done = abortedOutcome.promise
+    const controller = new AbortController()
+    const aborted = ctx.shell.start(ctx.shell.resolve({
+      command: 'Write-Output maybe-ran',
+      signal: controller.signal,
+    }))
+    controller.abort()
+    abortedOutcome.resolve({ exitCode: 0, signal: null })
+    await aborted.done
+    expect(aborted.status).toBe('killed')
   })
 })
 
@@ -268,24 +338,35 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.run', () => {
   })
 
   it('per-call timeout takes precedence under the cap and kills on expiry', async () => {
-    const { bash } = await setup({ timeoutMs: 60_000 })
-    const result = await bash.run(bash.resolve({ command: 'Start-Sleep -Seconds 60', timeoutMs: 100 }))
-    expect(result.timedOut).toBe(true)
-    // Mutually exclusive: a timeout classifies as timedOut, never also aborted.
-    expect(result.aborted).toBe(false)
-    expect(result.timeoutMs).toBe(100)
-  })
+    const { ctx, bash } = await setup({ timeoutMs: 60_000 })
+    try {
+      const result = await bash.run(bash.resolve({ command: 'Write-Output ready; Start-Sleep -Seconds 60', timeoutMs: 5_000 }))
+      expect(result.stdout.text).toContain('ready')
+      expect(result.timedOut).toBe(true)
+      expect(result.aborted).toBe(false)
+      expect(result.timeoutMs).toBe(5_000)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 20_000)
 
   it('propagates abort signals', async () => {
-    const { bash } = await setup()
+    const { ctx, bash } = await setup()
     const controller = new AbortController()
-    const pending = bash.run(bash.resolve({ command: 'Start-Sleep -Seconds 60', signal: controller.signal }))
-    setTimeout(() => { controller.abort() }, 50)
-    const result = await pending
-    expect(result.aborted).toBe(true)
-    // Mutually exclusive: an upstream cancel classifies as aborted, never also timedOut.
-    expect(result.timedOut).toBe(false)
-  })
+    using stdout = observeSubprocessStdout(ctx.subprocess)
+    const pending = bash.run(bash.resolve({ command: 'Write-Output ready; Start-Sleep -Seconds 60', signal: controller.signal }))
+    try {
+      await expect.poll(stdout.text, { timeout: 10_000 }).toContain('ready')
+      controller.abort()
+      const result = await pending
+      expect(result.aborted).toBe(true)
+      expect(result.timedOut).toBe(false)
+    } finally {
+      controller.abort()
+      await Promise.allSettled([pending])
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('classifies a self-killed command as neither timed out nor aborted', async () => {
     const { bash } = await setup({ timeoutMs: 60_000 })
@@ -414,14 +495,19 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.start (background process handles)'
     expect(lf(read.delta)).toContain('[stderr]')
   })
 
-  it('kill() terminates the process tree: true once, false after settlement', async () => {
-    const { bash } = await setup()
-    const proc = bash.start(bash.resolve({ command: 'Start-Sleep -Seconds 60' }))
-    expect(proc.kill()).toBe(true)
-    await proc.done
-    expect(proc.status).toBe('killed')
-    expect(proc.kill()).toBe(false)
-  })
+  it('kill() requests managed-range termination: true once, false after settlement', async () => {
+    const { ctx, bash } = await setup()
+    try {
+      const proc = bash.start(bash.resolve({ command: 'Write-Output ready; Start-Sleep -Seconds 60' }))
+      await readUntil(proc, 'ready', 10_000)
+      expect(proc.kill()).toBe(true)
+      await proc.done
+      expect(proc.status).toBe('killed')
+      expect(proc.kill()).toBe(false)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('kill() returns false for a naturally completed process', async () => {
     const { bash } = await setup()
@@ -432,13 +518,19 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.start (background process handles)'
   })
 
   it('a spec.signal abort settles the handle as killed, not completed', async () => {
-    const { bash } = await setup()
+    const { ctx, bash } = await setup()
     const controller = new AbortController()
-    const proc = bash.start(bash.resolve({ command: 'Start-Sleep -Seconds 60', signal: controller.signal }))
-    controller.abort()
-    await proc.done
-    expect(proc.status).toBe('killed')
-  })
+    try {
+      const proc = bash.start(bash.resolve({ command: 'Write-Output ready; Start-Sleep -Seconds 60', signal: controller.signal }))
+      await readUntil(proc, 'ready', 10_000)
+      controller.abort()
+      await proc.done
+      expect(proc.status).toBe('killed')
+    } finally {
+      controller.abort()
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it.skipIf(process.platform === 'win32')('a self-signal exit settles the handle as killed, not completed (POSIX)', async () => {
     const { bash } = await setup()
@@ -450,70 +542,69 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.start (background process handles)'
     expect(['SIGTERM', 'SIGKILL']).toContain(proc.signal)
   })
 
-  it('a background spawn failure settles as killed with the error readable on stderr', async () => {
+  it('an asynchronous creation failure settles as killed with a stage-neutral note', async () => {
     const { bash } = await setup()
     const proc = bash.start(bash.resolve({ command: 'Write-Output ok', workdir: '/nonexistent-dsh' }))
     // done resolves (never rejects) even though the process never ran.
     await expect(proc.done).resolves.toBeUndefined()
     expect(proc.status).toBe('killed')
-    expect(proc.readOutput().delta).toContain('spawn failed:')
+    expect(proc.readOutput().delta).toContain('subprocess failed before reporting an outcome:')
   })
 })
 
 describe.skipIf(!hasPwsh)('process lifecycle ownership (the subprocess service, not the executor)', () => {
   it('a background process survives executor-fiber disposal and dies with the subprocess service', async () => {
     const ctx = new Context()
-    const managerFiber = await ctx.plugin(LocalSubprocessRuntime)
-    ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }
-    const executorFiber = await ctx.plugin(PwshLocalExecutor, { graceMs: 200 })
-    const bash = ctx.shell as PwshLocalExecutor
+    try {
+      const managerFiber = await ctx.plugin(LocalSubprocessRuntime)
+      ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }
+      const executorFiber = await ctx.plugin(PwshLocalExecutor, { graceMs: 200 })
+      const bash = ctx.shell as PwshLocalExecutor
 
-    // The child prints its own pid so the test can probe liveness through the
-    // public read surface alone.
-    const proc = bash.start(bash.resolve({ command: 'Write-Output $PID; Start-Sleep -Seconds 60' }))
-    const pid = Number((await readUntil(proc, '\n')).trim())
-    expect(Number.isInteger(pid) && pid > 0).toBe(true)
+      // The child publishes its pid through the public output reader.
+      const proc = bash.start(bash.resolve({ command: 'Write-Output $PID; Start-Sleep -Seconds 60' }))
+      const pid = Number((await readUntil(proc, '\n', 10_000)).trim())
+      expect(Number.isInteger(pid) && pid > 0).toBe(true)
 
-    // Executor reload/disposal leaves background work running — the
-    // handle stays live and readable, mirroring the job runtime's
-    // registrations-outlive-producer-fibers contract.
-    await executorFiber.dispose()
-    expect(proc.status).toBe('running')
-    expect(() => process.kill(pid, 0)).not.toThrow()
+      await executorFiber.dispose()
+      expect(proc.status).toBe('running')
+      expect(() => process.kill(pid, 0)).not.toThrow()
 
-    // Service disposal kills the group and AWAITS its exit (no orphans).
-    await managerFiber.dispose()
-    expect(() => process.kill(pid, 0)).toThrow()
-    await proc.done
-    // Service disposal confirmed the tree is gone (kill(pid,0) throws above).
-    // On POSIX the stamp depends on whether the shell traps SIGTERM and exits
-    // cleanly (completed) or is killed by the signal (killed); Windows forced
-    // termination (taskkill, no signals) also stamps completed. Both mean the
-    // process no longer survives the service.
-    expect(['killed', 'completed']).toContain(proc.status)
-  })
+      await managerFiber.dispose()
+      expect(() => process.kill(pid, 0)).toThrow()
+      await proc.done
+      // A trapped POSIX signal or Windows forced termination can report completed.
+      expect(['killed', 'completed']).toContain(proc.status)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('service disposal settles running handles and leaves settled ones untouched', async () => {
     const ctx = new Context()
-    const managerFiber = await ctx.plugin(LocalSubprocessRuntime)
-    ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }
-    await ctx.plugin(PwshLocalExecutor, { graceMs: 200 })
-    const bash = ctx.shell as PwshLocalExecutor
+    try {
+      const managerFiber = await ctx.plugin(LocalSubprocessRuntime)
+      ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }
+      await ctx.plugin(PwshLocalExecutor, { graceMs: 200 })
+      const bash = ctx.shell as PwshLocalExecutor
 
-    const finished = bash.start(bash.resolve({ command: 'Write-Output done' }))
-    await finished.done
-    expect(finished.status).toBe('completed')
-    const running = bash.start(bash.resolve({ command: 'Start-Sleep -Seconds 60' }))
+      const finished = bash.start(bash.resolve({ command: 'Write-Output done' }))
+      await finished.done
+      expect(finished.status).toBe('completed')
+      const running = bash.start(bash.resolve({ command: 'Write-Output $PID; Start-Sleep -Seconds 60' }))
+      const pid = Number((await readUntil(running, '\n', 10_000)).trim())
+      expect(Number.isInteger(pid) && pid > 0).toBe(true)
+      expect(running.status).toBe('running')
+      expect(() => process.kill(pid, 0)).not.toThrow()
 
-    await managerFiber.dispose()
-    // A settled process was untouched; the live one was terminated and joined.
-    expect(finished.status).toBe('completed')
-    await running.done
-    // The live handle was terminated and joined; on POSIX the stamp depends
-    // on whether the shell traps SIGTERM and exits cleanly (completed) or is
-    // killed by the signal (killed); Windows forced termination (taskkill, no
-    // signals) also stamps completed. Both mean the process no longer
-    // survives the service.
-    expect(['killed', 'completed']).toContain(running.status)
-  })
+      await managerFiber.dispose()
+      expect(finished.status).toBe('completed')
+      expect(() => process.kill(pid, 0)).toThrow()
+      await running.done
+      // A trapped POSIX signal or Windows forced termination can report completed.
+      expect(['killed', 'completed']).toContain(running.status)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 })
