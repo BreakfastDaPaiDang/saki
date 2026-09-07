@@ -496,13 +496,18 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.start (background process handles)'
   })
 
   it('kill() requests managed-range termination: true once, false after settlement', async () => {
-    const { bash } = await setup()
-    const proc = bash.start(bash.resolve({ command: 'Start-Sleep -Seconds 60' }))
-    expect(proc.kill()).toBe(true)
-    await proc.done
-    expect(proc.status).toBe('killed')
-    expect(proc.kill()).toBe(false)
-  })
+    const { ctx, bash } = await setup()
+    try {
+      const proc = bash.start(bash.resolve({ command: 'Write-Output ready; Start-Sleep -Seconds 60' }))
+      await readUntil(proc, 'ready', 10_000)
+      expect(proc.kill()).toBe(true)
+      await proc.done
+      expect(proc.status).toBe('killed')
+      expect(proc.kill()).toBe(false)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('kill() returns false for a naturally completed process', async () => {
     const { bash } = await setup()
@@ -513,13 +518,19 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.start (background process handles)'
   })
 
   it('a spec.signal abort settles the handle as killed, not completed', async () => {
-    const { bash } = await setup()
+    const { ctx, bash } = await setup()
     const controller = new AbortController()
-    const proc = bash.start(bash.resolve({ command: 'Start-Sleep -Seconds 60', signal: controller.signal }))
-    controller.abort()
-    await proc.done
-    expect(proc.status).toBe('killed')
-  })
+    try {
+      const proc = bash.start(bash.resolve({ command: 'Write-Output ready; Start-Sleep -Seconds 60', signal: controller.signal }))
+      await readUntil(proc, 'ready', 10_000)
+      controller.abort()
+      await proc.done
+      expect(proc.status).toBe('killed')
+    } finally {
+      controller.abort()
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it.skipIf(process.platform === 'win32')('a self-signal exit settles the handle as killed, not completed (POSIX)', async () => {
     const { bash } = await setup()
@@ -544,57 +555,56 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.start (background process handles)'
 describe.skipIf(!hasPwsh)('process lifecycle ownership (the subprocess service, not the executor)', () => {
   it('a background process survives executor-fiber disposal and dies with the subprocess service', async () => {
     const ctx = new Context()
-    const managerFiber = await ctx.plugin(LocalSubprocessRuntime)
-    ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }
-    const executorFiber = await ctx.plugin(PwshLocalExecutor, { graceMs: 200 })
-    const bash = ctx.shell as PwshLocalExecutor
+    try {
+      const managerFiber = await ctx.plugin(LocalSubprocessRuntime)
+      ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }
+      const executorFiber = await ctx.plugin(PwshLocalExecutor, { graceMs: 200 })
+      const bash = ctx.shell as PwshLocalExecutor
 
-    // The child prints its own pid so the test can probe liveness through the
-    // public read surface alone.
-    const proc = bash.start(bash.resolve({ command: 'Write-Output $PID; Start-Sleep -Seconds 60' }))
-    const pid = Number((await readUntil(proc, '\n')).trim())
-    expect(Number.isInteger(pid) && pid > 0).toBe(true)
+      // The child publishes its pid through the public output reader.
+      const proc = bash.start(bash.resolve({ command: 'Write-Output $PID; Start-Sleep -Seconds 60' }))
+      const pid = Number((await readUntil(proc, '\n', 10_000)).trim())
+      expect(Number.isInteger(pid) && pid > 0).toBe(true)
 
-    // Executor reload/disposal leaves background work running — the
-    // handle stays live and readable, mirroring the job runtime's
-    // registrations-outlive-producer-fibers contract.
-    await executorFiber.dispose()
-    expect(proc.status).toBe('running')
-    expect(() => process.kill(pid, 0)).not.toThrow()
+      await executorFiber.dispose()
+      expect(proc.status).toBe('running')
+      expect(() => process.kill(pid, 0)).not.toThrow()
 
-    // Service disposal kills the group and AWAITS its exit (no orphans).
-    await managerFiber.dispose()
-    expect(() => process.kill(pid, 0)).toThrow()
-    await proc.done
-    // Service disposal confirmed the tree is gone (kill(pid,0) throws above).
-    // On POSIX the stamp depends on whether the shell traps SIGTERM and exits
-    // cleanly (completed) or is killed by the signal (killed); Windows forced
-    // termination (taskkill, no signals) also stamps completed. Both mean the
-    // process no longer survives the service.
-    expect(['killed', 'completed']).toContain(proc.status)
-  })
+      await managerFiber.dispose()
+      expect(() => process.kill(pid, 0)).toThrow()
+      await proc.done
+      // A trapped POSIX signal or Windows forced termination can report completed.
+      expect(['killed', 'completed']).toContain(proc.status)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   it('service disposal settles running handles and leaves settled ones untouched', async () => {
     const ctx = new Context()
-    const managerFiber = await ctx.plugin(LocalSubprocessRuntime)
-    ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }
-    await ctx.plugin(PwshLocalExecutor, { graceMs: 200 })
-    const bash = ctx.shell as PwshLocalExecutor
+    try {
+      const managerFiber = await ctx.plugin(LocalSubprocessRuntime)
+      ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }
+      await ctx.plugin(PwshLocalExecutor, { graceMs: 200 })
+      const bash = ctx.shell as PwshLocalExecutor
 
-    const finished = bash.start(bash.resolve({ command: 'Write-Output done' }))
-    await finished.done
-    expect(finished.status).toBe('completed')
-    const running = bash.start(bash.resolve({ command: 'Start-Sleep -Seconds 60' }))
+      const finished = bash.start(bash.resolve({ command: 'Write-Output done' }))
+      await finished.done
+      expect(finished.status).toBe('completed')
+      const running = bash.start(bash.resolve({ command: 'Write-Output $PID; Start-Sleep -Seconds 60' }))
+      const pid = Number((await readUntil(running, '\n', 10_000)).trim())
+      expect(Number.isInteger(pid) && pid > 0).toBe(true)
+      expect(running.status).toBe('running')
+      expect(() => process.kill(pid, 0)).not.toThrow()
 
-    await managerFiber.dispose()
-    // A settled process was untouched; the live one was terminated and joined.
-    expect(finished.status).toBe('completed')
-    await running.done
-    // The live handle was terminated and joined; on POSIX the stamp depends
-    // on whether the shell traps SIGTERM and exits cleanly (completed) or is
-    // killed by the signal (killed); Windows forced termination (taskkill, no
-    // signals) also stamps completed. Both mean the process no longer
-    // survives the service.
-    expect(['killed', 'completed']).toContain(running.status)
-  })
+      await managerFiber.dispose()
+      expect(finished.status).toBe('completed')
+      expect(() => process.kill(pid, 0)).toThrow()
+      await running.done
+      // A trapped POSIX signal or Windows forced termination can report completed.
+      expect(['killed', 'completed']).toContain(running.status)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 })
