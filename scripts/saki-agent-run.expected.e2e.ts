@@ -101,12 +101,13 @@ async function waitForConfirmedBoard(
   port: number,
   cookie: string,
   projectId: string,
+  matches: (projection: ConfirmedBoardProjection) => boolean = () => true,
 ): Promise<ConfirmedBoardProjection> {
   const deadline = Date.now() + 15_000
   while (Date.now() < deadline) {
     const result = await queryBoard(port, cookie, projectId)
     if (result.ok && isConfirmed(result.projection)
-      && result.projection.effectiveMutationAvailability.available) return result.projection
+      && result.projection.effectiveMutationAvailability.available && matches(result.projection)) return result.projection
     await delay(20)
   }
   throw new Error('Saki Agent Run snapshot did not reach a confirmed mutable Board')
@@ -321,7 +322,7 @@ async function transcript(): Promise<string> {
     await waitForModelRequests(first, 1)
     const firstOpen = await waitForOpenIntervention(port, cookie, workItem.id)
     const mutation = await readSakiBoardSnapshotMutationState(providerStatePath)
-    expect(mutation.dispatchCount).toBe(1)
+    expect(mutation.dispatchCount).toBe(0)
     await setProviderState(providerStatePath, 'hold')
     const firstProcess = first
     await firstProcess.stop()
@@ -373,7 +374,7 @@ async function transcript(): Promise<string> {
     expect(replayed).toEqual(given)
     const replayModelRequests = modelRequestCount(second)
     expect(replayModelRequests).toBe(0)
-    expect((await readSakiBoardSnapshotMutationState(providerStatePath)).dispatchCount).toBe(1)
+    expect((await readSakiBoardSnapshotMutationState(providerStatePath)).dispatchCount).toBe(0)
 
     const recommendation = restartedOpen.work.recommendation
     if (!recommendation.available || recommendation.offer.type !== 'answer-intervention') {
@@ -405,23 +406,58 @@ async function transcript(): Promise<string> {
       run: { id: given.receipt.agentRunId, state: 'running' },
       recommendation: { available: false, reason: 'active-work' },
     })
+    const activeBoard = await waitForConfirmedBoard(port, cookie, project.id)
+    const activeOverlay = activeBoard.mutationOverlays.find(overlay => overlay.state === 'targeted-confirmed'
+      && overlay.workItem.id === workItem.id)
+    const activeItem = activeOverlay?.state === 'targeted-confirmed' ? activeOverlay.workItem
+      : activeBoard.confirmed.items.find(item => item.id === workItem.id)
+    if (activeItem === undefined) throw new Error('active Work Item evidence is absent')
+    expect(activeItem.status).toBe(workItem.status)
+    await setProviderState(providerStatePath, 'complete')
+    const siblingResponse = await rpc(port, 'control/submit', {
+      ...intent,
+      intentId: 'intent-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      expectedRemoteFingerprint: activeItem.remoteFingerprint,
+    }, { cookie, requestToken: exchangeValue.access.requestToken })
+    const sibling = sakiGiveWorkItemToAgentResultSchema.parse(siblingResponse.value)
+    if (!sibling.ok) throw new Error(`shared-binding Agent start failed: ${JSON.stringify(sibling)}`)
+    expect(sibling.receipt.agentRunId).not.toBe(given.receipt.agentRunId)
+    const siblingOpen = await waitForOpenIntervention(port, cookie, workItem.id)
+    expect(siblingOpen.work.run?.id).toBe(sibling.receipt.agentRunId)
+    await waitForModelRequests(second, 2)
     const secondProcess = second
     await secondProcess.stop()
     second = undefined
     const secondSummary = summary(secondProcess.records)
-    expect(secondSummary).toMatchObject({ modelRequests: 1 })
-    expect(secondSummary.durableInputs).toEqual(firstSummary.durableInputs)
-    expect(secondSummary.durableInputInsertions).toEqual(firstSummary.durableInputInsertions)
+    expect(secondSummary).toMatchObject({ modelRequests: 2 })
+    expect(secondSummary.durableInputs).toEqual(expect.arrayContaining([...firstSummary.durableInputs]))
+    expect(secondSummary.durableInputs).toHaveLength(2)
+    expect(secondSummary.durableInputInsertions).toEqual(expect.arrayContaining([...firstSummary.durableInputInsertions]))
+    expect(secondSummary.durableInputInsertions).toHaveLength(2)
     expect(secondSummary.durableInterventionAnswerInputs).toHaveLength(1)
     expect(secondSummary.durableInterventionAnswerInputInsertions).toHaveLength(1)
     expect(secondSummary.durableInterventionAnswerInputSessionIds).toEqual(firstSummary.durableInputSessionIds)
     expect(secondSummary.modelInterventionAnswerInput).toEqual(secondSummary.durableInterventionAnswerInputs[0])
     expect(secondSummary.durableInterventionAnswerInputInsertions[0])
       .toEqual(secondSummary.durableInterventionAnswerInputs[0])
-    expect(secondSummary.durableInputSessionIds).toEqual(firstSummary.durableInputSessionIds)
-    expect(secondSummary.liveAgentSessionIds).toEqual(firstSummary.durableInputSessionIds)
+    expect(new Set(secondSummary.durableInputSessionIds).size).toBe(2)
+    expect(secondSummary.liveAgentSessionIds.toSorted()).toEqual(secondSummary.durableInputSessionIds.toSorted())
 
     const records = [
+      {
+        step: 'shared-binding-independent-runs',
+        result: {
+          sameProject: sibling.receipt.projectId === given.receipt.projectId,
+          workItemStatusUnchanged: activeItem.status === workItem.status,
+          distinctRuns: sibling.receipt.agentRunId !== given.receipt.agentRunId,
+          distinctSessions: new Set(secondSummary.durableInputSessionIds).size,
+          durableInputs: secondSummary.durableInputs.length,
+          durableInsertions: secondSummary.durableInputInsertions.length,
+          liveSessions: secondSummary.liveAgentSessionIds.length,
+          originalRunState: clearedWork.run?.state,
+          siblingRunState: siblingOpen.work.run?.state,
+        },
+      },
       {
         step: 'manual-agent-run',
         result: {
@@ -476,7 +512,7 @@ async function transcript(): Promise<string> {
           waitingProjectionRecovered: true,
           liveSessionCount: recoveredBeforeReplay.liveAgentSessionIds.length,
           modelRequests: replayModelRequests,
-          durableInputCount: secondSummary.durableInputs.length,
+          durableInputCount: firstSummary.durableInputs.length,
           providerDispatchCount: mutation.dispatchCount,
         },
       },

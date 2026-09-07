@@ -6,11 +6,11 @@ status: accepted
 
 English | [中文](0014-stable-resource-bindings-over-canonical-worktrees.zh.md)
 
-A Development Project and every Execution Lease address one stable Resource Binding id. A local binding stores a revisioned observation of its DSH Workspace and Git worktree location, but no path, branch, remote, or Git object id becomes the binding's identity. Registration canonicalizes an accepted ordinary directory spelling and its Git administrative paths, while a direct symlink or junction locator is rejected instead of treated as an alias. Relocation and replacement-Host recovery update the observation only through an attributed rebind operation.
+A Development Project and its Agent Runs address one stable Resource Binding id. A local binding stores a revisioned observation of its DSH Workspace and Git worktree location, but no path, branch, remote, or Git object id becomes the binding's identity. Registration canonicalizes an accepted ordinary directory spelling and its Git administrative paths, while a direct symlink or junction locator is rejected instead of treated as an alias. Relocation and replacement-Host recovery update the observation only through an attributed rebind operation.
 
 ## Why this decision
 
-One physical worktree can be reached through different drive-letter case, separators, junctions, symlinks, or paths containing `..`. Keying an Execution Lease by caller spelling would allow two Development Projects to write the same files. Keying by branch is also incorrect because a worktree may use detached HEAD and can change branches without becoming another resource.
+One physical worktree can be reached through different drive-letter case, separators, junctions, symlinks, or paths containing `..`. Keying a Project by caller spelling would register one resource under several product identities. Keying by branch is also incorrect because a worktree may use detached HEAD and can change branches without becoming another resource.
 
 Git distinguishes the main worktree from linked worktrees through per-worktree administrative data. The `.git` marker, `commondir`, and reciprocal `gitdir` control files identify the private administrative location and shared repository family without asking repository-aware Git to discover them. Those paths are strong duplicate-detection evidence while the worktree is available, but they can change when a main repository is moved, copied to another Host, or reconstructed from a clone. Git does not provide a portable repository UUID that Saki can treat as permanent authority.
 
@@ -28,9 +28,9 @@ If the selected directory is below the Git top level, registration presents the 
 
 ### Health and revalidation
 
-A binding is `active`, `missing`, `repair-required`, `needs-rebind`, or `retired`. Before acquiring an Execution Lease or starting a mutating Host Operation, the Host repeats canonical and Git inspection. A matching observation keeps the binding active. A missing directory becomes `missing`; a present path whose worktree or administrative identity no longer matches becomes `repair-required`; an Installation restored to another Host begins as `needs-rebind`. None of these states is repaired by finding a similarly named path, branch, remote, or commit.
+A binding is `active`, `missing`, `repair-required`, `needs-rebind`, or `retired`. Before starting a mutating Host Operation, the Host repeats canonical and Git inspection. A matching observation keeps the binding active. A missing directory becomes `missing`; a present path whose worktree or administrative identity no longer matches becomes `repair-required`; an Installation restored to another Host begins as `needs-rebind`. None of these states is repaired by finding a similarly named path, branch, remote, or commit.
 
-The stable Resource Binding id, not the observed location, remains the key for Execution Lease exclusivity. A binding revision change invalidates pending admission that was prepared against an older observation. Read-only history remains available in all non-active states, but new writable work is unavailable.
+The stable Resource Binding id identifies the resource shared by its Agent Runs. A binding revision change invalidates pending admission that was prepared against an older observation. Read-only history remains available in all non-active states, but new writable work is unavailable.
 
 ### Rebind and retirement
 

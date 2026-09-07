@@ -10,7 +10,7 @@ Agent Operations defines how one Saki Installation directs enrolled Hosts and na
 
 **Saki Host**: An enrolled execution node with a stable Host identity, trust state, revalidated capability inventory, and ownership of machine-local resources and credential resolution. A Local Host may share a process with the control plane without becoming the Saki Installation. _Avoid_: Saki Installation, browser client, Workspace
 
-**Resource Binding**: A stable association from a Project to one resource on a named Saki Host. Its revisioned locator and health observation may change through rebind, while its identity owns execution references and leases. _Avoid_: path, DSH Workspace, Execution Lease
+**Resource Binding**: A stable association from a Project to one resource on a named Saki Host. Its revisioned locator and health observation may change through rebind, while its identity owns execution references. _Avoid_: path, DSH Workspace
 
 **Installation State Generation**: A complete, versioned copy of Saki-owned Installation state. Exactly one generation is selected as active and writable; candidates, retained generations, and Recovery Backups never become active by filename or recency. _Avoid_: database version, backup
 
@@ -46,11 +46,9 @@ Agent Operations defines how one Saki Installation directs enrolled Hosts and na
 
 **Execution Dispatch**: A durable instruction produced from an accepted Control Intent for an enrolled Host to create or resume one Execution. It records delivery and recovery state, not proof that the Execution succeeded. _Avoid_: Control Intent, Agent Run
 
-**Dispatch Claim**: A bounded, revisioned, and fenced claim that lets one current executor coordinate Host admission of an Execution Dispatch. It is not an exactly-once guarantee and grants no Resource Binding access. _Avoid_: Execution Lease, Work Assignment
+**Dispatch Claim**: A bounded, revisioned, and fenced claim that lets one current executor coordinate Host admission of an Execution Dispatch. It is not an exactly-once guarantee and grants no Resource Binding access. _Avoid_: Work Assignment
 
 **Host Operation**: A durable Host-owned admission record for one Execution Dispatch. It binds the stable dispatch identity to the intended Execution before external effects and supplies an idempotent inspection and cancellation reference; it is not the Execution outcome. _Avoid_: Execution Dispatch, Agent Run, process
-
-**Execution Lease**: A durable claim that grants one Agent Run writable access to a Resource Binding. At most one active writable Agent Run holds a binding's lease; read-only Sessions do not require it. _Avoid_: process lock, Agent Run
 
 **Intervention Request**: A durable, addressable request for specified input, approval, credential authorization, acceptance, or recovery action. A response is attributed separately and cannot expand the responder's Grants. _Avoid_: live question, notification
 

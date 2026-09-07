@@ -18,11 +18,11 @@ A Work Assignment records continuing responsibility for one Work Item. Its assig
 
 An accepted Control Intent creates an Execution Dispatch before any Host wake-up when its effect requires creating or resuming an Execution. The dispatch records a stable branded id, Intent id, intended Agent Run and Work Session, target Installation and Host, Project and Resource Binding references, Agent Profile version, resolved Model Route reference, limits, immutable Actor attribution, delegated Grant references, payload digest, lifecycle revision, and any stable Host Operation reference. It contains references rather than Host paths, credentials, Agent handles, or provider objects.
 
-Dispatch delivery is at least once. A local scheduler, recovered poller, or future network adapter may present the same dispatch repeatedly. Only a bounded Dispatch Claim with the current revision and fencing value admits one executor, and the Host deduplicates `StartAgentRun` by dispatch id and intended Agent Run id. A lost acknowledgement leads to `inspectOperation` or reconciliation rather than a second Run. Dispatch Claim coordinates command admission; Execution Lease separately protects writable Resource Binding ownership.
+Dispatch delivery is at least once. A local scheduler, recovered poller, or future network adapter may present the same dispatch repeatedly. Only a bounded Dispatch Claim with the current revision and fencing value admits one executor, and the Host deduplicates `StartAgentRun` by dispatch id and intended Agent Run id. A lost acknowledgement leads to `inspectOperation` or reconciliation rather than a second Run. Dispatch Claim coordinates command admission; distinct Runs may share the Resource Binding.
 
 The [fenced idempotent admission proposal](2026-08-18-saki-fenced-idempotent-dispatch-admission.md) owns the exact `pending`, `claimed`, `accepted`, cancellation, rejection, and reconciliation transitions. It requires the Host to prepare one durable Host Operation before any effect and the control plane to accept that mapping under the current fencing token before the Host starts it.
 
-The [manual Give-to-Agent decision](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md) implements one explicit Ready-to-Run action with a Work Assignment, primary Work Session, Agent Run, Execution Dispatch, expected-revision Dispatch Claim, shared Host Operation lifecycle, and Binding Write Admission. The [durable Intervention answer decision](../../implemented/feature/2026-08-18-saki-durable-intervention-answer.md) adds text-input Intervention Requests, later answer Dispatches on the same Run and Session, and Principal-scoped Host Operator My Work and Attention projections. Automatic claiming, persistent Agent Identity delivery, notification adapters, and generalized recovery interactions remain proposed.
+The [manual Give-to-Agent decision](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md) implements one explicit Give-to-Agent action with a Work Assignment, primary Work Session, Agent Run, Execution Dispatch, expected-revision Dispatch Claim, shared Host Operation lifecycle, and independent Dispatch admission. The [durable Intervention answer decision](../../implemented/feature/2026-08-18-saki-durable-intervention-answer.md) adds text-input Intervention Requests, later answer Dispatches on the same Run and Session, and Principal-scoped Host Operator My Work and Attention projections. Automatic claiming, persistent Agent Identity delivery, notification adapters, and generalized recovery interactions remain proposed.
 
 An Intervention Request is a durable control-plane record with a stable id, kind, Project and subject references, target Principal or role, requested decision or input schema, blocking scope, causal Intent, Dispatch, Work Session, or Agent Run references, current revision, lifecycle state, optional deadline, and escalation policy. Initial kinds cover input, approval, credential authorization, acceptance, conflict resolution, and reconciliation. Notification acknowledgement and request resolution are separate facts, and expiry cannot produce approval.
 
@@ -36,7 +36,7 @@ The implemented manual and Intervention decisions persist Execution Dispatch and
 
 **Extend Control Intent into the only queue and interaction record.** Intent is the accepted attributed command and recovery envelope. Making it also own executor claims, assignment, question schemas, response targeting, and every user View would couple authorization admission to several independently changing lifecycles and make one Intent with multiple effects ambiguous.
 
-**Use DSH Agent inbox events as durable dispatch.** Agent inbox events correlate accepted and claimed messages for a Session. They do not select an enrolled Host, carry Project Grants, reserve a worktree, authorize an offline responder, or survive as unclaimed product work after Agent disposal. Saki consumes them as Execution evidence rather than product commands.
+**Use DSH Agent inbox events as durable dispatch.** Agent inbox events correlate accepted and claimed messages for a Session. They do not select an enrolled Host, carry Project Grants, authorize an offline responder, or survive as unclaimed product work after Agent disposal. Saki consumes them as Execution evidence rather than product commands.
 
 **Use continuable subagents as Project workers.** Continuable children provide durable conversation identity and cold resume under an exact parent lineage. The [Work Session decision](2026-08-17-saki-work-sessions-over-dsh-lineage.md) keeps product ownership independent from that lineage, and the shipped report and settlement paths acknowledge that offline delivery needs a separate addressing, authorization, and replay protocol.
 
@@ -44,13 +44,13 @@ The implemented manual and Intervention decisions persist Execution Dispatch and
 
 **Use notifications as the durable boundary.** A delivery adapter can prove that it sent or displayed a message, not that the authorized target understood or answered it. Notification retry remains useful but cannot settle Intervention Request state.
 
-**Combine Dispatch Claim and Execution Lease.** A dispatch can start a read-only Execution that needs no worktree lease, while one writable Agent Run may retain its Execution Lease across multiple Host Operations after its start dispatch settles. Combining them would either over-lock read-only work or release write ownership too early.
+**Hold a Dispatch Claim for an entire Run.** One Run can receive several independent Dispatches. Extending a claim across the conversation couples command delivery to Session lifetime and delays recovery after failure.
 
 ## Acceptance criteria
 
 - A committed Execution Dispatch survives process restart before any wake-up and remains eligible for delivery.
 - Repeated delivery of one dispatch cannot create a second Agent Run; a stale or competing Dispatch Claim cannot execute it.
-- Dispatch Claim and Execution Lease are observed and tested as separate invariants.
+- Dispatch admission and Session attribution remain independent for Runs sharing a Resource Binding.
 - An unknown Host acknowledgement is inspected or becomes reconciliation required rather than being treated as a failed start.
 - An Intervention Request remains answerable after Web reconnect and process restart without relying on an old in-memory Promise.
 - The first authorized response at the expected revision wins; stale, duplicate, unauthorized, and authority-expanding responses reject.

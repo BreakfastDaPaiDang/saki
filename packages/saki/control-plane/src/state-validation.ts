@@ -772,7 +772,6 @@ function validateProjects(domain: ControlPlaneDomain, foundation: FoundationSnap
     domain.table('agent_runs'),
     domain.table('execution_dispatches'),
     domain.table('intervention_requests'),
-    domain.table('binding_write_admissions'),
     projects.registry,
     agentOtherIntentIds,
     (actor) => { validateRegistrationActorReference(actor, foundation) },

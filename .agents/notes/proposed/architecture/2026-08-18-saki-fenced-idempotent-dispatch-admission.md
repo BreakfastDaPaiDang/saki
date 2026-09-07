@@ -8,13 +8,13 @@ English | [中文](2026-08-18-saki-fenced-idempotent-dispatch-admission.zh.md)
 
 Saki must redeliver a durable Execution Dispatch after process loss, a claimant timeout, or a missing Host acknowledgement. A Dispatch Claim can select one current executor, but it cannot by itself prevent an expired claimant from acting late or distinguish an unperformed operation from a lost response after the Host acted. Retrying either ambiguous case as a new start can create a second Agent Run or repeat another external effect.
 
-Dispatch delivery is shorter than the resulting Execution. Holding one claim for an entire Agent Run would delay recovery and overlap the independent Execution Lease that protects writable Resource Bindings. The design needs a short admission claim, a stable Host-side operation identity, and explicit reconciliation without claiming a cross-system transaction.
+Dispatch delivery is shorter than the resulting Execution. Holding one claim for an entire Agent Run would delay recovery and couple independent deliveries to one Session lifetime. The design needs a short admission claim, a stable Host-side operation identity, and explicit reconciliation without claiming a cross-system transaction.
 
 ## Proposal
 
-The Saki dispatch module will implement [ADR 0010](../../../../docs/adr/0010-fenced-idempotent-dispatch-admission.md) as the exact claim and admission protocol under [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.md). Execution Dispatch, Dispatch Claim, Host Operation, Agent Run, and Execution Lease remain separate records with separate completion meanings.
+The Saki dispatch module will implement [ADR 0010](../../../../docs/adr/0010-fenced-idempotent-dispatch-admission.md) as the exact claim and admission protocol under [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.md). Execution Dispatch, Dispatch Claim, Host Operation, and Agent Run remain separate records with separate completion meanings.
 
-The [implemented structured-Git decision](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.md) provides the direct `control-intent` Host Operation source and the source-general `prepareOperation`, `startOperation`, `inspectOperation`, and `cancelOperation` Host Execution lifecycle. The [manual Give-to-Agent decision](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md) implements Execution Dispatch, Agent Run, and Dispatch Claim records for one `StartAgentRun` path, extends the operation-source union with `execution-dispatch`, and uses long-lived `BindingWriteAdmission.agent-run` ownership. This proposal remains active for generalized dispatch sources, independent Execution Leases, automatic backoff and retry budgets, multi-Dispatch orchestration, and remote admission.
+The [implemented structured-Git decision](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.md) provides the direct `control-intent` Host Operation source and the source-general `prepareOperation`, `startOperation`, `inspectOperation`, and `cancelOperation` Host Execution lifecycle. The [manual Give-to-Agent decision](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md) implements Execution Dispatch, Agent Run, and Dispatch Claim records for one `StartAgentRun` path, extends the operation-source union with `execution-dispatch`, and admits each Dispatch independently while Agent Runs share a directory. This proposal remains active for generalized dispatch sources, automatic backoff and retry budgets, multi-Dispatch orchestration, and remote admission.
 
 ### State and ownership
 
@@ -24,7 +24,6 @@ The [implemented structured-Git decision](../../implemented/architecture/2026-08
 | Dispatch Claim | Current executor, claim id, monotonically increasing fencing token, issuance and expiry, and the dispatch revision used for renewal or acceptance. |
 | Host Operation | Host-side idempotency mapping from dispatch id to the prepared operation, intended Execution, payload digest, prepared and accepted fencing tokens, and operation lifecycle. |
 | Agent Run | One Agent Execution and its actual Session, Profile, model route, evidence, and outcome. |
-| Execution Lease | Exclusive writable ownership of one Resource Binding by the intended Agent Run. |
 
 The Dispatch lifecycle is `pending`, `claimed`, `accepted`, `canceled`, `rejected`, or `reconciliation_required`. `accepted` means delivery has a durable Host Operation receipt. It does not mean the operation started or completed. The last state stops automatic delivery until an attributed reconciliation Control Intent records a proven resolution.
 
@@ -32,11 +31,11 @@ The Dispatch lifecycle is `pending`, `claimed`, `accepted`, `canceled`, `rejecte
 
 1. The control plane persists the dispatch as `pending` before any wake-up. A durable scanner selects records whose `nextAttemptAt` has arrived; an in-process signal only prompts that scan.
 2. Claim acquisition compare-and-sets the expected dispatch revision, changes `pending` to `claimed` or replaces an expired `claimed` record, increments the fencing token, and records a bounded expiry. Renewal by the same executor requires an unexpired claim and expected revision and retains the token; reacquisition after expiry increments it.
-3. A writable dispatch is ineligible until its intended Agent Run holds the required Execution Lease. Admission also fails closed when cancellation, Grant revocation, Automation Policy, Host enrollment, or capability inventory no longer permits an unstarted effect.
+3. Admission fails closed when cancellation, Grant revocation, Automation Policy, Host enrollment, or capability inventory no longer permits an unstarted effect.
 4. `prepareOperation` presents the stable `execution-dispatch` source, intended Agent Run, payload digest, and current claim. The Host validates the claim with the control plane and atomically creates or returns the Host Operation keyed by dispatch id before any external effect. A later valid claim reuses the operation and updates its prepared token; a replay with different immutable inputs returns a conflict.
 5. After all awaited Host work, the control plane compare-and-sets the same unexpired claim and persists the operation reference while moving the dispatch to `accepted`. A failed acceptance leaves the prepared Host Operation inert.
 6. `startOperation` validates the accepted dispatch, operation reference, fencing token, current cancellation state, and capability-boundary authority before starting or resuming the Host Operation. The call is idempotent by operation reference. Recovery repeats it or calls `inspectOperation`; it never allocates another intended Agent Run.
-7. A stale claimant cannot renew, accept, or start. Claim expiry does not cancel an accepted operation or release its Execution Lease. Later inspect or cancel requests use their own Control Intents and current authorization.
+7. A stale claimant cannot renew, accept, or start. Claim expiry does not cancel an accepted operation. Later inspect or cancel requests use their own Control Intents and current authorization.
 
 ### Recovery rules
 
@@ -57,7 +56,7 @@ The Local Host stores the Host Operation registry durably even though both plane
 
 **Use the intended Agent Run id without a Host Operation.** Agent Run identity deduplicates starts but does not provide one general inspection and cancellation reference for Git or other Host dispatch variants, nor does it record whether the Host admitted the request before DSH started.
 
-**Keep a claim until Execution completion.** This merges delivery ownership with long-running execution and Resource Binding ownership, lengthens failure detection, and makes one claim cover unrelated Host Operations.
+**Keep a claim until Execution completion.** This merges delivery ownership with long-running execution, lengthens failure detection, and makes one claim cover unrelated Host Operations.
 
 **Automatically retry every unknown result.** Repetition is safe only when Host idempotency or confirmed absence establishes what occurred. Blind retry converts an observation failure into another potentially paid or mutating effect.
 
@@ -71,7 +70,7 @@ The Local Host stores the Host Operation registry durably even though both plane
 - A crash after dispatch persistence, claim, preparation, acceptance, or start recovers through the same dispatch and Host Operation without creating a second Agent Run.
 - A lost acknowledgement is inspected before retry; unknown evidence never becomes presumed failure.
 - Cancellation before acceptance prevents start, while cancellation after acceptance preserves the dispatch receipt and controls the operation separately.
-- Execution Lease validity and Dispatch Claim validity fail independently and neither lifecycle releases the other.
+- Distinct Dispatches and Runs sharing a Resource Binding retain independent admission and Session identities.
 - Local configuration validates claim duration, retry backoff, and retry budget; the plugin contains no deployment-specific hard-coded tunables.
 
 ## Risks

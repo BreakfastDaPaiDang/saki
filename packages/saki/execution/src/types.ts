@@ -703,7 +703,7 @@ export interface StartAgentRunProfile {
 export interface StartAgentRunHostOperationRequest {
   readonly type: 'start-agent-run'
   readonly source: ExecutionDispatchHostOperationSource
-  readonly expected: HostGitMutationPrecondition
+  readonly expected: { readonly binding: ActiveHostProjectBinding }
   readonly run: {
     readonly agentRunId: SakiAgentRunId
     readonly workSessionId: SakiWorkSessionId
@@ -714,10 +714,15 @@ export interface StartAgentRunHostOperationRequest {
 }
 
 /** Exact StartAgentRun request retained by `saki_host_execution@2`. */
-export type StartAgentRunHostOperationRequestV2 = Omit<StartAgentRunHostOperationRequest, 'run'> & {
+export type StartAgentRunHostOperationRequestV2 = Omit<StartAgentRunHostOperationRequestV3, 'run'> & {
   readonly run: Omit<StartAgentRunHostOperationRequest['run'], 'input'> & {
     readonly input: StartAgentRunInputMessageV2
   }
+}
+
+/** Exact Agent input request retained by Host Execution versions three and four. */
+export type StartAgentRunHostOperationRequestV3 = Omit<StartAgentRunHostOperationRequest, 'expected'> & {
+  readonly expected: HostGitMutationPrecondition
 }
 
 /** One selected row resolved to a repository-relative path by the Host. */

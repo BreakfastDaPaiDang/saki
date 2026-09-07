@@ -6,11 +6,11 @@ status: accepted
 
 [English](0014-stable-resource-bindings-over-canonical-worktrees.md) | 中文
 
-一个 Development Project 及其所有 Execution Lease 都寻址同一个稳定 Resource Binding id。本地绑定存储其 DSH Workspace 与 Git worktree 位置的带 revision 观察，但路径、分支、remote 或 Git object id 都不会成为绑定身份。登记会规范化已接受的普通目录拼写及其 Git 管理路径；直接 symlink 或 junction locator 会被拒绝，而不会被当作别名。位置迁移与替换 Host 恢复只能通过带归因的 rebind 操作更新观察结果。
+一个 Development Project 及其 Agent Run 都寻址同一个稳定 Resource Binding id。本地绑定存储其 DSH Workspace 与 Git worktree 位置的带 revision 观察，但路径、分支、remote 或 Git object id 都不会成为绑定身份。登记会规范化已接受的普通目录拼写及其 Git 管理路径；直接 symlink 或 junction locator 会被拒绝，而不会被当作别名。位置迁移与替换 Host 恢复只能通过带归因的 rebind 操作更新观察结果。
 
 ## 决策原因
 
-同一个物理 worktree 可以通过不同盘符大小写、分隔符、junction、symlink 或包含 `..` 的路径访问。若按调用者提供的拼写确定 Execution Lease 键，两个 Development Project 就可能同时写入同一批文件。按分支确定键同样错误，因为 worktree 可以使用 detached HEAD，也可以在不变成另一项资源的情况下切换分支。
+同一个物理 worktree 可以通过不同盘符大小写、分隔符、junction、symlink 或包含 `..` 的路径访问。若按调用者提供的拼写确定 Project 键，同一资源就可能登记成多个产品身份。按分支确定键同样错误，因为 worktree 可以使用 detached HEAD，也可以在不变成另一项资源的情况下切换分支。
 
 Git 通过各 worktree 私有管理数据区分主 worktree 与 linked worktree。`.git` marker、`commondir` 与双向 `gitdir` 控制文件可以标识私有管理位置和共享 Repository 家族，而无需让 repository-aware Git 发现它们。这些路径在 worktree 可用时是很强的重复检测证据，但主 Repository 被移动、复制到另一 Host 或从 clone 重建后都可能改变。Git 不提供可供 Saki 作为永久权威使用的可迁移 Repository UUID。
 
@@ -28,9 +28,9 @@ Host 使用 `fs.realpath` 规范化从文件系统发现的每个 worktree 与�
 
 ### 健康状态与重新验证
 
-绑定状态为 `active`、`missing`、`repair-required`、`needs-rebind` 或 `retired`。获取 Execution Lease 或启动带 mutation 的 Host Operation 前，Host 会重复规范化与 Git 检查。匹配的观察使绑定保持 active。目录缺失会进入 `missing`；路径存在但 worktree 或管理身份不再匹配会进入 `repair-required`；恢复到另一 Host 的 Installation 从 `needs-rebind` 开始。这些状态都不会通过寻找名称相似的路径、分支、remote 或 commit 自动修复。
+绑定状态为 `active`、`missing`、`repair-required`、`needs-rebind` 或 `retired`。启动带 mutation 的 Host Operation 前，Host 会重复规范化与 Git 检查。匹配的观察使绑定保持 active。目录缺失会进入 `missing`；路径存在但 worktree 或管理身份不再匹配会进入 `repair-required`；恢复到另一 Host 的 Installation 从 `needs-rebind` 开始。这些状态都不会通过寻找名称相似的路径、分支、remote 或 commit 自动修复。
 
-稳定 Resource Binding id 而非观察到的位置继续作为 Execution Lease 排他键。绑定 revision 变更会使基于旧观察准备的待定准入失效。所有非 active 状态仍可读取历史，但新可写工作不可用。
+稳定 Resource Binding id 标识其 Agent Run 共享的资源。绑定 revision 变更会使基于旧观察准备的待定准入失效。所有非 active 状态仍可读取历史，但新可写工作不可用。
 
 ### Rebind 与退役
 

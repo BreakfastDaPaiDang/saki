@@ -49,6 +49,7 @@ import LocalSakiHostExecution, {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionV4DomainSpec,
   type Config,
 } from '../src/index.ts'
 import {
@@ -3281,11 +3282,11 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
         dispatchId: agentRunInput.source.dispatchId,
         payloadDigest: computeStartAgentRunPayloadDigest(agentRunInput),
       },
-      expected: durable.request.expected,
+      expected: { binding: durable.request.expected.binding },
       run: {
         agentRunId: agentRunInput.source.agentRunId,
         workSessionId: agentRunInput.source.workSessionId,
-        sessionId: 'session-66666666-6666-4666-8666-666666666666',
+        sessionId: '66666666-6666-4666-8666-666666666666',
         profile: {
           id: 'agent-profile-55555555-5555-4555-8555-555555555555',
           version: 1,
@@ -7996,7 +7997,10 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
     expect(sakiHostExecutionDomainMigrations.steps[2]!.migrate({ tables: {}, global: null }))
       .toEqual({ tables: { operations: {} }, global: null })
     expect(sakiHostExecutionV3DomainSpec.version).toBe(3)
-    expect(sakiHostExecutionDomainSpec.version).toBe(4)
+    expect(sakiHostExecutionV4DomainSpec.version).toBe(4)
+    expect(sakiHostExecutionDomainSpec.version).toBe(5)
+    expect(sakiHostExecutionDomainMigrations.steps[3]!.migrate({ tables: {}, global: null }))
+      .toEqual({ tables: { operations: {} }, global: null })
   })
 
   it('fails a replayed historical detached Commit before effect', async () => {
@@ -8067,11 +8071,12 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
       migratedV3.tables['operations']![operation.id],
     )
     expect(versionThreeRecord).toEqual({ ...historicalRecord, schemaVersion: 3 })
-    const migrated = sakiHostExecutionDomainMigrations.steps[2]!.migrate(migratedV3)
+    const migratedV4 = sakiHostExecutionDomainMigrations.steps[2]!.migrate(migratedV3)
+    const migrated = sakiHostExecutionDomainMigrations.steps[3]!.migrate(migratedV4)
     const record = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse(
       migrated.tables['operations']![operation.id],
     )
-    expect(record).toEqual({ ...historicalRecord, schemaVersion: 4 })
+    expect(record).toEqual({ ...historicalRecord, schemaVersion: 5 })
     expect(record.request).toEqual(historicalRecord.request)
     expect(record.snapshot.requestFingerprint).toEqual(historicalRecord.snapshot.requestFingerprint)
     const operationTable = (execution as unknown as {

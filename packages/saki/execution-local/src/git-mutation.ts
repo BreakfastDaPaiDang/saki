@@ -2471,23 +2471,6 @@ async function observeAndValidate(
   return await observeAndValidateExpected(dependencies, record.request.expected, signal)
 }
 
-/**
- * Reobserve one frozen Host Git precondition without performing a repository effect.
- * @param dependencies - Local Host inspection capabilities.
- * @param expected - complete frozen writable-world evidence.
- * @param signal - observation cancellation.
- * @returns nothing after exact evidence matches.
- * @throws {NoEffectMutationError} when current durable evidence disproves the precondition.
- * @throws {RetryableMutationError} when no complete bounded observation is available.
- */
-export async function verifyFrozenHostOperationWorld(
-  dependencies: LocalHostWorldVerificationDependencies,
-  expected: HostGitMutationPrecondition,
-  signal: AbortSignal,
-): Promise<void> {
-  await observeAndValidateExpected(dependencies, expected, signal)
-}
-
 async function observeAndValidateExpected(
   dependencies: LocalHostWorldVerificationDependencies,
   expected: HostGitMutationPrecondition,

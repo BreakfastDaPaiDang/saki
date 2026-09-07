@@ -844,7 +844,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         agentRunTable: this.agentRunTable,
         dispatchTable: this.executionDispatchTable,
         interventionTable: this.interventionRequestTable,
-        admissionTable: this.bindingWriteAdmissionTable,
         execution: this.ctx.sakiHostExecution,
         projects: this.projects,
         mutationContext: projectId => this.githubSynchronization.mutationContext(projectId),
@@ -854,12 +853,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           const llm = this.ctx.get('llm')
           if (llm === undefined) throw new Error('Saki Agent dispatch requires an LLM runtime')
           await llm.resolveModelInfo(route.provider, route.model, signal)
-        },
-        moveWorkItem: async (intent, actor, signal) => {
-          if (this.hasControlIntentConflict(intent.intentId, 'work-item')) {
-            return { ok: false, reason: 'conflict' }
-          }
-          return await this.githubWorkItemOperations.submit(intent, actor, signal)
         },
         claimTtlMs: this.config.agentDispatchClaimTtlMs,
         notifyChanged: () => { this.notify(['my-work', 'attention', 'project-changes', 'board']) },
@@ -1404,11 +1397,6 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     }
     const binding = this.projects.currentActiveBinding(project.id)
     if (typeof binding === 'string') return { available: false, reason: 'binding-unavailable' }
-    const admission = this.bindingWriteAdmissionTable.get(binding.binding.id)
-    if (admission === undefined) return { available: false, reason: 'binding-unavailable' }
-    if (admission.state !== 'available') {
-      return { available: false, reason: 'operation-conditions-unavailable' }
-    }
     return { available: true }
   }
 

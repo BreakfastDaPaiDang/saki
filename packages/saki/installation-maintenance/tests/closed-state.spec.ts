@@ -11,6 +11,7 @@ import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionV4DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 import {
   canonicalDigest,
@@ -33,6 +34,7 @@ import {
   sakiControlPlaneV6DomainSpec,
   sakiControlPlaneV7DomainSpec,
   sakiControlPlaneV8DomainSpec,
+  sakiControlPlaneV9DomainSpec,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
@@ -40,6 +42,7 @@ import {
   sakiStorageGenerationV4DomainSpec,
   sakiStorageGenerationV5DomainSpec,
   sakiStorageGenerationV6DomainSpec,
+  sakiStorageGenerationV7DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationV1SealRecordSchema,
   storageGenerationV2SealRecordSchema,
@@ -78,6 +81,7 @@ import {
   readClosedSakiV6State,
   readClosedSakiV7State,
   readClosedSakiV8State,
+  readClosedSakiV9State,
 } from '../src/closed-state.ts'
 
 const INSTALLATION_ID = 'installation-00000000-0000-4000-8000-000000000001' as SakiInstallationId
@@ -337,7 +341,7 @@ function closedBranchPushCorruption(): {
     type: 'push-branch' as const,
   }
   const operation = sakiHostExecutionDomainSpec.tables.operations.valueSchema.parse({
-    schemaVersion: 4,
+    schemaVersion: 5,
     request: mismatchedRequest,
     preparationRevision: 0,
     snapshot: hostOperationSnapshotSchema.parse({
@@ -417,11 +421,7 @@ function orphanAgentIntentRecord(): unknown {
         },
         inheritedChangeBaseline: baseline,
       },
-      status: { version: 1, digest: '2'.repeat(64) },
-      head: { kind: 'commit', objectId: '3'.repeat(40), symbolicRef: 'refs/heads/main' },
-      index: { kind: 'tree', treeId: '4'.repeat(40) },
-      worktree: { version: 1, digest: '5'.repeat(64) },
-      preEffectBaseline: baseline,
+
     },
     run: {
       agentRunId,
@@ -462,9 +462,6 @@ function orphanAgentIntentRecord(): unknown {
     body: '# Acceptance criteria\n- remains bounded',
     updatedAt: item.updatedAt,
     remoteFingerprint: item.remoteFingerprint,
-    intendedOutcome: 'Complete the Work Item.',
-    acceptanceCriteria: ['remains bounded'],
-    blockage: [],
   }
   const projectContext = {
     projectId,
@@ -476,7 +473,7 @@ function orphanAgentIntentRecord(): unknown {
   const payload = { intent, actor }
   return agentOperationIntentRecordSchema.parse({
     id: intentId,
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     receiptId: 'receipt-22222222-2222-4222-8222-222222222222',
     payloadDigest: canonicalDigest('saki/agent-operation-intent/v1', payload),
@@ -486,7 +483,6 @@ function orphanAgentIntentRecord(): unknown {
     workSessionId,
     agentRunId,
     dispatchId,
-    inProgressIntentId: 'intent-dddddddd-dddd-4ddd-8ddd-dddddddddddd',
     workItemDefinition,
     projectContext,
     profile,
@@ -739,6 +735,31 @@ async function materializeV8(
   ])
 }
 
+function v7SealSnapshot(createdByBuildId: SakiBuildId = BUILD_ID): KvUnitSnapshot {
+  return {
+    global: null,
+    tables: {
+      storage_generation: {
+        [STORAGE_GENERATION_KEY]: {
+          schemaVersion: 7,
+          installationId: INSTALLATION_ID,
+          storageGenerationId: STORAGE_GENERATION_ID,
+          stateVersion: 9,
+          createdByBuildId,
+        },
+      },
+    },
+  }
+}
+
+async function materializeV9(path: string, storageGenerationSnapshot = v7SealSnapshot()): Promise<void> {
+  await materialize(path, [
+    { spec: sakiControlPlaneV9DomainSpec, snapshot: emptySnapshot(sakiControlPlaneV9DomainSpec) },
+    { spec: sakiHostExecutionV4DomainSpec, snapshot: emptySnapshot(sakiHostExecutionV4DomainSpec) },
+    { spec: sakiStorageGenerationV7DomainSpec, snapshot: storageGenerationSnapshot },
+  ])
+}
+
 async function exactFiles(path: string): Promise<readonly [Buffer, Buffer]> {
   return await Promise.all([readFile(path), readFile(`${path}-shm`)])
 }
@@ -788,7 +809,7 @@ describe('closed Saki state reads', () => {
     const state = await readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 9,
+      stateVersion: 10,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))
 
@@ -824,7 +845,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 9,
+      stateVersion: 10,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -842,7 +863,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 9,
+      stateVersion: 10,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     await expect(readFile(path)).resolves.toEqual(before)
@@ -861,7 +882,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 9,
+      stateVersion: 10,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -1064,6 +1085,36 @@ describe('closed Saki state reads', () => {
     expect(historical.hostExecution.table('operations').size).toBe(0)
     expect(historical.storageGeneration.table('storage_generation').get(STORAGE_GENERATION_KEY))
       .toMatchObject({ schemaVersion: 5, stateVersion: 7 })
+  })
+
+  it('reads retained v9 state without opening it through current Agent admission schemas', async () => {
+    const path = await databasePath()
+    await materializeV9(path)
+    const before = await readFile(path)
+    const historical = await readClosedSakiV9State(path, V5_EXPECTATION, AbortSignal.timeout(2_000))
+    expect(historical.stateVersion).toBe(9)
+    expect(historical.hostExecution.table('operations').size).toBe(0)
+    expect(historical.storageGeneration.table('storage_generation').get(STORAGE_GENERATION_KEY))
+      .toMatchObject({ schemaVersion: 7, stateVersion: 9 })
+    expect(await readFile(path)).toEqual(before)
+  })
+
+  it.each([
+    ['missing seal', () => ({ global: null, tables: { storage_generation: {} } }), 'is not the required singleton'],
+    ['noncanonical seal key', () => ({
+      global: null,
+      tables: { storage_generation: { unexpected: v7SealSnapshot().tables.storage_generation![STORAGE_GENERATION_KEY] } },
+    }), 'is not the required singleton'],
+    ['different build provenance', () => v7SealSnapshot(OTHER_BUILD_ID), 'disagrees with selected generation metadata'],
+  ] as const)('rejects retained v9 %s without modifying its database', async (_name, snapshot, message) => {
+    const path = await databasePath()
+    await materializeV9(path, snapshot())
+    const before = await readFile(path)
+    await expect(readClosedSakiV9State(path, V5_EXPECTATION, AbortSignal.timeout(2_000))).rejects.toMatchObject({
+      code: 'recovery-required',
+      cause: { message: `historical v9 Saki storage-generation seal ${message}` },
+    })
+    expect(await readFile(path)).toEqual(before)
   })
 
   it('validates the exact v8 control, Host v3, and storage v6 domains', async () => {

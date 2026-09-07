@@ -2123,7 +2123,7 @@ function boundStatusFixture() {
 }
 
 function startAgentRunFixture() {
-  const { baseline, binding, observation } = boundStatusFixture()
+  const { binding } = boundStatusFixture()
   const dispatchId = 'dispatch-22222222-2222-4222-8222-222222222222'
   const agentRunId = 'agent-run-33333333-3333-4333-8333-333333333333'
   const workSessionId = 'work-session-44444444-4444-4444-8444-444444444444'
@@ -2141,14 +2141,7 @@ function startAgentRunFixture() {
       dispatchId,
       payloadDigest: computeStartAgentRunPayloadDigest(input),
     },
-    expected: {
-      binding,
-      status: observation.fingerprint,
-      head: observation.head,
-      index: observation.index,
-      worktree: observation.worktree,
-      preEffectBaseline: baseline,
-    },
+    expected: { binding },
     run: {
       agentRunId,
       workSessionId,

@@ -85,14 +85,14 @@ pnpm run demo:ptc -- "task"  # headless PTC mode run (needs key)
 
 ### Host sandbox failures
 
-If a required `gh`, `pnpm`, build, test, or generator command fails because the sandbox blocks credentials, network, IPC, watching, or nested `sandbox-exec`, retry unchanged with the narrowest host escalation. Require sandbox evidence; never bypass test failures or the product sandbox.
+For proven sandbox blocks on credentials, network, IPC, watching, or nested `sandbox-exec`, retry unchanged with narrow host escalation. Never bypass test failures or the product sandbox.
 
 ### Run relevant checks locally
 
-Run checks before pushes via [dsh-pre-push-checks](.agents/skills/dsh-pre-push-checks/SKILL.md); report only commands run. After `gh stack sync`, validate immediately; do not merge before checks pass.
+Before pushing, use [dsh-pre-push-checks](.agents/skills/dsh-pre-push-checks/SKILL.md); report actual commands. Validate immediately after `gh stack sync`; merge only after checks pass.
 
 - Match evidence to the surface: focused behavior tests, model/user-output snapshots, `doc-sync` for docs, built smokes for published paths, and real-API e2e for providers.
-- Never default to the full suite or repeat a passing check for commit or push. CI owns exhaustive coverage and the platform matrix; rehearse all locally only by explicit request, for CI diagnosis, or for an irreducibly repository-wide change.
+- Do not repeat passing checks for commit or push. CI owns exhaustive coverage and platform testing; run full suites locally only by explicit request, for CI diagnosis, or for repository-wide changes.
 - `test:coverage`, not `test`, is the CI coverage gate ([why](docs/testing.md)).
 
 ## Secrets / .env
@@ -135,6 +135,8 @@ Real-API tests and demos read `DEEPSEEK_API_KEY`, optional `DEEPSEEK_BASE_URL`, 
 - Files end with exactly one trailing newline; `git diff --cached --check` (pre-commit) gates it.
 
 ## Saki agent workflow
+
+Manual Agent use has no workflow-state, Issue-template, Git-state, or conversation-count gates. Require only authorization, resource identity, exact replay, and input-delivery capabilities; check Git preconditions during Git operations ([rationale](.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md)).
 
 Track work in [GitHub Issues](docs/agents/issue-tracker.md) under [triage roles](docs/agents/triage-labels.md); navigate terminology through [CONTEXT-MAP.md](CONTEXT-MAP.md) and [domain-doc rules](docs/agents/domain.md).
 
