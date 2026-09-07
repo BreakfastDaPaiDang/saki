@@ -73,7 +73,7 @@ describe('Saki product state capability', () => {
     ])
     expect(sakiStateCapability.resolveReadable(10)?.domains.map(domain => [domain.name, domain.version])).toEqual([
       ['saki_control_plane', 10],
-      ['saki_host_execution', 4],
+      ['saki_host_execution', 5],
       ['saki_storage_generation', 8],
     ])
     expect(sakiStateCapability.writable.version).toBe(10)
