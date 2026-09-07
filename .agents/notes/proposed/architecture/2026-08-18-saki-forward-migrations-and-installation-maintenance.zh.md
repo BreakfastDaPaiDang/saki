@@ -35,7 +35,7 @@ Domain 层通过通用存储 operation 预留并检查已关闭的磁盘 unit，
 1. 进入维护模式，拒绝新的 mutation Intent，禁用自动化，排空 `storageDomain` 写入，并等待可以安全停稳的 Saki 自有 operation。无法停止的外部 operation 进入对账，而不能被报告为已完成。
 2. 关闭活动 Saki domain 与数据库。创建仅所有者可读的 Recovery Backup，其中记录活动 generation id、精确 state format 版本、源 build 来源、长度和加密摘要，并在继续迁移前验证该 artifact。
 3. 创建新的 candidate generation。调用通用 domain migration 依次通过每个连续版本，并使用当前 `DomainSpec` 打开结果数据库。
-4. 校验 Installation identity、引用完整性、唯一 admission owner、生命周期枚举、已占用 Execution Lease、非终态 Intent 与 Dispatch 的可恢复性，以及不存在 secret value。写入并 fsync candidate manifest，然后原子替换活动 manifest。
+4. 校验 Installation identity、引用完整性、唯一 admission owner、生命周期枚举、非终态 Intent 与 Dispatch 的可恢复性，以及不存在 secret value。写入并 fsync candidate manifest，然后原子替换活动 manifest。
 5. 重新打开选中的 generation，执行普通启动恢复，并且只在恢复进入安全状态后接受新工作。保留的旧 generation 维持只读，直到 retention policy 允许删除。
 
 启动时，manifest 是唯一 selector。Candidate 文件、backup 时间戳或数值最大的 generation 都不会隐式获胜。Manifest 替换前崩溃时选择旧 generation，替换后崩溃时选择新 generation。如果 manifest 或选中 generation 未通过完整性检查，启动会进入维护恢复，绝不猜测另一个写入者。回滚会显式安装声明状态 capability 能读取 backup 状态版本的 build，再恢复该 Recovery Backup；记录的源 build 只表示来源，可以帮助选择候选，但绝不是兼容性门禁。不支持反向迁移。
@@ -52,7 +52,7 @@ Installation Export 是包含认证加密 envelope、manifest 和内容 hash 的
 
 Restore 绝不覆盖活动 Installation。它会解密、验证 hash 与版本、校验每条包含记录，通过拥有 Session 的 capability 导入 Session archive，并构建新的 candidate generation。替换 restore 保留 Installation id，创建新的 Host id，把源 Host 记录为已退役或等待显式确认退役，然后通过和升级相同的 manifest switch 发布 candidate。
 
-每个 Resource Binding 都进入 `needs-rebind`，其原 display path 只保留为提示。使用 Host 绑定凭据的 Provider Account Profile 变成不可用，并产生 Intervention Request，要求设备重新授权或通过仅 Host 可用流程导入私钥材料。非终态 Host Operation 与 Execution Dispatch 进入对账，因为替换 Host 无法推断旧 process 结果。占用中的 Execution Lease 在 operation evidence 与 binding ownership 完成对账前保持阻塞。自动化保持禁用，直到这些状态和必需 GitHub refresh 都完成。
+每个 Resource Binding 都进入 `needs-rebind`，其原 display path 只保留为提示。使用 Host 绑定凭据的 Provider Account Profile 变成不可用，并产生 Intervention Request，要求设备重新授权或通过仅 Host 可用流程导入私钥材料。非终态 Host Operation 与 Execution Dispatch 进入对账，因为替换 Host 无法推断旧 process 结果。自动化保持禁用，直到这些状态和必需 GitHub refresh 都完成。
 
 维护命令会警告操作者在激活前让旧 Host 保持离线或完成退役。0.1.0 没有外部 coordinator，无法 fence 故意启动两个已恢复历史副本的操作者。未来远程控制面部署必须用经过认证的 lease 或 leader coordination 替代该运维规则。
 

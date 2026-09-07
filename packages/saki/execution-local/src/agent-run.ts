@@ -23,9 +23,9 @@ import type {
 import {
   NoEffectMutationError,
   RetryableMutationError,
-  verifyFrozenHostOperationWorld,
   type LocalHostWorldVerificationDependencies,
 } from './git-mutation.ts'
+import { inspectRepositoryResource } from './safe-repository.ts'
 import {
   hostOperationSnapshotCore,
   localHostAgentRunResultFor,
@@ -84,7 +84,7 @@ type SessionEvidence =
 /**
  * Advance one accepted StartAgentRun through durable planning, exact input
  * delivery, and success evidence without waiting for model completion. Fresh
- * writable-world evidence is required after Agent acquisition and immediately
+ * resource-identity evidence is required after Agent acquisition and immediately
  * before either the exact input send or a pending-input wake.
  * @param dependencies - live Agent and Session capabilities.
  * @param initial - accepted, planning, or publishing Agent Run record.
@@ -774,6 +774,40 @@ async function persistReconciledAgentRun(
   return reconciled
 }
 
+async function verifyAgentRunBinding(
+  dependencies: LocalAgentRunDependencies,
+  record: LocalHostAgentRunOperationRecord,
+  signal: AbortSignal,
+): Promise<void> {
+  const { fs, workspaces, config, identityReader } = dependencies.world
+  const binding = record.request.expected.binding
+  const expected = binding.expectedInspection.trusted
+  const resource = await inspectRepositoryResource(fs, expected.canonicalWorktreePath, config.inventoryMaxFileBytes, signal)
+  if (resource.kind === 'unavailable') throw new RetryableMutationError('unavailable')
+  if (resource.kind !== 'repository') throw new NoEffectMutationError('binding-stale')
+  const { topLevelPath, gitDirectoryPath, commonDirectoryPath } = resource.paths
+  const matches = workspaces.list().filter(workspace => workspace.path === topLevelPath)
+  if (matches.length !== 1 || matches[0]?.id !== binding.workspaceId
+    || topLevelPath !== expected.canonicalWorktreePath
+    || gitDirectoryPath !== expected.canonicalGitDirectory
+    || commonDirectoryPath !== expected.canonicalCommonGitDirectory) {
+    throw new NoEffectMutationError('binding-stale')
+  }
+  let gitIdentity
+  let commonIdentity
+  try {
+    gitIdentity = await identityReader(gitDirectoryPath, signal)
+    commonIdentity = commonDirectoryPath === gitDirectoryPath ? gitIdentity : await identityReader(commonDirectoryPath, signal)
+  } catch {
+    signal.throwIfAborted()
+    throw new RetryableMutationError('unavailable')
+  }
+  if (!isDeepStrictEqual(gitIdentity, expected.gitDirectoryIdentity)
+    || !isDeepStrictEqual(commonIdentity, expected.commonGitDirectoryIdentity)) {
+    throw new NoEffectMutationError('binding-stale')
+  }
+}
+
 async function verifyAgentRunWorld(
   dependencies: LocalAgentRunDependencies,
   record: LocalHostAgentRunOperationRecord,
@@ -785,7 +819,7 @@ async function verifyAgentRunWorld(
   | { readonly kind: 'decided'; readonly result: LocalAgentRunAdvanceResult }
 > {
   try {
-    await verifyFrozenHostOperationWorld(dependencies.world, record.request.expected, signal)
+    await verifyAgentRunBinding(dependencies, record, signal)
     return { kind: 'verified' }
   } catch (error: unknown) {
     signal.throwIfAborted()

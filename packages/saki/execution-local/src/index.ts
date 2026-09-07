@@ -779,7 +779,7 @@ function createPreparedOperationRecord<K extends HostOperationKind>(
   const preparedAt = Date.now()
   const operation = { id, hostId: request.expected.binding.hostId, type: request.type }
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     request,
     preparationRevision: 0,
     snapshot: {
@@ -841,12 +841,14 @@ export {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionV4DomainSpec,
 } from './operation-state.ts'
 export type {
   LocalHostGitOperationRecordV1,
   LocalHostOperationRecord,
   LocalHostOperationRecordV2,
   LocalHostOperationRecordV3,
+  LocalHostOperationRecordV4,
 } from './operation-state.ts'
 
 export default LocalSakiHostExecution

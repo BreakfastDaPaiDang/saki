@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.md
-2026-08-18-saki-manual-give-to-agent-dispatch.md: abc9e04715f4d65003cf853baaaba361b8ab147f
-2026-08-18-saki-manual-give-to-agent-dispatch.zh.md: e6f8d97c50a72d3e1b11cbd6aa0c71cab365db3e
+2026-08-18-saki-manual-give-to-agent-dispatch.md: d20aa6914a391ff505d450e2748f0bfa4be04eb7
+2026-08-18-saki-manual-give-to-agent-dispatch.zh.md: fe47549f4294b0f9fceed40bed70ec75a8bf69b6

@@ -36,9 +36,9 @@ Saki consequently uses at-least-once delivery with idempotent admission. The gua
 1. A scanner atomically claims an eligible `pending` dispatch or replaces an expired `claimed` record using its expected revision. Each new claim increments a monotonic fencing token and records a claim id, executor id, issuance time, expiry, and updated dispatch revision.
 2. The same executor may renew an unexpired claim with the expected revision without changing its fencing token. An expired claim cannot renew; reacquisition creates a higher token. The control plane is the time and validity authority, so a future remote Host cannot admit work from its local clock alone.
 3. The claimant asks the target Host to prepare the dispatch. The Host validates the current claim with the control plane, then atomically creates or reads a Host Operation keyed by dispatch id before invoking DSH, Git, a model, or another external capability. An exact replay or a later valid claim returns the same operation reference and records the latest prepared token; a different payload digest or intended Execution for that dispatch is a conflict.
-4. The control plane accepts the Host Operation reference with a compare-and-set against the current unexpired claim. It rechecks cancellation, delegated authority, applicable Automation Policy, and any required Execution Lease, then moves the dispatch to `accepted`.
+4. The control plane accepts the Host Operation reference with a compare-and-set against the current unexpired claim. It rechecks cancellation, delegated authority, and applicable Automation Policy, then moves the dispatch to `accepted`.
 5. The Host starts or resumes the prepared operation only after validating the accepted dispatch, operation reference, fencing token, current cancellation state, and authority required at that capability boundary. Start is idempotent by Host Operation reference. A prepared record whose acceptance failed remains inert and may be reused by a later valid claimant or garbage-collected after the dispatch reaches a terminal state.
-6. Claim expiry, release, or replacement invalidates the prior claimant but does not cancel an accepted Host Operation, stop its Execution, or release its Execution Lease. Operation control uses separately authorized inspect and cancel Control Intents.
+6. Claim expiry, release, or replacement invalidates the prior claimant but does not cancel an accepted Host Operation or stop its Execution. Operation control uses separately authorized inspect and cancel Control Intents.
 
 ### Retry, recovery, and cancellation
 
@@ -48,7 +48,7 @@ After a lost prepare or acceptance acknowledgement, Saki inspects by dispatch id
 
 Cancellation before acceptance moves `pending` or `claimed` to `canceled`, advances the dispatch revision, and prevents a prepared operation from starting. Cancellation after acceptance leaves the dispatch `accepted` and targets the Host Operation or Execution through another Control Intent, preserving the fact that delivery occurred.
 
-A writable dispatch is not claimable until its intended Agent Run holds the required Execution Lease. Claim expiry never releases that Lease. Manual and automatic starts use the same protocol; Automation Policy changes who may submit the originating Intent, not the safety properties of delivery.
+Manual and automatic starts use the same protocol; Automation Policy changes who may submit the originating Intent, not the safety properties of delivery.
 
 ## Considered options
 
@@ -56,7 +56,7 @@ A writable dispatch is not claimable until its intended Agent Run holds the requ
 
 **Let a claimant start the effect immediately after obtaining a claim.** A claimant can pause beyond expiry and act after another executor recovers the dispatch. A fencing token without Host-side admission and validation does not close that race.
 
-**Hold the Dispatch Claim for the complete Execution.** Agent Runs may last far longer than dispatch admission, and one Run may perform several Host operations. Long claims delay recovery and duplicate the separate Resource Binding invariant already owned by Execution Lease.
+**Hold the Dispatch Claim for the complete Execution.** Agent Runs may last far longer than dispatch admission, and one Run may perform several Host operations. Long claims delay recovery and couple independent command deliveries to one Session lifetime.
 
 **Create a new dispatch for each retry.** A new id destroys Host deduplication and makes a lost acknowledgement indistinguishable from a new requested effect. Retry metadata belongs to the stable dispatch.
 

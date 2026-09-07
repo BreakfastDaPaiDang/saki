@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { SakiGitHub, GitHubBranchSafetyFact, GitHubIssueDetailFact } from '@breakfastdapaidang/saki-github'
+import type { SakiGitHub, GitHubIssueDetailFact } from '@breakfastdapaidang/saki-github'
 import {
   canonicalDigest,
   computeStartAgentRunPayloadDigest,
@@ -29,25 +29,21 @@ import type {
   StartAgentRunHostOperationResult,
 } from '@breakfastdapaidang/saki-execution'
 import type { GitHubWorkItemMutationContextResult } from './github-sync.ts'
-import type { BindingWriteAdmissionTable } from './git-operations.ts'
 import { enqueueKeyedOperation } from './keyed-operation.ts'
 import type { DevelopmentProjects } from './projects.ts'
 import {
   agentOperationIntentRecordSchema,
   agentRunRecordSchema,
-  bindingWriteAdmissionRecordSchema,
   executionDispatchRecordSchema,
   workAssignmentRecordSchema,
   workSessionRecordSchema,
   interventionRequestRecordSchema,
-  MAX_AGENT_RUN_DISPATCHES,
   MAX_INTERVENTION_ANSWER_CHARS,
 } from './spec.ts'
 import type {
   AgentOperationIntentRecord,
   AgentProfileRecord,
   AgentRunRecord,
-  BindingWriteAdmissionRecord,
   ControlIntentActor,
   DevelopmentProjectRegistryRecord,
   ExecutionDispatchRecord,
@@ -58,7 +54,6 @@ import type {
 import type {
   AnswerInterventionIntent,
   GiveWorkItemToAgentIntent,
-  MoveWorkItemIntent,
   SakiBoardWorkItemProjection,
   SakiControlIntentId,
   SakiDispatchClaimId,
@@ -68,9 +63,7 @@ import type {
   SakiIntentReceiptId,
   SakiInterventionRequestId,
   SakiAnswerInterventionIntentReceipt,
-  SakiResourceBindingId,
   SakiWorkAssignmentId,
-  SakiWorkItemIntentReceipt,
 } from './types.ts'
 
 /** Stable Development Agent request admitted from the model-facing tool. */
@@ -118,7 +111,6 @@ interface AgentOperationsOptions {
   readonly agentRunTable: AgentRunTable
   readonly dispatchTable: ExecutionDispatchTable
   readonly interventionTable: InterventionRequestTable
-  readonly admissionTable: BindingWriteAdmissionTable
   readonly execution: SakiHostExecution
   readonly projects: DevelopmentProjects
   readonly mutationContext: (projectId: GiveWorkItemToAgentIntent['projectId']) => GitHubWorkItemMutationContextResult
@@ -128,11 +120,6 @@ interface AgentOperationsOptions {
     route: NonNullable<AgentProfileRecord['modelRouteRequest']>,
     signal: AbortSignal,
   ) => Promise<void>
-  readonly moveWorkItem: (
-    intent: MoveWorkItemIntent,
-    actor: ControlIntentActor,
-    signal: AbortSignal,
-  ) => Promise<SakiWorkItemIntentReceipt<'move-work-item'>>
   readonly claimTtlMs: number
   readonly notifyChanged: () => void
   readonly lifetime: AbortSignal
@@ -152,15 +139,12 @@ export interface ValidatedAgentOperationsState {
 
 type ReadonlyTable<K extends string, V> = Pick<KvTable<K, V>, 'entries' | 'get' | 'size'>
 
-class AdmissionBusy extends Error {}
-class AdmissionUnavailable extends Error {}
 class DispatchClaimLost extends Error {}
 class RecordCasConflict extends Error {}
 
 /** Durable Consumer that hides the complete manual assignment and Dispatch state machine. */
 export class AgentOperations {
   private readonly intentTails = new Map<SakiControlIntentId, Promise<void>>()
-  private readonly bindingTails = new Map<SakiResourceBindingId, Promise<void>>()
   private readonly runInterventionTails = new Map<SakiAgentRunId, Promise<void>>()
   private readonly interventionTails = new Map<SakiInterventionRequestId, Promise<void>>()
   private readonly active = new Set<Promise<void>>()
@@ -173,7 +157,7 @@ export class AgentOperations {
 
   /**
    * Attach the optional provider-neutral GitHub reader used only for fresh eligibility.
-   * @param github - reader for current Issue detail and branch-safety facts.
+   * @param github - reader for the current Issue title, body, and identity.
    * @returns a disposer that detaches this exact reader.
    */
   attachGitHub(github: GitHubReader): () => void {
@@ -201,7 +185,6 @@ export class AgentOperations {
       this.options.agentRunTable,
       this.options.dispatchTable,
       this.options.interventionTable,
-      this.options.admissionTable,
       registry,
       otherIntentIds,
       this.options.validateActorReference,
@@ -242,7 +225,6 @@ export class AgentOperations {
     await Promise.all([
       ...this.active,
       ...this.intentTails.values(),
-      ...this.bindingTails.values(),
       ...this.runInterventionTails.values(),
       ...this.interventionTails.values(),
     ])
@@ -362,9 +344,6 @@ export class AgentOperations {
             ? { ok: true, interventionId }
             : { ok: false, reason: 'conflict' }
         }
-        if (run.dispatchIds.length >= MAX_AGENT_RUN_DISPATCHES) {
-          return { ok: false, reason: 'conflict' }
-        }
         if (run.state !== 'starting' && run.state !== 'running' && run.state !== 'resume-pending') {
           return { ok: false, reason: 'conflict' }
         }
@@ -373,16 +352,12 @@ export class AgentOperations {
         const origin = this.requireIntent(run.intentId)
         const initialDispatchId = run.dispatchIds[0] as SakiExecutionDispatchId
         const latestDispatchId = run.dispatchIds.at(-1) as SakiExecutionDispatchId
-        const admissionValue = this.options.admissionTable.get(run.bindingId)
-        if (admissionValue === undefined || workSession.state !== 'open' || assignment.agentRunId !== run.id
+        if (workSession.state !== 'open' || assignment.agentRunId !== run.id
         || assignment.primaryWorkSessionId !== run.workSessionId) {
           return { ok: false, reason: 'unavailable' }
         }
         const initialDispatch = this.requireDispatch(initialDispatchId)
         const latestDispatch = this.requireDispatch(latestDispatchId)
-        const admission = bindingWriteAdmissionRecordSchema.parse(admissionValue)
-        const exactAcceptedOwner = admissionMatchesAgentOperation(admission, origin)
-        && admission.phase === 'accepted'
         const acceptedInitialPublication = run.state === 'starting'
         && assignment.state === 'assigned'
         && origin.phase === 'dispatching'
@@ -411,8 +386,7 @@ export class AgentOperations {
         && ((run.state === 'resume-pending' && run.blockingInterventionId === predecessor.id)
           || (run.state === 'running' && run.blockingInterventionId === undefined
             && dispatchHasExactSucceededRun(latestDispatch, run)))
-        if (!exactAcceptedOwner
-        || (!acceptedInitialPublication && !deliveredRun && !acceptedAnswerPublication)) {
+        if (!acceptedInitialPublication && !deliveredRun && !acceptedAnswerPublication) {
           return { ok: false, reason: 'unavailable' }
         }
         const ignoredPredecessorId = acceptedAnswerPublication
@@ -610,20 +584,14 @@ export class AgentOperations {
       const assignment = this.requireAssignment(run.assignmentId)
       const workSession = this.requireWorkSession(owner.workSessionId)
       const original = this.requireIntent(run.intentId)
-      const admissionValue = this.options.admissionTable.get(run.bindingId)
-      const admission = admissionValue === undefined
-        ? undefined
-        : bindingWriteAdmissionRecordSchema.parse(admissionValue)
       const currentBinding = this.options.projects.currentActiveBinding(run.projectId)
       if (run.state !== 'waiting' || run.blockingInterventionId !== intervention.id
         || run.workSessionId !== owner.workSessionId
         || assignment.ownerPrincipalId !== actor.principalId || assignment.state !== 'active'
         || workSession.state !== 'open'
-        || admission === undefined || admission.state !== 'agent-run' || admission.phase !== 'accepted'
-        || !admissionMatchesAgentOperation(admission, original)
         || typeof currentBinding === 'string'
         || currentBinding.binding.id !== run.bindingId
-        || currentBinding.binding.revision !== admission.bindingRevision) {
+        || currentBinding.binding.revision !== original.projectContext.bindingRevision) {
         return answerConflict(intervention, intent, 'owner-unavailable')
       }
       signal.throwIfAborted()
@@ -710,6 +678,7 @@ export class AgentOperations {
     }
     | { readonly ok: false; readonly result: InterventionAnswerResult }
   > {
+    signal.throwIfAborted()
     const { answer } = intervention
     let run = this.requireRun(intervention.owner.agentRunId)
     let dispatchValue = this.options.dispatchTable.get(answer.dispatchId)
@@ -725,24 +694,6 @@ export class AgentOperations {
       const current = this.options.projects.currentActiveBinding(intervention.projectId)
       if (typeof current === 'string' || current.binding.id !== run.bindingId) {
         return { ok: false, result: await this.reconcileInterventionAnswer(intervention, undefined, 'protocol') }
-      }
-      let inspected: Awaited<ReturnType<SakiHostExecution['inspectProject']>>
-      try {
-        inspected = await this.options.execution.inspectProject({ binding: current.binding }, signal)
-      } catch {
-        signal.throwIfAborted()
-        return { ok: false, result: answerUnavailable(intervention) }
-      }
-      signal.throwIfAborted()
-      if (!inspected.ok) {
-        return inspected.reason === 'unavailable'
-          ? { ok: false, result: answerUnavailable(intervention) }
-          : { ok: false, result: await this.reconcileInterventionAnswer(intervention, undefined, 'protocol') }
-      }
-      if (inspected.observation.index.kind !== 'tree'
-        || inspected.preEffectBaseline.kind !== 'complete'
-        || !inspected.observation.structuredMutation.available) {
-        return { ok: false, result: answerUnavailable(intervention) }
       }
       const input = interventionAnswerInput(
         intervention,
@@ -762,11 +713,6 @@ export class AgentOperations {
         },
         expected: {
           binding: current.binding,
-          status: inspected.observation.fingerprint,
-          head: inspected.observation.head,
-          index: inspected.observation.index,
-          worktree: inspected.observation.worktree,
-          preEffectBaseline: inspected.preEffectBaseline,
         },
         run: {
           agentRunId: run.id,
@@ -779,7 +725,7 @@ export class AgentOperations {
       const now = Date.now()
       const dispatch = executionDispatchRecordSchema.parse({
         id: answer.dispatchId,
-        schemaVersion: 1,
+        schemaVersion: 2,
         revision: 0,
         intentId: answer.payload.intent.intentId,
         agentRunId: run.id,
@@ -859,14 +805,14 @@ export class AgentOperations {
     }
     const retainedClaim = dispatch as ClaimedExecutionDispatch
     if (retainedClaim.claim.expiresAt <= Date.now()) return answerUnavailable(intervention)
-    if (this.currentInterventionAnswerAdmission(intervention, retainedClaim) === undefined) {
+    if (!this.currentInterventionAnswerAdmission(intervention, retainedClaim)) {
       return await this.reconcileInterventionAnswer(intervention, retainedClaim, 'protocol')
     }
     const accepted = await this.acceptClaimedDispatch(
       retainedClaim,
       prepared.preparation,
       prepared.snapshot,
-      current => this.currentInterventionAnswerAdmission(intervention, current) !== undefined,
+      current => this.currentInterventionAnswerAdmission(intervention, current),
     )
     return accepted === undefined ? answerUnavailable(intervention) : undefined
   }
@@ -890,6 +836,7 @@ export class AgentOperations {
           state: 'accepted',
           claim: undefined,
           acceptedFencingToken: claimed.claim.fencingToken,
+          admissionRevision: current.revision + 1,
           preparation,
           operationSnapshot: snapshot,
           updatedAt: Math.max(current.updatedAt, Date.now()),
@@ -913,11 +860,10 @@ export class AgentOperations {
   private currentInterventionAnswerAdmission(
     intervention: Extract<InterventionRequestRecord, { readonly state: 'answered' }>,
     dispatch: ExecutionDispatchRecord,
-  ): Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> | undefined {
+  ): boolean {
     const parsedRun = this.requireRun(intervention.owner.agentRunId)
     const assignment = this.requireAssignment(parsedRun.assignmentId)
     const origin = this.requireIntent(parsedRun.intentId)
-    const admission = bindingWriteAdmissionRecordSchema.parse(this.options.admissionTable.get(parsedRun.bindingId))
     const actor = intervention.answer.payload.actor
     const current = this.options.projects.currentActiveBinding(intervention.projectId)
     return parsedRun.state === 'resume-pending'
@@ -929,14 +875,10 @@ export class AgentOperations {
       && actor.principalId === intervention.targetPrincipalId
       && this.options.authorityCurrent(actor, 'intervention:answer')
       && interventionAnswerDispatchMatches(dispatch, intervention, parsedRun)
-      && admissionMatchesAgentOperation(admission, origin)
-      && admission.phase === 'accepted'
       && typeof current !== 'string'
       && current.binding.id === parsedRun.bindingId
-      && current.binding.revision === admission.bindingRevision
+      && current.binding.revision === origin.projectContext.bindingRevision
       && isDeepStrictEqual(current.binding, dispatch.hostRequest.expected.binding)
-      ? admission
-      : undefined
   }
 
   private async driveAcceptedInterventionAnswer(
@@ -1051,10 +993,7 @@ export class AgentOperations {
       readonly profile: AgentProfileRecord & { readonly modelRouteRequest: NonNullable<AgentProfileRecord['modelRouteRequest']> }
       readonly item: SakiBoardWorkItemProjection
       readonly detail: GitHubIssueDetailFact
-      readonly definition: ParsedDefinition
       readonly binding: ReturnType<DevelopmentProjects['currentActiveBinding']> & object
-      readonly inspected: Extract<Awaited<ReturnType<SakiHostExecution['inspectProject']>>, { readonly ok: true }>
-      readonly branchName: string
     }
   > {
     const registry = this.options.projects.registry()
@@ -1079,33 +1018,8 @@ export class AgentOperations {
     if (item === undefined || item.remoteFingerprint !== intent.expectedRemoteFingerprint) {
       return { ok: false, result: conflict(intent, 'stale-remote') }
     }
-    if (item.status !== 'ready' || item.issueState !== 'open' || item.archived || item.notInProject) {
-      return { ok: false, result: conflict(intent, 'work-item-not-ready') }
-    }
     const binding = this.options.projects.currentActiveBinding(intent.projectId)
     if (typeof binding === 'string' || binding.projectRevision !== intent.expectedProjectRevision) {
-      return { ok: false, result: conflict(intent, 'binding-unavailable') }
-    }
-    const admissionValue = this.options.admissionTable.get(binding.binding.id)
-    if (admissionValue === undefined) {
-      return { ok: false, result: conflict(intent, 'binding-unavailable') }
-    }
-    if (bindingWriteAdmissionRecordSchema.parse(admissionValue).state !== 'available') {
-      return { ok: false, result: conflict(intent, 'writable-run-active') }
-    }
-    const inspected = await this.options.execution.inspectProject({ binding: binding.binding }, signal)
-    signal.throwIfAborted()
-    if (!inspected.ok) {
-      return inspected.reason === 'unavailable'
-        ? { ok: false, result: { ok: false, reason: 'unavailable', detail: 'host-unavailable' } }
-        : { ok: false, result: conflict(intent, 'binding-unavailable') }
-    }
-    if (inspected.preEffectBaseline.kind !== 'complete'
-      || !inspected.observation.structuredMutation.available
-      || inspected.observation.index.kind !== 'tree') {
-      return { ok: false, result: conflict(intent, 'inherited-changes-unsafe') }
-    }
-    if (inspected.observation.branch.kind !== 'attached') {
       return { ok: false, result: conflict(intent, 'binding-unavailable') }
     }
     const github = this.github
@@ -1142,41 +1056,13 @@ export class AgentOperations {
       || detail.updatedAt > item.updatedAt) {
       return { ok: false, result: conflict(intent, 'stale-remote') }
     }
-    const definition = parseDefinition(detail.body)
-    if (definition.acceptanceCriteria.length === 0) {
-      return { ok: false, result: conflict(intent, 'acceptance-criteria-missing') }
-    }
-    if (definition.blockage.length > 0) {
-      return { ok: false, result: conflict(intent, 'work-item-blocked') }
-    }
-    let branch: GitHubBranchSafetyFact
-    try {
-      branch = await github.read<'branch-safety'>({
-        kind: 'branch-safety',
-        installation,
-        repositoryId: mutation.context.configuration.repositoryNodeId,
-        repositoryDatabaseId: mutation.context.configuration.repositoryDatabaseId,
-        branch: inspected.observation.branch.name,
-      }, signal)
-    } catch {
-      signal.throwIfAborted()
-      return { ok: false, result: { ok: false, reason: 'unavailable', detail: 'branch-safety-unavailable' } }
-    }
-    signal.throwIfAborted()
-    if (branch.kind === 'protected') return { ok: false, result: conflict(intent, 'branch-protected') }
-    if (branch.kind === 'legacy-protection-unknown') {
-      return { ok: false, result: conflict(intent, 'legacy-protection-unknown') }
-    }
     return {
       ok: true,
       project,
       profile: resolvedProfile,
       item,
       detail,
-      definition,
       binding,
-      inspected,
-      branchName: inspected.observation.branch.name,
     }
   }
 
@@ -1201,9 +1087,7 @@ export class AgentOperations {
           projectTitle: eligible.project.projectTitle,
           item: eligible.item,
           detail: eligible.detail,
-          definition: eligible.definition,
           profile,
-          branch: eligible.branchName,
         }),
       }],
       source: {
@@ -1219,11 +1103,6 @@ export class AgentOperations {
       source: { kind: 'execution-dispatch', dispatchId: ids.dispatchId, payloadDigest: runPayloadDigest },
       expected: {
         binding: eligible.binding.binding,
-        status: eligible.inspected.observation.fingerprint,
-        head: eligible.inspected.observation.head,
-        index: eligible.inspected.observation.index,
-        worktree: eligible.inspected.observation.worktree,
-        preEffectBaseline: eligible.inspected.preEffectBaseline,
       },
       run: {
         agentRunId: ids.agentRunId,
@@ -1246,9 +1125,6 @@ export class AgentOperations {
       body: eligible.detail.body,
       updatedAt: eligible.detail.updatedAt,
       remoteFingerprint: intent.expectedRemoteFingerprint,
-      intendedOutcome: eligible.definition.intendedOutcome,
-      acceptanceCriteria: eligible.definition.acceptanceCriteria,
-      blockage: eligible.definition.blockage,
     }
     const projectContext = {
       projectId: eligible.project.id,
@@ -1259,7 +1135,7 @@ export class AgentOperations {
     }
     const candidate = agentOperationIntentRecordSchema.safeParse({
       id: intent.intentId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       receiptId: receiptId(intent.intentId),
       payloadDigest: canonicalDigest('saki/agent-operation-intent/v1', payload),
@@ -1269,7 +1145,6 @@ export class AgentOperations {
       workSessionId: ids.workSessionId,
       agentRunId: ids.agentRunId,
       dispatchId: ids.dispatchId,
-      inProgressIntentId: ids.inProgressIntentId,
       workItemDefinition,
       projectContext,
       profile,
@@ -1302,15 +1177,6 @@ export class AgentOperations {
       if (recoveredTerminal !== undefined) return recoveredTerminal
       if (!this.options.authorityCurrent(record.payload.actor, 'work-item:give-to-agent')) {
         return await this.cancelForRevocation(record, signal)
-      }
-      if (record.phase === 'prepared') {
-        try {
-          await this.reserve(record)
-        } catch (error) {
-          if (error instanceof AdmissionBusy || error instanceof AdmissionUnavailable) return unavailable(record)
-          throw error
-        }
-        record = await this.updateIntent(record, { phase: 'admission-reserved' })
       }
       if (dispatch.state !== 'accepted') {
         const claimed = await this.claim(dispatch)
@@ -1375,7 +1241,7 @@ export class AgentOperations {
     })
     const dispatch = executionDispatchRecordSchema.parse({
       id: record.dispatchId,
-      schemaVersion: 1,
+      schemaVersion: 2,
       revision: 0,
       intentId: record.id,
       agentRunId: record.agentRunId,
@@ -1427,50 +1293,6 @@ export class AgentOperations {
         'updatedAt',
       ],
     )
-  }
-
-  private async reserve(
-    record: AgentOperationIntentRecord,
-  ): Promise<Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }>> {
-    return await enqueueKeyedOperation(this.bindingTails, record.projectContext.resourceBindingId, async () => {
-      const bindingId = record.projectContext.resourceBindingId
-      const value = this.options.admissionTable.get(bindingId)
-      if (value === undefined) throw new AdmissionUnavailable()
-      try {
-        const next = await this.options.admissionTable.update(bindingId, (currentValue) => {
-          const current = bindingWriteAdmissionRecordSchema.parse(currentValue)
-          if (current.state === 'agent-run') {
-            if (admissionMatchesAgentOperation(current, record)) return current
-            throw new AdmissionBusy()
-          }
-          if (current.state === 'manual-host-operation') throw new AdmissionBusy()
-          const now = Math.max(current.updatedAt, Date.now())
-          return bindingWriteAdmissionRecordSchema.parse({
-            id: bindingId,
-            schemaVersion: 1,
-            revision: current.revision + 1,
-            state: 'agent-run',
-            phase: 'reserved',
-            bindingRevision: record.projectContext.bindingRevision,
-            originIntentId: record.id,
-            agentRunId: record.agentRunId,
-            payloadDigest: record.hostRequest.source.payloadDigest,
-            reservedAt: now,
-            updatedAt: now,
-          })
-        })
-        return next as Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }>
-      } catch (error) {
-        if (error instanceof AdmissionBusy || error instanceof AdmissionUnavailable) throw error
-        const replay = this.options.admissionTable.get(bindingId)
-        /* v8 ignore else -- an active Binding admission row is provisioned once and has no deletion path. */
-        if (replay !== undefined) {
-          const parsed = bindingWriteAdmissionRecordSchema.parse(replay)
-          if (admissionMatchesAgentOperation(parsed, record)) return parsed
-        }
-        throw error
-      }
-    })
   }
 
   private async claim(dispatch: ExecutionDispatchRecord): Promise<ClaimedExecutionDispatch | undefined> {
@@ -1560,13 +1382,11 @@ export class AgentOperations {
     const prepared = await this.prepareExactHostOperation(record, signal)
     if (!prepared.ok) {
       if (prepared.reason === 'unavailable') return { ok: false, result: unavailable(record) }
-      await this.acceptAdmission(record)
       const reconciled = await this.reconcile(record, 'protocol')
       return { ok: false, result: resultFor(reconciled) }
     }
     assertSnapshot(record, prepared.snapshot)
     if (prepared.snapshot.state !== 'prepared') {
-      await this.acceptAdmission(record)
       const reconciled = await this.reconcile(record, 'protocol')
       return { ok: false, result: resultFor(reconciled) }
     }
@@ -1597,7 +1417,6 @@ export class AgentOperations {
     if (!this.acceptanceAuthorityIsCurrent(record)) {
       return { ok: false, result: unavailable(record) }
     }
-    await this.acceptAdmission(record)
     const accepted = await this.acceptClaimedDispatch(
       retainedClaim,
       prepared.preparation,
@@ -1616,26 +1435,6 @@ export class AgentOperations {
       && isDeepStrictEqual(current.binding, record.hostRequest.expected.binding)
   }
 
-  private async acceptAdmission(
-    record: AgentOperationIntentRecord,
-  ): Promise<Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run'; readonly phase: 'accepted' }>> {
-    const bindingId = record.projectContext.resourceBindingId
-    const next = await this.options.admissionTable.update(bindingId, (value) => {
-      const current = bindingWriteAdmissionRecordSchema.parse(value)
-      if (!admissionMatchesAgentOperation(current, record)) throw new AdmissionBusy()
-      if (current.phase === 'accepted') return current
-      const now = Math.max(current.updatedAt, Date.now())
-      return bindingWriteAdmissionRecordSchema.parse({
-        ...current,
-        revision: current.revision + 1,
-        phase: 'accepted',
-        acceptedAt: now,
-        updatedAt: now,
-      })
-    })
-    return next as Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run'; readonly phase: 'accepted' }>
-  }
-
   private async driveAccepted(
     record: AgentOperationIntentRecord,
     dispatch: ExecutionDispatchRecord,
@@ -1652,7 +1451,7 @@ export class AgentOperations {
     const inspected = await this.options.execution.inspectOperation(preparation.operation, signal)
     signal.throwIfAborted()
     assertSnapshot(record, inspected)
-    if (inspected.state === 'succeeded') return await this.finishStarted(record, dispatch, inspected.result, inspected, signal)
+    if (inspected.state === 'succeeded') return await this.finishStarted(record, dispatch, inspected.result, inspected)
     if (inspected.state === 'reconciliation-required') return resultFor(await this.reconcile(record, inspected.reason))
     if (inspected.state === 'failed' || inspected.state === 'canceled') {
       return await this.finishNoEffect(record, dispatch, inspected, signal)
@@ -1669,7 +1468,7 @@ export class AgentOperations {
     assertSnapshot(record, started.snapshot)
     dispatch = await this.updateDispatch(dispatch, { operationSnapshot: started.snapshot })
     if (started.snapshot.state === 'succeeded') {
-      return await this.finishStarted(record, dispatch, started.snapshot.result, started.snapshot, signal)
+      return await this.finishStarted(record, dispatch, started.snapshot.result, started.snapshot)
     }
     if (started.snapshot.state === 'reconciliation-required') {
       return resultFor(await this.reconcile(record, started.snapshot.reason))
@@ -1682,7 +1481,7 @@ export class AgentOperations {
       const canceled = await this.options.execution.cancelOperation(preparation.operation, reason, signal)
       assertSnapshot(record, canceled)
       if (canceled.state === 'succeeded') {
-        return await this.finishStarted(record, dispatch, canceled.result, canceled, signal)
+        return await this.finishStarted(record, dispatch, canceled.result, canceled)
       }
       if (canceled.state === 'failed' || canceled.state === 'canceled') {
         return await this.finishNoEffect(record, dispatch, canceled, signal)
@@ -1699,7 +1498,6 @@ export class AgentOperations {
     dispatch: ExecutionDispatchRecord,
     result: StartAgentRunHostOperationResult,
     snapshot: HostOperationSnapshot<'start-agent-run'>,
-    signal: AbortSignal,
   ): Promise<AgentResult> {
     if (result.agentRunId !== record.agentRunId
       || result.workSessionId !== record.workSessionId
@@ -1711,21 +1509,6 @@ export class AgentOperations {
     const run = this.requireRun(record.agentRunId)
     if (run.state !== 'running') {
       await this.updateRun(run, { state: 'running', hostResult: result })
-    }
-    const move: MoveWorkItemIntent = {
-      type: 'move-work-item',
-      intentId: record.inProgressIntentId,
-      projectId: record.payload.intent.projectId,
-      workItemId: record.payload.intent.workItemId,
-      expectedRemoteFingerprint: record.payload.intent.expectedRemoteFingerprint,
-      targetStatus: 'in-progress',
-    }
-    const moved = await this.options.moveWorkItem(move, record.payload.actor, signal)
-    if (!moved.ok) {
-      if (moved.reason === 'unavailable') return unavailable(record)
-      return resultFor(await this.reconcile(record, moved.reason === 'reconciliation-required'
-        ? moved.receipt.reason === 'evidence-conflict' ? 'evidence-conflict' : 'effect-unknown'
-        : 'protocol'))
     }
     const assignment = this.requireAssignment(record.assignmentId)
     if (assignment.state !== 'active') await this.updateAssignment(assignment, { state: 'active' })
@@ -1755,7 +1538,6 @@ export class AgentOperations {
       const replay = await this.prepareExactHostOperation(record, signal)
       if (!replay.ok) {
         if (replay.reason === 'unavailable') return unavailable(record)
-        await this.acceptAdmission(record)
         return resultFor(await this.reconcile(record, 'protocol'))
       }
       dispatch = await this.updateDispatch(dispatch, {
@@ -1772,7 +1554,7 @@ export class AgentOperations {
       signal,
     )
     assertSnapshot(record, snapshot)
-    if (snapshot.state === 'succeeded') return await this.finishStarted(record, dispatch, snapshot.result, snapshot, signal)
+    if (snapshot.state === 'succeeded') return await this.finishStarted(record, dispatch, snapshot.result, snapshot)
     if (snapshot.state === 'reconciliation-required') return resultFor(await this.reconcile(record, snapshot.reason))
     if (snapshot.state !== 'failed' && snapshot.state !== 'canceled') return unavailable(record)
     const terminalSnapshot = snapshot
@@ -1812,7 +1594,6 @@ export class AgentOperations {
 
   private async completeCanceled(record: AgentOperationIntentRecord): Promise<AgentResult> {
     await this.cancelChildren(record)
-    await this.release(record)
     const current = this.requireIntent(record.id)
     const canceled = await this.updateIntent(current, { phase: 'canceled', terminalReason: 'authority-revoked' })
     this.options.notifyChanged()
@@ -1838,13 +1619,6 @@ export class AgentOperations {
     if (intent.phase !== 'dispatching' || !dispatchMatchesAdmissionExpectation(dispatch, expectation)) {
       return Promise.resolve({ kind: 'denied', reason: 'not-current' })
     }
-    const admissionValue = this.options.admissionTable.get(dispatch.bindingId)
-    if (admissionValue === undefined) return Promise.resolve({ kind: 'unavailable' })
-    const admission = bindingWriteAdmissionRecordSchema.safeParse(admissionValue)
-    if (!admission.success) return Promise.resolve({ kind: 'unavailable' })
-    if (!admissionMatchesAgentOperation(admission.data, intent) || admission.data.phase !== 'accepted') {
-      return Promise.resolve({ kind: 'denied', reason: 'not-current' })
-    }
     const current = this.options.projects.currentActiveBinding(intent.payload.intent.projectId)
     if (typeof current === 'string' || current.projectRevision !== intent.projectContext.projectRevision
       || !isDeepStrictEqual(current.binding, dispatch.hostRequest.expected.binding)) {
@@ -1853,7 +1627,7 @@ export class AgentOperations {
     if (!this.options.authorityCurrent(intent.payload.actor, 'work-item:give-to-agent')) {
       return Promise.resolve({ kind: 'denied', reason: 'authority-revoked' })
     }
-    return Promise.resolve({ kind: 'accepted', admissionRevision: admission.data.revision })
+    return Promise.resolve({ kind: 'accepted', admissionRevision: dispatch.admissionRevision })
   }
 
   private admitInterventionAnswer(
@@ -1872,10 +1646,9 @@ export class AgentOperations {
     if (!this.options.authorityCurrent(intervention.answer.payload.actor, 'intervention:answer')) {
       return { kind: 'denied', reason: 'authority-revoked' }
     }
-    const admission = this.currentInterventionAnswerAdmission(intervention, dispatch)
-    return admission === undefined
-      ? { kind: 'denied', reason: 'not-current' }
-      : { kind: 'accepted', admissionRevision: admission.revision }
+    return this.currentInterventionAnswerAdmission(intervention, dispatch)
+      ? { kind: 'accepted', admissionRevision: dispatch.admissionRevision }
+      : { kind: 'denied', reason: 'not-current' }
   }
 
   private async reconcile(
@@ -1915,27 +1688,6 @@ export class AgentOperations {
     if (session.state !== 'canceled') await this.updateWorkSession(session, { state: 'canceled' })
     const run = this.requireRun(record.agentRunId)
     if (run.state !== 'canceled') await this.updateRun(run, { state: 'canceled' })
-  }
-
-  private async release(record: AgentOperationIntentRecord): Promise<void> {
-    const bindingId = record.projectContext.resourceBindingId
-    const currentValue = this.options.admissionTable.get(bindingId)
-    if (currentValue === undefined) throw new AdmissionUnavailable()
-    const current = bindingWriteAdmissionRecordSchema.parse(currentValue)
-    if (current.state === 'available') return
-    if (!admissionMatchesAgentOperation(current, record)) return
-    await this.options.admissionTable.update(bindingId, (value) => {
-      const stored = bindingWriteAdmissionRecordSchema.parse(value)
-      if (stored.state === 'available') return stored
-      if (!admissionMatchesAgentOperation(stored, record)) throw new AdmissionBusy()
-      return bindingWriteAdmissionRecordSchema.parse({
-        id: bindingId,
-        schemaVersion: 1,
-        revision: stored.revision + 1,
-        state: 'available',
-        updatedAt: Math.max(stored.updatedAt, Date.now()),
-      })
-    })
   }
 
   private requireIntent(id: SakiControlIntentId): AgentOperationIntentRecord {
@@ -2109,32 +1861,15 @@ function sameDispatchClaimOwner(
 function dispatchMatchesAdmissionExpectation(
   dispatch: ExecutionDispatchRecord,
   expectation: HostOperationAdmissionExpectation,
-): boolean {
+): dispatch is ExecutionDispatchRecord & { readonly admissionRevision: number } {
   return dispatch.state === 'accepted'
+    && dispatch.admissionRevision !== undefined
     && dispatch.acceptedFencingToken !== undefined
     && dispatch.preparation !== undefined
     && isDeepStrictEqual(expectation.source, dispatch.hostRequest.source)
     && isDeepStrictEqual(expectation.preparation, dispatch.preparation)
     && expectation.bindingId === dispatch.bindingId
     && expectation.bindingRevision === dispatch.hostRequest.expected.binding.revision
-}
-
-function admissionMatchesAgentOperation(
-  admission: BindingWriteAdmissionRecord,
-  record: AgentOperationIntentRecord,
-): admission is Extract<BindingWriteAdmissionRecord, { readonly state: 'agent-run' }> {
-  if (admission.state !== 'agent-run') return false
-  return isDeepStrictEqual({
-    originIntentId: admission.originIntentId,
-    agentRunId: admission.agentRunId,
-    payloadDigest: admission.payloadDigest,
-    bindingRevision: admission.bindingRevision,
-  }, {
-    originIntentId: record.id,
-    agentRunId: record.agentRunId,
-    payloadDigest: record.hostRequest.source.payloadDigest,
-    bindingRevision: record.projectContext.bindingRevision,
-  })
 }
 
 /**
@@ -2145,7 +1880,6 @@ function admissionMatchesAgentOperation(
  * @param agentRunTable - preallocated Agent Runs and Host results.
  * @param dispatchTable - preallocated Execution Dispatches and Host evidence.
  * @param interventionTable - independently revisioned operator requests and answer winners.
- * @param admissionTable - shared Resource Binding write-admission rows.
  * @param registry - validated Project Registry, or absence before provisioning.
  * @param otherIntentIds - Control Intent ids already owned by other durable families.
  * @param validateActorReference - validator for retained Actor attribution.
@@ -2158,7 +1892,6 @@ export function validateAgentOperationsDurableState(
   agentRunTable: ReadonlyTable<SakiAgentRunId, AgentRunRecord>,
   dispatchTable: ReadonlyTable<SakiExecutionDispatchId, ExecutionDispatchRecord>,
   interventionTable: ReadonlyTable<SakiInterventionRequestId, InterventionRequestRecord>,
-  admissionTable: ReadonlyTable<SakiResourceBindingId, BindingWriteAdmissionRecord>,
   registry: DevelopmentProjectRegistryRecord | undefined,
   otherIntentIds: ReadonlySet<SakiControlIntentId>,
   validateActorReference: (actor: ControlIntentActor) => void,
@@ -2222,8 +1955,6 @@ export function validateAgentOperationsDurableState(
       ? [[intervention.answer.dispatchId, intervention] as const]
       : []
   )))
-  const admissions = parseTable(admissionTable, bindingWriteAdmissionRecordSchema, 'Binding write admission')
-  const admissionById = new Map(admissions.map(value => [value.id, value]))
   for (const intent of intents) {
     const project = registry.projects.find(candidate => candidate.id === intent.payload.intent.projectId)
     const profile = registry.agentProfiles.find(candidate => candidate.id === intent.profile.id)
@@ -2288,41 +2019,6 @@ export function validateAgentOperationsDurableState(
       || session?.state !== 'canceled' || run?.state !== 'canceled'
       || !dispatchProvesCanceledDelivery(dispatch))) {
       throw new Error('canceled Saki Agent operation retains a nonterminal child or possible-effect Host snapshot')
-    }
-    const admission = admissionById.get(intent.projectContext.resourceBindingId)
-    const ownedAdmission = admission?.state === 'agent-run'
-      && admission.originIntentId === intent.id && admission.agentRunId === intent.agentRunId
-      ? admission
-      : undefined
-    const exactOwner = ownedAdmission !== undefined
-      && ownedAdmission.bindingRevision === intent.projectContext.bindingRevision
-      && ownedAdmission.payloadDigest === intent.hostRequest.source.payloadDigest
-    if (intent.phase === 'canceled') {
-      if (ownedAdmission !== undefined) throw new Error('canceled Saki Agent operation retains its write admission')
-    } else if (intent.phase === 'admission-reserved') {
-      if (!exactOwner || ownedAdmission.phase !== 'reserved') {
-        throw new Error('admission-reserved Saki Agent operation lacks its exact reserved write admission')
-      }
-    } else if (intent.phase === 'dispatching') {
-      const terminalAdmissionIsValid = reconciliationPrefix
-        ? exactOwner
-        : cancellationPrefix
-          ? ownedAdmission === undefined
-            || exactOwner
-          : undefined
-      const activeAdmissionIsValid = exactOwner
-        && (dispatch?.state === 'claimed'
-          || (dispatch?.state === 'accepted'
-            ? ownedAdmission.phase === 'accepted'
-            : dispatch?.state === 'pending' && ownedAdmission.phase === 'reserved'))
-      if (terminalAdmissionIsValid === false
-        || (terminalAdmissionIsValid === undefined && !activeAdmissionIsValid)) {
-        throw new Error('dispatching Saki Agent operation has incompatible write admission')
-      }
-    } else if (intent.phase === 'started' || intent.phase === 'reconciliation-required') {
-      if (!exactOwner || ownedAdmission.phase !== 'accepted') {
-        throw new Error('started or reconciling Saki Agent operation lacks its exact accepted write admission')
-      }
     }
   }
   for (const assignment of assignments) {
@@ -2528,19 +2224,6 @@ export function validateAgentOperationsDurableState(
       throw new Error('orphan or mismatched Execution Dispatch')
     }
   }
-  const bindingById = new Map(registry.resourceBindings.map(binding => [binding.id, binding]))
-  for (const admission of admissions) {
-    if (admission.state !== 'agent-run') continue
-    const binding = bindingById.get(admission.id)
-    const intent = intentById.get(admission.originIntentId)
-    const run = runById.get(admission.agentRunId)
-    if (binding === undefined || intent === undefined || run === undefined
-      || run.intentId !== intent.id || intent.projectContext.resourceBindingId !== admission.id
-      || admission.bindingRevision > binding.revision
-      || admission.payloadDigest !== intent.hostRequest.source.payloadDigest) {
-      throw new Error('Saki Agent Run write admission has inconsistent ownership')
-    }
-  }
   const runningAgentRuns = runs
     .filter(run => run.state === 'running')
     .toSorted(byCreatedAtThenId)
@@ -2736,72 +2419,24 @@ function terminalPrefixChildrenAreMonotonic(
   return session.state !== 'open' || run.state !== 'canceled'
 }
 
-interface ParsedDefinition {
-  readonly intendedOutcome: string
-  readonly acceptanceCriteria: readonly string[]
-  readonly blockage: readonly string[]
-}
-
-/**
- * Parse the bounded Issue body into the exact normalized definition shown to the Agent.
- * @param body - complete validated GitHub Issue body.
- * @returns intended outcome, acceptance criteria, and nonempty blockage entries.
- */
-function parseDefinition(body: string): ParsedDefinition {
-  const sections = new Map<string, string[]>()
-  let current = ''
-  for (const line of body.split(/\r?\n/u)) {
-    if (/^#{1,6}\s+.+?\s*$/u.test(line)) {
-      current = line.replace(/^#{1,6}\s+/u, '').trim().toLowerCase()
-      if (!sections.has(current)) sections.set(current, [])
-      continue
-    }
-    const lines = sections.get(current)
-    if (lines !== undefined) lines.push(line)
-  }
-  const section = (...names: readonly string[]): string => names
-    .flatMap(name => sections.get(name) ?? [])
-    .join('\n')
-    .trim()
-  const intendedOutcome = section('intended outcome', 'user story / outcome', 'outcome')
-  const criteria = listItems(section('acceptance criteria', 'acceptance'))
-  const blockage = listItems(section('blocked by', 'blockage', 'blockers', 'blocked'))
-    .filter(value => !/^(?:none|n\/a|not blocked|无|无阻塞)$/iu.test(value))
-  return {
-    intendedOutcome: intendedOutcome === '' ? 'Complete the Work Item as specified.' : intendedOutcome,
-    acceptanceCriteria: criteria,
-    blockage,
-  }
-}
-
-function listItems(value: string): readonly string[] {
-  return value.split(/\r?\n/u)
-    .map(line => line.trim().replace(/^[-*+]\s+(?:\[[ xX]\]\s*)?/u, '').trim())
-    .filter(line => line !== '')
-}
-
 function renderRunInput(input: {
   readonly projectTitle: string
   readonly item: SakiBoardWorkItemProjection
   readonly detail: GitHubIssueDetailFact
-  readonly definition: ParsedDefinition
   readonly profile: AgentOperationIntentRecord['profile']
-  readonly branch: string
 }): string {
   return [
     `Project: ${input.projectTitle}`,
     `Work Item: #${String(input.detail.number)} ${input.detail.title}`,
     `URL: ${input.detail.url}`,
-    `Current branch: ${input.branch}`,
     `Development Agent Profile: ${input.profile.id} v${String(input.profile.version)}; preset ${input.profile.agentPresetId}; route ${input.profile.modelRoute.provider}/${input.profile.modelRoute.model}`,
     '',
-    'Intended outcome:',
-    input.definition.intendedOutcome,
+    `Issue state: ${input.detail.state}; workflow status: ${input.item.status}`,
     '',
-    'Acceptance criteria:',
-    ...input.definition.acceptanceCriteria.map(value => `- ${value}`),
+    'Issue description:',
+    input.detail.body,
     '',
-    'Implement the frozen Work Item definition in the bound repository. Preserve unrelated existing changes.',
+    'Work on the supplied Work Item in the bound repository. Preserve unrelated existing changes.',
   ].join('\n')
 }
 
@@ -2984,7 +2619,6 @@ function childIds(intent: GiveWorkItemToAgentIntent) {
     dispatchId: `dispatch-${id('dispatch')}` as SakiExecutionDispatchId,
     sessionId: `session-${id('dsh-session')}` as StartAgentRunHostOperationRequest['run']['sessionId'],
     messageId: id('message') as StartAgentRunHostOperationRequest['run']['input']['id'],
-    inProgressIntentId: `intent-${id('in-progress-intent')}` as SakiControlIntentId,
   }
 }
 
@@ -3020,7 +2654,7 @@ function conflict(intent: GiveWorkItemToAgentIntent, reason: AgentConflictReason
 function unavailable(record: AgentOperationIntentRecord): AgentResult {
   return { ok: false, reason: 'unavailable', receipt: receiptFor(record) as Extract<
     SakiGiveWorkItemToAgentReceipt,
-    { readonly state: 'prepared' | 'admission-reserved' | 'dispatching' }
+    { readonly state: 'prepared' | 'dispatching' }
   > }
 }
 
@@ -3052,7 +2686,6 @@ function receiptFor(record: AgentOperationIntentRecord): DurableAgentReceipt {
   }
   switch (record.phase) {
     case 'prepared': return { ...base, state: 'prepared' }
-    case 'admission-reserved': return { ...base, state: 'admission-reserved' }
     case 'dispatching': return { ...base, state: 'dispatching' }
     case 'started': return { ...base, state: 'started' }
     case 'canceled': return { ...base, state: 'canceled', reason: 'authority-revoked' }

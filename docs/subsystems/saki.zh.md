@@ -14,7 +14,7 @@ Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现
 
 `register-development-project` 会重复 locator 与浏览器确认的准确指纹和 baseline，指定预期 Registry revision，并且不携带由 client 选择的 Actor 或 Grant。控制面根据当前权限派生归因，在创建 Workspace 前持久化 Intent，并在每个涉及 effect 的阶段前把保留的规范 worktree 路径作为不可信 locator 重新检查，再通过一次 Registry 比较并设置提交 Project、Resource Binding、路径索引与 Intent 映射。准确重放会从已记录阶段继续，并返回相同回执与身份；payload 变化、Registry revision 陈旧，或者规范 worktree 或每 worktree Git 目录身份重复时会发生冲突。启动流程在恢复前校验完整 Registry 与 Intent 库存，继续非终态登记，并根据新的 Host 检查把每项 Binding 刷新为 `active`、`missing` 或 `repair-required`。
 
-`project-index` 查询返回当前 Registry revision、已登记 Host 选项与分离的 Project 摘要。`development-workspace` 查询必须指定该准确 revision，并返回一个 Project 及其当前安全检查和恢复原因，或者类型化的 `stale` 或 `not-found` 结果。重绑定、退役与 Execution Lease 不属于登记操作集；仓库 mutation 使用下方专用直接操作集。
+`project-index` 查询返回当前 Registry revision、已登记 Host 选项与分离的 Project 摘要。`development-workspace` 查询必须指定该准确 revision，并返回一个 Project 及其当前安全检查和恢复原因，或者类型化的 `stale` 或 `not-found` 结果。重绑定与退役不属于登记操作集；仓库 mutation 使用下方专用直接操作集。
 
 ## Project change 与 Git 操作
 

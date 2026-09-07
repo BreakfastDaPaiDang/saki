@@ -10,6 +10,7 @@ import {
   sakiControlPlaneV6DomainSpec,
   sakiControlPlaneV7DomainSpec,
   sakiControlPlaneV8DomainSpec,
+  sakiControlPlaneV9DomainSpec,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
@@ -17,6 +18,7 @@ import {
   sakiStorageGenerationV4DomainSpec,
   sakiStorageGenerationV5DomainSpec,
   sakiStorageGenerationV6DomainSpec,
+  sakiStorageGenerationV7DomainSpec,
 } from '@breakfastdapaidang/saki-control-plane'
 import {
   sakiHostExecutionDomainMigrations,
@@ -24,6 +26,7 @@ import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionV4DomainSpec,
 } from '@breakfastdapaidang/saki-execution-local'
 
 /** One complete readable Saki product-state format. */
@@ -92,6 +95,17 @@ export type SakiStateVersionSpec =
   | Readonly<{
     version: 9
     domains: readonly [
+      typeof sakiControlPlaneV9DomainSpec,
+      typeof sakiHostExecutionV4DomainSpec,
+      typeof sakiStorageGenerationV7DomainSpec,
+    ]
+    controlPlane: typeof sakiControlPlaneV9DomainSpec
+    hostExecution: typeof sakiHostExecutionV4DomainSpec
+    storageGeneration: typeof sakiStorageGenerationV7DomainSpec
+  }>
+  | Readonly<{
+    version: 10
+    domains: readonly [
       typeof sakiControlPlaneDomainSpec,
       typeof sakiHostExecutionDomainSpec,
       typeof sakiStorageGenerationDomainSpec,
@@ -106,7 +120,7 @@ export interface SakiStateCapability {
   /** Every product-state version this build can inspect or migrate. */
   readonly readable: readonly SakiStateVersionSpec[]
   /** The sole product-state version this build may create or publish. */
-  readonly writable: Extract<SakiStateVersionSpec, { readonly version: 9 }>
+  readonly writable: Extract<SakiStateVersionSpec, { readonly version: 10 }>
   /**
    * Resolve one readable product-state format.
    * @param version - untrusted manifest or backup state version.
@@ -186,6 +200,18 @@ const V8_STATE_SPEC = Object.freeze({
 const V9_STATE_SPEC = Object.freeze({
   version: 9,
   domains: Object.freeze([
+    sakiControlPlaneV9DomainSpec,
+    sakiHostExecutionV4DomainSpec,
+    sakiStorageGenerationV7DomainSpec,
+  ] as const),
+  controlPlane: sakiControlPlaneV9DomainSpec,
+  hostExecution: sakiHostExecutionV4DomainSpec,
+  storageGeneration: sakiStorageGenerationV7DomainSpec,
+}) satisfies SakiStateVersionSpec
+
+const V10_STATE_SPEC = Object.freeze({
+  version: 10,
+  domains: Object.freeze([
     sakiControlPlaneDomainSpec,
     sakiHostExecutionDomainSpec,
     sakiStorageGenerationDomainSpec,
@@ -206,8 +232,9 @@ export const sakiStateCapability: SakiStateCapability = Object.freeze({
     V7_STATE_SPEC,
     V8_STATE_SPEC,
     V9_STATE_SPEC,
+    V10_STATE_SPEC,
   ]),
-  writable: V9_STATE_SPEC,
+  writable: V10_STATE_SPEC,
   resolveReadable: (version: number) => {
     if (version === V2_STATE_SPEC.version) return V2_STATE_SPEC
     if (version === V3_STATE_SPEC.version) return V3_STATE_SPEC
@@ -217,14 +244,15 @@ export const sakiStateCapability: SakiStateCapability = Object.freeze({
     if (version === V7_STATE_SPEC.version) return V7_STATE_SPEC
     if (version === V8_STATE_SPEC.version) return V8_STATE_SPEC
     if (version === V9_STATE_SPEC.version) return V9_STATE_SPEC
+    if (version === V10_STATE_SPEC.version) return V10_STATE_SPEC
     return undefined
   },
 })
 
-/** Control-plane migration chain used when any retained v2-v8 format advances to writable v9. */
+/** Control-plane migration chain used when any retained v2-v9 format advances to writable v10. */
 export const sakiStateControlPlaneMigrationPlan: typeof sakiControlPlaneMigrationPlan =
   sakiControlPlaneMigrationPlan
 
-/** Host Execution migration used when a retained v5-v8 format advances to writable v9. */
+/** Host Execution migration used when a retained v5-v9 format advances to writable v10. */
 export const sakiStateHostExecutionMigrationPlan: typeof sakiHostExecutionDomainMigrations =
   sakiHostExecutionDomainMigrations

@@ -1221,9 +1221,9 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const database = new DatabaseSync(durable.sqlite)
     try {
       expect(database.prepare('SELECT name, version FROM units ORDER BY name').all()).toEqual([
-        { name: 'saki_control_plane', version: 9 },
-        { name: 'saki_host_execution', version: 4 },
-        { name: 'saki_storage_generation', version: 7 },
+        { name: 'saki_control_plane', version: 10 },
+        { name: 'saki_host_execution', version: 5 },
+        { name: 'saki_storage_generation', version: 8 },
       ])
       const tables = database.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name",
@@ -2501,8 +2501,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
   })
 
   it.each([
-    ['successful move and stale Actor restart rejection', 'success'],
-    ['derived Intent collision', 'move-conflict'],
+    ['unchanged Work Item status and stale Actor restart rejection', 'success'],
   ] as const)('routes the assembled Agent work lifecycle: %s', async (_case, mode) => {
     const durable = await paths()
     const repo = await repository(durable.root, `agent-control-route-${mode}`)
@@ -2595,7 +2594,6 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       'work-item:give-to-agent',
       'intervention:answer',
       'work-item:move',
-      ...(mode === 'move-conflict' ? ['github-synchronization:configure' as const] : []),
     ])
     if (mode === 'success') {
       const recommendation = async () => {
@@ -2664,7 +2662,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       const admission = admissions.get(bindingId)
       if (admission === undefined) throw new Error('Binding admission fixture is absent')
       await admissions.delete(bindingId)
-      expect(await recommendation()).toEqual({ available: false, reason: 'binding-unavailable' })
+      expect(await recommendation()).toMatchObject({ available: true })
       await admissions.put(bindingId, admission)
     }
     expect(await harness.control.query<'my-work'>(harness.authentication, {
@@ -2703,19 +2701,6 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         intentId: registrationIntentId,
       }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
     }
-    if (mode === 'move-conflict') {
-      host.beforeSuccess = async () => {
-        const record = liveSakiDomain(harness.ctx).table('agent_operation_intents').get(agentIntent.intentId)
-        if (record === undefined) throw new Error('Agent operation was not retained before Host success')
-        expect(await harness.control.submit(harness.authentication, {
-          type: 'configure-github-synchronization',
-          intentId: record.inProgressIntentId,
-          projectId: registered.receipt.projectId,
-          expectedSynchronizationRevision: board.synchronizationRevision,
-          patch: configuration,
-        }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'conflict' })
-      }
-    }
     const changedKeys: string[][] = []
     const disposeChanged = harness.control.onChanged((keys) => { changedKeys.push([...keys]) })
     const submission = harness.control.submit(harness.authentication, agentIntent, new AbortController().signal)
@@ -2726,18 +2711,12 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         projectId: registered.receipt.projectId,
         refresh: 'interactive',
       }, new AbortController().signal)).toMatchObject({ ok: true })
-      const moved = await waitForConfirmedBoard(
+      const refreshed = await waitForConfirmedBoard(
         harness,
         registered.receipt.projectId,
         (board.confirmed?.generation ?? 0) + 1,
       )
-      expect(moved.confirmed?.items[0]?.status).toBe('in-progress')
-    } else {
-      await expect(submission).resolves.toMatchObject({
-        ok: false,
-        reason: 'reconciliation-required',
-        receipt: { state: 'reconciliation-required', reason: 'protocol' },
-      })
+      expect(refreshed.confirmed?.items[0]?.status).toBe('ready')
     }
     expect(resolveModelInfo).toHaveBeenCalledWith('test-provider', 'test-model', expect.any(AbortSignal))
     expect(host.requests).toHaveLength(2)
@@ -2848,10 +2827,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         ...firstAnswer,
         interventionId: 'intervention-48484848-4848-4848-8848-484848484848' as SakiInterventionRequestId,
       }, new AbortController().signal)).toEqual({ ok: false, reason: 'conflict' })
-      expect(await harness.control.submit(harness.authentication, {
-        ...agentIntent,
-        intentId: 'intent-46464646-4646-4646-8646-464646464646' as SakiControlIntentId,
-      }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'conflict' })
+
 
       const opening = await harness.control.agentInterventions.request({
         sessionId,
@@ -2861,10 +2837,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       if (!opening.ok) throw new Error('recovery Intervention was not created')
       const openingRecord = liveSakiDomain(harness.ctx).table('intervention_requests').get(opening.interventionId)
       if (openingRecord === undefined) throw new Error('recovery Intervention record is absent')
-      expect(await harness.control.submit(harness.authentication, {
-        ...agentIntent,
-        intentId: 'intent-49494949-4949-4949-8949-494949494949' as SakiControlIntentId,
-      }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'conflict' })
+
       expect(await harness.control.query<'my-work'>(harness.authentication, {
         type: 'my-work',
       }, new AbortController().signal)).toMatchObject({

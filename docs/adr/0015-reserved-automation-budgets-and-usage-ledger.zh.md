@@ -24,7 +24,7 @@ Automation Policy 带版本，并声明适用 limit、window、暂停规则、�
 
 预留与 ledger entry 都是 Saki 控制面记录。DSH Session 用量事件、GitHub 观察、提供方 Usage Snapshot、Generation Job 结果和 Host Operation 结果仍分别拥有对应事实的证据。修正通过追加抵消 entry 完成，而不是重写较早准入决策使用的观察。
 
-预算可以按 operation、Agent Run、Work Item、Project rolling window 或 Provider Account Profile 应用。一笔预留可以原子消耗多个 scope。Project 并发 claim 与 Resource Binding Execution Lease 继续保持独立，因为前者限制自动化总量，后者阻止两个 writer 共享一个 worktree。
+预算可以按 operation、Agent Run、Work Item、Project rolling window 或 Provider Account Profile 应用。一笔预留可以原子消耗多个 scope。Project 并发限制约束自动化总量；Agent Run 可以在这些配置限制内共享 worktree。
 
 ### 0.1.0 必需维度
 

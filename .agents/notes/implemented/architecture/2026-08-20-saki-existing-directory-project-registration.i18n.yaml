@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-20-saki-existing-directory-project-registration.md
-2026-08-20-saki-existing-directory-project-registration.md: beae29a6c7d50d9e035693fd9a6beb71b54ffea4
-2026-08-20-saki-existing-directory-project-registration.zh.md: 8dec8af10468e1b3ec47938a8e87a14b0d6c77c2
+2026-08-20-saki-existing-directory-project-registration.md: 9a844aac5bda7a2cc0b9609059a4038c6ccdd5d3
+2026-08-20-saki-existing-directory-project-registration.zh.md: 36cad5518ad37f514f236b6850c525984a07c9ae

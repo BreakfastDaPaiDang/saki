@@ -21,7 +21,7 @@ kind: "package-bundle"
 <a id="use-this-package"></a>
 ## 使用本包
 
-Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载定时调度、默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@9`、`saki_host_execution@4` 与 `saki_storage_generation@7`；此外还挂载 JSONL Session 持久化及 Session projection registry、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。
+Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载定时调度、默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@10`、`saki_host_execution@5` 与 `saki_storage_generation@8`；此外还挂载 JSONL Session 持久化及 Session projection registry、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。
 
 启动器把 preset 名册绑定到包内 `config/agent-presets` 的绝对路径，并禁用 DSH 随包 preset 和用户 preset 根目录。随包提供的 `development` preset 提供仓库指令、持久 `request_intervention` 工具、Windows 前台 PowerShell，以及基于 Agent 隔离沙箱文件系统的 `read`、`write` 与 `edit` 工具；Host 操作继续使用独立的本地文件系统提供方。生产组合不安装模型 adapter；创建或恢复 Agent 后会保持 idle，直至拥有该 Agent Run 的 operation 提交持久输入。
 
@@ -37,7 +37,7 @@ pnpm run saki
 
 该命令通过仓库的 ESM 钩子与路径映射启动 TypeScript 源码。执行 `pnpm run build:lib:host` 后，对应的产物平面命令是 `node packages/saki/bundle/lib/bin.js`。两者解析同一个由包声明的补丁，并持续运行至收到 `SIGINT` 或 `SIGTERM`。`SAKI_ONESHOT=1` 保留供组装冒烟测试与快照使用的“就绪后退出”模式。
 
-启动组合前，启动器会取得 Installation 全局排他 lease、调和精确具名的恢复元数据，并且只通过 `installation.json` 选择状态；没有 manifest 时才使用精确配置的 B03 数据库。无状态 Installation 会直接配置为当前 state v9。任何精确保留的 v2 至 v8 Installation 都会以 `upgrade-required` 闭合失败；启动当前 build 前需让其 Host 保持离线，并通过保留的维护迁移升级到 v9。启动器在准备、对外服务和完整 teardown（拆卸）期间始终持有 lease；畸形或不受支持的选中状态也会闭合失败。
+启动组合前，启动器会取得 Installation 全局排他 lease、调和精确具名的恢复元数据，并且只通过 `installation.json` 选择状态；没有 manifest 时才使用精确配置的 B03 数据库。无状态 Installation 会直接配置为当前 state v10。任何精确保留的 v2 至 v9 Installation 都会以 `upgrade-required` 闭合失败；启动当前 build 前需让其 Host 保持离线，并通过保留的维护迁移升级到 v10。启动器在准备、对外服务和完整 teardown（拆卸）期间始终持有 lease；畸形或不受支持的选中状态也会闭合失败。
 
 每次非一次性启动还会写出一行启动器交接 JSON，其中包含 `bootstrapPurpose`、`bootstrapSecret` 与回环基础 `url`。首次完成前用途为 `initial-bootstrap`，此后为 `local-reauthentication`。明文机密值只供立即执行本机登录使用；不得重定向、持久保存或公开这行内容。重启会保留先前尚未过期的挑战并签发新挑战；交换任一状态为 `issued` 的挑战时会消费该挑战，并撤销其余挑战。
 

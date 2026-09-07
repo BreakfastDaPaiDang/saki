@@ -8,13 +8,13 @@ Status: proposed
 
 进程丢失、claimant 超时或 Host acknowledgement 缺失后，Saki 必须重新交付持久 Execution Dispatch。Dispatch Claim 可以选择一个当前执行器，但它自身既不能阻止已过期 claimant 迟到行动，也不能区分尚未执行的 operation 和 Host 行动后回复丢失。把任一结果不明情况作为新启动重试，都可能创建第二个 Agent Run 或重复其他外部副作用。
 
-Dispatch 交付时间短于结果 Execution。让一条 claim 覆盖完整 Agent Run 会延迟恢复，并与保护可写 Resource Binding 的独立 Execution Lease 重叠。该设计需要短期 admission claim、稳定 Host-side operation identity，以及不声称跨系统事务的显式 reconciliation。
+Dispatch 交付时间短于结果 Execution。让一条 claim 覆盖完整 Agent Run 会延迟恢复，并把独立交付耦合到一个 Session 生命周期。该设计需要短期 admission claim、稳定 Host-side operation identity，以及不声称跨系统事务的显式 reconciliation。
 
 ## 提案
 
-Saki dispatch module 将实现 [ADR 0010](../../../../docs/adr/0010-fenced-idempotent-dispatch-admission.zh.md)，作为 [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.zh.md)之下的精确 claim 与 admission 协议。Execution Dispatch、Dispatch Claim、Host Operation、Agent Run 与 Execution Lease 保持为不同记录，并具有不同的完成含义。
+Saki dispatch module 将实现 [ADR 0010](../../../../docs/adr/0010-fenced-idempotent-dispatch-admission.zh.md)，作为 [ADR 0009](../../../../docs/adr/0009-durable-dispatch-intervention-and-attention-projections.zh.md)之下的精确 claim 与 admission 协议。Execution Dispatch、Dispatch Claim、Host Operation 与 Agent Run 保持为不同记录，并具有不同的完成含义。
 
-[已实现的结构化 Git 决策](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.zh.md)提供直接 `control-intent` Host Operation source，以及 source-general `prepareOperation`、`startOperation`、`inspectOperation` 与 `cancelOperation` Host Execution 生命周期。[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)为一条 `StartAgentRun` 路径实现 Execution Dispatch、Agent Run 与 Dispatch Claim 记录，以 `execution-dispatch` 扩展 operation-source union，并使用长期 `BindingWriteAdmission.agent-run` 所有权。本提案仍覆盖通用 dispatch source、独立 Execution Lease、自动 backoff 与 retry budget、多 Dispatch orchestration 和远程 admission。
+[已实现的结构化 Git 决策](../../implemented/architecture/2026-08-28-saki-recoverable-structured-git-operations.zh.md)提供直接 `control-intent` Host Operation source，以及 source-general `prepareOperation`、`startOperation`、`inspectOperation` 与 `cancelOperation` Host Execution 生命周期。[手动 Give-to-Agent 决策](../../implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)为一条 `StartAgentRun` 路径实现 Execution Dispatch、Agent Run 与 Dispatch Claim 记录，以 `execution-dispatch` 扩展 operation-source union，并对每条 Dispatch 独立准入，同时允许 Agent Run 共享目录。本提案仍覆盖通用 dispatch source、自动 backoff 与 retry budget、多 Dispatch orchestration 和远程 admission。
 
 ### 状态与所有权
 
@@ -24,7 +24,6 @@ Saki dispatch module 将实现 [ADR 0010](../../../../docs/adr/0010-fenced-idemp
 | Dispatch Claim | 当前执行器、claim id、单调递增 fencing token、签发与过期时间，以及续期或 acceptance 使用的 dispatch revision。 |
 | Host Operation | 从 dispatch id 到已准备 operation 的 Host-side 幂等映射、目标 Execution、payload digest、prepared 与 accepted fencing token 和 operation 生命周期。 |
 | Agent Run | 一次 Agent Execution 及其实际 Session、Profile、model route、evidence 与 outcome。 |
-| Execution Lease | 目标 Agent Run 对一个 Resource Binding 的排他可写所有权。 |
 
 Dispatch 生命周期为 `pending`、`claimed`、`accepted`、`canceled`、`rejected` 或 `reconciliation_required`。`accepted` 表示交付具有持久 Host Operation receipt，不表示 operation 已经启动或完成。最后一种状态会停止自动交付，直到带归因的 reconciliation Control Intent 记录已经证实的解决结果。
 
@@ -32,11 +31,11 @@ Dispatch 生命周期为 `pending`、`claimed`、`accepted`、`canceled`、`reje
 
 1. 控制面在任何 wake-up 前把 dispatch 持久化为 `pending`。持久 scanner 选择 `nextAttemptAt` 已到达的记录；进程内 signal 只会触发该扫描。
 2. 获取 claim 时，系统针对 expected dispatch revision 执行 compare-and-set，把 `pending` 改为 `claimed` 或替换已过期 `claimed` 记录、递增 fencing token，并记录有界 expiry。同一执行器续期时必须持有未过期 claim 并提供 expected revision，而且保持 token 不变；过期后重新领取会递增 token。
-3. 可写 dispatch 只有在目标 Agent Run 持有必需 Execution Lease 后才符合条件。当 cancellation、Grant revocation、Automation Policy、Host enrollment 或 capability inventory 不再允许尚未启动的副作用时，admission 也会 fail closed。
+3. 当 cancellation、Grant revocation、Automation Policy、Host enrollment 或 capability inventory 不再允许尚未启动的副作用时，admission 也会 fail closed。
 4. `prepareOperation` 会提交稳定 `execution-dispatch` source、目标 Agent Run、payload digest 与当前 claim。Host 向控制面验证 claim，并在产生任何外部副作用前，以 dispatch id 为键原子创建或返回 Host Operation。后续有效 claim 会复用该 operation，并更新 prepared token；如果重复请求的不可变 input 不同，则返回 conflict。
 5. 所有需要等待的 Host 工作结束后，控制面对同一条未过期 claim 执行 compare-and-set，在把 dispatch 转为 `accepted` 时持久化 operation reference。Acceptance 失败会使已准备 Host Operation 保持 inert。
 6. `startOperation` 在启动或恢复 Host Operation 前验证已接受 dispatch、operation reference、fencing token、当前 cancellation state 与 capability-boundary authority。该调用按 operation reference 保持幂等。恢复时重复该调用或执行 `inspectOperation`，绝不会重新分配目标 Agent Run。
-7. 陈旧 claimant 无法续期、accept 或 start。Claim 过期不会取消已接受 operation，也不会释放其 Execution Lease。后续 inspect 或 cancel 请求使用各自的 Control Intent 与当前授权。
+7. 陈旧 claimant 无法续期、accept 或 start。Claim 过期不会取消已接受 operation。后续 inspect 或 cancel 请求使用各自的 Control Intent 与当前授权。
 
 ### 恢复规则
 
@@ -71,7 +70,7 @@ Dispatch 生命周期为 `pending`、`claimed`、`accepted`、`canceled`、`reje
 - 在 dispatch 持久化、claim、preparation、acceptance 或 start 后发生崩溃时，系统通过同一 dispatch 与 Host Operation 恢复，不会创建第二个 Agent Run。
 - Acknowledgement 丢失后先执行 inspection；结果不明绝不会成为推定失败。
 - 接受前取消会阻止 start；接受后取消会保留 dispatch receipt，并单独控制 operation。
-- Execution Lease 与 Dispatch Claim 的有效性分别 fail，而且两种生命周期都不会释放另一种记录。
+- 共享 Resource Binding 的不同 Dispatch 与 Run 保留独立准入和 Session 身份。
 - 本地配置会验证 claim duration、retry backoff 与 retry budget；plugin 不包含部署专用的硬编码 tunable。
 
 ## 风险

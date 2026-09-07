@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -28,6 +28,8 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import {
   computeStartAgentRunPayloadDigest,
+  canonicalDigest,
+  computeProjectInspectionFingerprint,
   type ActiveHostProjectBinding,
   type HostOperationAdmissionSource,
   type SakiAgentProfileId,
@@ -51,9 +53,12 @@ import LocalSakiHostExecution, {
   type LocalHostOperationRecord,
   sakiHostExecutionDomainSpec,
   sakiHostExecutionV2DomainSpec,
+  sakiHostExecutionV4DomainSpec,
+  sakiHostExecutionDomainMigrations,
 } from '../src/index.ts'
 import { disposeLocalAgentRuns, waitForInputRecord } from '../src/agent-run.ts'
 import { GitCommandError, type GitRunner } from '../src/git-runner.ts'
+import * as identity from '../src/identity.ts'
 
 const run = promisify(execFile)
 const roots: string[] = []
@@ -188,13 +193,34 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     })
     if (!started.ok || started.snapshot.state !== 'succeeded') return
     const currentRecord = {
-      schemaVersion: 4 as const,
+      schemaVersion: 5 as const,
       request: answer,
       preparationRevision: preparedAnswer.preparation.preparationRevision,
       snapshot: started.snapshot,
       effectPlan: { kind: 'agent-run' as const, publication: 'applied-recorded' as const, result: started.snapshot.result },
     }
     expect(sakiHostExecutionDomainSpec.tables.operations.valueSchema.safeParse(currentRecord).success).toBe(true)
+    const historicalRequest = { ...answer, expected: {
+      ...answer.expected,
+      status: { version: 1, digest: '2'.repeat(64) },
+      head: { kind: 'commit', objectId: '3'.repeat(40), symbolicRef: 'refs/heads/main' },
+      index: { kind: 'tree', treeId: '4'.repeat(40) },
+      worktree: { version: 1, digest: '5'.repeat(64) },
+      preEffectBaseline: answer.expected.binding.inheritedChangeBaseline,
+    } }
+    const historicalRecord = sakiHostExecutionV4DomainSpec.tables.operations.valueSchema.parse({
+      ...currentRecord, schemaVersion: 4, request: historicalRequest,
+      snapshot: { ...started.snapshot, requestFingerprint: {
+        version: 1, digest: canonicalDigest('saki/host-operation-request/v1', historicalRequest),
+      } },
+    })
+    const before = structuredClone(historicalRecord)
+    const migrated = sakiHostExecutionDomainMigrations.steps[3]!.migrate({
+      global: null, tables: { operations: { [started.snapshot.operation.id]: historicalRecord } },
+    })
+    expect(historicalRecord).toEqual(before)
+    expect(migrated.tables['operations']![started.snapshot.operation.id]).toEqual(currentRecord)
+
     expect(sakiHostExecutionV2DomainSpec.tables.operations.valueSchema.safeParse({
       ...currentRecord,
       schemaVersion: 2,
@@ -241,8 +267,8 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(restarted.adapter.requests[0]?.messages.find(message => message.id === ANSWER_MESSAGE_ID)).toEqual(input)
   }, 90_000)
 
-  it('fails without an Agent effect when the frozen repository changes before start', async () => {
-    const harness = await agentRunHarness([])
+  it('starts after repository content changes before input delivery', async () => {
+    const harness = await agentRunHarness([stopResponse('done')])
     const signal = new AbortController().signal
     const binding = await activeBinding(harness.execution, harness.repository, signal)
     const request = await startAgentRunRequest(harness.execution, binding, signal)
@@ -257,20 +283,16 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       signal,
     )
 
-    expect(started).toMatchObject({
-      ok: true,
-      snapshot: {
-        state: 'failed',
-        failure: { reason: 'observation-stale' },
-        effect: 'none',
-      },
-    })
-    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-    expect(harness.adapter.requests).toHaveLength(0)
-    await expect(harness.context.sessionPersistence.list({ signal })).resolves.toEqual([])
+    expect(started).toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+    const agent = harness.context.agents.get(SESSION_ID)
+    if (agent === undefined) throw new Error('started Agent is missing')
+    await agent.whenIdle()
+    expect(harness.adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
+      .toHaveLength(1)
   }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
-  it('keeps the Agent Run retryable when the frozen world is temporarily unavailable', async () => {
+  it('keeps the Agent Run retryable when repository identity cannot be read', async () => {
     const harness = await agentRunHarness([])
     const signal = new AbortController().signal
     const binding = await activeBinding(harness.execution, harness.repository, signal)
@@ -278,7 +300,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     const prepared = await harness.execution.prepareOperation(request, accepted(29), signal)
     expect(prepared.ok).toBe(true)
     if (!prepared.ok) return
-    const git = replaceGitRunner(harness.execution, new GitCommandError('spawn-failure'))
+    const inspect = vi.spyOn(harness.context.fs, 'lstat').mockRejectedValue(new Error('filesystem unavailable'))
 
     const started = await harness.execution.startOperation(
       prepared.preparation.operation,
@@ -289,10 +311,126 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(started).toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
-    git.restore()
+    inspect.mockRestore()
   }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
-  it('rechecks the frozen repository after Agent creation before sending exact input', async () => {
+  it('starts on detached HEAD even when Git commands are unavailable', async () => {
+    const harness = await agentRunHarness([stopResponse('done')])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    await git(harness.repository, 'checkout', '--detach')
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const unavailable = replaceGitRunner(harness.execution, new GitCommandError('spawn-failure'))
+    try {
+      const prepared = await harness.execution.prepareOperation(request, accepted(30), signal)
+      if (!prepared.ok) throw new Error('Agent input was not prepared')
+      expect(await harness.execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+        .toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+      const agent = harness.context.agents.get(SESSION_ID)
+      if (agent === undefined) throw new Error('started Agent is missing')
+      await agent.whenIdle()
+      expect(harness.adapter.requests).toHaveLength(1)
+    } finally {
+      unavailable.restore()
+    }
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+
+  it.each(['workspace-id', 'nested-path', 'git-path', 'common-path', 'git-identity', 'common-identity'] as const)(
+    'refuses input when the admitted resource differs at %s', async (difference) => {
+      const harness = await agentRunHarness([])
+      const signal = new AbortController().signal
+      const binding = await activeBinding(harness.execution, harness.repository, signal)
+      await mkdir(join(harness.repository, 'nested'))
+      const trusted = binding.expectedInspection.trusted
+      const changedBinding = {
+        ...binding,
+        ...(difference === 'workspace-id' ? { workspaceId: WorkspaceId('workspace-other') } : {}),
+        expectedInspection: {
+          ...binding.expectedInspection,
+          trusted: {
+            ...trusted,
+            ...(difference === 'nested-path' ? { canonicalWorktreePath: join(harness.repository, 'nested') } : {}),
+            ...(difference === 'git-path' ? { canonicalGitDirectory: join(harness.repository, '.other-git') } : {}),
+            ...(difference === 'common-path' ? { canonicalCommonGitDirectory: join(harness.repository, '.other-common') } : {}),
+            ...(difference === 'git-identity' ? { gitDirectoryIdentity: { version: 1 as const, digest: 'e'.repeat(64) } } : {}),
+            ...(difference === 'common-identity'
+              ? { commonGitDirectoryIdentity: { version: 1 as const, digest: 'e'.repeat(64) } } : {}),
+          },
+        },
+      }
+      changedBinding.expectedInspection.projection = {
+        ...changedBinding.expectedInspection.projection,
+        fingerprint: computeProjectInspectionFingerprint(
+          changedBinding.expectedInspection.projection, changedBinding.expectedInspection.trusted,
+        ),
+      }
+      const request = await startAgentRunRequest(harness.execution, changedBinding, signal)
+      const prepared = await harness.execution.prepareOperation(request, accepted(31), signal)
+      if (!prepared.ok) throw new Error('resource fixture was not prepared')
+      expect(await harness.execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+        .toMatchObject({ ok: true, snapshot: { state: 'failed', failure: { reason: 'binding-stale' }, effect: 'none' } })
+      expect(harness.adapter.requests).toHaveLength(0)
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    }, REAL_GIT_AGENT_RUN_TIMEOUT_MS,
+  )
+
+  it('refuses input when the repository marker disappears', async () => {
+    const harness = await agentRunHarness([])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(32), signal)
+    if (!prepared.ok) throw new Error('repository fixture was not prepared')
+    await rename(join(harness.repository, '.git'), join(harness.repository, '.retained-git'))
+    expect(await harness.execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .toMatchObject({ ok: true, snapshot: { state: 'failed', failure: { reason: 'binding-stale' }, effect: 'none' } })
+    expect(harness.adapter.requests).toHaveLength(0)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+
+  it.each(['io-failure', 'aborted'] as const)('keeps administrative identity %s separate from stale binding', async (failure) => {
+    const harness = await agentRunHarness([])
+    const lifetime = new AbortController()
+    const { signal } = lifetime
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(33), signal)
+    if (!prepared.ok) throw new Error('identity fixture was not prepared')
+    const read = vi.spyOn(identity, 'readLocalAdministrativeDirectoryIdentity').mockImplementation(async () => {
+      if (failure === 'aborted') lifetime.abort(new Error('identity request canceled'))
+      throw new Error('administrative identity unavailable')
+    })
+    try {
+      const attempt = harness.execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+      if (failure === 'aborted') await expect(attempt).rejects.toThrow('identity request canceled')
+      else await expect(attempt).resolves.toMatchObject({ ok: false, reason: 'unavailable', snapshot: { state: 'publishing' } })
+      expect(harness.adapter.requests).toHaveLength(0)
+      expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    } finally {
+      read.mockRestore()
+    }
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+
+  it('delivers input in a detached linked worktree with distinct Git administrative directories', async () => {
+    const world = await createAgentRunWorld()
+    const linked = join(world.repository, 'linked')
+    await git(world.repository, 'worktree', 'add', '--detach', linked)
+    const harness = await mountAgentRunHarness({ ...world, repository: linked }, [stopResponse('linked done')])
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    expect(binding.expectedInspection.trusted.canonicalGitDirectory)
+      .not.toBe(binding.expectedInspection.trusted.canonicalCommonGitDirectory)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const prepared = await harness.execution.prepareOperation(request, accepted(34), signal)
+    if (!prepared.ok) throw new Error('linked-worktree input was not prepared')
+    expect(await harness.execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
+      .toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+    const agent = harness.context.agents.get(SESSION_ID)
+    if (agent === undefined) throw new Error('linked-worktree Agent is missing')
+    await agent.whenIdle()
+    expect(harness.adapter.requests).toHaveLength(1)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+
+  it('rechecks workspace binding after Agent creation before sending exact input', async () => {
     const harness = await agentRunHarness([])
     const signal = new AbortController().signal
     const binding = await activeBinding(harness.execution, harness.repository, signal)
@@ -303,7 +441,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     const create = harness.context.agents.create.bind(harness.context.agents)
     vi.spyOn(harness.context.agents, 'create').mockImplementation(async (options) => {
       const handle = await create(options)
-      await writeFile(join(harness.repository, 'tracked.txt'), 'changed while acquiring Agent\n')
+      vi.spyOn(harness.context.workspaceRegistry, 'list').mockReturnValue([])
       return handle
     })
 
@@ -315,7 +453,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
 
     expect(started).toMatchObject({
       ok: true,
-      snapshot: { state: 'failed', failure: { reason: 'observation-stale' }, effect: 'none' },
+      snapshot: { state: 'failed', failure: { reason: 'binding-stale' }, effect: 'none' },
     })
     expect(harness.adapter.requests).toHaveLength(0)
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
@@ -327,7 +465,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       .toBe(false)
   }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
-  it('does not publish stale-world failure until the acquired Agent is disposed', async () => {
+  it('does not publish binding failure until the acquired Agent is disposed', async () => {
     const harness = await agentRunHarness([])
     const signal = new AbortController().signal
     const binding = await activeBinding(harness.execution, harness.repository, signal)
@@ -340,7 +478,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     vi.spyOn(harness.context.agents, 'create').mockImplementation(async (options) => {
       const handle = acquiredHandle = await create(options)
       vi.spyOn(handle, 'dispose').mockRejectedValueOnce(new Error('stale Agent Handle drain failed'))
-      await writeFile(join(harness.repository, 'tracked.txt'), 'changed before failed stale drain\n')
+      vi.spyOn(harness.context.workspaceRegistry, 'list').mockReturnValue([])
       return handle
     })
 
@@ -366,14 +504,14 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
 
     expect(replayed).toMatchObject({
       ok: true,
-      snapshot: { state: 'failed', failure: { reason: 'observation-stale' }, effect: 'none' },
+      snapshot: { state: 'failed', failure: { reason: 'binding-stale' }, effect: 'none' },
     })
     expect(handles.has(SESSION_ID)).toBe(false)
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
     expect(harness.adapter.requests).toHaveLength(0)
   }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
-  it('rechecks a stale repository after restarting an attempting operation with no Session evidence', async () => {
+  it('rechecks workspace binding after restarting an attempting operation with no Session evidence', async () => {
     const harness = await agentRunHarness([])
     const signal = new AbortController().signal
     const binding = await activeBinding(harness.execution, harness.repository, signal)
@@ -396,7 +534,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     )).rejects.toThrow('lost Agent Run attempt acknowledgement')
     persistence.restore()
     expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
-    await writeFile(join(harness.repository, 'tracked.txt'), 'changed before restart\n')
+    vi.spyOn(harness.context.workspaceRegistry, 'list').mockReturnValue([])
 
     const restarted = await harness.execution.startOperation(
       prepared.preparation.operation,
@@ -408,7 +546,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       ok: true,
       snapshot: {
         state: 'failed',
-        failure: { reason: 'observation-stale' },
+        failure: { reason: 'binding-stale' },
         effect: 'none',
       },
     })
@@ -1184,8 +1322,8 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       .toHaveLength(1)
   }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
-  it('does not wake a durable pending input after its frozen repository becomes stale', async () => {
-    const harness = await agentRunHarness([])
+  it('wakes durable pending input after repository content changes', async () => {
+    const harness = await agentRunHarness([stopResponse('done')])
     const signal = new AbortController().signal
     const binding = await activeBinding(harness.execution, harness.repository, signal)
     const request = await startAgentRunRequest(harness.execution, binding, signal)
@@ -1213,15 +1351,16 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
       signal,
     )
 
-    expect(replayed).toMatchObject({
-      ok: true,
-      snapshot: { state: 'reconciliation-required', reason: 'effect-unknown' },
-    })
-    expect(harness.adapter.requests).toHaveLength(0)
-    expect(harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    expect(replayed).toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+    const agent = harness.context.agents.get(SESSION_ID)
+    if (agent === undefined) throw new Error('started Agent is missing')
+    await agent.whenIdle()
+    expect(harness.adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.id === MESSAGE_ID))
+      .toHaveLength(1)
   }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 
-  it('rechecks the frozen repository after Agent resume before waking pending input', async () => {
+  it('rechecks workspace binding after Agent resume before waking pending input', async () => {
     const harness = await agentRunHarness([])
     const signal = new AbortController().signal
     const binding = await activeBinding(harness.execution, harness.repository, signal)
@@ -1233,7 +1372,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     const resume = harness.context.agents.resume.bind(harness.context.agents)
     vi.spyOn(harness.context.agents, 'resume').mockImplementation(async (options) => {
       const handle = await resume(options)
-      await writeFile(join(harness.repository, 'tracked.txt'), 'changed while resuming Agent\n')
+      vi.spyOn(harness.context.workspaceRegistry, 'list').mockReturnValue([])
       return handle
     })
 
@@ -1337,7 +1476,7 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     const persistence = operationPersistence(harness.execution)
     const { completedAt: _completedAt, result: _result, ...base } = started.snapshot
     await persistence.original({
-      schemaVersion: 4,
+      schemaVersion: 5,
       request,
       preparationRevision: prepared.preparation.preparationRevision,
       effectPlan: { kind: 'agent-run', publication: 'applied-recorded', result: started.snapshot.result },
@@ -2435,16 +2574,10 @@ async function activeBinding(
 }
 
 async function startAgentRunRequest(
-  execution: LocalSakiHostExecution,
+  _execution: LocalSakiHostExecution,
   binding: ActiveHostProjectBinding,
-  signal: AbortSignal,
+  _signal: AbortSignal,
 ): Promise<StartAgentRunHostOperationRequest> {
-  const inspected = await execution.inspectProject({ binding }, signal)
-  if (!inspected.ok || inspected.observation.head.kind !== 'commit'
-    || inspected.observation.index.kind !== 'tree'
-    || inspected.preEffectBaseline.kind !== 'complete') {
-    throw new Error('test binding is not ready for StartAgentRun')
-  }
   const input: StartAgentRunInputMessage = {
     id: MESSAGE_ID,
     role: 'user',
@@ -2463,14 +2596,7 @@ async function startAgentRunRequest(
       dispatchId: DISPATCH_ID,
       payloadDigest: computeStartAgentRunPayloadDigest(input),
     },
-    expected: {
-      binding,
-      status: inspected.observation.fingerprint,
-      head: inspected.observation.head,
-      index: inspected.observation.index,
-      worktree: inspected.observation.worktree,
-      preEffectBaseline: inspected.preEffectBaseline,
-    },
+    expected: { binding },
     run: {
       agentRunId: AGENT_RUN_ID,
       workSessionId: WORK_SESSION_ID,

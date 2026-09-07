@@ -494,6 +494,38 @@ export async function openSafeRepositoryView(
   }
 }
 
+/**
+ * Read repository topology without inspecting HEAD, index, content, or Git configuration.
+ * @param fs - Local Host filesystem.
+ * @param selectedPath - admitted canonical worktree path.
+ * @param maxControlFileBytes - bound for Git directory-pointer files.
+ * @param signal - caller lifetime.
+ * @returns canonical repository paths or a classified discovery failure.
+ * @internal
+ */
+export async function inspectRepositoryResource(
+  fs: FileSystem,
+  selectedPath: string,
+  maxControlFileBytes: number,
+  signal: AbortSignal,
+): Promise<
+  | { readonly kind: 'repository'; readonly paths: Pick<SafeRepositoryView, 'topLevelPath' | 'gitDirectoryPath' | 'commonDirectoryPath'> }
+  | Exclude<SafeRepositoryOpenResult, { readonly kind: 'repository' }>
+> {
+  try {
+    const discovered = await discoverRepository(fs, selectedPath, maxControlFileBytes, signal)
+    if (discovered.kind !== 'repository') return discovered
+    return { kind: 'repository', paths: {
+      topLevelPath: discovered.topology.topLevel.path,
+      gitDirectoryPath: discovered.topology.gitDirectory.path,
+      commonDirectoryPath: discovered.topology.commonDirectory.path,
+    } }
+  } catch (error) {
+    signal.throwIfAborted()
+    return { kind: error instanceof SafeRepositoryError ? error.kind : 'unavailable' }
+  }
+}
+
 async function discoverRepository(
   fs: FileSystem,
   selectedPath: string,

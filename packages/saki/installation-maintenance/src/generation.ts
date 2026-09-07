@@ -79,7 +79,7 @@ async function materializeHostExecutionAndSeal(
   facility: DomainFacility,
   identity: NewSakiGenerationIdentity,
   signal: AbortSignal,
-  retainedHostExecution?: KvUnitSnapshot,
+  retainedHostExecution?: { readonly version: 1 | 2 | 3 | 4; readonly snapshot: KvUnitSnapshot },
 ): Promise<void> {
   const hostExecution = sakiStateCapability.writable.hostExecution
   if (retainedHostExecution === undefined) {
@@ -135,21 +135,21 @@ export async function materializeFreshSakiGeneration(
 }
 
 /**
- * Migrate exact retained v2-v8 control state into a missing current SQLite database and add its seal.
+ * Migrate exact retained v2-v9 control state into a missing current SQLite database and add its seal.
  * Product relationships must be validated before this generic transformation is called and
  * are validated again against the complete current candidate by the outer operation.
  * @param sourceDatabasePath - exact closed retained source selected by manifest or legacy config.
  * @param targetDatabasePath - missing candidate `state.sqlite` path on different media.
  * @param identity - retained Installation plus fresh generation and build provenance.
  * @param signal - cancellation through migration and seal materialization.
- * @param retainedHostExecution - exact v5-v8 Host Operation snapshot, absent for pre-v5 sources.
+ * @param retainedHostExecution - exact Host domain version and snapshot for v5-v9 sources, absent for pre-v5 sources.
  */
 export async function migrateSakiGeneration(
   sourceDatabasePath: string,
   targetDatabasePath: string,
   identity: NewSakiGenerationIdentity,
   signal: AbortSignal,
-  retainedHostExecution: KvUnitSnapshot | undefined,
+  retainedHostExecution: { readonly version: 1 | 2 | 3 | 4; readonly snapshot: KvUnitSnapshot } | undefined,
 ): Promise<void> {
   signal.throwIfAborted()
   const context = new Context()

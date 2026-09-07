@@ -18,7 +18,7 @@ POSIX Session 写锁只在其执行路径加载 `fs-ext`。该依赖在安装时
 
 持久 PowerShell 使用上游无界面终端模拟器处理协议回复，协议与调用方输入经过相同的串行终端写入。非交互宿主与前台子进程输入各有语义：宿主提示会拒绝，子 REPL 仍可从 PTY 读取。[持久 PTY 决策](../../archived/architecture/2026-08-11-pwsh-persistent-pty.md) 拥有就绪与输入顺序规则。
 
-Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 组合及最终工作区预期。断言保留路由后的 `ask-matt`、`handoff` 调用，以及 `to-tickets` 缺少 shell 时的拒绝。不以录制会话为输入的 Host 和凭据预期输出保留在所属方的 expected-output 层。真实 Git 夹具采用能容纳多次仓库观察的请求预算；文件系统、操作回执与重启断言仍决定是否成功。
+Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 组合及最终工作区预期。断言保留路由后的 `ask-matt`、`handoff` 调用，以及 `to-tickets` 缺少 shell 时的拒绝。不以录制会话为输入的 Host 和凭据预期输出保留在所属方的 expected-output 层。真实 Git 夹具采用能容纳多次仓库观察与 Windows 进程所有者启动的请求预算；文件系统、操作回执与重启断言仍决定是否成功。
 
 bundle 显式设置 `personaPrefix` 与 `personaSuffix`；development preset 通过 Persona 插件的 `prefix` 字段提供稳定提示。Connection 在 WebServer 可用时安装 HTTP 路由，并将已验证的恢复配置发布到浏览器 bootstrap。Saki 路由身份认证也适用于派发前失败。
 

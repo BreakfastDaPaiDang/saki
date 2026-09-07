@@ -14,7 +14,7 @@ Control Intent 与 Execution Dispatch 回答不同问题。Control Intent 记录
 
 DSH 已经提供几种范围更窄的机制。Schedule 把提醒状态保存在 Session 日志中，但只在 Session 活跃时交付。Workflow 会持久化观察历史，但实时 run 仍由调用方持有，重启后不能恢复。已发布 Jobs Provider 是进程本地实现。可继续 subagent 可以从持久 Session 冷恢复，但其 Agent inbox 只为一条运行时 lineage 排序轮次，不是离线、经过授权的 Project mailbox。用户问题与审批在打开的 Agent turn 内等待；它们的审计事件不能让进程消失后仍未回答的请求独立接受回答。
 
-因此，Saki 要承诺自动工作、重启恢复、未来远程 Host 或 Project Coordinator，就需要产品级记录。系统在唤醒 Host 前持久化 dispatch，使交付可以重复而不会丢失已接受工作。稳定 dispatch identity 与有界 Dispatch Claim 防止重复交付创建多个 Agent Run。该 claim 不同于 Execution Lease：前者为一条命令选择一个消费方，后者防止多个可写 Run 并发访问同一 Resource Binding。
+因此，Saki 要承诺自动工作、重启恢复、未来远程 Host 或 Project Coordinator，就需要产品级记录。系统在唤醒 Host 前持久化 dispatch，使交付可以重复而不会丢失已接受工作。稳定 dispatch identity 与有界 Dispatch Claim 防止重复交付创建多个 Agent Run。该 claim 为一条命令选择一个消费方；不同 Run 可以共享同一 Resource Binding。
 
 人工介入也具有相同的持久性要求。Agent、自动化 policy、提供方登录或对账流程可能在原进程或 model turn 结束后仍需要输入。请求必须保留主题、目标对象、所需决定、阻塞范围、状态、deadline 或 escalation policy，以及因果引用。通知送达不是回答，超时也绝不表示批准。
 
@@ -30,7 +30,7 @@ DSH 已经提供几种范围更窄的机制。Schedule 把提醒状态保存在 
 
 **让 Attention Inbox 条目成为权威队列记录。** 复制出的队列条目会在 Work Assignment、Intervention Request、Dispatch 或恢复记录之外再造一套生命周期。通过投影重建与重新查询，每项事实只有一个来源，不同用户也能获得不同 View，而无需复制命令。
 
-**合并 Dispatch Claim 与 Execution Lease。** 两种 claim 保护不同不变量。只读 Execution 仍需要带 fencing 的幂等 dispatch admission，却不需要 worktree Lease；一个可写 Run 也可能在启动 dispatch 已结算后继续持有 Execution Lease，并执行多个 Host Operation。
+**在整个 Run 期间持有 Dispatch Claim。** 一条 Run 可以接收多条独立 Dispatch。让 claim 覆盖整个会话会耦合命令交付与会话生命周期，并延迟失败后的恢复。
 
 **把通知送达或超时当作回答。** 浏览器、飞书或 QQ adapter 最多确认 transport，不能证明具备权限的对象作出了决定；超时自动批准还会把可用性故障变成权限来源。
 

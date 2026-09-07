@@ -6,17 +6,17 @@ status: accepted
 
 English | [中文](0005-recoverable-control-intents.zh.md)
 
-Saki persists every product mutation except bootstrap exchange and logout as an idempotent Control Intent and advances it through a recoverable lifecycle. The two access operations modify only one Installation Access aggregate through their dedicated authentication protocol. Versioned domain records own current facts, an Execution Lease atomically grants one writable Agent Run access to a worktree, and product Views read explicit projections. Version 0.1.0 uses DSH `storageDomain` for these records and does not introduce full event sourcing or a separate transactional database.
+Saki persists every product mutation except bootstrap exchange and logout as an idempotent Control Intent and advances it through a recoverable lifecycle. The two access operations modify only one Installation Access aggregate through their dedicated authentication protocol. Versioned domain records own current facts, each Execution Dispatch owns its admission, and product Views read explicit projections. Version 0.1.0 uses DSH `storageDomain` for these records and does not introduce full event sourcing or a separate transactional database.
 
 ## Why this decision
 
-Starting work is not one database write. It can reserve a worktree, create an Agent Run and Work Session association, start a DSH Session, change a GitHub Work Item, and later receive provider or GitHub results. DSH `storageDomain` serializes writes and makes one record update durable before publishing it, but it deliberately provides no cross-record transaction. A sequence of unrelated writes could therefore crash after only part of the state changed, leaving a false In progress item, an unowned Run, or two writers that both believe they own one worktree.
+Starting work is not one database write. It can create an Agent Run and Work Session association, start a DSH Session, change a GitHub Work Item, and later receive provider or GitHub results. DSH `storageDomain` serializes writes and makes one record update durable before publishing it, but it deliberately provides no cross-record transaction. Partial writes can leave a false In progress item, an unattributed Run, or a duplicate delivery of the same input.
 
 A relational transaction would make several local rows atomic but could not atomically include Git, a DSH runtime, GitHub, or a model provider. Saki would still need idempotency, durable progress, compensation, and reconciliation for external effects. Adding a second persistence abstraction in version 0.1.0 would duplicate DSH storage while leaving the decisive distributed-failure problem unsolved.
 
 A Control Intent makes the incomplete operation explicit. Saki records the requested action and actor before dispatch, uses the Intent id as the idempotency key across capability seams, and records progress as external facts become observable. Restart recovery resumes or reconciles unfinished Intents instead of inferring success from partially updated projections. The UI can distinguish pending, failed, and reconciliation-required work rather than presenting an optimistic state as confirmed.
 
-The one safety fact that must reject concurrent admission is narrower: one worktree has at most one active writable Agent Run. `storageDomain` can enforce that fact with one atomic read-modify-write on an Execution Lease record keyed by the Project's Resource Binding. Other records may converge through the Intent lifecycle without pretending that their updates share a transaction.
+Each Dispatch admits one exact Host Operation through an atomic compare-and-set on its current claim and revision. Distinct Agent Runs may share a Resource Binding and retain independent Sessions. Other records converge through the Intent lifecycle without pretending that their updates share a transaction.
 
 ## Considered options
 
@@ -34,4 +34,4 @@ The control plane exposes `SakiAccess` for Access, bootstrap exchange, and logou
 
 Every external adapter must accept stable Intent identifiers and support idempotent dispatch or explicit reconciliation. An adapter returns stable identifiers and ordinary data rather than live process handles or credential contents. A Control Intent that cannot be resolved automatically remains visible as reconciliation required.
 
-Saki does not promise cross-record ACID transactions in version 0.1.0. Each authoritative record identifies its owner and revision, and only one record owns each hard admission invariant. Recovery tests must interrupt work after every durable phase, reopen the store, and prove that Saki neither loses attribution nor starts a second writable Run.
+Saki does not promise cross-record ACID transactions in version 0.1.0. Each authoritative record identifies its owner and revision, and only one record owns each admission invariant. Recovery tests interrupt work after durable phases, reopen the store, and prove that Saki preserves attribution and deduplicates each requested operation.

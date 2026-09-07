@@ -38,6 +38,7 @@ import {
   readClosedSakiV6State,
   readClosedSakiV7State,
   readClosedSakiV8State,
+  readClosedSakiV9State,
 } from './closed-state.ts'
 import { publishMissingFile, replaceFileDurably } from './durable-files.ts'
 import type { DurableFileResult } from './durable-files.ts'
@@ -89,7 +90,7 @@ function newStorageGenerationId(): SakiStorageGenerationId {
 function preparedExpectation(generation: GenerationManifest): {
   readonly installationId: SakiInstallationId
   readonly storageGenerationId: SakiStorageGenerationId
-  readonly stateVersion: 9
+  readonly stateVersion: 10
   readonly createdByBuildId: SakiBuildId
 } {
   return {
@@ -233,6 +234,21 @@ async function prepareSelectedGeneration(
     throw new SakiMaintenanceError(
       'upgrade-required',
       'Saki state version 8 is valid but requires the offline upgrade command before serving',
+    )
+  }
+  if (readable?.version === 9) {
+    await readClosedSakiV9State(
+      selected.databasePath,
+      {
+        installationId: selected.installation.installationId,
+        storageGenerationId: selected.installation.storageGenerationId,
+        createdByBuildId: selected.generation.createdByBuildId,
+      },
+      signal,
+    )
+    throw new SakiMaintenanceError(
+      'upgrade-required',
+      'Saki state version 9 is valid but requires the offline upgrade command before serving',
     )
   }
   if (readable?.version !== sakiStateCapability.writable.version) {

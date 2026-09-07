@@ -31,8 +31,11 @@ export const name = 'saki-test-llm'
 export const inject = ['llm']
 
 class ControllableFakeLlm extends LlmAdapter {
-  constructor(private readonly probe: SakiTestLlmProbe) {
+  private readonly probe: SakiTestLlmProbe
+
+  constructor(probe: SakiTestLlmProbe) {
     super()
+    this.probe = probe
   }
 
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {

@@ -1608,7 +1608,7 @@ interface SakiGiveWorkItemToAgentReceiptBase {
 /** Durable browser-safe lifecycle for one manual Agent assignment. */
 export type SakiGiveWorkItemToAgentReceipt =
   | (SakiGiveWorkItemToAgentReceiptBase & {
-    readonly state: 'prepared' | 'admission-reserved' | 'dispatching'
+    readonly state: 'prepared' | 'dispatching'
   })
   | (SakiGiveWorkItemToAgentReceiptBase & { readonly state: 'started' })
   | (SakiGiveWorkItemToAgentReceiptBase & {
@@ -1616,14 +1616,7 @@ export type SakiGiveWorkItemToAgentReceipt =
     readonly reason:
       | 'expected-revision'
       | 'stale-remote'
-      | 'work-item-not-ready'
-      | 'work-item-blocked'
-      | 'acceptance-criteria-missing'
       | 'binding-unavailable'
-      | 'inherited-changes-unsafe'
-      | 'writable-run-active'
-      | 'branch-protected'
-      | 'legacy-protection-unknown'
   })
   | (SakiGiveWorkItemToAgentReceiptBase & {
     readonly state: 'canceled'
@@ -1646,12 +1639,11 @@ export type SakiGiveWorkItemToAgentIntentReceipt =
     readonly reason: 'unavailable'
     readonly detail?: (
       | 'work-item-detail-unavailable'
-      | 'branch-safety-unavailable'
       | 'agent-profile-unavailable'
       | 'model-route-unavailable'
       | 'host-unavailable') | undefined
     readonly receipt?: Extract<SakiGiveWorkItemToAgentReceipt, {
-      readonly state: 'prepared' | 'admission-reserved' | 'dispatching'
+      readonly state: 'prepared' | 'dispatching'
     }> | undefined
   }
   | {

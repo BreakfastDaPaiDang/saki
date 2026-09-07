@@ -15,6 +15,7 @@ import {
   readClosedSakiV6State,
   readClosedSakiV7State,
   readClosedSakiV8State,
+  readClosedSakiV9State,
 } from './closed-state.ts'
 import { SakiMaintenanceError } from './error.ts'
 import { sakiStateCapability } from './state-version.ts'
@@ -40,7 +41,7 @@ import type { VerifiedRecoveryBackup } from './recovery-backup.ts'
 import { validateClosedSakiV2Source } from './legacy-state.ts'
 import { LEGACY_B03_BUILD_ID } from './release.ts'
 
-const PREVIOUS_WRITABLE_STATE_VERSION = 8 as const
+const PREVIOUS_WRITABLE_STATE_VERSION = 9 as const
 
 function requireAbsolutePath(path: string, subject: string): string {
   const absolute = resolve(path)
@@ -137,7 +138,7 @@ async function recoverFresh(
 }
 
 function isRecoverableJournalTarget(stateVersion: number): boolean {
-  return stateVersion === PREVIOUS_WRITABLE_STATE_VERSION
+  return stateVersion === 8 || stateVersion === PREVIOUS_WRITABLE_STATE_VERSION
     || stateVersion === sakiStateCapability.writable.version
 }
 
@@ -150,8 +151,12 @@ async function validateSelectedJournalTarget(
     storageGenerationId: selected.installation.storageGenerationId,
     createdByBuildId: selected.generation.createdByBuildId,
   }
-  if (selected.generation.stateVersion === PREVIOUS_WRITABLE_STATE_VERSION) {
+  if (selected.generation.stateVersion === 8) {
     await readClosedSakiV8State(selected.databasePath, expectation, signal)
+    return
+  }
+  if (selected.generation.stateVersion === PREVIOUS_WRITABLE_STATE_VERSION) {
+    await readClosedSakiV9State(selected.databasePath, expectation, signal)
     return
   }
   if (selected.installation.phase === 'ready') {
@@ -222,8 +227,10 @@ async function validateUpgradeCandidate(
     storageGenerationId: candidate.installation.storageGenerationId,
     createdByBuildId: candidate.generation.createdByBuildId,
   }
-  if (candidate.generation.stateVersion === PREVIOUS_WRITABLE_STATE_VERSION) {
+  if (candidate.generation.stateVersion === 8) {
     await readClosedSakiV8State(candidate.databasePath, expectation, signal)
+  } else if (candidate.generation.stateVersion === PREVIOUS_WRITABLE_STATE_VERSION) {
+    await readClosedSakiV9State(candidate.databasePath, expectation, signal)
   } else {
     await readClosedCurrentSakiState(candidate.databasePath, expectation, signal)
   }
@@ -246,7 +253,7 @@ function requireUpgradeBackupSource(
 
 function requireRetainedUpgradeSource(
   journal: Extract<SakiOperationJournal, { readonly kind: 'upgrade' }>,
-  stateVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8,
+  stateVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9,
   storageGenerationId: SakiStorageGenerationId,
   sourceBuildId: SakiBuildId,
 ): void {
@@ -292,7 +299,7 @@ async function recoverUpgrade(
   }
 
   let oldStorageGenerationId: SakiStorageGenerationId
-  let oldStateVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8
+  let oldStateVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
   let oldSourceBuildId: SakiBuildId
   if (manifest === undefined) {
     const legacy = await validateClosedSakiV2Source(
@@ -313,7 +320,8 @@ async function recoverUpgrade(
         && manifest.value.stateVersion !== 5
         && manifest.value.stateVersion !== 6
         && manifest.value.stateVersion !== 7
-        && manifest.value.stateVersion !== 8)
+        && manifest.value.stateVersion !== 8
+        && manifest.value.stateVersion !== 9)
       || manifest.value.storageGenerationId === journal.candidateStorageGenerationId) {
       throw new SakiMaintenanceError(
         'recovery-required',
@@ -378,8 +386,18 @@ async function recoverUpgrade(
         },
         signal,
       )
-    } else {
+    } else if (manifest.value.stateVersion === 8) {
       await readClosedSakiV8State(
+        old.databasePath,
+        {
+          installationId: old.installation.installationId,
+          storageGenerationId: old.installation.storageGenerationId,
+          createdByBuildId: old.generation.createdByBuildId,
+        },
+        signal,
+      )
+    } else {
+      await readClosedSakiV9State(
         old.databasePath,
         {
           installationId: old.installation.installationId,

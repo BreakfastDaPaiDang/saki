@@ -1576,7 +1576,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'abstract readonly stateVersion: 9',
+        signature: 'abstract readonly stateVersion: 10',
         description: 'State-format version selected by the Installation manifest.',
         parameters: [],
       },
@@ -6931,7 +6931,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'StartAgentRunHostOperationRequest',
-    declaration: 'export interface StartAgentRunHostOperationRequest {\n    readonly type: \'start-agent-run\';\n    readonly source: ExecutionDispatchHostOperationSource;\n    readonly expected: HostGitMutationPrecondition;\n    readonly run: {\n        readonly agentRunId: SakiAgentRunId;\n        readonly workSessionId: SakiWorkSessionId;\n        readonly sessionId: SessionId;\n        readonly profile: StartAgentRunProfile;\n        readonly input: StartAgentRunInputMessage;\n    };\n}',
+    declaration: 'export interface StartAgentRunHostOperationRequest {\n    readonly type: \'start-agent-run\';\n    readonly source: ExecutionDispatchHostOperationSource;\n    readonly expected: {\n        readonly binding: ActiveHostProjectBinding;\n    };\n    readonly run: {\n        readonly agentRunId: SakiAgentRunId;\n        readonly workSessionId: SakiWorkSessionId;\n        readonly sessionId: SessionId;\n        readonly profile: StartAgentRunProfile;\n        readonly input: StartAgentRunInputMessage;\n    };\n}',
   },
   {
     name: 'StartAgentRunHostOperationResult',

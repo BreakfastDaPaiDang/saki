@@ -5,18 +5,21 @@ import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import {
   agentRunRecordSchema,
   agentRunV1RecordSchema,
-  bindingWriteAdmissionRecordSchema,
+  agentRunV2RecordSchema,
+  bindingWriteAdmissionV3RecordSchema,
   executionDispatchRecordSchema,
   executionDispatchV1RecordSchema,
+  executionDispatchV2RecordSchema,
   gitOperationIntentRecordSchema,
   sakiControlPlaneDomainSpec,
   sakiStorageGenerationDomainSpec,
   validateCurrentSakiState,
   type AgentRunRecord,
   type AgentRunV1Record,
-  type BindingWriteAdmissionRecord,
+  type BindingWriteAdmissionV3Record,
   type ExecutionDispatchRecord,
   type ExecutionDispatchV1Record,
+  type ExecutionDispatchV2Record,
   type GitOperationIntentRecord,
   type SakiBuildId,
   type SakiInstallationId,
@@ -27,24 +30,27 @@ import {
   sakiHostExecutionV1DomainSpec,
   sakiHostExecutionV2DomainSpec,
   sakiHostExecutionV3DomainSpec,
+  sakiHostExecutionV4DomainSpec,
   type LocalHostGitOperationRecordV1,
   type LocalHostOperationRecord,
   type LocalHostOperationRecordV2,
   type LocalHostOperationRecordV3,
+  type LocalHostOperationRecordV4,
 } from '@breakfastdapaidang/saki-execution-local'
 
 type CurrentControlPlaneDomain = Domain<typeof sakiControlPlaneDomainSpec>
 type CurrentHostExecutionDomain = Domain<typeof sakiHostExecutionDomainSpec>
+type HistoricalV4HostExecutionDomain = Domain<typeof sakiHostExecutionV4DomainSpec>
 type HistoricalV1HostExecutionDomain = Domain<typeof sakiHostExecutionV1DomainSpec>
 type HistoricalV2HostExecutionDomain = Domain<typeof sakiHostExecutionV2DomainSpec>
 type HistoricalV3HostExecutionDomain = Domain<typeof sakiHostExecutionV3DomainSpec>
 type CurrentStorageGenerationDomain = Domain<typeof sakiStorageGenerationDomainSpec>
 type CurrentGitHostOperationRecord = Exclude<
-  LocalHostOperationRecord,
+  LocalHostOperationRecord | LocalHostOperationRecordV4,
   { readonly request: { readonly type: 'start-agent-run' | 'push-branch' } }
 >
 type CurrentPushHostOperationRecord = Extract<
-  LocalHostOperationRecord,
+  LocalHostOperationRecord | LocalHostOperationRecordV4,
   { readonly request: { readonly type: 'push-branch' } }
 >
 type CurrentBranchDeliveryRecord = ReturnType<
@@ -57,7 +63,7 @@ type CurrentBranchPushIntentRecord = CurrentBranchDeliveryIntentRecord & {
   readonly operation: Extract<CurrentBranchDeliveryIntentRecord['operation'], { readonly kind: 'push' }>
 }
 type BranchPushAdmissionRecord = Extract<
-  BindingWriteAdmissionRecord,
+  BindingWriteAdmissionV3Record,
   { readonly state: 'manual-host-operation' }
 > & { readonly action: 'project-branch:push' }
 type HistoricalV2GitHostOperationRecord = Exclude<
@@ -73,7 +79,7 @@ type GitHostOperationRecord = LocalHostGitOperationRecordV1
   | HistoricalV3GitHostOperationRecord
   | CurrentGitHostOperationRecord
 type AgentHostOperationRecord = Extract<
-  LocalHostOperationRecord,
+  LocalHostOperationRecord | LocalHostOperationRecordV4,
   { readonly request: { readonly type: 'start-agent-run' } }
 >
 type HistoricalAgentHostOperationRecord = Extract<
@@ -81,7 +87,7 @@ type HistoricalAgentHostOperationRecord = Extract<
   { readonly request: { readonly type: 'start-agent-run' } }
 >
 type LinkedAgentRunRecord = AgentRunRecord | AgentRunV1Record
-type LinkedExecutionDispatchRecord = ExecutionDispatchRecord | ExecutionDispatchV1Record
+type LinkedExecutionDispatchRecord = ExecutionDispatchRecord | ExecutionDispatchV1Record | ExecutionDispatchV2Record
 type LinkedAgentHostOperationRecord = AgentHostOperationRecord | HistoricalAgentHostOperationRecord
 
 interface GitOperationControlPlaneDomain {
@@ -100,9 +106,9 @@ interface BranchDeliveryControlPlaneDomain {
 /**
  * Validate complete current product relationships across Control Plane, Host Execution, and generation identity.
  * Recoverable write-order gaps are accepted only when the Host still proves that no effect was admitted.
- * @param controlPlane - opened exact `saki_control_plane@9` domain.
- * @param hostExecution - opened exact `saki_host_execution@4` domain.
- * @param storageGeneration - opened exact `saki_storage_generation@7` domain.
+ * @param controlPlane - opened exact `saki_control_plane@10` domain.
+ * @param hostExecution - opened exact `saki_host_execution@5` domain.
+ * @param storageGeneration - opened exact `saki_storage_generation@8` domain.
  * @param expectedInstallationId - Installation selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation selected by maintenance metadata.
  * @param expectedCreatedByBuildId - generation provenance repeated by its seal.
@@ -136,7 +142,7 @@ export function validateCurrentSakiProductState(
  */
 export function validateBranchDeliveryOperationLinks(
   controlPlane: BranchDeliveryControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain,
 ): void {
   const deliveries = identifiedRecords(
     controlPlane.table('branch_deliveries'),
@@ -154,7 +160,7 @@ export function validateBranchDeliveryOperationLinks(
   }
   const admissions = identifiedRecords(
     controlPlane.table('binding_write_admissions'),
-    bindingWriteAdmissionRecordSchema,
+    bindingWriteAdmissionV3RecordSchema,
     'Binding write admission',
   )
   const pushAdmissions = new Map<BranchPushAdmissionRecord['id'], BranchPushAdmissionRecord>()
@@ -225,7 +231,7 @@ export function validateBranchDeliveryOperationLinks(
 function branchPushWithoutHostValid(
   intent: CurrentBranchPushIntentRecord,
   delivery: CurrentBranchDeliveryRecord,
-  admission: BindingWriteAdmissionRecord | undefined,
+  admission: BindingWriteAdmissionV3Record | undefined,
 ): boolean {
   const checkpoint = intent.checkpoint
   const ownedAdmission = admission !== undefined && isBranchPushAdmission(admission)
@@ -257,7 +263,7 @@ function identifiedRecords<K extends string, V extends { readonly id: K }>(
 }
 
 function isBranchPushAdmission(
-  record: BindingWriteAdmissionRecord,
+  record: BindingWriteAdmissionV3Record,
 ): record is BranchPushAdmissionRecord {
   return record.state === 'manual-host-operation' && record.action === 'project-branch:push'
 }
@@ -267,7 +273,7 @@ function isBranchPushIntent(record: CurrentBranchDeliveryIntentRecord): record i
 }
 
 function isCurrentPushHostOperation(
-  operation: LocalHostOperationRecord,
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV4,
 ): operation is CurrentPushHostOperationRecord {
   return operation.request.type === 'push-branch'
 }
@@ -304,7 +310,7 @@ function branchPushAdmissionMatchesRequest(
 function activeBranchPushWindowValid(
   intent: CurrentBranchDeliveryIntentRecord,
   operation: CurrentPushHostOperationRecord,
-  admission: Extract<BindingWriteAdmissionRecord, {
+  admission: Extract<BindingWriteAdmissionV3Record, {
     readonly state: 'manual-host-operation'
     readonly action: 'project-branch:push'
   }>,
@@ -321,7 +327,7 @@ function branchPushWindowValid(
   intent: CurrentBranchPushIntentRecord,
   delivery: CurrentBranchDeliveryRecord,
   operation: CurrentPushHostOperationRecord,
-  admission: BindingWriteAdmissionRecord | undefined,
+  admission: BindingWriteAdmissionV3Record | undefined,
 ): boolean {
   const checkpoint = intent.checkpoint
   if (!isDeepStrictEqual(operation.request, intent.operation.request)) {
@@ -376,7 +382,7 @@ function sourceConflictedBranchPushValid(
   intent: CurrentBranchPushIntentRecord,
   delivery: CurrentBranchDeliveryRecord,
   operation: CurrentPushHostOperationRecord,
-  admission: BindingWriteAdmissionRecord | undefined,
+  admission: BindingWriteAdmissionV3Record | undefined,
 ): boolean {
   const checkpoint = intent.checkpoint
   const noEffect = operation.effectPlan === undefined
@@ -404,7 +410,7 @@ function terminalBranchPushWindowValid(
   intent: CurrentBranchDeliveryIntentRecord,
   delivery: CurrentBranchDeliveryRecord,
   operation: CurrentPushHostOperationRecord,
-  admission: BindingWriteAdmissionRecord | undefined,
+  admission: BindingWriteAdmissionV3Record | undefined,
 ): boolean {
   const checkpoint = intent.checkpoint
   if (checkpoint.state !== 'terminal' || checkpoint.host === undefined
@@ -431,7 +437,7 @@ function terminalBranchPushWindowValid(
 }
 
 function terminalBranchPushAdmissionMatches(
-  admission: BindingWriteAdmissionRecord | undefined,
+  admission: BindingWriteAdmissionV3Record | undefined,
   intent: CurrentBranchDeliveryIntentRecord,
   operation: CurrentPushHostOperationRecord,
   preparation: ReturnType<typeof operationPreparation>,
@@ -455,7 +461,7 @@ function terminalBranchPushAdmissionMatches(
 }
 
 function branchPushAdmissionAfterHostMatches(
-  admission: BindingWriteAdmissionRecord | undefined,
+  admission: BindingWriteAdmissionV3Record | undefined,
   intent: CurrentBranchDeliveryIntentRecord,
   operation: CurrentPushHostOperationRecord,
   preparation: ReturnType<typeof operationPreparation>,
@@ -471,7 +477,7 @@ function branchPushAdmissionAfterHostMatches(
 }
 
 function branchPushAcceptedAdmissionMatches(
-  admission: Extract<BindingWriteAdmissionRecord, {
+  admission: Extract<BindingWriteAdmissionV3Record, {
     readonly state: 'manual-host-operation'
     readonly action: 'project-branch:push'
     readonly phase: 'accepted'
@@ -492,8 +498,8 @@ function branchPushAcceptedAdmissionMatches(
  */
 export function validateGitOperationLinks(
   controlPlane: GitOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain | HistoricalV1HostExecutionDomain | HistoricalV2HostExecutionDomain
-    | HistoricalV3HostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain | HistoricalV1HostExecutionDomain
+    | HistoricalV2HostExecutionDomain | HistoricalV3HostExecutionDomain,
 ): void {
   const intents = new Map([...controlPlane.table('git_operation_intents').entries()].map(([key, value]) => {
     const intent = gitOperationIntentRecordSchema.parse(value)
@@ -501,7 +507,7 @@ export function validateGitOperationLinks(
     return [key, intent] as const
   }))
   const admissions = new Map([...controlPlane.table('binding_write_admissions').entries()].map(([key, value]) => {
-    const admission = bindingWriteAdmissionRecordSchema.parse(value)
+    const admission = bindingWriteAdmissionV3RecordSchema.parse(value)
     if (admission.id !== key) throw new Error('Saki Binding write admission id disagrees with its table key')
     return [key, admission] as const
   }))
@@ -565,7 +571,7 @@ export function validateGitOperationLinks(
  */
 export function validateAgentOperationLinks(
   controlPlane: AgentOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain | HistoricalV3HostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain | HistoricalV3HostExecutionDomain,
 ): void {
   validateAgentOperationLinksWithSchemas(
     controlPlane,
@@ -593,9 +599,24 @@ export function validateSakiV7AgentOperationLinks(
   )
 }
 
+/**
+ * Validate exact v8–v9 Dispatch links using their historical binding reservations.
+ * @param controlPlane - exact v8 or v9 source Control Plane.
+ * @param hostExecution - matching historical or current Host Execution.
+ */
+export function validateSakiV8AgentOperationLinks(
+  controlPlane: AgentOperationControlPlaneDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain | HistoricalV3HostExecutionDomain,
+): void {
+  validateAgentOperationLinksWithSchemas(
+    controlPlane, hostExecution, agentRunV2RecordSchema, executionDispatchV2RecordSchema,
+  )
+}
+
 function validateAgentOperationLinksWithSchemas(
   controlPlane: AgentOperationControlPlaneDomain,
-  hostExecution: CurrentHostExecutionDomain | HistoricalV2HostExecutionDomain | HistoricalV3HostExecutionDomain,
+  hostExecution: CurrentHostExecutionDomain | HistoricalV4HostExecutionDomain
+    | HistoricalV2HostExecutionDomain | HistoricalV3HostExecutionDomain,
   runSchema: { parse(value: unknown): LinkedAgentRunRecord },
   dispatchSchema: { parse(value: unknown): LinkedExecutionDispatchRecord },
 ): void {
@@ -611,7 +632,7 @@ function validateAgentOperationLinksWithSchemas(
   )
   const admissions = identifiedRecords(
     controlPlane.table('binding_write_admissions'),
-    bindingWriteAdmissionRecordSchema,
+    bindingWriteAdmissionV3RecordSchema,
     'Binding write admission',
   )
   const operations = new Map<LinkedExecutionDispatchRecord['id'], LinkedAgentHostOperationRecord>()
@@ -672,21 +693,21 @@ function validateAgentOperationLinksWithSchemas(
 function retainedAgentSourceConflict(
   dispatch: LinkedExecutionDispatchRecord,
   run: LinkedAgentRunRecord,
-  admission: BindingWriteAdmissionRecord | undefined,
+  admission: BindingWriteAdmissionV3Record | undefined,
 ): boolean {
   return dispatch.state === 'reconciliation-required'
     && run.state === 'reconciliation-required'
     && dispatch.preparation === undefined
     && dispatch.operationSnapshot === undefined
-    && admission?.state === 'agent-run'
+    && (dispatch.schemaVersion === 2 || (admission?.state === 'agent-run'
     && admission.originIntentId === dispatch.intentId
     && admission.agentRunId === dispatch.agentRunId
     && admission.bindingRevision === dispatch.hostRequest.expected.binding.revision
-    && admission.payloadDigest === dispatch.payloadDigest
+    && admission.payloadDigest === dispatch.payloadDigest))
 }
 
 function isAgentHostOperation(
-  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostOperationRecordV3,
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV4 | LocalHostOperationRecordV2 | LocalHostOperationRecordV3,
 ): operation is LinkedAgentHostOperationRecord {
   return operation.request.type === 'start-agent-run'
 }
@@ -714,8 +735,15 @@ function validateAgentHostAdmission(
   dispatch: LinkedExecutionDispatchRecord,
   run: LinkedAgentRunRecord,
   operation: LinkedAgentHostOperationRecord,
-  admission: BindingWriteAdmissionRecord | undefined,
+  admission: BindingWriteAdmissionV3Record | undefined,
 ): void {
+  if (dispatch.schemaVersion === 2) {
+    const evidence = operation.snapshot.admission
+    if (evidence.kind === 'accepted' && dispatch.admissionRevision !== evidence.revision) {
+      throw new Error('StartAgentRun Host Operation disagrees with its Dispatch admission')
+    }
+    return
+  }
   const releasedAfterNoEffect = (operation.snapshot.state === 'failed'
     || operation.snapshot.state === 'canceled')
     && dispatch.state === 'canceled' && run.state === 'canceled'
@@ -735,7 +763,7 @@ function validateAgentHostAdmission(
 }
 
 function isGitHostOperation(
-  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV4 | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
     | LocalHostGitOperationRecordV1,
 ): operation is GitHostOperationRecord {
   return operation.request.type !== 'start-agent-run' && operation.request.type !== 'push-branch'
@@ -789,7 +817,7 @@ function validateSourceConflictHostRecord(
 }
 
 function operationPreparation(
-  operation: LocalHostOperationRecord | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
+  operation: LocalHostOperationRecord | LocalHostOperationRecordV4 | LocalHostOperationRecordV2 | LocalHostOperationRecordV3
     | LocalHostGitOperationRecordV1,
 ) {
   return {
@@ -813,7 +841,7 @@ function validatePrePreparationHostRecord(
 function validateOperationAdmissionLink(
   intent: GitOperationIntentRecord,
   operation: GitHostOperationRecord,
-  admission: BindingWriteAdmissionRecord | undefined,
+  admission: BindingWriteAdmissionV3Record | undefined,
 ): void {
   if (sourceConflictedIntent(intent)) return
   const owned = admission?.state === 'manual-host-operation'
@@ -839,7 +867,7 @@ function validateOperationAdmissionLink(
 }
 
 function validateManualAdmissionMatchesOperation(
-  admission: Extract<BindingWriteAdmissionRecord, { readonly state: 'manual-host-operation' }>,
+  admission: Extract<BindingWriteAdmissionV3Record, { readonly state: 'manual-host-operation' }>,
   operation: GitHostOperationRecord,
 ): void {
   if (admission.id !== operation.request.expected.binding.id
@@ -852,7 +880,7 @@ function validateManualAdmissionMatchesOperation(
 }
 
 function acceptedAdmissionMatchesOperation(
-  admission: Extract<BindingWriteAdmissionRecord, {
+  admission: Extract<BindingWriteAdmissionV3Record, {
     readonly state: 'manual-host-operation'
     readonly phase: 'accepted'
   }>,

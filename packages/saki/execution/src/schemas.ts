@@ -59,6 +59,7 @@ import type {
   StageFilesHostOperationResult,
   StartAgentRunHostOperationRequest,
   StartAgentRunHostOperationRequestV2,
+  StartAgentRunHostOperationRequestV3,
   StartAgentRunHostOperationResult,
   StartAgentRunInputMessage,
   StartAgentRunInputMessageV2,
@@ -1241,11 +1242,11 @@ function refineStartAgentRunRequestRelations(
   }
 }
 
-/** Strict Agent-start request with full writable preconditions and frozen input. */
+/** Exact Agent input delivery scoped to its authorized resource binding. */
 export const startAgentRunHostOperationRequestSchema = z.object({
   type: z.literal('start-agent-run'),
   source: executionDispatchHostOperationSourceSchema,
-  expected: hostGitMutationPreconditionSchema,
+  expected: z.object({ binding: activeHostProjectBindingSchema }).strict(),
   run: z.object({
     agentRunId: sakiAgentRunIdSchema,
     workSessionId: sakiWorkSessionIdSchema,
@@ -1254,6 +1255,12 @@ export const startAgentRunHostOperationRequestSchema = z.object({
     input: startAgentRunInputMessageSchema,
   }).strict(),
 }).strict().superRefine(refineStartAgentRunRequestRelations) satisfies z.ZodType<StartAgentRunHostOperationRequest>
+
+/** Exact Agent input request retained by Host Execution versions three and four. */
+export const startAgentRunHostOperationRequestV3Schema = z.object({
+  ...startAgentRunHostOperationRequestSchema.shape,
+  expected: hostGitMutationPreconditionSchema,
+}).strict().superRefine(refineStartAgentRunRequestRelations) satisfies z.ZodType<StartAgentRunHostOperationRequestV3>
 
 /** Exact StartAgentRun request retained by `saki_host_execution@2`. */
 export const startAgentRunHostOperationRequestV2Schema = z.object({
