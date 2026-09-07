@@ -328,7 +328,8 @@ export async function startSaki(
   }
   try {
     await new Promise<void>((resolveReady, reject) => {
-      const timeout = setTimeout(() => { reject(new Error('Saki snapshot startup timed out')) }, 20_000)
+      const startupTimeoutMs = options.agentRunSnapshot === true && process.platform === 'win32' ? 90_000 : 20_000
+      const timeout = setTimeout(() => { reject(new Error('Saki snapshot startup timed out')) }, startupTimeoutMs)
       const cleanup = (): void => {
         clearTimeout(timeout)
         child.off('exit', onExit)
