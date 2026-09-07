@@ -556,6 +556,10 @@ export async function registerSnapshotProject(
     hostId,
     directoryLocator: repository,
   }, { cookie })
+  expect(inspected.value, 'Saki project-selection result').toMatchObject({
+    ok: true,
+    projection: { result: { ok: true } },
+  })
   const inspection = inspected.value as SnapshotProjectInspection
   const selection = inspection.projection.result.selection
   const registrationIntent = {
