@@ -393,6 +393,7 @@ describe('LocalSubprocessRuntime', () => {
       const ctx = new Context()
       const fiber = await ctx.plugin(IsolatedLocalSubprocessRuntime)
       const service = ctx.subprocess as InstanceType<typeof IsolatedLocalSubprocessRuntime>
+      service.internals = { platform: 'darwin' }
       const handle = await ctx.subprocess.spawnTerminal({
         argv: ['shell'], cwd: process.cwd(), rows: 24, cols: 80, graceMs: 1,
       })
@@ -600,6 +601,7 @@ describe('LocalSubprocessRuntime', () => {
       ctx.logger.error = ((error: unknown) => { disposalErrors.push(error) }) as typeof ctx.logger.error
       const fiber = await ctx.plugin(IsolatedLocalSubprocessRuntime)
       const alive = new Set([124])
+      ;(ctx.subprocess as InstanceType<typeof IsolatedLocalSubprocessRuntime>).internals = { platform: 'darwin' }
       ;(ctx.subprocess as InstanceType<typeof IsolatedLocalSubprocessRuntime>).terminalInspector = {
         foregroundPgid: () => 123,
         isStdinWaiting: () => false,
@@ -847,12 +849,20 @@ describe('LocalSubprocessRuntime', () => {
   it('disposal kills still-running processes and awaits their exit', async () => {
     const ctx = new Context()
     const fiber = await ctx.plugin(LocalSubprocessRuntime)
-    const handle = ctx.subprocess.spawn(spec('sleep 60'))
-    await fiber.dispose()
-    const outcome = await handle.done
-    // Windows teardown terminates through taskkill, which reports no signal.
-    expect(outcome.signal).toBe(process.platform === 'win32' ? null : 'SIGTERM')
-  })
+    const handle = ctx.subprocess.spawn({
+      ...spec('sleep 60'),
+      argv: [process.execPath, '-e', 'console.log("ready"); setTimeout(() => {}, 60000)'],
+    })
+    try {
+      await expect.poll(() => handle.collected.stdout!.readFrom(0).text, { timeout: 10_000 }).toContain('ready')
+      await fiber.dispose()
+      const outcome = await handle.done
+      // Windows Job termination does not report a POSIX signal.
+      expect(outcome.signal).toBe(process.platform === 'win32' ? null : 'SIGTERM')
+    } finally {
+      await fiber.dispose()
+    }
+  }, 30_000)
 
   it('a settled process leaves the live set (disposal does not re-kill it)', async () => {
     const ctx = new Context()

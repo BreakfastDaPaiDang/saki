@@ -20,6 +20,8 @@ Persistent PowerShell uses the upstream headless terminal emulator for protocol 
 
 Saki skill scenarios live in the shared SDK session corpus, with explicit portable shell compositions and final workspace expectations. Their assertions preserve routed `ask-matt` and `handoff` invocations and the `to-tickets` missing-shell refusal. Host and credential expected output without recorded-session input remains owner-local in the expected-output tier. Real-Git fixtures use a request budget that accommodates repeated repository observations and Windows process-owner startup; their filesystem, operation-receipt, and restart assertions still decide success.
 
+Native subprocess fixtures observe target output before testing cancellation or disposal. Fake-terminal lifecycle cases select the process-group implementation; dedicated Linux scope cases verify native launch and outcome handling. Timeout-output cases allow the native bootstrap to start the target within the deadline under test.
+
 The bundle sets `personaPrefix` and `personaSuffix` explicitly; the development preset supplies its stable prompt through the Persona plugin’s `prefix` field. Connection installs HTTP routes when WebServer becomes available and publishes its validated recovery configuration into the browser bootstrap. Saki route authentication also applies to pre-dispatch failures.
 
 Connection requires credential storage for its browser-session signing record even when Saki owns the mounted Host API authentication. The POSIX composition selects the existing local provider with `plaintext` protection; the Product GitHub App remains disabled. Windows selects DPAPI for both Connection records and Product App references.

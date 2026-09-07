@@ -20,6 +20,8 @@ POSIX Session 写锁只在其执行路径加载 `fs-ext`。该依赖在安装时
 
 Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 组合及最终工作区预期。断言保留路由后的 `ask-matt`、`handoff` 调用，以及 `to-tickets` 缺少 shell 时的拒绝。不以录制会话为输入的 Host 和凭据预期输出保留在所属方的 expected-output 层。真实 Git 夹具采用能容纳多次仓库观察与 Windows 进程所有者启动的请求预算；文件系统、操作回执与重启断言仍决定是否成功。
 
+原生子进程夹具先观察目标输出，再测试取消或释放。假终端生命周期用例选择进程组实现；专门的 Linux scope 用例验证原生启动与结果处理。超时输出用例为原生引导进程在受测期限内启动目标留出时间。
+
 bundle 显式设置 `personaPrefix` 与 `personaSuffix`；development preset 通过 Persona 插件的 `prefix` 字段提供稳定提示。Connection 在 WebServer 可用时安装 HTTP 路由，并将已验证的恢复配置发布到浏览器 bootstrap。Saki 路由身份认证也适用于派发前失败。
 
 即使挂载的 Host API 身份认证由 Saki 负责，Connection 仍需要凭据存储来保存浏览器会话签名记录。POSIX 组合选择现有的本地提供方，其保护等级为 `plaintext`；Product GitHub App 保持禁用。Windows 使用 DPAPI 保存 Connection 记录和 Product App 引用。

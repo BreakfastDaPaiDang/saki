@@ -270,10 +270,10 @@ describe('bash tool', () => {
 
   it('reports timeout kills with both markers (timeout first)', async () => {
     const ctx = await setup()
-    const result = await call(ctx, 'bash', { command: 'sleep 60', description: 'test command', timeoutMs: 100 })
+    const result = await call(ctx, 'bash', { command: 'sleep 60', description: 'test command', timeoutMs: 5_000 })
     expect(result.isError).toBe(false)
-    expect(text(result)).toBe('(no output)\n[timed out after 100ms]\n[killed by signal: SIGTERM]')
-  })
+    expect(text(result)).toBe('(no output)\n[timed out after 5000ms]\n[killed by signal: SIGTERM]')
+  }, 20_000)
 
   it('reports a timeout even when the command traps the signal and exits 0', async () => {
     // The signal-independent timeout marker: a trapped SIGTERM that exits 0
@@ -281,11 +281,11 @@ describe('bash tool', () => {
     // print "Terminated" to stderr for the killed sleep — environment
     // dependent — so assert the marker, not the exact body.)
     const ctx = await setup()
-    const result = await call(ctx, 'bash', { command: 'trap "exit 0" TERM; sleep 60', description: 'test command', timeoutMs: 100 })
+    const result = await call(ctx, 'bash', { command: 'trap "exit 0" TERM; sleep 60', description: 'test command', timeoutMs: 5_000 })
     expect(result.isError).toBe(false)
-    expect(text(result)).toContain('[timed out after 100ms]')
+    expect(text(result)).toContain('[timed out after 5000ms]')
     expect(text(result)).not.toContain('[exit code:')
-  })
+  }, 20_000)
 
   it('reports truncation with the spill path', async () => {
     const ctx = new Context()
@@ -317,20 +317,34 @@ describe('bash tool', () => {
   it('surfaces foreground aborts as the structured TOOL_ABORTED error', async () => {
     const ctx = await setup()
     const controller = new AbortController()
+    const spawn = ctx.subprocess.spawn.bind(ctx.subprocess)
+    let child: ReturnType<typeof spawn> | undefined
+    const observedSpawn = vi.spyOn(ctx.subprocess, 'spawn').mockImplementation((spec) => {
+      child = spawn(spec)
+      return child
+    })
     const pending = ctx.tools.execute({
       callId: ToolCallId('call-abort'),
       name: 'bash',
-      arguments: { command: 'sleep 60', description: 'test command' },
+      arguments: { command: 'echo ready; sleep 60', description: 'test command' },
       signal: controller.signal,
     })
-    setTimeout(() => { controller.abort() }, 50)
-    const result = await pending
-    expect(result.isError).toBe(true)
-    expect(result.error).toMatchObject({
-      message: 'tool call aborted',
-      info: { name: 'AbortError', code: TOOL_ABORTED },
-    })
-  })
+    try {
+      await expect.poll(() => child?.collected.stdout?.readFrom(0).text, { timeout: 10_000 }).toContain('ready')
+      controller.abort()
+      const result = await pending
+      expect(result.isError).toBe(true)
+      expect(result.error).toMatchObject({
+        message: 'tool call aborted',
+        info: { name: 'AbortError', code: TOOL_ABORTED },
+      })
+    } finally {
+      controller.abort()
+      await pending
+      observedSpawn.mockRestore()
+      await ctx.fiber.dispose()
+    }
+  }, 30_000)
 
   // Type and required-key violations are rejected by the harness
   // (defineTool validates against the ParameterSchemaSpec — the arg-validation Agent Note) before execute.
@@ -472,7 +486,8 @@ describe('background execution through the job runtime', () => {
 
   it('a running background job is killable through the REAL job_kill tool', async () => {
     const ctx = await setupWithTasks()
-    await call(ctx, 'bash', { command: 'sleep 60', description: 'test command', run_in_background: true })
+    await call(ctx, 'bash', { command: 'echo ready; sleep 60', description: 'test command', run_in_background: true })
+    await callUntilText(ctx, 'job_output', { job_id: 'bash-1' }, 'ready', 10_000)
 
     const killed = await call(ctx, 'job_kill', { job_id: 'bash-1' })
     expect(text(killed)).toBe('requested cancellation of job bash-1')
@@ -480,7 +495,7 @@ describe('background execution through the job runtime', () => {
     // the signal detail mapped by processOutcome.
     const final = await call(ctx, 'job_output', { job_id: 'bash-1', wait: true })
     expect(text(final)).toContain('[status: killed, signal: SIGTERM]')
-  })
+  }, 30_000)
 
   it('a self-signal background exit is reported as killed through the REAL job_output tool', async () => {
     const ctx = await setupWithTasks()
