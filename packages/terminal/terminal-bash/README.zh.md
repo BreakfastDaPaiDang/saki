@@ -122,7 +122,7 @@ PowerShell 使用 `-NoLogo -NoProfile -NonInteractive` 启动。它保留持久 
 - [tool-terminal 工具](../tool-terminal/README.zh.md)——操作会话的面向模型工具。
 - [子进程 seam](../../../docs/subsystems/subprocess.zh.md)——负责 PTY 分配与进程树清理的终端原语。
 - [持久 PTY Agent Note](../../../.agents/notes/implemented/feature/2026-07-16-persistent-pty-sessions.zh.md)——能力设计与暂缓边界。
-- [持久 pwsh Agent Note](../../../.agents/notes/implemented/architecture/2026-08-11-pwsh-persistent-pty.zh.md)——Windows 基底与 pwsh 方言。
+- [持久 pwsh Agent Note](../../../.agents/notes/archived/architecture/2026-08-11-pwsh-persistent-pty.md)——Windows 基底与 pwsh 方言。
 
 -----
 

@@ -10,15 +10,17 @@ Saki 拥有持久控制状态、认证 loopback RPC、Windows 凭据保护和 Ag
 
 ## Decision
 
-Saki 直接使用 Session 读取句柄和 `snapshotEvents()`，关闭每个取得的句柄，并在 bundle 与 AgentRun 夹具中挂载 `session-projection`。其 preset 目录排除 shipped 与 user root，因为 Saki 提供可运行的 preset 组合。凭据引用通过类型化 Credentials Remote 保留保护与可用性元数据。Saki 的 loopback 请求策略绑定到其注册路由，包括派发前失败；普通浏览器路由使用浏览器认证策略。
+Saki 从每个 `SessionHandleReadResult` 读取 `events` 切片而不修改事件值，对 live Session 使用 `snapshotEvents()`，关闭每个取得的句柄，并在 bundle 与 AgentRun 夹具中挂载 `session-projection`。其 preset 目录排除 shipped 与 user root，因为 Saki 提供可运行的 preset 组合。凭据引用通过类型化 Credentials Remote 保留保护与可用性元数据。Saki 的 loopback 请求策略绑定到其注册路由，包括派发前失败；普通浏览器路由使用浏览器认证策略。
 
 存储在上游逐记录布局之外保留可选 closed-unit lease 和显式仅创建迁移操作。普通 SQLite 服务要求物理 v2；closed 迁移可读取物理 v1 而不修改源。JSON 单 unit 写入保留严格无损 JSON 与根目录身份检查。这些机制独立于已发布 Session 代际，后者遵循 [Session 迁移决策](2026-08-31-released-session-format-migrations.zh.md)。
 
 POSIX Session 写锁只在其执行路径加载 `fs-ext`。该依赖在安装时可选，使 Windows 能使用内核信号量而无需构建 POSIX addon；缺少 addon 的 POSIX 部署会在取得锁时失败。不存在无锁回退。
 
-持久 PowerShell 使用上游无界面终端模拟器处理协议回复，协议与调用方输入经过相同的串行终端写入。非交互宿主与前台子进程输入各有语义：宿主提示会拒绝，子 REPL 仍可从 PTY 读取。[持久 PTY 决策](2026-08-11-pwsh-persistent-pty.zh.md) 拥有就绪与输入顺序规则。
+持久 PowerShell 使用上游无界面终端模拟器处理协议回复，协议与调用方输入经过相同的串行终端写入。非交互宿主与前台子进程输入各有语义：宿主提示会拒绝，子 REPL 仍可从 PTY 读取。[持久 PTY 决策](../../archived/architecture/2026-08-11-pwsh-persistent-pty.md) 拥有就绪与输入顺序规则。
 
 Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 组合及最终工作区预期。断言保留路由后的 `ask-matt`、`handoff` 调用，以及 `to-tickets` 缺少 shell 时的拒绝。不以录制会话为输入的 Host 和凭据预期输出保留在所属方的 expected-output 层。真实 Git 夹具采用能容纳多次仓库观察的请求预算；文件系统、操作回执与重启断言仍决定是否成功。
+
+bundle 显式设置 `personaPrefix` 与 `personaSuffix`；development preset 通过 Persona 插件的 `prefix` 字段提供稳定提示。Connection 在 WebServer 可用时安装 HTTP 路由，并将已验证的恢复配置发布到浏览器 bootstrap。Saki 路由身份认证也适用于派发前失败。
 
 即使挂载的 Host API 身份认证由 Saki 负责，Connection 仍需要凭据存储来保存浏览器会话签名记录。POSIX 组合选择现有的本地提供方，其保护等级为 `plaintext`；Product GitHub App 保持禁用。Windows 使用 DPAPI 保存 Connection 记录和 Product App 引用。
 

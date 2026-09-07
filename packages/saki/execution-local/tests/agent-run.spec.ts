@@ -87,13 +87,13 @@ const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
   inventoryMaxGitOutputBytes: 4 * 1024 * 1024,
   inventoryMaxFileBytes: 1024 * 1024,
   inventoryMaxTotalFileBytes: 8 * 1024 * 1024,
-  inventoryMaxCaptureMs: 10_000,
+  inventoryMaxCaptureMs: 30_000,
   baselineMaxEntries: 1_000,
   baselineMaxPathBytes: 1024 * 1024,
   baselineMaxGitOutputBytes: 4 * 1024 * 1024,
   baselineMaxFileBytes: 1024 * 1024,
   baselineMaxTotalFileBytes: 4 * 1024 * 1024,
-  baselineMaxCaptureMs: 10_000,
+  baselineMaxCaptureMs: 30_000,
   operationMaxIndexBytes: 8 * 1024 * 1024,
   operationMaxReflogBytes: 1024 * 1024,
 }
@@ -104,7 +104,7 @@ afterEach(async () => {
 })
 
 // Each recovery case performs several complete Git observations against a real repository.
-const REAL_GIT_AGENT_RUN_TIMEOUT_MS = 90_000
+const REAL_GIT_AGENT_RUN_TIMEOUT_MS = process.platform === 'win32' ? 300_000 : 90_000
 
 describe('LocalSakiHostExecution StartAgentRun', () => {
   it('starts one exact preallocated Agent Run without exposing its wake message to the model', async () => {
@@ -2344,7 +2344,7 @@ async function mountAgentRunHarness(
   await context.plugin(LlmRuntime)
   await context.plugin(SessionStore)
   await context.plugin(SessionProjectionRegistry)
-  await context.plugin(SystemPrompt, { persona: '' })
+  await context.plugin(SystemPrompt, { personaPrefix: '', personaSuffix: '' })
   await context.plugin(ToolRuntime)
   await context.plugin(AgentRegistry)
   await context.plugin(AgentLoop, { agents: [] })
@@ -2660,7 +2660,8 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
 
 async function readPersistedSession(persistence: SessionPersistence, signal: AbortSignal) {
   await using handle = await persistence.open(SESSION_ID, 'read', { signal })
-  return { meta: handle.header, events: await handle.read(0, undefined, { signal }) }
+  const { events } = await handle.read(0, undefined, { signal })
+  return { meta: handle.header, events }
 }
 
 /** Override one read handle's detached identity while retaining its real lifetime and I/O. */

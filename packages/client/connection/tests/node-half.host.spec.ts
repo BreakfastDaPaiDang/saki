@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import type { WebServer, WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
-import { API_PATH, RpcId, apply, inject, type ClientRequest, type HostConnectionHandle } from '../src/index.ts'
+import type { IndexInjection, WebServer, WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
+import { API_PATH, RpcId, apply, inject, type ClientRequest, type ConnectionConfig, type HostConnectionHandle } from '../src/index.ts'
 import { DEFAULT_MAX_REQUEST_BODY_BYTES } from '../src/http-bridge.ts'
 import { provideBrowserCredentials } from './browser-credentials.ts'
 
@@ -32,6 +32,11 @@ function fakeHttpServer(
     tapIndex: () => () => {},
     port: 0,
   }
+}
+
+async function registeredRoute(routes: WebRoute[], path: string): Promise<WebRoute> {
+  await expect.poll(() => routes.some(route => route.path === path)).toBe(true)
+  return routes.find(route => route.path === path)!
 }
 
 /** Bodyless GET carrying the given headers (enough for the trust fence + bridge). */
@@ -81,7 +86,8 @@ function fakeResponse(): {
   return { response, state }
 }
 
-async function mounted(config?: { trustedHosts?: string[] }): Promise<{
+async function mounted(config?: ConnectionConfig): Promise<{
+  ctx: Context
   routes: WebRoute[]
   upgrades: WebUpgradeRoute[]
   connection: HostConnectionHandle
@@ -95,6 +101,7 @@ async function mounted(config?: { trustedHosts?: string[] }): Promise<{
   const fiber = ctx.plugin({ inject: [...inject], apply }, config)
   await fiber.await()
   return {
+    ctx,
     routes,
     upgrades,
     connection: ctx.get('connection') as HostConnectionHandle,
@@ -116,6 +123,44 @@ function browserCookie(connection: HostConnectionHandle, authority: string): str
 }
 
 describe('connection node half', () => {
+  it('provides the carrier-neutral service without a Web server', async () => {
+    const ctx = new Context()
+    provideBrowserCredentials(ctx)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    expect(ctx.get('connection')).toBeInstanceOf(Object)
+    await fiber.dispose()
+  })
+
+  it('injects validated browser recovery timing and withdraws it on disposal', async () => {
+    const { ctx, dispose } = await mounted({ recovery: { generationReadyTimeoutMs: 25_000 } })
+    try {
+      const rows: IndexInjection[] = []
+      ctx.emit('webserver/index-inject', rows)
+      expect(rows).toEqual([{
+        kind: 'global', name: '__DSH_CONNECTION_RECOVERY__', value: {
+          backoffBaseMs: 500, backoffFactor: 2, backoffMaxMs: 10_000,
+          generationReadyWarnMs: 3_000, generationReadyTimeoutMs: 25_000,
+        },
+      }])
+      await dispose()
+      const after: IndexInjection[] = []
+      ctx.emit('webserver/index-inject', after)
+      expect(after).toEqual([])
+    } finally {
+      await dispose()
+    }
+  })
+
+  it.each([
+    { recovery: { backoffBaseMs: 0 }, error: /backoffBaseMs/ },
+    { recovery: { backoffFactor: NaN }, error: /backoffFactor.*finite/ },
+  ])('rejects invalid recovery timing before acquiring Host resources: $recovery', async ({ recovery, error }) => {
+    const ctx = new Context()
+    await expect(apply(ctx, { recovery })).rejects.toThrow(error)
+    expect(ctx.get('connection')).toBeUndefined()
+  })
+
   it('reserves enough default carrier capacity for the 200 MiB image batch', () => {
     expect(DEFAULT_MAX_REQUEST_BODY_BYTES).toBe(300 * 1024 * 1024)
     expect(DEFAULT_MAX_REQUEST_BODY_BYTES).toBeGreaterThan(Math.ceil(200 * 1024 * 1024 * 4 / 3) + 1024 * 1024)
@@ -238,6 +283,70 @@ describe('connection node half', () => {
     await dispose()
   })
 
+  it.each([false, true])('mounts a caller-owned channel with WebServer initially present: %s', async (serverPresent) => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    provideBrowserCredentials(ctx)
+    const serverPlugin = (serverCtx: Context) => {
+      serverCtx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    }
+    let server = serverPresent ? ctx.plugin(serverPlugin) : undefined
+    try {
+      await server?.await()
+      await ctx.plugin({ inject: [...inject], apply }).await()
+      const caller = ctx.plugin({
+        inject: ['connection'],
+        apply(callerCtx: Context) {
+          callerCtx.connection.rpc.handle('/owned', async () => ({ result: { ok: true, value: null } }), {
+            authority: 'loopback',
+          })
+        },
+      })
+      await caller.await()
+      if (!serverPresent) {
+        expect(routes).toHaveLength(0)
+        server = ctx.plugin(serverPlugin)
+        await server.await()
+      }
+      await expect.poll(() => routes.map(route => route.path).sort()).toEqual(['/api', '/owned'])
+      await server!.dispose()
+      expect(routes).toHaveLength(0)
+      server = ctx.plugin(serverPlugin)
+      await server.await()
+      await expect.poll(() => routes.map(route => route.path).sort()).toEqual(['/api', '/owned'])
+      await caller.dispose()
+      expect(routes.map(route => route.path)).toEqual(['/api'])
+    } finally {
+      await ctx.fiber.dispose()
+    }
+    expect(routes).toHaveLength(0)
+  })
+
+  it('withdraws a dedicated channel before its WebServer appears', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    provideBrowserCredentials(ctx)
+    try {
+      await ctx.plugin({ inject: [...inject], apply }).await()
+      const caller = ctx.plugin({
+        inject: ['connection'],
+        apply(callerCtx: Context) {
+          callerCtx.connection.rpc.handle('/withdrawn', async () => ({ result: { ok: true, value: null } }), {
+            authority: 'loopback',
+          })
+        },
+      })
+      await caller.await()
+      await caller.dispose()
+      await ctx.plugin((serverCtx: Context) => {
+        serverCtx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+      }).await()
+      await expect.poll(() => routes.map(route => route.path)).toEqual(['/api'])
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('provides a disposable dedicated RPC channel', async () => {
     const ctx = new Context()
     const routes: WebRoute[] = []
@@ -254,7 +363,7 @@ describe('connection node half', () => {
       calls.push({ endpoint, payload })
       return { result: { ok: true, value: { accepted: true } } }
     }, { authority: 'trusted-host' })
-    const route = routes.find(candidate => candidate.path === '/rpc')
+    const route = await registeredRoute(routes, '/rpc')
     expect(route).toBeDefined()
 
     const request: ClientRequest = {
@@ -264,7 +373,7 @@ describe('connection node half', () => {
       payload: { args: { agentId: 'agent-1' } },
     }
     const result = fakeResponse()
-    await route!.handler(fakePost({
+    await route.handler(fakePost({
       host: '127.0.0.1:3080',
       cookie: browserCookie(connection, '127.0.0.1:3080'),
     }, '/rpc/goals/create', request), result.response)
@@ -314,7 +423,7 @@ describe('connection node half', () => {
         },
       }
     }, { authority: 'loopback' })
-    const route = routes.find(candidate => candidate.path === '/rpc')!
+    const route = await registeredRoute(routes, '/rpc')
     const response = fakeResponse()
     await route.handler(fakePost({
       host: '127.0.0.1:3080',
@@ -377,7 +486,7 @@ describe('connection node half', () => {
       requiredResponseHeaders: { 'cache-control': 'no-store', 'x-required': 'present' },
       opaqueError,
     })
-    const route = routes.find(candidate => candidate.path === '/opaque')!
+    const route = await registeredRoute(routes, '/opaque')
 
     for (const [request, status] of [
       [fakePost({ host: 'other.example' }, '/opaque/read', {}), 403],
@@ -557,7 +666,7 @@ describe('connection node half', () => {
     }, {
       authority: 'trusted-host',
     })
-    const route = routes.find(candidate => candidate.path === '/rpc')!
+    const route = await registeredRoute(routes, '/rpc')
     const harnessHeaders = {
       host: 'harness.example',
       cookie: browserCookie(connection, 'harness.example'),
@@ -622,7 +731,7 @@ describe('connection node half', () => {
     const removeLoopback = connection.rpc.handle('/loopback', async () => ({ result: { ok: true, value: null } }), {
       authority: 'loopback',
     })
-    const loopbackRoute = routes.find(candidate => candidate.path === '/loopback')!
+    const loopbackRoute = await registeredRoute(routes, '/loopback')
     const publicResponse = fakeResponse()
     await loopbackRoute.handler(fakePost({ host: 'harness.example' }, '/loopback/read', {
       type: 'client-request', rpcId: 'rpc-public', method: 'read', payload: {},

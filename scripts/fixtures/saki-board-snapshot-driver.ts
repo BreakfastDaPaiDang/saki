@@ -79,7 +79,7 @@ async function reportAgentRunSnapshot(ctx: Context): Promise<void> {
   const inputSessionIds: string[] = []
   for (const snapshot of await ctx.sessionPersistence.list({ signal })) {
     await using handle = await ctx.sessionPersistence.open(snapshot.header.id, 'read', { signal })
-    const events = await handle.read(0, undefined, { signal })
+    const { events } = await handle.read(0, undefined, { signal })
     const foundInterventionCall = events.find(event =>
       event.type === 'tool/call' && event.data.name === 'request_intervention')
     const interventionCall = foundInterventionCall?.type === 'tool/call'

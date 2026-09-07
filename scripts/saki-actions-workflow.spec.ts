@@ -25,6 +25,7 @@ describe('Saki Actions cost policy', () => {
     for (const jobName of [
       'node-24',
       'node-24-coverage',
+      'node-24-bench',
       'node-24-consumers',
       'node-compat',
       'python-sdk',
@@ -42,6 +43,7 @@ describe('Saki Actions cost policy', () => {
     expect(aggregate.needs).toEqual([
       'node-24',
       'node-24-coverage',
+      'node-24-bench',
       'node-24-consumers',
       'node-compat',
       'python-sdk',
@@ -61,6 +63,7 @@ describe('Saki Actions cost policy', () => {
     expect(workflowJobNames(workflow)).toEqual([
       'node-24',
       'node-24-coverage',
+      'node-24-bench',
       'node-24-consumers',
       'node-compat',
       'python-sdk',

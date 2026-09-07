@@ -204,7 +204,7 @@ function persistence(events: SessionEvent[] | undefined): Pick<SessionPersistenc
       if (events === undefined) return Promise.reject(new Error('not found'))
       return Promise.resolve({
         id: SESSION_ID, header: HEADER, inheritedEventCount: SessionLogOffset(0), access: 'read' as const,
-        read: () => Promise.resolve(events),
+        read: () => Promise.resolve({ eventState: 'detached' as const, events: structuredClone(events) }),
         append: () => Promise.reject(new Error('read-only')),
         flush: () => Promise.reject(new Error('read-only')),
         close: () => Promise.resolve(),
