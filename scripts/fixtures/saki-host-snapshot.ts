@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { expect } from 'vitest'
+import { resolveExampleLaunch, type ExampleMode } from '@deepseek-ai/dsh-loader-smoke'
 import type { ProjectGitHead } from '@breakfastdapaidang/saki-execution'
 import type { GitMutationExpectation, SakiProjectChangesProjection } from '@breakfastdapaidang/saki-control-plane'
 import { sakiSnapshotEnvironment } from '../saki-snapshot-environment.ts'
@@ -16,7 +17,6 @@ import { sakiSnapshotEnvironment } from '../saki-snapshot-environment.ts'
 const SNAPSHOT_RPC_TIMEOUT_MS = process.platform === 'win32' ? 180_000 : 90_000
 
 const root = resolve(import.meta.dirname, '../..')
-const tsxLoader = import.meta.resolve('tsx/esm')
 const run = promisify(execFile)
 const nullConfig = process.platform === 'win32' ? 'NUL' : '/dev/null'
 
@@ -53,6 +53,7 @@ export interface StartedSaki {
 
 /** Narrow fixture controls explicitly supplied to one Saki child. */
 export interface SakiSnapshotStartOptions {
+  readonly mode?: ExampleMode
   readonly agentRunSnapshot?: boolean
   readonly boardProviderEnabled?: boolean
   readonly boardProviderStatePath?: string
@@ -254,7 +255,6 @@ export async function startSaki(
   runtimeRoot: string,
   options: SakiSnapshotStartOptions = {},
 ): Promise<StartedSaki> {
-  const source = entry.endsWith('.ts')
   const environment = sakiSnapshotEnvironment()
   environment.DSH_HOME = join(runtimeRoot, 'home')
   environment.SAKI_DATABASE_PATH = databasePath
@@ -267,13 +267,17 @@ export async function startSaki(
   }
   if (options.agentRunSnapshot === true) environment.SAKI_AGENT_RUN_SNAPSHOT = '1'
   if (options.deliverySnapshot === true) environment.SAKI_DELIVERY_SNAPSHOT = '1'
-  if (source) environment.TSX_TSCONFIG_PATH = join(root, 'tsconfig.json')
-  const child = spawn(process.execPath, [
-    ...(source ? ['--import', tsxLoader] : []),
-    entry,
-  ], {
-    cwd: runtimeRoot,
+  const launch = resolveExampleLaunch({
+    srcBin: entry,
+    libBin: entry,
+    ...entry.endsWith('.js') ? { mode: 'lib' } : options.mode === undefined ? {} : { mode: options.mode },
+    tsconfigPath: join(root, 'tsconfig.json'),
+    sourceImport: 'tsx/esm',
     env: environment,
+  })
+  const child = spawn(launch.command, launch.args, {
+    cwd: runtimeRoot,
+    env: launch.env,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   let childDidClose = false
@@ -328,7 +332,7 @@ export async function startSaki(
   }
   try {
     await new Promise<void>((resolveReady, reject) => {
-      const startupTimeoutMs = options.agentRunSnapshot === true && process.platform === 'win32' ? 90_000 : 20_000
+      const startupTimeoutMs = process.platform === 'win32' ? 90_000 : 20_000
       const timeout = setTimeout(() => { reject(new Error('Saki snapshot startup timed out')) }, startupTimeoutMs)
       const cleanup = (): void => {
         clearTimeout(timeout)

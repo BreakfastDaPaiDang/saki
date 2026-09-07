@@ -11,7 +11,7 @@ import * as StorageSqlite from '@deepseek-ai/dsh-storage-sqlite'
 import * as StorageJson from '@deepseek-ai/dsh-storage-json'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SakiGitFixtureSubprocess from '../../../../scripts/fixtures/saki-git-subprocess.ts'
 import LocalSakiHostExecution from '@breakfastdapaidang/saki-execution-local'
 import {
   computeProjectGitStatusFingerprint,
@@ -101,7 +101,7 @@ async function start(): Promise<RunningHost> {
   context.provide('sessions', { list: () => [] } as never)
   await context.plugin(WorkspaceRegistry)
   await context.plugin(LocalFileSystem, { cwd: directory })
-  await context.plugin(LocalSubprocessRuntime)
+  await context.plugin(SakiGitFixtureSubprocess)
   await context.plugin(LocalSakiHostExecution)
   await context.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   const origin = `http://127.0.0.1:${String(context.webServer.port)}`

@@ -48,7 +48,7 @@ import type {
   GitHubScanMap,
 } from '@breakfastdapaidang/saki-github'
 import { SAKI_BOARD_WORK_ITEM_LIMIT } from '@breakfastdapaidang/saki-control-plane/constants'
-import type { LocalGitPushTransport } from '../../packages/saki/execution-local/src/git-push.ts'
+import type { LocalGitPushTransport } from '@breakfastdapaidang/saki-execution-local/src/git-push.ts'
 
 const REVISION_AT = 1_700_000_000_000
 const ACCOUNT_ID = githubAccountId('O_saki_account')

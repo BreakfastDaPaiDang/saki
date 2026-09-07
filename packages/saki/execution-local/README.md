@@ -120,4 +120,6 @@ Inspection is independent of model requests. Each Agent input adds a user turn o
 
 No runtime invariant companion is published because domain parsers validate Host Operation records at open and before writes; live acceptance callbacks are not durable state.
 
+Application fixtures install a root-scoped Push transport through the internal `installLocalGitPushInternals` root export. Using that export keeps the fixture and the built provider on the same adapter registry.
+
 </details>

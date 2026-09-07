@@ -70,4 +70,6 @@ The base Host installs no model adapter, so starting a Session or restoring an a
 
 No runtime invariant companion is published because the package owns static composition metadata and delegates mutable state to its mounted services.
 
+The root exports `sakiServingInstallationOptions`, `sakiPreparedStoragePatch`, and `sakiAgentPresetsPatch` so application fixtures use the launcher's Installation paths, storage selection, and preset assets through built package exports.
+
 </details>

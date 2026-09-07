@@ -10,7 +10,7 @@ import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
 import * as StorageSqlite from '@deepseek-ai/dsh-storage-sqlite'
-import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SakiGitFixtureSubprocess from '../../../../scripts/fixtures/saki-git-subprocess.ts'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import {
   computeStartAgentRunPayloadDigest,
@@ -18302,7 +18302,7 @@ async function provider(
   await ctx.plugin(StorageDomain, { backend: 'sqlite' })
   provideInertLocalAgentRunDependencies(ctx)
   await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-  await ctx.plugin(LocalSubprocessRuntime)
+  await ctx.plugin(SakiGitFixtureSubprocess)
   ctx.provide('workspaceRegistry', { list: () => [{ id: WORKSPACE_ID, path: root }] })
   await ctx.plugin(LocalSakiHostExecution, { ...CONFIG, ...options?.config })
   const execution = ctx.sakiHostExecution as LocalSakiHostExecution

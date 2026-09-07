@@ -24,7 +24,7 @@ import { describe, expect, it } from 'vitest'
 import {
   readSakiBoardSnapshotMutationState,
   SAKI_BOARD_SNAPSHOT_CONFIGURATION,
-} from './fixtures/saki-board-fake-github.ts'
+} from '../packages/saki/bundle/tests/fixtures/saki-board-fake-github.ts'
 import {
   cleanupSnapshot,
   createRepository,
@@ -39,7 +39,7 @@ import {
 } from './fixtures/saki-host-snapshot.ts'
 
 const root = resolve(import.meta.dirname, '..')
-const driver = join(root, 'scripts/fixtures/saki-board-snapshot-driver.ts')
+const driver = join(root, 'packages/saki/bundle/tests/fixtures/saki-board-snapshot-driver.ts')
 const expected = join(root, 'scripts/tests/expected/saki-agent-run/agent-run.expected.jsonl')
 const refreshing = process.env.DSH_SNAPSHOT === 'record' || process.env.DSH_SNAPSHOT === 'refresh'
 

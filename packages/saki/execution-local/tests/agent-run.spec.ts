@@ -22,7 +22,7 @@ import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
 import * as StorageSqlite from '@deepseek-ai/dsh-storage-sqlite'
-import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SakiGitFixtureSubprocess from '../../../../scripts/fixtures/saki-git-subprocess.ts'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
@@ -2499,7 +2499,7 @@ async function mountAgentRunHarness(
   await context.plugin(StorageSqlite, { path: join(storageRoot, 'saki.db'), journalMode: 'delete' })
   await context.plugin(StorageDomain, { backend: 'sqlite' })
   await context.plugin(LocalFileSystem, { cwd: process.cwd() })
-  await context.plugin(LocalSubprocessRuntime)
+  await context.plugin(SakiGitFixtureSubprocess)
   context.provide('workspaceRegistry', { list: () => [{ id: WORKSPACE_ID, path: repository }] })
   const adapter = new ScriptedAdapter(responses)
   context.llm.registerAdapter(['test-provider'], adapter)

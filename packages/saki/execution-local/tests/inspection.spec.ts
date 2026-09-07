@@ -7,7 +7,7 @@ import { performance } from 'node:perf_hooks'
 import { promisify } from 'node:util'
 import { Context } from '@deepseek-ai/cordis'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SakiGitFixtureSubprocess from '../../../../scripts/fixtures/saki-git-subprocess.ts'
 import {
   FsError,
   FsTargetKey,
@@ -174,7 +174,7 @@ async function provider(workspaces: readonly { id: string; path: string }[] = []
   contexts.push(ctx)
   await mountLocalHostOperationStorage(ctx, roots)
   await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-  await ctx.plugin(LocalSubprocessRuntime)
+  await ctx.plugin(SakiGitFixtureSubprocess)
   ctx.provide('workspaceRegistry', { list: () => [...workspaces] })
   await ctx.plugin(LocalSakiHostExecution, CONFIG)
   return ctx.sakiHostExecution as LocalSakiHostExecution
@@ -184,7 +184,7 @@ async function localInspectionHarness(): Promise<{ readonly fs: FileSystem; read
   const ctx = new Context()
   contexts.push(ctx)
   await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-  await ctx.plugin(LocalSubprocessRuntime)
+  await ctx.plugin(SakiGitFixtureSubprocess)
   const executable = await ctx.subprocess.resolveExecutable('git')
   return {
     fs: ctx.fs,
@@ -1465,7 +1465,7 @@ describe('LocalSakiHostExecution', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     const executable = await ctx.subprocess.resolveExecutable('git')
     const actual = new GitRunner(ctx.subprocess, executable, {
       maxStdoutBytes: CONFIG.maxGitStdoutBytes,
@@ -2090,7 +2090,7 @@ describe('LocalSakiHostExecution', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     const executable = await ctx.subprocess.resolveExecutable('git')
     const actual = new GitRunner(ctx.subprocess, executable, {
       maxStdoutBytes: CONFIG.maxGitStdoutBytes,
@@ -2148,7 +2148,7 @@ describe('LocalSakiHostExecution', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     const executable = await ctx.subprocess.resolveExecutable('git')
     const actual = new GitRunner(ctx.subprocess, executable, {
       maxStdoutBytes: CONFIG.maxGitStdoutBytes,
@@ -2428,7 +2428,7 @@ describe('LocalSakiHostExecution', () => {
         }, { once: true })
       }),
     } as never)
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     ctx.provide('workspaceRegistry', { list: () => [] })
     const fiber = await ctx.plugin(LocalSakiHostExecution, CONFIG)
     const retained = ctx.sakiHostExecution as LocalSakiHostExecution
@@ -2460,7 +2460,7 @@ describe('LocalSakiHostExecution', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     const executable = await ctx.subprocess.resolveExecutable('git')
     const actual = new GitRunner(ctx.subprocess, executable, {
       maxStdoutBytes: CONFIG.maxGitStdoutBytes,
@@ -2637,7 +2637,7 @@ describe('LocalSakiHostExecution', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     const executable = await ctx.subprocess.resolveExecutable('git')
     const actual = new GitRunner(ctx.subprocess, executable, {
       maxStdoutBytes: CONFIG.maxGitStdoutBytes,
@@ -2683,7 +2683,7 @@ describe('LocalSakiHostExecution', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     const executable = await ctx.subprocess.resolveExecutable('git')
     const actual = new GitRunner(ctx.subprocess, executable, {
       maxStdoutBytes: CONFIG.maxGitStdoutBytes,
@@ -2727,7 +2727,7 @@ describe('LocalSakiHostExecution', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     const executable = await ctx.subprocess.resolveExecutable('git')
     const actual = new GitRunner(ctx.subprocess, executable, {
       maxStdoutBytes: CONFIG.maxGitStdoutBytes,
@@ -2847,7 +2847,7 @@ describe('LocalSakiHostExecution', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     const executable = await ctx.subprocess.resolveExecutable('git')
     const actual = new GitRunner(ctx.subprocess, executable, {
       maxStdoutBytes: CONFIG.maxGitStdoutBytes,
@@ -2975,7 +2975,7 @@ describe('LocalSakiHostExecution', () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LocalFileSystem, { cwd: process.cwd() })
-    await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SakiGitFixtureSubprocess)
     const executable = await ctx.subprocess.resolveExecutable('git')
     const actual = new GitRunner(ctx.subprocess, executable, {
       maxStdoutBytes: CONFIG.maxGitStdoutBytes,

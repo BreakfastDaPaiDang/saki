@@ -36,6 +36,7 @@ const EXECUTABLE_SOURCE_ALLOWLIST = new Map<string, string>([
   ['apps/cli/src/bin.ts', 'supported dsh application launcher'],
   ['apps/cli/tests/profiles/headless/tests/fixtures/credentials/credentials-windows-dpapi/driver.ts', 'test-only subprocess driver'],
   ['packages/saki/bundle/src/bin.ts', 'private Saki Host launcher with Installation lease ownership'],
+  ['packages/saki/bundle/tests/fixtures/saki-board-snapshot-driver.ts', 'test-only subprocess driver'],
   ['packages/saki/installation-maintenance/src/bin.ts', 'offline Installation maintenance authority'],
   ['packages/context/time-context/tests/fixtures/driver.ts', 'test-only subprocess driver'],
   ['packages/experimental/webworker-packer/bin.js', 'private build-only wrapper'],

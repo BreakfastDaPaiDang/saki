@@ -11,18 +11,18 @@ import {
 } from '@breakfastdapaidang/saki-installation-maintenance'
 import { boot, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
-import { announceSakiReadiness } from '../../packages/saki/bundle/src/index.ts'
 import {
+  announceSakiReadiness,
   sakiAgentPresetsPatch,
   sakiPreparedStoragePatch,
   sakiServingInstallationOptions,
-} from '../../packages/saki/bundle/src/launcher.ts'
-import type {} from '../../packages/saki/bundle/tests/fixtures/controllable-fake-llm.ts'
-import { installLocalGitPushInternals } from '../../packages/saki/execution-local/src/git-push-internals.ts'
+} from '@breakfastdapaidang/saki-bundle'
+import type {} from './controllable-fake-llm.ts'
+import { installLocalGitPushInternals } from '@breakfastdapaidang/saki-execution-local'
 import { sakiBoardSnapshotGitPushTransport } from './saki-board-fake-github.ts'
 
-const ROOT_CONFIG = fileURLToPath(new URL('../../packages/saki/bundle/cordis.yml', import.meta.url))
-const BUNDLE_PATCH = fileURLToPath(new URL('../../packages/saki/bundle/cordis.patch.yml', import.meta.url))
+const ROOT_CONFIG = fileURLToPath(new URL('../../cordis.yml', import.meta.url))
+const BUNDLE_PATCH = fileURLToPath(new URL('../../cordis.patch.yml', import.meta.url))
 
 const lifetime = new AbortController()
 let app: Context | undefined
@@ -30,23 +30,29 @@ let stopping = false
 let resolveStop!: () => void
 const stopped = new Promise<void>((resolve) => { resolveStop = resolve })
 
-function agentRunControlProfilePatch(bundlePatches: readonly PatchOptions[]): PatchOptions {
+function snapshotControlPlanePatch(
+  bundlePatches: readonly PatchOptions[],
+  agentRunSnapshot: boolean,
+  deliverySnapshot: boolean,
+): PatchOptions {
   const control = bundlePatches
     .flatMap(patch => patch.insert ?? [])
     .find((entry: EntryOptions) => entry.id === 'saki-control-plane')
   if (control === undefined || control.name !== '@breakfastdapaidang/saki-control-plane'
     || typeof control.config !== 'object' || control.config === null || Array.isArray(control.config)) {
-    throw new Error('Saki Agent Run snapshot could not locate the production control-plane row')
+    throw new Error('Saki snapshot could not locate the production control-plane row')
   }
   return {
     id: control.id,
     name: control.name,
     config: {
       ...structuredClone(control.config as Record<string, unknown>),
-      defaultAgentProfile: {
+      ...(agentRunSnapshot ? { defaultAgentProfile: {
         agentPresetId: 'development',
         modelRouteRequest: { provider: 'saki-test', model: 'controllable' },
-      },
+      } } : {}),
+      // The Delivery case owns explicit refreshes and finishes within this polling interval.
+      ...(deliverySnapshot ? { targetedPendingPollIntervalMs: 600_000 } : {}),
     },
   }
 }
@@ -184,11 +190,13 @@ try {
         ...(fakeProviderEnabled ? [{
           insert: [{
             id: 'saki-board-snapshot-github',
-            name: '../../../scripts/fixtures/saki-board-fake-github.ts',
+            name: './tests/fixtures/saki-board-fake-github.ts',
           }],
         }] : []),
+        ...(agentRunSnapshot || deliverySnapshot ? [
+          snapshotControlPlanePatch(bundlePatches, agentRunSnapshot, deliverySnapshot),
+        ] : []),
         ...(agentRunSnapshot ? [
-          agentRunControlProfilePatch(bundlePatches),
           sakiAgentPresetsPatch(),
           {
             insert: [{
