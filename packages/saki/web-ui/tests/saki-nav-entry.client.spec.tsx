@@ -35,7 +35,7 @@ describe('SakiNavEntry', () => {
   it('renders the wide 「工作」 row, marks it current when elected, and opens on click', () => {
     const { instance, useNavigation } = navigationHook()
     const open = vi.fn()
-    render(<SakiNavEntry wide={true} open={open} sakiSurface="work" useNavigation={useNavigation} useSessions={neverHook} useSessionPendingInteraction={neverHook} useWorkspaces={neverHook} t={t} />)
+    render(<SakiNavEntry wide={true} open={open} sakiSurface="work" useNavigation={useNavigation} useResource={neverHook} useSessions={neverHook} useSessionPendingInteraction={neverHook} useWorkspaces={neverHook} t={t} />)
     const entry = screen.getByRole('button', { name: '工作' })
     expect(entry.textContent).toContain('▤')
     expect(entry.textContent).toContain('工作')
@@ -51,7 +51,7 @@ describe('SakiNavEntry', () => {
   it('renders the collapsed 「项目」 rail without the label and tracks the project surface', () => {
     const { instance, useNavigation } = navigationHook()
     const open = vi.fn()
-    render(<SakiNavEntry wide={false} open={open} sakiSurface="project" useNavigation={useNavigation} useSessions={neverHook} useSessionPendingInteraction={neverHook} useWorkspaces={neverHook} t={t} />)
+    render(<SakiNavEntry wide={false} open={open} sakiSurface="project" useNavigation={useNavigation} useResource={neverHook} useSessions={neverHook} useSessionPendingInteraction={neverHook} useWorkspaces={neverHook} t={t} />)
     const entry = screen.getByRole('button', { name: '项目' })
     expect(entry.textContent).toBe('▦')
     act(() => { instance.actions.showProject() })

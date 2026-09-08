@@ -28,7 +28,7 @@ Saki bundle 在 `cordis.patch.yml` 中组合浏览器栈：DSH 客户端服务�
 
 **启用动态插件 runner。** 动态加载链是尚未了结的基础设施，提案要求 Saki 走已发布插件路径；静态组合不依赖它即可交付同样页面。
 
-**登记使用原生目录选择器。** 选择器笔记（[2026-07-27](./2026-07-27-native-workspace-directory-picker.zh.md)）覆盖的是 workspace 选择；登记必须拿规范路径与 Host 检查结果核对，键入输入让该契约保持显式且可测试，选择器之后可以不改 Intent 直接补上。
+**登记使用原生目录选择器。** 选择器笔记（[2026-07-27](../../archived/feature/2026-07-27-native-workspace-directory-picker.md)）覆盖的是 workspace 选择；登记必须拿规范路径与 Host 检查结果核对，键入输入让该契约保持显式且可测试，选择器之后可以不改 Intent 直接补上。
 
 ## Consequences
 

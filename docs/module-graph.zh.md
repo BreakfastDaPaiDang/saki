@@ -291,6 +291,7 @@ flowchart TD
     pkg_saki_host_api["saki/host-api"]
     pkg_saki_installation_maintenance["saki/installation-maintenance"]
     pkg_saki_tool_intervention["saki/tool-intervention"]
+    pkg_saki_web_ui["saki/web-ui"]
   end
   subgraph group_sandbox["packages/sandbox"]
     pkg_sandbox["sandbox"]
@@ -1315,6 +1316,7 @@ flowchart TD
 | [`host-open-in-app`](../packages/host/open-in-app) | `host` | — |
 | [`host-webserver`](../packages/host/webserver) | `host` | — |
 | [`invariants`](../packages/runtime-diagnostics/invariants) | `runtime-diagnostics` | — |
+| [`saki/web-ui`](../packages/saki/web-ui) | `saki` | — |
 | [`sandbox-windows-acl`](../packages/sandbox/sandbox-windows-acl) | `sandbox` | — |
 | [`session-format`](../packages/session/session-format) | `session` | — |
 | [`session-format-v0-to-v1`](../packages/session/session-format-v0-to-v1) | `session` | — |

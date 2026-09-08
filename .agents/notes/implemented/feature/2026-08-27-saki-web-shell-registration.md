@@ -28,7 +28,7 @@ Out of scope here by decision: binding detection, rebind, retirement, and histor
 
 **Spawn the dynamic plugin runners.** The dynamic loader chain is unresolved infrastructure, and the proposal keeps Saki on the published plugin path; static composition ships the same pages without it.
 
-**Native directory picker for registration.** The picker notes ([2026-07-27](./2026-07-27-native-workspace-directory-picker.md)) cover workspace selection, but registration must confirm the canonical path against Host inspection; typed input keeps that contract explicit and testable, and the picker can be added later without changing the Intent.
+**Native directory picker for registration.** The picker notes ([2026-07-27](../../archived/feature/2026-07-27-native-workspace-directory-picker.md)) cover workspace selection, but registration must confirm the canonical path against Host inspection; typed input keeps that contract explicit and testable, and the picker can be added later without changing the Intent.
 
 ## Consequences
 
