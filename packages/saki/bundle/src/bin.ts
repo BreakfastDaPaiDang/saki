@@ -7,6 +7,7 @@
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@breakfastdapaidang/saki-control-plane'
+import type {} from '@deepseek-ai/dsh-client-connection'
 import { providePreparedSakiState, withPreparedSakiServingState } from '@breakfastdapaidang/saki-installation-maintenance'
 import { boot, installFailLoud, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
@@ -89,11 +90,14 @@ try {
         if (!exitAfterReadiness) {
           const handoff = ctx.sakiControlPlane.bootstrap.take()
           if (handoff !== undefined) {
+            // The DSH browser-session layer mints its authority-bound cookie
+            // only from the process launch token carried by this URL; the
+            // Saki Access gate still requires the bootstrap secret exchange.
             process.stdout.write(`${JSON.stringify({
               product: 'saki',
               bootstrapPurpose: handoff.purpose,
               bootstrapSecret: handoff.consume(),
-              url: `http://127.0.0.1:${String(ctx.webServer.port)}`,
+              url: ctx.connection.authenticatedUrl(`http://127.0.0.1:${String(ctx.webServer.port)}`),
             })}\n`)
           }
         }

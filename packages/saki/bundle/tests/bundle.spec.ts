@@ -45,9 +45,12 @@ describe('Saki bundle package', () => {
       ['session', '@deepseek-ai/dsh-session'],
       ['session-projection', '@deepseek-ai/dsh-session-projection'],
       ['session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'],
+      ['attachment-local', '@deepseek-ai/dsh-attachment-local'],
+      ['session-query-sqlite', '@deepseek-ai/dsh-session-query-sqlite'],
       ['system-prompt', '@deepseek-ai/dsh-system-prompt'],
       ['tools', '@deepseek-ai/dsh-tools'],
       ['agent', '@deepseek-ai/dsh-agent'],
+      ['agent-default-model', '@deepseek-ai/dsh-agent-default-model'],
       ['agent-loop', '@deepseek-ai/dsh-agent-loop'],
       ['session-checkpoint-policy', '@deepseek-ai/dsh-session-checkpoint-policy'],
       ['agent-presets', '@deepseek-ai/dsh-agent-presets'],
@@ -71,13 +74,18 @@ describe('Saki bundle package', () => {
       ['saki-connection', '@deepseek-ai/dsh-client-connection'],
       ['saki-control-plane', '@breakfastdapaidang/saki-control-plane'],
       ['saki-host-api', '@breakfastdapaidang/saki-host-api'],
+      ['directory-picker', '@deepseek-ai/dsh-host-directory-picker-auto'],
+      ['session-controller', '@deepseek-ai/dsh-api-session-controller'],
+      ['settings-controller', '@deepseek-ai/dsh-api-settings-controller'],
+      ['workspace-controller', '@deepseek-ai/dsh-api-workspace-controller'],
       ['modules', '@deepseek-ai/dsh-client-modules'],
+      ['file-upload', '@deepseek-ai/dsh-client-file-upload'],
       ['api-remotes', '@deepseek-ai/dsh-api-remotes'],
-      ['client-runtime', '@deepseek-ai/dsh-client-runtime'],
       ['ui-theme', '@deepseek-ai/dsh-client-ui-theme'],
       ['locale', '@deepseek-ai/dsh-client-locale'],
       ['ui-layout', '@deepseek-ai/dsh-client-ui-layout'],
       ['ui-renderer', '@deepseek-ai/dsh-client-ui-renderer'],
+      ['ui-session', '@deepseek-ai/dsh-client-ui-session'],
       ['ui-sidebar', '@deepseek-ai/dsh-client-ui-sidebar'],
       ['ui-settings', '@deepseek-ai/dsh-client-ui-settings'],
       ['ui-settings-general', '@deepseek-ai/dsh-client-ui-settings-general'],
@@ -106,6 +114,14 @@ describe('Saki bundle package', () => {
     })
     expect(insert.find(entry => entry.id === 'session-persistence-jsonl')?.config).toEqual({
       root: { __jsExpr: "dshHomePath('sessions')" },
+    })
+    expect(insert.find(entry => entry.id === 'session-query-sqlite')?.config).toEqual({
+      path: ':memory:',
+      openAt: 'never',
+    })
+    expect(insert.find(entry => entry.id === 'agent-default-model')?.config).toEqual({
+      provider: 'saki-unconfigured',
+      model: 'saki-unconfigured',
     })
     expect(insert.find(entry => entry.id === 'agent-presets')?.config).toEqual({
       default: 'development',

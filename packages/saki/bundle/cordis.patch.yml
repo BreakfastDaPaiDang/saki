@@ -40,6 +40,20 @@
       config:
         root: !!js dshHomePath('sessions')
 
+    # Durable image bytes live outside the append-only Session log; messages
+    # keep content-addressed references this backend resolves.
+    - id: attachment-local
+      name: '@deepseek-ai/dsh-attachment-local'
+
+    # Session cold reads, titles, and lineage traces stay mounted; content
+    # search stays disabled, so search calls fail loud with
+    # SESSION_QUERY_SEARCH_DISABLED and SQLite is never opened.
+    - id: session-query-sqlite
+      name: '@deepseek-ai/dsh-session-query-sqlite'
+      config:
+        path: ':memory:'
+        openAt: never
+
     - id: system-prompt
       name: '@deepseek-ai/dsh-system-prompt'
       config:
@@ -51,6 +65,17 @@
 
     - id: agent
       name: '@deepseek-ai/dsh-agent'
+
+    # Transport-independent default model selection read when a Session is
+    # created or resumed. Production installs no model adapter, so this named
+    # route is never served: any actual model use fails loud at the point of
+    # use, mirroring the control plane's absent modelRouteRequest, which leaves
+    # agent dispatch unavailable.
+    - id: agent-default-model
+      name: '@deepseek-ai/dsh-agent-default-model'
+      config:
+        provider: saki-unconfigured
+        model: saki-unconfigured
 
     - id: agent-loop
       name: '@deepseek-ai/dsh-agent-loop'
@@ -157,6 +182,29 @@
     - id: saki-host-api
       name: '@breakfastdapaidang/saki-host-api'
 
+    # ── Host Remotes the browser services call ──
+
+    # Resolves bind host, launch, and display once at boot, then mounts the
+    # matching directory-picker backend and client surface as Loader entries;
+    # the workspace controller's picker child serves remote.directoryPicker
+    # over the backend.
+    - id: directory-picker
+      name: '@deepseek-ai/dsh-host-directory-picker-auto'
+
+    # Session commands, cold reads, and live control over Typert Remote.
+    - id: session-controller
+      name: '@deepseek-ai/dsh-api-session-controller'
+
+    # Configuration-surface reads and writes over Typert Remote. Saki mounts
+    # no settings provider, so each call answers the configuration API's
+    # actionable missing-provider diagnostic.
+    - id: settings-controller
+      name: '@deepseek-ai/dsh-api-settings-controller'
+
+    # Workspace commands and reconnect-safe projection over Typert Remote.
+    - id: workspace-controller
+      name: '@deepseek-ai/dsh-api-workspace-controller'
+
     # ── browser surface: client module system + shell roster + dist serving ──
 
     # Dual-face: the node half scans this tree, composes window.__DSH_BOOT__,
@@ -164,11 +212,14 @@
     - id: modules
       name: '@deepseek-ai/dsh-client-modules'
 
+    # Raw Blob and ReadableStream uploads run independently of Connection's
+    # RPC: the host half provides the fileUploads service and streaming route,
+    # the browser half the fileUpload client.
+    - id: file-upload
+      name: '@deepseek-ai/dsh-client-file-upload'
+
     - id: api-remotes
       name: '@deepseek-ai/dsh-api-remotes'
-
-    - id: client-runtime
-      name: '@deepseek-ai/dsh-client-runtime'
 
     - id: ui-theme
       name: '@deepseek-ai/dsh-client-ui-theme'
@@ -181,6 +232,11 @@
 
     - id: ui-renderer
       name: '@deepseek-ai/dsh-client-ui-renderer'
+
+    # Session standard seats (useSession, useSessions, the pending-interaction
+    # hook) over the session controller's browser Sessions face.
+    - id: ui-session
+      name: '@deepseek-ai/dsh-client-ui-session'
 
     - id: ui-sidebar
       name: '@deepseek-ai/dsh-client-ui-sidebar'
