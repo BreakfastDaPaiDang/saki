@@ -61,7 +61,7 @@ pnpm run saki
 
 - **受限的 GitHub mutation**：操作者安装并配置 Product App 后，Windows 组合可以发布已确认的 Board 读取结果、执行可恢复的 `CreateWorkItem` 与 `MoveWorkItem` saga，并通过持久 marker，根据准确 Repository、head、base 与 Commit identity 创建 Branch Delivery PR。尚未提供任意 Issue edit、Repository Contents 与 Workflow write。
 - **只支持有界 Project 生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 workspace 读取、返回有界 repository-relative 展示路径且不暴露规范 Host 路径的 Changes 读取、同样不暴露规范 Host 路径的有界 Diff 页面读取，以及浏览器请求不携带路径的直接结构化 stage、unstage 与 Commit 操作。Branch Delivery Push 已通过 Local Host 组合，但默认未设置 `pushCredentialHelper`，因此保持不可用；操作者必须选择 `git-credential-manager` 或 `git-credential-manager-core`。尚未组合 Resource Binding 重绑定与退役、automated dispatch 与生产模型 adapter。
-- **无模型 adapter 的浏览器界面**：组合的壳层会渲染 Saki 页面与 Conversation 回退，但生产组合不安装模型 adapter，且浏览器 `/api` 事件 socket 未提供服务（控制台会出现重连噪音）：在后续切片接通两者之前，Conversation 回合保持 idle。
+- **无模型 adapter 的浏览器界面**：组合的壳层在已提供服务的 `/api` Remote 之上渲染 Saki 页面与 Conversation 回退；启动器打印的 URL 携带 DSH 进程启动令牌，其一次性交换会签发这些 Remote 所需的浏览器会话 cookie，而 Saki bootstrap secret 仍然守护每一项 Host 操作。生产组合不安装模型 adapter：组合的默认模型路由永不提供服务，因此 Conversation 回合保持 idle，任何实际的模型调用都会在使用点立即报错。
 - **固定的 Product Agent 能力**：名册只发现由系统拥有的 `development` preset。用户自定义 preset 要等其授权规则与 Project Profile 选择语义确定后，才会进入 Saki Host。
 - **可执行入口仅供仓库本地使用**——Saki 包保持私有，不属于任何 npm 发布族。
 - **仅限回环开发 Host**：固定的本地 bootstrap 流程不会授权远程浏览器，也不替代 [Saki Host 启动器](../../../docs/saki/host-launcher.zh.md)所述的 Windows Host 包装层。
