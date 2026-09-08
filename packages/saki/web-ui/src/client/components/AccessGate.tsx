@@ -12,8 +12,13 @@ import css from './AccessGate.module.css'
 
 /** Props for the access gate. */
 export interface AccessGateProps {
-  /** Current access state (null while the first read is in flight). */
-  access: SakiWireAccessProjection | null
+  /**
+   * Current access state (null while the first read is in flight). The
+   * `'unavailable'` sentinel covers a rejected first read: the wire contract
+   * pins its unavailable message as a literal the locale gate forbids, so the
+   * surface reports failure through this local token instead.
+   */
+  access: SakiWireAccessProjection | 'unavailable' | null
   /** Submit the launcher secret; resolves to the exchange outcome. */
   exchange: (secret: string) => Promise<SakiWireAccessExchangeResult>
   /** Re-read the access projection. */
@@ -51,10 +56,10 @@ export function AccessGate(props: AccessGateProps) {
   if (props.access === null) {
     return <p className={css.hint}>{t('workspace.loading')}</p>
   }
-  if (props.access.kind === 'authenticated') return null
+  if (props.access !== 'unavailable' && props.access.kind === 'authenticated') return null
 
-  const bootstrap = props.access.kind === 'bootstrap-required'
-  const unavailable = props.access.kind === 'unavailable'
+  const bootstrap = props.access !== 'unavailable' && props.access.kind === 'bootstrap-required'
+  const unavailable = props.access === 'unavailable' || props.access.kind === 'unavailable'
   return (
     <div className={css.gate} role="region" aria-label={t('access.bootstrap.title')}>
       <h2 className={css.title}>{unavailable ? t('access.unavailable.title') : bootstrap ? t('access.bootstrap.title') : t('access.session.title')}</h2>

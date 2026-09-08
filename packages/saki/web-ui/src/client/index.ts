@@ -10,10 +10,10 @@
  * hooks compartment); cross-plugin collaboration goes through slots and ctx
  * services only.
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ISessions } from '@deepseek-ai/dsh-client-runtime/src/client/contract/sessions.ts'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { SakiHostClient } from '@breakfastdapaidang/saki-host-api/client'
 import { createSakiNavigationStore, surfaceTokenOf, type SakiNavigationActionsFace, type SakiSurface } from './navigation.ts'
@@ -36,7 +36,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Services the Saki client plugin requires. */
-export const inject = ['slots', 'layout', 'sessions', 'locale', 'sakiHostClient']
+export const inject = ['slots', 'layout', 'locale', 'sakiHostClient']
 
 /** Host callbacks the surface components receive through the inject face. */
 export interface SakiHostFace {
@@ -83,7 +83,12 @@ export function apply(ctx: ClientContext): void {
   }
 
   // Nav state → shell surface token: the sidebar entries set the surface; the
-  // shell elects the Saki entry through the main.surface chain.
+  // shell elects the Saki entry through the main.surface chain. No other
+  // source moves it: a Session becoming current — including the shell's
+  // startup Workspace auto-connect — never evicts an elected Saki page, so
+  // this plugin subscribes to no sessions-layer signal. A gesture-level
+  // hand-back (clicking a Session opens the Conversation) needs a
+  // conversation-side election mechanism that does not exist yet.
   ctx.effect(() => {
     const publish = () => { ctx.layout.requestSurface(surfaceTokenOf(navigation.store.getSnapshot())) }
     const unsubscribe = navigation.store.subscribe(publish)
@@ -94,21 +99,6 @@ export function apply(ctx: ClientContext): void {
       ctx.layout.requestSurface(null)
     }
   }, 'saki-web-ui: surface sync')
-
-  // Selecting a session (the inherited Conversation navigation) hands the
-  // surface back: the Saki surface clears and the fallback reappears.
-  // core/session's Context merge shadows the client runtime's sessions face
-  // in this package's type universe; the client runtime provides ISessions.
-  const sessionsList = (ctx.sessions as unknown as ISessions).list
-  ctx.effect(() => {
-    let wasCurrent = sessionsList.getSnapshot().current !== undefined
-    const unsubscribe = sessionsList.subscribe(() => {
-      const isCurrent = sessionsList.getSnapshot().current !== undefined
-      if (isCurrent && !wasCurrent) navigation.actions.clearSurface()
-      wasCurrent = isCurrent
-    })
-    return unsubscribe
-  }, 'saki-web-ui: session fallback sync')
 
   const registerNavEntry = (surface: SakiSurface, id: string, order: number) =>
     ctx.slots.inject('sidebar.primary.action', () =>

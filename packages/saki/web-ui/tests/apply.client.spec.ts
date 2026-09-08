@@ -6,7 +6,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SlotRegistry, createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { apply, inject } from '@breakfastdapaidang/saki-web-ui/client'
 import { apply as hostApply } from '../src/index.ts'
@@ -61,7 +62,7 @@ beforeEach(() => {
 
 describe('saki-web-ui apply', () => {
   it('declares the services it uses', () => {
-    expect(inject).toEqual(['slots', 'layout', 'sessions', 'locale', 'sakiHostClient'])
+    expect(inject).toEqual(['slots', 'layout', 'locale', 'sakiHostClient'])
   })
 
   it('registers both sidebar entries and the surface chain entry', async () => {
@@ -78,7 +79,7 @@ describe('saki-web-ui apply', () => {
     expect(select({ surfaceKey: 'other:thing' })).toBeNull()
   })
 
-  it('publishes the surface token from navigation state and clears it on session selection', async () => {
+  it('publishes the surface token from navigation state and keeps it through session elections', async () => {
     const { ctx, slots, layout, sessionsList } = await bench()
     await ctx.plugin({ inject: [...inject], apply }).await()
     expect(layout.requestSurface).toHaveBeenLastCalledWith(null)
@@ -89,7 +90,19 @@ describe('saki-web-ui apply', () => {
     face.open()
     expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
 
-    // A session becoming current hands the surface back to the fallback.
+    // A session election while a Saki page owns the surface leaves it in
+    // place — the shell's startup Workspace auto-connect must not evict it.
+    sessionsList.update((draft) => { draft.current = 'session-1' })
+    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+    expect(face.hooks.navigation.getSnapshot().surface).toBe('work')
+  })
+
+  it('leaves the Conversation fallback untouched when a session becomes current with no surface elected', async () => {
+    const { ctx, slots, layout, sessionsList } = await bench()
+    await ctx.plugin({ inject: [...inject], apply }).await()
+    const face = (slots.entries('sidebar.primary.action')[0]!.inject as () => {
+      hooks: { navigation: { getSnapshot: () => NavigationSnapshot } }
+    })()
     sessionsList.update((draft) => { draft.current = 'session-1' })
     expect(layout.requestSurface).toHaveBeenLastCalledWith(null)
     expect(face.hooks.navigation.getSnapshot().surface).toBeNull()
@@ -116,7 +129,7 @@ describe('saki-web-ui apply', () => {
     expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:project')
   })
 
-  it('keeps the Saki surface when the current session switches to another session', async () => {
+  it('keeps the Saki surface through session elections and session-to-session switches', async () => {
     const { ctx, slots, layout, sessionsList } = await bench()
     await ctx.plugin({ inject: [...inject], apply }).await()
     const face = (slots.entries('sidebar.primary.action')[0]!.inject as () => {
@@ -125,10 +138,9 @@ describe('saki-web-ui apply', () => {
     })()
     face.open()
     sessionsList.update((draft) => { draft.current = 'session-1' })
-    expect(face.hooks.navigation.getSnapshot().surface).toBeNull()
-    face.open()
+    expect(face.hooks.navigation.getSnapshot().surface).toBe('work')
     expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
-    // A session-to-session switch is not a fallback transition.
+    // A session-to-session switch is not a fallback transition either.
     sessionsList.update((draft) => { draft.current = 'session-2' })
     expect(face.hooks.navigation.getSnapshot().surface).toBe('work')
     expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')

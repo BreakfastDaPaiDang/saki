@@ -8,6 +8,7 @@
  * facts visible; nothing is blindly retried or duplicated.
  */
 import { useState } from 'react'
+import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ProjectSelectionProjection } from '@breakfastdapaidang/saki-execution'
 import type { SakiWireIntent, SakiWireProjectId, SakiWireProjectIndexResult } from '@breakfastdapaidang/saki-host-api/wire'
@@ -84,7 +85,7 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
     try {
       result = await props.registerDevelopmentProject({
         type: 'register-development-project',
-        intentId: `intent-${crypto.randomUUID()}` as SakiWireIntent['intentId'],
+        intentId: `intent-${randomUUID()}` as SakiWireIntent['intentId'],
         projectTitle: title,
         hostId: selection.hostId,
         directoryLocator: directory,

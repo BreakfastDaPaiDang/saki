@@ -25,7 +25,7 @@ export type SurfaceRootProps =
  * @returns the surface element.
  */
 export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeof NS> }) {
-  const [access, setAccess] = useState<SakiWireAccessProjection | null>(null)
+  const [access, setAccess] = useState<SakiWireAccessProjection | 'unavailable' | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   // Hooks run unconditionally before any early return below.
   const projectId = props.useNavigation(state => state.projectId)
@@ -35,7 +35,7 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
     void props.readAccess().then((projection) => {
       if (!cancelled) setAccess(projection)
     }).catch(() => {
-      if (!cancelled) setAccess({ kind: 'unavailable', message: 'Local access is temporarily unavailable.' })
+      if (!cancelled) setAccess('unavailable')
     })
     return () => { cancelled = true }
     // The inject face is created once per apply, so readAccess is stable.
@@ -44,7 +44,7 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
   const reload = useCallback(() => { setReloadKey(key => key + 1) }, [])
   const exchange = props.exchangeBootstrap
 
-  if (access === null || access.kind !== 'authenticated') {
+  if (access === null || access === 'unavailable' || access.kind !== 'authenticated') {
     return <AccessGate access={access} reload={reload} t={props.t} exchange={async (secret) => {
       const result = await exchange(secret)
       if (result.ok) {

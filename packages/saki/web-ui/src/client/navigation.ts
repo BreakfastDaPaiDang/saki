@@ -7,7 +7,7 @@
  * the shell (`ctx.layout.requestSurface`) is derived from this state — never
  * the other way around.
  */
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-runtime/client'
+import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type { SakiWireProjectId } from '@breakfastdapaidang/saki-host-api/wire'
 
 /** The two Saki top-level surfaces; null means the shell's Conversation fallback. */
