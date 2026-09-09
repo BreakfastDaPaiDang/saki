@@ -10,6 +10,7 @@ function fakePanels(): PanelActions {
     setRightbar: vi.fn(),
     openRightbar: vi.fn(),
     closeRightbar: vi.fn(),
+    setSurface: vi.fn(),
   }
 }
 
@@ -32,20 +33,29 @@ describe('LayoutController', () => {
     expect(panels.setRightbar).not.toHaveBeenCalled()
   })
 
-  it('forwards the three panel actions to the attached set', () => {
+  it('forwards the panel and surface actions to the attached set', () => {
     const service = new LayoutController()
     const panels = fakePanels()
     service.attachPanels(panels)
 
     service.toggleSidebar()
+    service.requestSurface('product:work')
+    service.requestSurface(null)
 
     expect(panels.toggleSidebar).toHaveBeenCalledTimes(1)
+    expect(panels.setSurface).toHaveBeenNthCalledWith(1, 'product:work')
+    expect(panels.setSurface).toHaveBeenNthCalledWith(2, null)
     expect(panels.setSidebar).not.toHaveBeenCalled()
   })
 
-  it('fails loud before the root entry wired its actions', () => {
+  it('fails loud before the root entry wired its actions, except requestSurface buffers', () => {
     const service = new LayoutController()
     expect(() => { service.toggleSidebar() }).toThrow(/panel actions not wired/)
+    // A pre-mount surface request buffers and flushes at attach.
+    service.requestSurface('product:work')
+    const panels = fakePanels()
+    service.attachPanels(panels)
+    expect(panels.setSurface).toHaveBeenCalledWith('product:work')
   })
 
   it('re-attach overwrites the stale action set (entry re-register)', () => {

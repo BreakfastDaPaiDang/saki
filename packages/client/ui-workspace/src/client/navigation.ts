@@ -20,10 +20,30 @@ export interface UiWorkspace {
    */
   connectWorkspace(workspaceId: WorkspaceId): Promise<SessionId>
   /**
-   * Start a New Session flow and navigate to its Session.
+   * Start a New Session flow and navigate to its Session. Reports the gesture
+   * to {@link UiWorkspace.onSessionNavigation} listeners synchronously — ahead
+   * of the asynchronous connect, and on the no-Workspace fallback that clears
+   * into the New Session view alike.
    * @param workspaceId - explicit target; absent inherits the current or most recent Workspace.
    */
   startSession(workspaceId?: WorkspaceId): void
+  /**
+   * Open a listed Session as a user navigation gesture — the sidebar row,
+   * search-result, and fork-child clicks route here: selects it, then reports
+   * the gesture to {@link UiWorkspace.onSessionNavigation} listeners so
+   * takeover surfaces can hand the center column back to the Conversation.
+   * @param sessionId - Session to open.
+   */
+  openSession(sessionId: SessionId): void
+  /**
+   * Subscribe to user-driven Session navigation ({@link UiWorkspace.startSession},
+   * {@link UiWorkspace.openSession}); the listener fires synchronously at the
+   * gesture. The startup Workspace auto-connect and the persisted-selection
+   * restore are navigation policy, not gestures, and never fire it.
+   * @param listener - gesture callback.
+   * @returns disposer removing the listener.
+   */
+  onSessionNavigation(listener: () => void): () => void
   /**
    * Archive a Session and clear it when it is the current selection.
    * @param sessionId - Session to archive.
@@ -70,6 +90,8 @@ export class DirectoryBrowseError extends Error {
 /** Implements Workspace archive and directory UI operations. */
 class UiWorkspaceService extends Service implements UiWorkspace {
   private readonly connecting = new Map<WorkspaceId, Promise<SessionId>>()
+  /** Session-navigation gesture listeners (see {@link UiWorkspace.onSessionNavigation}). */
+  private readonly navigationListeners = new Set<() => void>()
 
   /**
    * @param ctx - Client root Context.
@@ -84,7 +106,13 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     private readonly sessions: ISessions,
   ) {
     super(ctx, 'uiWorkspace')
-    ctx.effect(() => this.watchNavigation(), 'ui-workspace: Workspace navigation policy')
+    ctx.effect(() => {
+      const disposeNavigation = this.watchNavigation()
+      return () => {
+        disposeNavigation()
+        this.navigationListeners.clear()
+      }
+    }, 'ui-workspace: Workspace navigation policy')
   }
 
   async connectWorkspace(workspaceId: WorkspaceId): Promise<SessionId> {
@@ -112,6 +140,9 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   }
 
   startSession(workspaceId?: WorkspaceId): void {
+    // The gesture IS the navigation: listeners hear it synchronously, ahead of
+    // the asynchronous connect and on the no-Workspace clear fallback alike.
+    this.notifySessionNavigation()
     const workspace = this.workspaces.list.getSnapshot()
     const sessions = this.sessions.list.getSnapshot()
     const current = sessions.current
@@ -130,6 +161,28 @@ class UiWorkspaceService extends Service implements UiWorkspace {
       (sessionId) => { this.sessions.open(sessionId) },
       (reason: unknown) => { console.warn('new session failed:', reason) },
     )
+  }
+
+  openSession(sessionId: SessionId): void {
+    // open() validates the id, so an unknown Session throws before any report.
+    this.sessions.open(sessionId)
+    this.notifySessionNavigation()
+  }
+
+  onSessionNavigation(listener: () => void): () => void {
+    this.navigationListeners.add(listener)
+    return () => { this.navigationListeners.delete(listener) }
+  }
+
+  /** Report one user Session-navigation gesture synchronously. */
+  private notifySessionNavigation(): void {
+    for (const listener of [...this.navigationListeners]) {
+      try {
+        listener()
+      } catch (error) {
+        console.warn('Session navigation listener failed:', error)
+      }
+    }
   }
 
   async archiveSession(sessionId: SessionId): Promise<void> {

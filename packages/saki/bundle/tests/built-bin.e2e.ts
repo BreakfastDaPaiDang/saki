@@ -5,7 +5,6 @@ import { existsSync, watch } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import type { FSWatcher } from 'node:fs'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,23 +41,6 @@ function keylessEnvironment(directory: string): NodeJS.ProcessEnv {
   environment.DSH_HOME = join(directory, 'home')
   environment.SAKI_ONESHOT = '1'
   return environment
-}
-
-async function availablePort(): Promise<number> {
-  const server = createServer()
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const address = server.address()
-  if (address === null || typeof address === 'string') {
-    server.close()
-    throw new Error('temporary Saki port did not resolve to a TCP address')
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => { if (error === undefined) resolve(); else reject(error) })
-  })
-  return address.port
 }
 
 async function runOneShot(directory: string, port: number): Promise<{ stdout: string; stderr: string }> {
@@ -183,7 +165,7 @@ describe.skipIf(!existsSync(bin))('built Saki executable', () => {
   it('boots under plain Node without credentials', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'saki-built-bin-'))
     try {
-      const { stdout, stderr } = await runOneShot(directory, await availablePort())
+      const { stdout, stderr } = await runOneShot(directory, 0)
 
       expect(stdout).toBe(readyRecord)
       expect(stderr).toBe('')
@@ -195,7 +177,7 @@ describe.skipIf(!existsSync(bin))('built Saki executable', () => {
   it('reopens the exact ready generation on a second plain-Node launch', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'saki-built-reopen-'))
     const manifestPath = join(directory, 'home', 'saki', 'installation.json')
-    const port = await availablePort()
+    const port = 0
     try {
       const first = await runOneShot(directory, port)
       expect(first).toEqual({ stdout: readyRecord, stderr: '' })
@@ -210,13 +192,13 @@ describe.skipIf(!existsSync(bin))('built Saki executable', () => {
     }
   })
 
-  it('rejects a port that cannot identify the configured browser Origin', async () => {
+  it('rejects a port outside the TCP range', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'saki-built-bin-'))
     try {
-      const error = await runOneShotExpectingFailure(directory, 0)
+      const error = await runOneShotExpectingFailure(directory, -1)
       expect(error.code).toBe(1)
       expect(error.stdout).toBe('')
-      expect(error.stderr).toContain('SAKI_PORT must be an integer from 1 through 65535')
+      expect(error.stderr).toContain('SAKI_PORT must be an integer from 0 through 65535')
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -225,13 +207,13 @@ describe.skipIf(!existsSync(bin))('built Saki executable', () => {
   describe.skipIf(process.platform === 'win32')('POSIX signal lifecycle', () => {
     it('releases the serving lease on SIGTERM so the next process starts immediately', async () => {
       const directory = await mkdtemp(join(tmpdir(), 'saki-built-sigterm-ready-'))
-      const port = await availablePort()
+      const port = 0
       let run: RunningSaki | undefined
       try {
         await runOneShot(directory, port)
         run = startServing(directory, port)
         await within(run.ready, 30_000, 'Saki readiness')
-        const blocked = await runOneShotExpectingFailure(directory, await availablePort())
+        const blocked = await runOneShotExpectingFailure(directory, 0)
         expect(blocked.code).toBe(1)
         expect(blocked.stderr).toContain('already serving or under maintenance')
         expect(run.child.kill('SIGTERM')).toBe(true)
@@ -252,7 +234,7 @@ describe.skipIf(!existsSync(bin))('built Saki executable', () => {
       const installationRoot = join(directory, 'home', 'saki')
       await mkdir(installationRoot, { recursive: true })
       const publication = waitForLeafPublication(installationRoot, 'active-operation.json')
-      const port = await availablePort()
+      const port = 0
       let run: RunningSaki | undefined
       try {
         run = startServing(directory, port)

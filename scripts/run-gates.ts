@@ -457,6 +457,7 @@ function ciConsumerGates(): Gate[] {
     'doc-typecheck',
     'node-next-types',
     'built-bin-smoke',
+    'saki-web-registration',
   ]
   return [
     ciBuildGate(),
@@ -482,6 +483,10 @@ function ciConsumerGates(): Gate[] {
       needs: validatedBuild,
     }),
     builtBinSmokeGate(validatedBuild),
+    pnpmExec('saki-web-registration', [
+      'vitest', 'run', '--config', 'vitest.e2e.config.ts',
+      'packages/saki/bundle/tests/web-registration.e2e.ts', '--retry=0',
+    ], { label: 'Saki browser registration', needs: validatedBuild }),
   ]
 }
 

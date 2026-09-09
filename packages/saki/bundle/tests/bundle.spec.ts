@@ -45,9 +45,12 @@ describe('Saki bundle package', () => {
       ['session', '@deepseek-ai/dsh-session'],
       ['session-projection', '@deepseek-ai/dsh-session-projection'],
       ['session-persistence-jsonl', '@deepseek-ai/dsh-session-persistence-jsonl'],
+      ['attachment-local', '@deepseek-ai/dsh-attachment-local'],
+      ['session-query-sqlite', '@deepseek-ai/dsh-session-query-sqlite'],
       ['system-prompt', '@deepseek-ai/dsh-system-prompt'],
       ['tools', '@deepseek-ai/dsh-tools'],
       ['agent', '@deepseek-ai/dsh-agent'],
+      ['agent-default-model', '@deepseek-ai/dsh-agent-default-model'],
       ['agent-loop', '@deepseek-ai/dsh-agent-loop'],
       ['session-checkpoint-policy', '@deepseek-ai/dsh-session-checkpoint-policy'],
       ['agent-presets', '@deepseek-ai/dsh-agent-presets'],
@@ -63,10 +66,34 @@ describe('Saki bundle package', () => {
       ['saki-credentials', '@deepseek-ai/dsh-credentials-windows-dpapi'],
       ['saki-connection-credentials', '@deepseek-ai/dsh-credentials-local'],
       ['saki-github-app', '@breakfastdapaidang/saki-github-app'],
+      ['typert', '@deepseek-ai/dsh-typert-registry'],
+      ['typert-loader', '@deepseek-ai/dsh-typert-loader'],
+      ['typert-gateway', '@deepseek-ai/dsh-api-gateway'],
+      ['commands', '@deepseek-ai/dsh-commands'],
       ['saki-webserver', '@deepseek-ai/dsh-host-webserver'],
       ['saki-connection', '@deepseek-ai/dsh-client-connection'],
       ['saki-control-plane', '@breakfastdapaidang/saki-control-plane'],
       ['saki-host-api', '@breakfastdapaidang/saki-host-api'],
+      ['directory-picker', '@deepseek-ai/dsh-host-directory-picker-auto'],
+      ['session-controller', '@deepseek-ai/dsh-api-session-controller'],
+      ['settings-controller', '@deepseek-ai/dsh-api-settings-controller'],
+      ['workspace-controller', '@deepseek-ai/dsh-api-workspace-controller'],
+      ['modules', '@deepseek-ai/dsh-client-modules'],
+      ['file-upload', '@deepseek-ai/dsh-client-file-upload'],
+      ['api-remotes', '@deepseek-ai/dsh-api-remotes'],
+      ['ui-theme', '@deepseek-ai/dsh-client-ui-theme'],
+      ['locale', '@deepseek-ai/dsh-client-locale'],
+      ['ui-layout', '@deepseek-ai/dsh-client-ui-layout'],
+      ['ui-renderer', '@deepseek-ai/dsh-client-ui-renderer'],
+      ['ui-session', '@deepseek-ai/dsh-client-ui-session'],
+      ['ui-sidebar', '@deepseek-ai/dsh-client-ui-sidebar'],
+      ['ui-settings', '@deepseek-ai/dsh-client-ui-settings'],
+      ['ui-settings-general', '@deepseek-ai/dsh-client-ui-settings-general'],
+      ['ui-conversation', '@deepseek-ai/dsh-client-ui-conversation'],
+      ['ui-workspace', '@deepseek-ai/dsh-client-ui-workspace'],
+      ['ui-brand-official', '@deepseek-ai/dsh-client-ui-brand-official'],
+      ['saki-web-ui', '@breakfastdapaidang/saki-web-ui'],
+      ['saki-web-runtime', '@breakfastdapaidang/saki-bundle/web-runtime'],
       ['saki-readiness', '@breakfastdapaidang/saki-bundle'],
     ])
     expect(insert.find(entry => entry.id === 'storage-json')?.config).toEqual({
@@ -87,6 +114,14 @@ describe('Saki bundle package', () => {
     })
     expect(insert.find(entry => entry.id === 'session-persistence-jsonl')?.config).toEqual({
       root: { __jsExpr: "dshHomePath('sessions')" },
+    })
+    expect(insert.find(entry => entry.id === 'session-query-sqlite')?.config).toEqual({
+      path: ':memory:',
+      openAt: 'never',
+    })
+    expect(insert.find(entry => entry.id === 'agent-default-model')?.config).toEqual({
+      provider: 'saki-unconfigured',
+      model: 'saki-unconfigured',
     })
     expect(insert.find(entry => entry.id === 'agent-presets')?.config).toEqual({
       default: 'development',
@@ -115,12 +150,12 @@ describe('Saki bundle package', () => {
     expect(insert.find(entry => entry.id === 'saki-webserver')?.config).toEqual({
       host: '127.0.0.1',
       port: {
-        __jsExpr: "(() => { const port = Number(process.env.SAKI_PORT ?? 43119); if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SAKI_PORT must be an integer from 1 through 65535'); return port })()",
+        __jsExpr: "(() => { const port = Number(process.env.SAKI_PORT ?? 43119); if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('SAKI_PORT must be an integer from 0 through 65535'); return port })()",
       },
     })
-    expect(insert.find(entry => entry.id === 'saki-webserver')?.inject).toEqual(['sakiControlPlane'])
+    expect(insert.find(entry => entry.id === 'saki-control-plane')?.inject).toEqual(['webServer'])
     expect(insert.find(entry => entry.id === 'saki-control-plane')?.config).toMatchObject({
-      origin: { __jsExpr: "'http://127.0.0.1:' + String(Number(process.env.SAKI_PORT ?? 43119))" },
+      origin: { __jsExpr: "'http://127.0.0.1:' + String(ctx.webServer.port)" },
       defaultAgentProfile: { agentPresetId: 'development' },
     })
   })

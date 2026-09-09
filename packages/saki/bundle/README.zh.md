@@ -21,7 +21,7 @@ kind: "package-bundle"
 <a id="use-this-package"></a>
 ## 使用本包
 
-Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁在空的 [`cordis.yml`](cordis.yml) 上挂载定时调度、默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@10`、`saki_host_execution@5` 与 `saki_storage_generation@8`；此外还挂载 JSONL Session 持久化及 Session projection registry、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API 与 `saki-readiness`。
+Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁挂载定时调度、默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@10`、`saki_host_execution@5` 与 `saki_storage_generation@8`；此外还挂载 JSONL Session 持久化及 Session projection registry、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API、带壳层花名册与 Saki [`web-ui`](../web-ui/README.zh.md) 插件的 DSH 客户端模块系统、为构建产物 web 前端 dist 提供服务的 fallback 座服务器，以及 `saki-readiness`；以上组合建立在空的 [`cordis.yml`](cordis.yml) 上。
 
 启动器把 preset 名册绑定到包内 `config/agent-presets` 的绝对路径，并禁用 DSH 随包 preset 和用户 preset 根目录。随包提供的 `development` preset 提供仓库指令、持久 `request_intervention` 工具、Windows 前台 PowerShell，以及基于 Agent 隔离沙箱文件系统的 `read`、`write` 与 `edit` 工具；Host 操作继续使用独立的本地文件系统提供方。生产组合不安装模型 adapter；创建或恢复 Agent 后会保持 idle，直至拥有该 Agent Run 的 operation 提交持久输入。
 
@@ -44,7 +44,7 @@ pnpm run saki
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `SAKI_DATABASE_PATH` | `dshHomePath('saki', 'control.sqlite')` | 精确的无 manifest B03 源路径；它绝不覆盖 manifest，且拒绝 `:memory:` |
-| `SAKI_PORT` | `43119` | 回环 HTTP 端口，必须是 `1` 至 `65535` 的整数 |
+| `SAKI_PORT` | `43119` | 回环 HTTP 端口，取 `0` 至 `65535` 的整数；`0` 由系统分配端口，访问校验使用实际绑定的 Origin |
 | `SAKI_ONESHOT` | 未设置 | 设为 `1` 时打印就绪记录并退出，且不消费 bootstrap 交接值 |
 
 <a id="model-experience"></a>
@@ -60,7 +60,8 @@ pnpm run saki
 ## 已知限制与延后工作
 
 - **受限的 GitHub mutation**：操作者安装并配置 Product App 后，Windows 组合可以发布已确认的 Board 读取结果、执行可恢复的 `CreateWorkItem` 与 `MoveWorkItem` saga，并通过持久 marker，根据准确 Repository、head、base 与 Commit identity 创建 Branch Delivery PR。尚未提供任意 Issue edit、Repository Contents 与 Workflow write。
-- **只支持有界 Project 生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 workspace 读取、返回有界 repository-relative 展示路径且不暴露规范 Host 路径的 Changes 读取、同样不暴露规范 Host 路径的有界 Diff 页面读取，以及浏览器请求不携带路径的直接结构化 stage、unstage 与 Commit 操作。Branch Delivery Push 已通过 Local Host 组合，但默认未设置 `pushCredentialHelper`，因此保持不可用；操作者必须选择 `git-credential-manager` 或 `git-credential-manager-core`。尚未组合 Resource Binding 重绑定与退役、automated dispatch、生产模型 adapter 和渲染后的 Web 界面。
+- **只支持有界 Project 生命周期**：Host 支持本地访问、已有目录检查、Development Project 首次登记、Project index 与 workspace 读取、返回有界 repository-relative 展示路径且不暴露规范 Host 路径的 Changes 读取、同样不暴露规范 Host 路径的有界 Diff 页面读取，以及浏览器请求不携带路径的直接结构化 stage、unstage 与 Commit 操作。Branch Delivery Push 已通过 Local Host 组合，但默认未设置 `pushCredentialHelper`，因此保持不可用；操作者必须选择 `git-credential-manager` 或 `git-credential-manager-core`。尚未组合 Resource Binding 重绑定与退役、automated dispatch 与生产模型 adapter。
+- **无模型 adapter 的浏览器界面**：组合的壳层在已提供服务的 `/api` Remote 之上渲染 Saki 页面与 Conversation 回退；启动器打印的 URL 携带 DSH 进程启动令牌，其一次性交换会签发这些 Remote 所需的浏览器会话 cookie，而 Saki bootstrap secret 仍然守护每一项 Host 操作。生产组合不安装模型 adapter：组合的默认模型路由永不提供服务，因此 Conversation 回合保持 idle，任何实际的模型调用都会在使用点立即报错。
 - **固定的 Product Agent 能力**：名册只发现由系统拥有的 `development` preset。用户自定义 preset 要等其授权规则与 Project Profile 选择语义确定后，才会进入 Saki Host。
 - **可执行入口仅供仓库本地使用**——Saki 包保持私有，不属于任何 npm 发布族。
 - **仅限回环开发 Host**：固定的本地 bootstrap 流程不会授权远程浏览器，也不替代 [Saki Host 启动器](../../../docs/saki/host-launcher.zh.md)所述的 Windows Host 包装层。

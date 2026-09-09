@@ -117,6 +117,7 @@ describe('ui-workspace apply', () => {
     declare(b.slots, 'sidebar.workspaces', 'conversation.hero.workspace')
     await b.ctx.plugin({ inject: [...inject], apply }).await()
     const startSession = vi.spyOn(b.ctx.uiWorkspace, 'startSession').mockImplementation(() => undefined)
+    const openSession = vi.spyOn(b.ctx.uiWorkspace, 'openSession')
 
     const browser = (b.slots.entries('sidebar.workspaces')[0]!.inject as () => WorkspaceBrowserInjected)()
     // Both arms delegate to the shared Session navigation action.
@@ -124,7 +125,9 @@ describe('ui-workspace apply', () => {
     expect(startSession).toHaveBeenCalledWith('ws')
     browser.startSession()
     expect(startSession).toHaveBeenLastCalledWith(undefined)
+    // Row elections route through the navigation face so its gesture signal fires.
     browser.open('session' as never)
+    expect(openSession).toHaveBeenCalledWith('session')
     expect(b.open).toHaveBeenCalledWith('session')
     const signal = new AbortController().signal
     await expect(browser.searchSessions('match', signal)).resolves.toEqual({
@@ -138,8 +141,9 @@ describe('ui-workspace apply', () => {
     expect(b.renameSession).toHaveBeenCalledWith('renamed session')
     browser.forkSession('session' as never)
     await vi.waitFor(() => {
-      expect(b.open).toHaveBeenCalledWith('forked')
+      expect(openSession).toHaveBeenCalledWith('forked')
     })
+    expect(b.open).toHaveBeenCalledWith('forked')
     expect(b.fork).toHaveBeenCalledWith({ sessionId: 'session', increaseTitle: true })
     await browser.renameWorkspace('ws' as never, 'renamed')
     expect(b.rename).toHaveBeenCalledWith('ws', 'renamed')

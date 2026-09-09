@@ -76,7 +76,9 @@ describe('web e2e: blank New Session folding quota', () => {
     await showMore.waitFor({ timeout: 15_000 })
     await compareOrRefreshGolden(
       SIDEBAR_EXPECTED,
-      await captureStableAria(page, '[role="tree"][aria-label="Sessions"]', scaffold.workspaceCwd),
+      await captureStableAria(page, '[role="tree"][aria-label="Sessions"]', scaffold.workspaceCwd, {
+        replacements: [[basename(scaffold.workspaceCwd), '{{workspace}}']],
+      }),
       MODE,
     )
 
