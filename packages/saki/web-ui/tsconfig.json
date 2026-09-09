@@ -27,6 +27,9 @@
       "path": "../../client/ui-slots"
     },
     {
+      "path": "../../client/ui-workspace"
+    },
+    {
       "path": "../host-api/tsconfig.client.json"
     },
     {

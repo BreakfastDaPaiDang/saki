@@ -157,11 +157,9 @@
 
     - id: saki-webserver
       name: '@deepseek-ai/dsh-host-webserver'
-      inject:
-        - sakiControlPlane
       config:
         host: '127.0.0.1'
-        port: !!js "(() => { const port = Number(process.env.SAKI_PORT ?? 43119); if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SAKI_PORT must be an integer from 1 through 65535'); return port })()"
+        port: !!js "(() => { const port = Number(process.env.SAKI_PORT ?? 43119); if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('SAKI_PORT must be an integer from 0 through 65535'); return port })()"
 
     - id: saki-connection
       name: '@deepseek-ai/dsh-client-connection'
@@ -170,8 +168,10 @@
 
     - id: saki-control-plane
       name: '@breakfastdapaidang/saki-control-plane'
+      inject:
+        - webServer
       config:
-        origin: !!js "'http://127.0.0.1:' + String(Number(process.env.SAKI_PORT ?? 43119))"
+        origin: !!js "'http://127.0.0.1:' + String(ctx.webServer.port)"
         challengeTtlMs: 900000
         sessionTtlMs: 43200000
         terminalRetentionMs: 604800000

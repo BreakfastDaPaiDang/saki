@@ -150,12 +150,12 @@ describe('Saki bundle package', () => {
     expect(insert.find(entry => entry.id === 'saki-webserver')?.config).toEqual({
       host: '127.0.0.1',
       port: {
-        __jsExpr: "(() => { const port = Number(process.env.SAKI_PORT ?? 43119); if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('SAKI_PORT must be an integer from 1 through 65535'); return port })()",
+        __jsExpr: "(() => { const port = Number(process.env.SAKI_PORT ?? 43119); if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('SAKI_PORT must be an integer from 0 through 65535'); return port })()",
       },
     })
-    expect(insert.find(entry => entry.id === 'saki-webserver')?.inject).toEqual(['sakiControlPlane'])
+    expect(insert.find(entry => entry.id === 'saki-control-plane')?.inject).toEqual(['webServer'])
     expect(insert.find(entry => entry.id === 'saki-control-plane')?.config).toMatchObject({
-      origin: { __jsExpr: "'http://127.0.0.1:' + String(Number(process.env.SAKI_PORT ?? 43119))" },
+      origin: { __jsExpr: "'http://127.0.0.1:' + String(ctx.webServer.port)" },
       defaultAgentProfile: { agentPresetId: 'development' },
     })
   })

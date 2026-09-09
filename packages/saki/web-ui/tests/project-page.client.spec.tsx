@@ -7,7 +7,7 @@
  * Props are fed directly; nav is the real navigation store instance.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ProjectGitHead } from '@breakfastdapaidang/saki-execution'
 import type { SakiWireHostId, SakiWireProjectId } from '@breakfastdapaidang/saki-host-api/wire'
@@ -382,5 +382,52 @@ describe('ProjectPage — Development Workspace', () => {
     await waitFor(() => { expect(screen.getByText('找不到该项目：可能已在其他地方退役。')).toBeTruthy() })
     fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: '返回项目选择' }))
     expect(navigation.store.getSnapshot().projectId).toBeNull()
+  })
+})
+
+describe('workspace read ordering', () => {
+  it('retains the current revision when an earlier read completes late', async () => {
+    const { face, props } = bench(PROJECT_A)
+    const indexRead = deferred<unknown>()
+    const oldWorkspaceRead = deferred<unknown>()
+    face.queryProjectIndex.mockReturnValue(indexRead.promise)
+    face.queryDevelopmentWorkspace.mockImplementation((_project, revision) => revision === 0
+      ? oldWorkspaceRead.promise
+      : Promise.resolve(workspaceResult(summary())))
+    render(<ProjectPage {...props} />)
+    await waitFor(() => { expect(face.queryDevelopmentWorkspace).toHaveBeenCalledWith(PROJECT_A, 0) })
+    indexRead.resolve(indexResult([summary()], 3))
+    await waitFor(() => { expect(screen.getByRole('heading', { name: '示例项目' })).toBeTruthy() })
+    await act(async () => {
+      oldWorkspaceRead.resolve({ ok: false, reason: 'stale' })
+      await oldWorkspaceRead.promise
+    })
+    expect(screen.queryByText('本地视图已过时，请刷新后重试。')).toBeNull()
+    expect(screen.getByRole('heading', { name: '示例项目' })).toBeTruthy()
+  })
+})
+
+describe('workspace read failures', () => {
+  it('ignores a rejected read superseded by the index-driven reload', async () => {
+    const { face, props } = bench(PROJECT_A)
+    const indexRead = deferred<unknown>()
+    const oldWorkspaceRead = deferred<unknown>()
+    face.queryProjectIndex.mockReturnValue(indexRead.promise)
+    face.queryDevelopmentWorkspace.mockImplementation((_project: unknown, revision: unknown) => revision === 0
+      ? oldWorkspaceRead.promise
+      : Promise.resolve(workspaceResult(summary())))
+    render(<ProjectPage {...props} />)
+    await waitFor(() => { expect(face.queryDevelopmentWorkspace).toHaveBeenCalledWith(PROJECT_A, 0) })
+    await act(async () => {
+      indexRead.resolve(indexResult([summary()], 3))
+      await indexRead.promise
+    })
+    await waitFor(() => { expect(screen.getByRole('heading', { name: '示例项目' })).toBeTruthy() })
+    await act(async () => {
+      oldWorkspaceRead.reject(new Error('gone'))
+      await oldWorkspaceRead.promise.catch(() => undefined)
+    })
+    expect(screen.getByRole('heading', { name: '示例项目' })).toBeTruthy()
+    expect(screen.queryByText('连接已断开：显示最近一次已确认的状态。')).toBeNull()
   })
 })

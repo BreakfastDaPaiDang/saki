@@ -322,7 +322,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'startSession(workspaceId?: WorkspaceId): void',
-        description: 'Start a New Session flow and navigate to its Session.',
+        description: 'Start a New Session flow and navigate to its Session. Reports the gesture to UiWorkspace.onSessionNavigation listeners synchronously — ahead of the asynchronous connect, and on the no-Workspace fallback that clears into the New Session view alike.',
         parameters: [{ name: 'workspaceId', description: 'explicit target; absent inherits the current or most recent Workspace.' }],
       },
       {

@@ -6,7 +6,7 @@
  * no render machinery, no cordis.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { AccessGate } from '../src/client/components/AccessGate.tsx'
 import { RegisterProjectDialog } from '../src/client/components/RegisterProjectDialog.tsx'
@@ -40,6 +40,7 @@ function selection(overrides: Record<string, unknown> = {}) {
 function dialogProps() {
   const inspectProjectSelection = vi.fn()
   const registerDevelopmentProject = vi.fn()
+  const refreshIndex = vi.fn(async (): Promise<number | undefined> => 4)
   const onClose = vi.fn()
   const onRegistered = vi.fn()
   const props: RegisterProjectDialogProps = {
@@ -48,11 +49,12 @@ function dialogProps() {
     requestToken: 'token-1',
     inspectProjectSelection: inspectProjectSelection as never,
     registerDevelopmentProject: registerDevelopmentProject as never,
+    refreshIndex,
     onClose,
     onRegistered,
     t,
   }
-  return { props, inspectProjectSelection, registerDevelopmentProject, onClose, onRegistered }
+  return { props, inspectProjectSelection, registerDevelopmentProject, refreshIndex, onClose, onRegistered }
 }
 
 describe('AccessGate', () => {
@@ -233,6 +235,32 @@ describe('RegisterProjectDialog', () => {
     await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('登记信息已变化') })
     expect(onClose).not.toHaveBeenCalled()
     expect(onRegistered).not.toHaveBeenCalled()
+
+    // A conflict offers real recovery: refresh the registry revision and the
+    // evidence, then review and confirm again.
+    const revision5 = { ...selection(), fingerprint: { version: 2 as const, digest: 'fresh-digest' } }
+    inspectProjectSelection.mockResolvedValue({
+      ok: true,
+      projection: { type: 'inspect-project-selection', result: { ok: true, selection: revision5 } },
+    })
+    registerDevelopmentProject.mockResolvedValue({
+      ok: true,
+      receipt: {
+        id: 'receipt-0a1b2c3d-0000-4000-8000-0000000000bb',
+        intentId: 'intent-0a1b2c3d-0000-4000-8000-0000000000bb',
+        state: 'confirmed',
+        projectId: 'project-0a1b2c3d-0000-4000-8000-0000000000bb',
+        resourceBindingId: 'binding-0a1b2c3d-0000-4000-8000-0000000000bb',
+        registryRevision: 4,
+      },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '刷新证据并重新确认' }))
+    await waitFor(() => { expect(screen.getByText('D:\\projects\\demo')).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: '确认登记' }))
+    await waitFor(() => { expect(onRegistered).toHaveBeenCalledWith('project-0a1b2c3d-0000-4000-8000-0000000000bb') })
+    const retried = registerDevelopmentProject.mock.calls.at(-1)![0] as SakiWireRegisterDevelopmentProjectIntent
+    expect(retried.expectedRegistryRevision).toBe(4)
+    expect(retried.confirmedFingerprint).toEqual({ version: 2, digest: 'fresh-digest' })
   })
 
   /** Drive the dialog from an empty path field to the evidence review step. */
@@ -383,5 +411,153 @@ describe('RegisterProjectDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: '检查目录' }))
     await waitFor(() => { expect(screen.getByText('—')).toBeTruthy() })
     expect(screen.getByText('main')).toBeTruthy()
+  })
+})
+
+describe('registration recovery', () => {
+  it('makes a failed directory inspection retryable', async () => {
+    const { props, inspectProjectSelection } = dialogProps()
+    inspectProjectSelection.mockRejectedValue(new Error('inspection transport disconnected'))
+    render(<RegisterProjectDialog {...props} />)
+    fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:/projects/demo' } })
+    fireEvent.click(screen.getByRole('button', { name: '检查目录' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('暂时不可用') })
+    expect(screen.getByRole('button', { name: '检查目录' }).hasAttribute('disabled')).toBe(false)
+  })
+
+  it('does not publish inspection evidence after the directory changes', async () => {
+    const { props, inspectProjectSelection } = dialogProps()
+    const read = Promise.withResolvers<unknown>()
+    inspectProjectSelection.mockReturnValue(read.promise)
+    render(<RegisterProjectDialog {...props} />)
+    fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:/projects/first' } })
+    fireEvent.click(screen.getByRole('button', { name: '检查目录' }))
+    fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:/projects/second' } })
+    await act(async () => {
+      read.resolve({
+        ok: true,
+        projection: { type: 'inspect-project-selection', result: { ok: true, selection: selection({ displayLocation: 'D:/projects/first' }) } },
+      })
+      await read.promise
+    })
+    await waitFor(() => { expect(screen.getByRole('button', { name: '检查目录' }).hasAttribute('disabled')).toBe(false) })
+    expect(screen.queryByText('D:/projects/first')).toBeNull()
+  })
+})
+
+describe('registration conflict recovery failures', () => {
+  /** Drive a dialog to the conflict outcome so the recovery action appears. */
+  async function reachConflict(
+    props: RegisterProjectDialogProps,
+    inspectProjectSelection: ReturnType<typeof vi.fn>,
+    registerDevelopmentProject: ReturnType<typeof vi.fn>,
+  ) {
+    inspectProjectSelection.mockResolvedValue({
+      ok: true,
+      projection: { type: 'inspect-project-selection', result: { ok: true, selection: selection() } },
+    })
+    registerDevelopmentProject.mockResolvedValue({ ok: false, reason: 'conflict' })
+    render(<RegisterProjectDialog {...props} />)
+    fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:\projects\demo' } })
+    fireEvent.click(screen.getByRole('button', { name: '检查目录' }))
+    await waitFor(() => { expect(screen.getByLabelText('项目名称')).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: '确认登记' }))
+    await waitFor(() => { expect(screen.getByRole('button', { name: '刷新证据并重新确认' })).toBeTruthy() })
+  }
+
+  it('settles the recovery with the unavailable note when the index refresh fails', async () => {
+    const { props, inspectProjectSelection, registerDevelopmentProject, refreshIndex } = dialogProps()
+    await reachConflict(props, inspectProjectSelection, registerDevelopmentProject)
+    refreshIndex.mockResolvedValue(undefined)
+    fireEvent.click(screen.getByRole('button', { name: '刷新证据并重新确认' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('暂时不可用') })
+    expect(screen.getByRole('button', { name: '刷新证据并重新确认' }).hasAttribute('disabled')).toBe(false)
+    expect(screen.getByRole('button', { name: '确认登记' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it.each(['index', 'inspection'] as const)('discards recovery when the path changes during %s', async (stage) => {
+    const { props, inspectProjectSelection, registerDevelopmentProject, refreshIndex } = dialogProps()
+    await reachConflict(props, inspectProjectSelection, registerDevelopmentProject)
+    const read = Promise.withResolvers<never>()
+    if (stage === 'index') refreshIndex.mockReturnValue(read.promise)
+    else inspectProjectSelection.mockReturnValue(read.promise)
+    fireEvent.click(screen.getByRole('button', { name: '刷新证据并重新确认' }))
+    if (stage === 'inspection') await waitFor(() => { expect(inspectProjectSelection).toHaveBeenCalledTimes(2) })
+    fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:/projects/second' } })
+    await act(async () => {
+      read.reject(new Error('superseded recovery'))
+      await read.promise.catch(() => undefined)
+    })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByRole('button', { name: '确认登记' })).toBeNull()
+    expect(screen.getByRole('button', { name: '刷新证据并重新确认' }).hasAttribute('disabled')).toBe(false)
+    if (stage === 'index') expect(inspectProjectSelection).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not inspect the old directory after a superseded index refresh succeeds', async () => {
+    const { props, inspectProjectSelection, registerDevelopmentProject, refreshIndex } = dialogProps()
+    await reachConflict(props, inspectProjectSelection, registerDevelopmentProject)
+    const revision = Promise.withResolvers<number>()
+    refreshIndex.mockReturnValue(revision.promise)
+    fireEvent.click(screen.getByRole('button', { name: '刷新证据并重新确认' }))
+    fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:/projects/second' } })
+    await act(async () => { revision.resolve(5); await revision.promise })
+    expect(inspectProjectSelection).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: '确认登记' })).toBeNull()
+  })
+
+  it('settles the recovery with the unavailable note when the re-inspection is rejected', async () => {
+    const { props, inspectProjectSelection, registerDevelopmentProject } = dialogProps()
+    await reachConflict(props, inspectProjectSelection, registerDevelopmentProject)
+    inspectProjectSelection.mockResolvedValue({
+      ok: true,
+      projection: { type: 'inspect-project-selection', result: { ok: false, reason: 'not-git' } },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '刷新证据并重新确认' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('暂时不可用') })
+  })
+
+  it('settles the recovery with the unavailable note when the re-inspection throws', async () => {
+    const { props, inspectProjectSelection, registerDevelopmentProject } = dialogProps()
+    await reachConflict(props, inspectProjectSelection, registerDevelopmentProject)
+    inspectProjectSelection.mockRejectedValue(new Error('transport disconnected'))
+    fireEvent.click(screen.getByRole('button', { name: '刷新证据并重新确认' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('暂时不可用') })
+  })
+})
+
+describe('registration inspection staleness', () => {
+  it('ignores a rejected inspection whose directory was superseded', async () => {
+    const { props, inspectProjectSelection } = dialogProps()
+    const read = Promise.withResolvers<unknown>()
+    inspectProjectSelection.mockReturnValue(read.promise)
+    render(<RegisterProjectDialog {...props} />)
+    fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:\projects\first' } })
+    fireEvent.click(screen.getByRole('button', { name: '检查目录' }))
+    fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:\projects\second' } })
+    await act(async () => {
+      read.reject(new Error('stale rejection'))
+      await read.promise.catch(() => undefined)
+    })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: '检查目录' }).hasAttribute('disabled')).toBe(false)
+  })
+
+  it('reports unavailable when recovery runs with no enrolled host', async () => {
+    const { props, inspectProjectSelection, registerDevelopmentProject } = dialogProps()
+    inspectProjectSelection.mockResolvedValue({
+      ok: true,
+      projection: { type: 'inspect-project-selection', result: { ok: true, selection: selection() } },
+    })
+    registerDevelopmentProject.mockResolvedValue({ ok: false, reason: 'conflict' })
+    const { rerender } = render(<RegisterProjectDialog {...props} />)
+    fireEvent.change(screen.getByLabelText('本地目录路径'), { target: { value: 'D:\projects\demo' } })
+    fireEvent.click(screen.getByRole('button', { name: '检查目录' }))
+    await waitFor(() => { expect(screen.getByLabelText('项目名称')).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: '确认登记' }))
+    await waitFor(() => { expect(screen.getByRole('button', { name: '刷新证据并重新确认' })).toBeTruthy() })
+    rerender(<RegisterProjectDialog {...props} hosts={[]} />)
+    fireEvent.click(screen.getByRole('button', { name: '刷新证据并重新确认' }))
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('暂时不可用') })
   })
 })

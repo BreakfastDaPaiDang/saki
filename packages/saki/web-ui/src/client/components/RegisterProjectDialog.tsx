@@ -7,14 +7,14 @@
  * revision. Non-converged outcomes keep the dialog open with the completed
  * facts visible; nothing is blindly retried or duplicated.
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ProjectSelectionProjection } from '@breakfastdapaidang/saki-execution'
 import type { SakiWireIntent, SakiWireProjectId, SakiWireProjectIndexResult } from '@breakfastdapaidang/saki-host-api/wire'
 import type { SakiInjected } from '../index.ts'
 import type { NS } from '../locales.ts'
-import { displayGitHead } from '../git-head.ts'
+import { GitFactRows } from './GitFactRows.tsx'
 import css from './RegisterProjectDialog.module.css'
 
 /** Inspection evidence the operator reviews before confirming. */
@@ -30,6 +30,8 @@ export interface RegisterProjectDialogProps {
   requestToken: string
   inspectProjectSelection: SakiInjected['inspectProjectSelection']
   registerDevelopmentProject: SakiInjected['registerDevelopmentProject']
+  /** Re-read the Project index and resolve the fresh registry revision. */
+  refreshIndex: () => Promise<number | undefined>
   onClose: () => void
   onRegistered: (projectId: SakiWireProjectId) => void
   t: TranslateNS<typeof NS>
@@ -50,36 +52,62 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
   const [directory, setDirectory] = useState('')
   const [title, setTitle] = useState('')
   const [phase, setPhase] = useState<Phase>({ step: 'input' })
-  const [pending, setPending] = useState(false)
+  const [pending, setPending] = useState<'inspect' | 'confirm' | null>(null)
   const [outcome, setOutcome] = useState<string | null>(null)
+  // The registry revision a confirm would carry; conflict recovery replaces it
+  // with a freshly read one before the user re-confirms new evidence.
+  const [registryRevision, setRegistryRevision] = useState(props.expectedRegistryRevision)
+  // A conflict offers one recovery action: refresh the revision and evidence.
+  const [recoveryOffered, setRecoveryOffered] = useState(false)
+  // A new input or a new inspect supersedes an in-flight request; its late
+  // result must not publish evidence under the current directory.
+  const inspectGeneration = useRef(0)
 
-  const inspect = async () => {
-    setPending(true)
-    setOutcome(null)
+  const inspect = async (refresh = false) => {
     const host = props.hosts[0]
     if (!host) {
       setOutcome(t('project.register.unavailable'))
-      setPending(false)
       return
     }
-    const result = await props.inspectProjectSelection(host.id, directory)
-    setPending(false)
-    if (!result.ok) {
-      setOutcome(result.reason === 'denied' ? t('project.register.denied') : t('project.register.unavailable'))
-      return
-    }
-    const inner = result.projection.result
-    if (inner.ok) {
-      setPhase({ step: 'review', selection: inner.selection })
-      /* v8 ignore next -- String.split always yields at least one segment, so pop() never yields undefined */
-      setTitle(inner.selection.displayLocation.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '')
-    } else {
-      setPhase({ step: 'rejected', reason: inner.reason })
+    const inspectedDirectory = directory
+    const generation = ++inspectGeneration.current
+    setPending('inspect')
+    setOutcome(null)
+    try {
+      const revision = refresh ? await props.refreshIndex() : registryRevision
+      if (inspectGeneration.current !== generation) return
+      if (revision === undefined) {
+        setOutcome(t('project.register.unavailable'))
+        return
+      }
+      const result = await props.inspectProjectSelection(host.id, inspectedDirectory)
+      if (inspectGeneration.current !== generation) return
+      if (!result.ok) {
+        setOutcome(result.reason === 'denied' ? t('project.register.denied') : t('project.register.unavailable'))
+        return
+      }
+      const inner = result.projection.result
+      if (inner.ok) {
+        setRegistryRevision(revision)
+        setRecoveryOffered(false)
+        setPhase({ step: 'review', selection: inner.selection })
+        /* v8 ignore next -- String.split always yields at least one segment, so pop() never yields undefined */
+        if (!refresh) setTitle(inner.selection.displayLocation.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '')
+      } else if (refresh) {
+        setOutcome(t('project.register.unavailable'))
+      } else {
+        setPhase({ step: 'rejected', reason: inner.reason })
+      }
+    } catch {
+      // A transport or parse failure settles the gate with a plain reason.
+      if (inspectGeneration.current === generation) setOutcome(t('project.register.unavailable'))
+    } finally {
+      if (inspectGeneration.current === generation) setPending(null)
     }
   }
 
   const confirm = async (selection: Selection) => {
-    setPending(true)
+    setPending('confirm')
     setOutcome(null)
     let result: Awaited<ReturnType<SakiInjected['registerDevelopmentProject']>>
     try {
@@ -89,24 +117,24 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
         projectTitle: title,
         hostId: selection.hostId,
         directoryLocator: directory,
-        expectedRegistryRevision: props.expectedRegistryRevision,
+        expectedRegistryRevision: registryRevision,
         confirmedFingerprint: selection.fingerprint,
         confirmedBaseline: selection.baseline,
       }, props.requestToken)
     } catch {
       // A transport or parse failure keeps the dialog open with a plain reason.
       setOutcome(t('project.register.unavailable'))
-      setPending(false)
+      setPending(null)
       return
     }
-    setPending(false)
+    setPending(null)
     if (result.ok) {
       props.onRegistered(result.receipt.projectId)
       return
     }
     switch (result.reason) {
       case 'denied': setOutcome(t('project.register.denied')); break
-      case 'conflict': setOutcome(t('project.register.conflict')); break
+      case 'conflict': setOutcome(t('project.register.conflict')); setRecoveryOffered(true); break
       case 'reconciliation-required': setOutcome(t('project.register.reconciliation')); break
       default: setOutcome(t('project.register.unavailable')); break
     }
@@ -126,13 +154,21 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
             <input
               className={css.input}
               value={directory}
-              onChange={(event) => { setDirectory(event.target.value); setPhase({ step: 'input' }) }}
+              disabled={pending === 'confirm'}
+              onChange={(event) => {
+                // Editing the path supersedes any in-flight inspection.
+                inspectGeneration.current += 1
+                setPending(null)
+                setOutcome(null)
+                setDirectory(event.target.value)
+                setPhase({ step: 'input' })
+              }}
               placeholder={t('project.register.pathPlaceholder')}
             />
           </label>
-          {phase.step === 'input' ? (
+          {phase.step === 'input' && !recoveryOffered ? (
             <div className={css.actions}>
-              <button type="button" className={css.primary} disabled={!directory.trim() || pending} onClick={() => void inspect()}>
+              <button type="button" className={css.primary} disabled={!directory.trim() || pending !== null} onClick={() => void inspect()}>
                 {pending ? t('workspace.loading') : t('project.register.inspect')}
               </button>
             </div>
@@ -146,7 +182,8 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
             <ReviewEvidence
               selection={phase.selection}
               title={title}
-              pending={pending}
+              pending={pending !== null}
+              confirmBlocked={recoveryOffered}
               onTitleChange={setTitle}
               onConfirm={selection => void confirm(selection)}
               t={t}
@@ -154,6 +191,13 @@ export function RegisterProjectDialog(props: RegisterProjectDialogProps) {
           ) : null}
 
           {outcome !== null ? <p className={css.error} role="alert">{outcome}</p> : null}
+          {recoveryOffered ? (
+            <div className={css.actions}>
+              <button type="button" className={css.primary} disabled={!directory.trim() || pending !== null} onClick={() => void inspect(true)}>
+                {t('project.register.refreshEvidence')}
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -165,21 +209,16 @@ function ReviewEvidence(props: {
   selection: Selection
   title: string
   pending: boolean
+  confirmBlocked: boolean
   onTitleChange: (title: string) => void
   onConfirm: (selection: Selection) => void
   t: TranslateNS<typeof NS>
 }) {
   const { selection, t } = props
-  const head = displayGitHead(selection.head)
   return (
     <>
       <dl className={css.evidence}>
-        <div className={css.factRow}><dt>{t('workspace.facts.location')}</dt><dd className={css.mono}>{selection.displayLocation}</dd></div>
-        <div className={css.factRow}>
-          <dt>{t('workspace.facts.branch')}</dt>
-          <dd className={css.mono}>{head.detached ? t('workspace.facts.detached') : head.branch}</dd>
-        </div>
-        <div className={css.factRow}><dt>{t('workspace.facts.head')}</dt><dd className={css.mono}>{head.shortHead ?? '—'}</dd></div>
+        <GitFactRows displayLocation={selection.displayLocation} head={selection.head} css={css} t={t} />
         <div className={css.factRow}>
           <dt>{t('project.register.remotes')}</dt>
           <dd className={css.mono}>{selection.remotes.length === 0 ? t('workspace.facts.none') : selection.remotes.map(remote => remote.coordinate ?? remote.transport).join('，')}</dd>
@@ -209,7 +248,7 @@ function ReviewEvidence(props: {
         <input className={css.input} value={props.title} onChange={(event) => { props.onTitleChange(event.target.value) }} />
       </label>
       <div className={css.actions}>
-        <button type="button" className={css.primary} disabled={!props.title.trim() || props.pending} onClick={() => { props.onConfirm(selection) }}>
+        <button type="button" className={css.primary} disabled={!props.title.trim() || props.pending || props.confirmBlocked} onClick={() => { props.onConfirm(selection) }}>
           {props.pending ? t('workspace.loading') : t('project.register.confirm')}
         </button>
       </div>

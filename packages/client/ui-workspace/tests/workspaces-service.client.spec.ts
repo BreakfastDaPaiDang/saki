@@ -289,6 +289,55 @@ describe('UiWorkspaceService', () => {
     })
   })
 
+  it('reports user Session navigation gestures and never the startup auto-connect', async () => {
+    const current = summary('current', { cwd: '/w/alpha' })
+    const b = bench({
+      sessions: sessionState([current], current.id),
+      workspaces: workspaceState([workspace('alpha', [current.id])]),
+    })
+    const gestures = vi.fn()
+    const off = b.uiWorkspace.onSessionNavigation(gestures)
+
+    // A row election opens through the Session Controller, then reports.
+    b.uiWorkspace.openSession(sid('row'))
+    expect(b.sessions.open).toHaveBeenCalledWith(sid('row'))
+    expect(gestures).toHaveBeenCalledTimes(1)
+
+    // New Session reports at the gesture, ahead of the asynchronous connect.
+    const pending = Promise.withResolvers<SessionId>()
+    b.sessions.create.mockImplementation(() => pending.promise)
+    b.uiWorkspace.startSession()
+    expect(gestures).toHaveBeenCalledTimes(2)
+    expect(b.sessions.create).toHaveBeenCalledWith({ workspaceId: wid('alpha') })
+    pending.resolve(sid('started'))
+    await vi.waitFor(() => { expect(b.sessions.open).toHaveBeenLastCalledWith(sid('started')) })
+    expect(gestures).toHaveBeenCalledTimes(2)
+
+    // The disposer removes the listener.
+    off()
+    b.uiWorkspace.openSession(sid('other'))
+    expect(gestures).toHaveBeenCalledTimes(2)
+
+    // The startup auto-connect is navigation policy, not a gesture.
+    const startup = bench()
+    const startupGestures = vi.fn()
+    startup.uiWorkspace.onSessionNavigation(startupGestures)
+    startup.sessions.create.mockResolvedValue(sid('initial'))
+    startup.workspaces.list.set(workspaceState([workspace('recent')]))
+    startup.sessions.list.set(sessionState())
+    await vi.waitFor(() => { expect(startup.sessions.open).toHaveBeenCalledWith(sid('initial')) })
+    expect(startupGestures).not.toHaveBeenCalled()
+  })
+
+  it('drops Session-navigation listeners when its Cordis lifetime is disposed', async () => {
+    const b = bench()
+    const gestures = vi.fn()
+    b.uiWorkspace.onSessionNavigation(gestures)
+    await b.ctx.fiber.dispose()
+    b.uiWorkspace.openSession(sid('row'))
+    expect(gestures).not.toHaveBeenCalled()
+  })
+
   it('opens the recent Workspace after both baselines arrive', async () => {
     const b = bench()
     b.sessions.create.mockResolvedValue(sid('initial'))
@@ -420,6 +469,19 @@ describe('UiWorkspaceService', () => {
     b.workspaces.onArchive = () => Promise.reject(new Error('archive rejected'))
     await expect(b.uiWorkspace.archiveSession(idle)).rejects.toThrow('archive rejected')
     expect(b.workspaces.archiveCalls).toEqual([idle, idle])
+  })
+
+  it('contains a navigation listener failure and still completes New Session navigation', () => {
+    const b = bench()
+    const failure = new Error('listener failed')
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const next = vi.fn()
+    b.uiWorkspace.onSessionNavigation(() => { throw failure })
+    b.uiWorkspace.onSessionNavigation(next)
+    b.uiWorkspace.startSession()
+    expect(next).toHaveBeenCalledOnce()
+    expect(b.sessions.clear).toHaveBeenCalledOnce()
+    expect(warning).toHaveBeenCalledWith('Session navigation listener failed:', failure)
   })
 
   it('passes directory operations to the Host and preserves structured browse failures', async () => {

@@ -2,8 +2,9 @@
  * Saki Web client plugin, browser half: registers the two top-level entries
  * (「工作」「项目」) into the shell's `sidebar.primary.action` list slot and
  * one takeover entry into the `main.surface` chain slot, owns the small
- * navigation store, and drives the Saki Host API client for access, Project
- * index, registration, and Development Workspace reads.
+ * navigation store, hands the center column back to the Conversation on
+ * user-driven Session navigation, and drives the Saki Host API client for
+ * access, Project index, registration, and Development Workspace reads.
  *
  * Composition rules honored here: components are pure props; live business
  * facts arrive through the inject face (plain callbacks plus the reserved
@@ -15,6 +16,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { SakiHostClient } from '@breakfastdapaidang/saki-host-api/client'
 import { createSakiNavigationStore, surfaceTokenOf, type SakiNavigationActionsFace, type SakiSurface } from './navigation.ts'
 import { en, NS, zh, type SakiKey } from './locales.ts'
@@ -36,7 +38,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Services the Saki client plugin requires. */
-export const inject = ['slots', 'layout', 'locale', 'sakiHostClient']
+export const inject = ['slots', 'layout', 'uiWorkspace', 'locale', 'sakiHostClient']
 
 /** Host callbacks the surface components receive through the inject face. */
 export interface SakiHostFace {
@@ -83,12 +85,7 @@ export function apply(ctx: ClientContext): void {
   }
 
   // Nav state → shell surface token: the sidebar entries set the surface; the
-  // shell elects the Saki entry through the main.surface chain. No other
-  // source moves it: a Session becoming current — including the shell's
-  // startup Workspace auto-connect — never evicts an elected Saki page, so
-  // this plugin subscribes to no sessions-layer signal. A gesture-level
-  // hand-back (clicking a Session opens the Conversation) needs a
-  // conversation-side election mechanism that does not exist yet.
+  // shell elects the Saki entry through the main.surface chain.
   ctx.effect(() => {
     const publish = () => { ctx.layout.requestSurface(surfaceTokenOf(navigation.store.getSnapshot())) }
     const unsubscribe = navigation.store.subscribe(publish)
@@ -99,6 +96,19 @@ export function apply(ctx: ClientContext): void {
       ctx.layout.requestSurface(null)
     }
   }, 'saki-web-ui: surface sync')
+
+  // A user-driven Session navigation (sidebar Session row, New Session, fork
+  // open) hands the center column back to the Conversation fallback. The
+  // gesture signal lives on the Workspace navigation face, never the sessions
+  // layer: the shell's startup Workspace auto-connect and the
+  // persisted-selection restore move `sessions.list.current` through the same
+  // elections as a user click, so a list subscription could not tell them
+  // apart — and a restored 项目 page must survive both, mid-registration
+  // included.
+  ctx.effect(
+    () => ctx.uiWorkspace.onSessionNavigation(() => { navigation.actions.clearSurface() }),
+    'saki-web-ui: session navigation hand-back',
+  )
 
   const registerNavEntry = (surface: SakiSurface, id: string, order: number) =>
     ctx.slots.inject('sidebar.primary.action', () =>

@@ -14,9 +14,11 @@ Saki 0.1.0 需要真实 bundle 提供浏览器产品：完成本地 bootstrap �
 
 Saki bundle 在 `cordis.patch.yml` 中组合浏览器栈：DSH 客户端服务注入所需的 Typert registry/loader、API gateway 与 commands；客户端模块系统（`modules`、`api-remotes`）；浏览器服务调用的 Host Remote（`session-controller`、`workspace-controller`、`settings-controller`）及其支撑 provider（`attachment-local`、关闭内容搜索的 `session-query-sqlite`，以及 `agent-default-model`——它命名一个刻意不提供服务的模型路由，使任何实际模型调用都在使用点立即报错）；启动期解析的 `directory-picker` 交互；双端 `file-upload`；壳层花名册（theme、locale、layout、renderer、session、sidebar、settings、conversation、workspace、official brand）；`saki-web-ui` 插件；以及 `saki-web-runtime` 胶水插件——通过 `dsh-host-frontend-static` 在 webserver fallback 座上提供构建好的 `@deepseek-ai/dsh-web-frontend` dist。动态 client/host runner 链被明确排除：动态插件包不属于 0.1.0 的表面范围。
 
-`@breakfastdapaidang/saki-web-ui` 按提案要求保持单一客户端插件。它拥有持久化在 `saki.navigation` localStorage 键下的导航 store（surface、选中与最近 Project id）；只有侧边栏入口能改变 surface，因此 Session 变为当前——包括壳层启动时的 Workspace 自动连接——不会挤走已被选中的 Saki 页面，只有在没有选中任何 Saki surface 时才渲染 Conversation fallback。启动器打印的 URL 携带 DSH 进程启动令牌，其一次性交换会签发绑定 authority 的浏览器会话 cookie，供 `/api` Remote 使用；Saki bootstrap secret 仍然守护每一项 Host 操作。Access 门在被选中的 Saki surface 内渲染，交换启动器打印的 bootstrap secret；登记使用键入的目录路径而非浏览对话框，因为登记要求规范路径加服务端证据确认，选择器集成属于后续打磨切片。workspace 视图渲染已确认 projection，并区分 loading、refreshing、stale、not-found、denied、unavailable 与 offline 状态。控制面的持久 Browser Session 能跨越 Host 重启：持有 cookie 的浏览器不经新交换直接回到持久化地址；无 cookie 的浏览器则必须用重启后新签发的 secret 完成 session-required 交换。
+`@breakfastdapaidang/saki-web-ui` 按提案要求保持单一客户端插件。它拥有持久化在 `saki.navigation` localStorage 键下的导航 store（surface、选中与最近 Project id）；侧边栏入口选中 surface，用户驱动的会话导航将其清除，因此只有在没有选中任何 Saki surface 时才渲染 Conversation fallback。交还订阅的是手势通道而非 sessions 层：`UiWorkspace` face 携带 `openSession`（侧边栏行、搜索结果与 fork 子会话选举的唯一入口）与 `onSessionNavigation`，同步报告 `startSession`/`openSession` 手势——绝不覆盖壳层启动时的 Workspace 自动连接与持久化选中恢复；后两者在 `sessions.list.current` 上与用户点击呈现相同的选举而无法区分，因此已被选中的 Saki 页面（包括登记流程中恢复出的「项目」页）在两者之下都保持不动。启动器打印的 URL 携带 DSH 进程启动令牌，其一次性交换会签发绑定 authority 的浏览器会话 cookie，供 `/api` Remote 使用；Saki bootstrap secret 仍然守护每一项 Host 操作。Access 门在被选中的 Saki surface 内渲染，交换启动器打印的 bootstrap secret；登记使用键入的目录路径而非浏览对话框，因为登记要求规范路径加服务端证据确认，选择器集成属于后续打磨切片。workspace 视图渲染已确认 projection，并区分 loading、refreshing、stale、not-found、denied、unavailable 与 offline 状态。控制面的持久 Browser Session 能跨越 Host 重启：持有 cookie 的浏览器不经新交换直接回到持久化地址；无 cookie 的浏览器则必须用重启后新签发的 secret 完成 session-required 交换。
 
 按决策明确排除：binding 检测、rebind、退役与历史迁移（[#26](https://github.com/BreakfastDaPaiDang/saki/issues/26)）；Project Settings、自动化策略与 budget（K7）；生产模型 adapter（组合的 bundle 已携带 agent 栈，但没有 adapter 时 Conversation 回退的回合保持 idle）。
+
+Web Server 先绑定监听端口，control plane 再从 `ctx.webServer.port` 解析浏览器 Origin。因此端口 `0` 为每个测试进程原子分配监听器，同时保留精确的 Origin 校验。Bootstrap 就绪仍须等待完整的条目激活审计；浏览器测试启动失败时会终止子进程，并等待输出流关闭后才报告失败。
 
 ## Alternatives considered
 
@@ -25,6 +27,8 @@ Saki bundle 在 `cordis.patch.yml` 中组合浏览器栈：DSH 客户端服务�
 **按组件标识选举 surface。** 让登记项在激活时自行渲染会把壳层耦合到条目标识。纯字符串 token 使壳层不含产品类型，回退规则也只是一次比较。
 
 **对挂载前的 `requestSurface` 直接报错。** 插件 apply 顺序是正当组装细节，严格的 face 会迫使每个功能插件感知时序。缓冲单个请求既保住调用方意图，也不引入队列契约。
+
+**从 sessions 层订阅清除 surface。** `sessions.list.current` 的边沿无法区分用户选举与策略：启动时的 Workspace 自动连接何时落地取决于 Host 何时应答其异步 connect，持久化选中恢复则在首个列表拉取时解除 `current` 的遮蔽——两者都没有手势，列表拉取变慢时会在登记流程中途落地。把手势发布在 Workspace 导航 face 上，交还才精确。
 
 **启用动态插件 runner。** 动态加载链是尚未了结的基础设施，提案要求 Saki 走已发布插件路径；静态组合不依赖它即可交付同样页面。
 

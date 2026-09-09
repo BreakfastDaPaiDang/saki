@@ -44,7 +44,7 @@ pnpm run saki
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `SAKI_DATABASE_PATH` | `dshHomePath('saki', 'control.sqlite')` | 精确的无 manifest B03 源路径；它绝不覆盖 manifest，且拒绝 `:memory:` |
-| `SAKI_PORT` | `43119` | 回环 HTTP 端口，必须是 `1` 至 `65535` 的整数 |
+| `SAKI_PORT` | `43119` | 回环 HTTP 端口，取 `0` 至 `65535` 的整数；`0` 由系统分配端口，访问校验使用实际绑定的 Origin |
 | `SAKI_ONESHOT` | 未设置 | 设为 `1` 时打印就绪记录并退出，且不消费 bootstrap 交接值 |
 
 <a id="model-experience"></a>

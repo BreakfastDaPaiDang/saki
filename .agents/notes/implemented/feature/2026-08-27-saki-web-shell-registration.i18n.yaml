@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-27-saki-web-shell-registration.md
-2026-08-27-saki-web-shell-registration.md: 2d9a65bc7d47630feb29eb6b3a5148f8ebe8c608
-2026-08-27-saki-web-shell-registration.zh.md: b470ecfd1dd192068eb33aa7cdace93e8078d8e1
+2026-08-27-saki-web-shell-registration.md: f8b11e6da1242e3218ea9bdb96ce8803737840e1
+2026-08-27-saki-web-shell-registration.zh.md: f22750114971c6c8c7c10b61473e245674acd760

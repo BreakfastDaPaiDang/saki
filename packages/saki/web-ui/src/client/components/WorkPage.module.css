@@ -14,7 +14,7 @@
 .card {
   margin-top: 20px;
   padding: 24px;
-  border: 1px solid var(--dsw-alias-border-l, rgba(255, 255, 255, 0.1));
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-1, transparent);
 }

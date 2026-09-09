@@ -44,7 +44,7 @@ Every non-oneshot start also writes one launcher-handoff JSON line containing `b
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `SAKI_DATABASE_PATH` | `dshHomePath('saki', 'control.sqlite')` | Exact manifest-less B03 source path; it never overrides a manifest and `:memory:` is rejected |
-| `SAKI_PORT` | `43119` | Loopback HTTP port, an integer from `1` through `65535` |
+| `SAKI_PORT` | `43119` | Loopback HTTP port from `0` through `65535`; `0` asks the OS to allocate a port, and access checks use the bound Origin |
 | `SAKI_ONESHOT` | unset | Set to `1` to print readiness and exit without consuming a bootstrap handoff |
 
 ## Model Experience

@@ -13,7 +13,7 @@
   max-height: 80vh;
   overflow-y: auto;
   background: var(--dsw-alias-bg-layer-1, #161b25);
-  border: 1px solid var(--dsw-alias-border-l, rgba(255, 255, 255, 0.12));
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
 }
@@ -23,7 +23,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--dsw-alias-border-l, rgba(255, 255, 255, 0.1));
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .dialogTitle {
@@ -64,7 +64,7 @@
 .input {
   padding: 8px 10px;
   border-radius: 8px;
-  border: 1px solid var(--dsw-alias-border-l, rgba(255, 255, 255, 0.12));
+  border: 0.5px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-base, transparent);
   color: var(--dsw-alias-label-primary);
   font-size: 13px;
@@ -73,7 +73,7 @@
 .evidence {
   margin: 0;
   padding: 14px 16px;
-  border: 1px solid var(--dsw-alias-border-l, rgba(255, 255, 255, 0.1));
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   display: flex;
   flex-direction: column;

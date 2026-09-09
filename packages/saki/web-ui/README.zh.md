@@ -25,7 +25,10 @@ Saki 的 Web 客户端插件。它把「工作」「项目」两个顶层入口�
 
 - `sidebar.primary.action`：`saki-work` 与 `saki-project` 两个条目渲染 New Session 下方的主要入口，并通过 owner 的 `wide` 标志适配收起形态。
 - `main.surface`：一个 chain 条目根据壳层通用 surface token（`saki:work` / `saki:project`）选择接管；未选中时渲染 Conversation fallback，且接管期间 fallback 保持挂载，会话内未提交状态不丢失。
-- 导航 store 通过 `ctx.layout.requestSurface` 发布 surface token。只有侧边栏入口能改变 surface：Session 变为当前时，已被选中的 Saki 页面保持不动——壳层启动时的 Workspace 自动连接不得将其挤走——只有在没有选中任何 Saki surface 时才渲染 Conversation fallback。
+- 导航 store 通过 `ctx.layout.requestSurface` 发布 surface token。Saki 侧边栏入口选中各自 surface；只有在没有选中任何 Saki surface 时才渲染 Conversation fallback。
+- Workspace 导航 face 报告的用户驱动会话导航（`uiWorkspace.onSessionNavigation`：侧边栏 Session 行、New Session 或 fork 打开）会清除 surface，把中央列交还 Conversation；没有手势支撑的选举——壳层启动时的 Workspace 自动连接与持久化选中恢复——不会挤下已选中的页面，因此恢复出的「项目」页在登记流程中也保持不动。
+
+目录变更会使未完成的检查失效。登记 Intent 完成前路径不可编辑；发生冲突后，必须刷新登记表修订号与检查证据才能再次确认。
 
 <a id="model-experience"></a>
 ## 模型体验
@@ -36,11 +39,10 @@ Saki 的 Web 客户端插件。它把「工作」「项目」两个顶层入口�
 
 无；本插件只读取类型化 Projection。
 
-<a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延期工作
+<a id="known-limitations-and-deferred-work"></a>
 
 - **尚无 My Work Projection** ——「工作」页显示明确的不可用状态并指向「项目」；真正的页面随 K2 切片到来。
-- **点击会话不交还中央列** —— 本切片由 Saki 页面拥有 surface：会话变为当前（包括壳层启动时的 Workspace 自动连接）不会挤下已选中的页面；手势级的交还 Conversation 需要尚不存在的 conversation 侧选举机制。
 - **客户端没有推送通道** —— 本切片在导航、刷新与 Intent 后重新查询；`onChanged` 仅在 Host 侧。
 - **目录选择是带校验的路径输入** —— 本切片不组合浏览对话框；后端在登记前重新检查任何提交的路径。
 - **修复与 rebind 在此只读** —— binding 的 `missing` / `repair-required` 状态保持历史可读但不提供修复操作；它们属于 Resource Binding 切片（#26）。

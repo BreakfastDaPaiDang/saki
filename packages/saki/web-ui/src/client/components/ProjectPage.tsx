@@ -5,7 +5,7 @@
  * stale, not-found, repair-required, and blocked states with text-first
  * semantics, and never reads paths or parses Git output itself.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   SakiWireAccessProjection,
@@ -16,7 +16,7 @@ import type {
 import type { SakiInjected } from '../index.ts'
 import type { SakiNavigationActionsFace } from '../navigation.ts'
 import { NS } from '../locales.ts'
-import { displayGitHead } from '../git-head.ts'
+import { GitFactRows } from './GitFactRows.tsx'
 import { RegisterProjectDialog } from './RegisterProjectDialog.tsx'
 import css from './ProjectPage.module.css'
 
@@ -77,13 +77,18 @@ export function ProjectPage(props: ProjectPageProps) {
   const [index, setIndex] = useState<IndexState>({ phase: 'loading' })
   const [registerOpen, setRegisterOpen] = useState(false)
 
-  const loadIndex = useCallback(async () => {
+  const loadIndex = useCallback(async (): Promise<number | undefined> => {
     try {
       const result = await props.queryProjectIndex()
-      if (result.ok) setIndex({ phase: 'ready', projection: result.projection })
-      else setIndex({ phase: result.reason === 'denied' ? 'denied' : 'unavailable' })
+      if (result.ok) {
+        setIndex({ phase: 'ready', projection: result.projection })
+        return result.projection.revision
+      }
+      setIndex({ phase: result.reason === 'denied' ? 'denied' : 'unavailable' })
+      return undefined
     } catch {
       setIndex(current => current.phase === 'ready' ? current : { phase: 'offline' })
+      return undefined
     }
     // The inject face is created once per apply, so the callback is stable.
   }, [props.queryProjectIndex])
@@ -164,6 +169,7 @@ export function ProjectPage(props: ProjectPageProps) {
           requestToken={props.access.requestToken}
           inspectProjectSelection={props.inspectProjectSelection}
           registerDevelopmentProject={props.registerDevelopmentProject}
+          refreshIndex={loadIndex}
           onClose={() => { setRegisterOpen(false) }}
           onRegistered={(projectId) => {
             setRegisterOpen(false)
@@ -194,15 +200,21 @@ function WorkspaceView(props: {
   const [workspace, setWorkspace] = useState<WorkspaceState>({ phase: 'loading' })
 
   const registryRevision = props.index.phase === 'ready' ? props.index.projection.revision : 0
+  // A superseded query (the index arrived and re-fired with the real revision,
+  // or a refresh replaced it) must never overwrite the newer result.
+  const loadGeneration = useRef(0)
   const load = useCallback(async (refreshing: boolean) => {
+    const generation = ++loadGeneration.current
     if (refreshing) {
       setWorkspace(current => current.phase === 'ready' ? { ...current, refreshing: true } : current)
     }
     try {
       const result = await props.queryDevelopmentWorkspace(props.projectId, registryRevision)
+      if (loadGeneration.current !== generation) return
       if (result.ok) setWorkspace({ phase: 'ready', projection: result.projection, refreshing: false })
       else setWorkspace({ phase: result.reason })
     } catch {
+      if (loadGeneration.current !== generation) return
       setWorkspace(current => current.phase === 'ready' ? { ...current, refreshing: false } : { phase: 'offline' })
     }
     // The inject face callback and the project id are stable across renders.
@@ -257,17 +269,11 @@ function WorkspaceView(props: {
 function WorkspaceFacts(props: { workspace: Workspace; refreshing: boolean; t: TranslateNS<typeof NS> }) {
   const { workspace, t } = props
   const binding = workspace.project.binding
-  const head = displayGitHead(binding.head)
   return (
     <div className={css.facts}>
       {props.refreshing ? <p className={css.refreshing} role="status">{t('workspace.refreshing')}</p> : null}
       <dl className={css.factList}>
-        <div className={css.factRow}><dt>{t('workspace.facts.location')}</dt><dd className={css.mono}>{binding.displayLocation}</dd></div>
-        <div className={css.factRow}>
-          <dt>{t('workspace.facts.branch')}</dt>
-          <dd className={css.mono}>{head.detached ? t('workspace.facts.detached') : head.branch}</dd>
-        </div>
-        <div className={css.factRow}><dt>{t('workspace.facts.head')}</dt><dd className={css.mono}>{head.shortHead ?? '—'}</dd></div>
+        <GitFactRows displayLocation={binding.displayLocation} head={binding.head} css={css} t={t} />
         <div className={css.factRow}>
           <dt>{t('workspace.facts.inherited')}</dt>
           <dd>{binding.inheritedChangeEntryCount === 0 ? t('workspace.facts.none') : `${binding.inheritedChangeEntryCount} ${t('workspace.facts.inherited.count')}`}</dd>

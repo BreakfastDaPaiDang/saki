@@ -39,6 +39,7 @@ export interface ILayout {
    * `main.surface` chain entry, and clears it (null) to hand the center
    * column back to the conversation fallback. A request fired before the
    * frame mounts is buffered and flushed when the frame's store attaches.
+   * @param key - the electing entry's surface token, or null for the fallback.
    */
   requestSurface(key: string | null): void
 }
