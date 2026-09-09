@@ -24,8 +24,14 @@ const require = createRequire(import.meta.url)
 const bin = fileURLToPath(new URL('../lib/bin.js', import.meta.url))
 const readyRecord = '{"product":"saki","status":"ready"}'
 
-/** Per-interaction bound; the Host's own Git ceiling is 10 s per command. */
-const STEP_MS = 30_000
+/**
+ * Per-interaction bound. One registration runs two full repository
+ * inspections (dialog + register-time re-verification) plus workspace
+ * creation and projection queries; on a Windows host each bounded Git
+ * command costs on the order of a second to start, so the measured
+ * confirm-to-workspace chain lands near a minute.
+ */
+const STEP_MS = 120_000
 
 interface SakiRun {
   readonly child: ReturnType<typeof spawn>
@@ -247,5 +253,5 @@ describe.skipIf(!runnable)('Saki web registration flow (built bundle, real brows
       await fresh.close()
     }
     expect(pageErrors).toEqual([])
-  }, 300_000)
+  }, 600_000)
 })
