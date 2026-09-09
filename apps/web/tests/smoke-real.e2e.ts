@@ -268,13 +268,13 @@ async function screen(page: Page, name: string): Promise<void> {
 
 /** First column track (px string) of the frame grid. */
 async function firstTrack(page: Page): Promise<string> {
-  return (await page.locator('[class*="frame"]').evaluate(
+  return (await page.locator('[data-rightbar-collapsed]').evaluate(
     el => getComputedStyle(el).gridTemplateColumns)).split(' ')[0]!
 }
 
 /** Last column track (details) as a number of pixels. */
 async function detailsTrack(page: Page): Promise<number> {
-  const cols = await page.locator('[class*="frame"]').evaluate(
+  const cols = await page.locator('[data-rightbar-collapsed]').evaluate(
     el => getComputedStyle(el).gridTemplateColumns)
   return Number(cols.split(' ').pop()!.replace('px', ''))
 }
@@ -714,6 +714,9 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || notReady.length > 0)('web smoke
     page = await newEnglishPage(browser)
     page.on('pageerror', e => pageErrors.push(String(e)))
     await page.goto(baseUrl, { waitUntil: 'load' })
+    const notice = page.getByRole('dialog', { name: 'Internal Testing Notice' })
+    await notice.getByRole('button', { name: 'Continue', exact: true }).click()
+    await notice.waitFor({ state: 'detached' })
   }, 120_000)
 
   afterAll(async () => {
@@ -731,7 +734,7 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || notReady.length > 0)('web smoke
     onTestFailed(() => saveFailureShot(page, 'w5-cold-start'))
     await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
     expect(await page.locator('text=Failed to load plugins').count()).toBe(0)
-    const template = await page.locator('[class*="frame"]').evaluate(el => getComputedStyle(el).gridTemplateColumns)
+    const template = await page.locator('[data-rightbar-collapsed]').evaluate(el => getComputedStyle(el).gridTemplateColumns)
     expect(template.split(' ').length).toBe(3)
     await screen(page, '01-cold-start')
   })
@@ -739,8 +742,8 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || notReady.length > 0)('web smoke
   it('empty-state first send completes a real model round', async () => {
     onTestFailed(() => saveFailureShot(page, 'w5-first-round'))
     // This scenario spawns its own server against a fresh $DSH_HOME with the
-    // DeepSeek credential inherited from the environment, so no onboarding
-    // step mounts and the page is immediately interactive.
+    // DeepSeek credential inherited from the environment; setup acknowledges
+    // the versioned notice before the scenario uses the Workspace controls.
     // Fresh world: connect a Workspace so the composer starts live.
     await connectFreshWorkspace(page, sessionsDir)
     const input = page.locator('[data-composer-input]').first()
