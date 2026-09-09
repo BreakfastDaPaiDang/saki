@@ -523,7 +523,7 @@ describe('Node 24 lane ownership', () => {
     const subject = withPnpmEntrypoint(() => gatesForMode('ci-consumers'))
 
     expect(defaultConcurrency('ci-consumers', subject.length, 4)).toEqual({
-      workers: 11,
+      workers: 12,
       source: 'ci-consumers gate count',
     })
     expect(subject.map(item => item.id)).toEqual([
@@ -538,6 +538,7 @@ describe('Node 24 lane ownership', () => {
       'doc-typecheck',
       'node-next-types',
       'built-bin-smoke',
+      'saki-web-registration',
     ])
     expect(subject.find(item => item.id === 'publint')?.needs).toEqual(['build'])
     expect(subject.find(item => item.id === 'build')?.env).toEqual({
@@ -555,6 +556,7 @@ describe('Node 24 lane ownership', () => {
       'doc-typecheck',
       'node-next-types',
       'built-bin-smoke',
+      'saki-web-registration',
     ]) {
       expect(subject.find(item => item.id === id)?.needs).toEqual(['built-package-invariants'])
     }
@@ -584,8 +586,12 @@ describe('Node 24 lane ownership', () => {
         'doc-typecheck',
         'node-next-types',
         'built-bin-smoke',
+        'saki-web-registration',
       ],
     })
+    expect(subject.find(item => item.id === 'saki-web-registration')?.args).toEqual(
+      expect.arrayContaining(['packages/saki/bundle/tests/web-registration.e2e.ts', '--retry=0']),
+    )
   })
 })
 

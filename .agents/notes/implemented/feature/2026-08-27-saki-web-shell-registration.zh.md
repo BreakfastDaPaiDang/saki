@@ -36,6 +36,8 @@ Web Server 先绑定监听端口，control plane 再从 `ctx.webServer.port` 解
 
 ## Consequences
 
+Linux 的 `ci-consumers` 执行图在构建产物不变式检查后运行此浏览器测试，HMR Web 测试则等待 Saki 测试释放共享产物后再启动。
+
 bundle 通过 `node packages/saki/bundle/lib/bin.js` 启动为可用的浏览器产品；`pnpm run saki` 从源码提供同一界面。产品级证据是 `packages/saki/bundle/tests/web-registration.e2e.ts`：它在随机端口、全新 Installation 上启动构建产物，驱动 Chromium 完成 bootstrap、两次登记、一次必须完成的重复登记、reload 地址还原、持久会话存活的重启，以及无 cookie 的重新认证；每个交互都有上界，服务端停滞会让对应步骤失败而不是挂住。该 e2e 的存在也源于一次教训：早先的手工验证曾把占用固定调试端口的残留进程误判为服务端挂起；harness 规则（随机端口、全新 home、有界等待、强制拆除）把这类伪证据挡在门外。它的步骤预算按 Windows Git 启动成本设定：一次登记要跑两轮完整检查外加 workspace 创建，而在该平台上每条有界命令的启动开销约为秒级，因此确认到 workspace 可见的链路在那里实测接近一分钟。
 
 壳层增量是可累加且通用的，后续 DSH 特性无需了解 Saki 即可复用这两个 slot。组合的 bundle 已携带 Conversation 回退背后的 agent 栈；在没有生产模型 adapter 时其回合保持 idle，如 bundle README 所记。「工作」页在其 projection seam 落地前，以诚实的不可用占位形式发布。

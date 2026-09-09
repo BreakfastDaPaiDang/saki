@@ -36,6 +36,8 @@ The Web Server binds before the control plane resolves its browser Origin from `
 
 ## Consequences
 
+The Linux `ci-consumers` graph runs this browser test after the built-package invariant gate, and its HMR Web suite waits for the Saki test to release the shared artifacts.
+
 The bundle boots to a working browser product with `node packages/saki/bundle/lib/bin.js`; `pnpm run saki` serves the same surface from source. The product-level proof is `packages/saki/bundle/tests/web-registration.e2e.ts`: it boots the built bundle on a random port with a fresh Installation, drives Chromium through bootstrap, two registrations, a repeat registration that must settle, reload address restore, a restart that the durable session survives, and a cookie-less re-authentication, with every interaction bounded so a server stall fails the step. The e2e exists because an earlier manual pass mistook a stale process squatting the fixed debug port for a server hang; the harness rules (random ports, fresh homes, bounded waits, forced teardown) keep that class of false evidence out. Its step budget is sized for Windows Git startup: one registration runs two full inspections plus workspace creation, and each bounded command costs on the order of a second to start there, so the confirm-to-workspace chain measures near a minute on that platform.
 
 The shell increments are additive and generic, so future DSH features can take the same slots without Saki knowledge. The composed bundle carries the agent stack behind the Conversation fallback; without a production model adapter its turns stay idle, as the bundle README records. The 工作 page ships as an honest unavailable placeholder until its projection seam lands.
