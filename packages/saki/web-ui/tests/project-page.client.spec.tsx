@@ -242,7 +242,10 @@ describe('ProjectPage — Development Workspace', () => {
     const workspaceRead = deferred<unknown>()
     face.queryProjectIndex.mockReturnValue(indexRead.promise)
     face.queryDevelopmentWorkspace.mockReturnValue(workspaceRead.promise)
-    render(<ProjectPage {...props} />)
+    const openBoard = vi.fn()
+    render(<ProjectPage {...props} openBoard={openBoard} />)
+    fireEvent.click(screen.getByRole('button', { name: '看板' }))
+    expect(openBoard).toHaveBeenCalledOnce()
     await waitFor(() => { expect(face.queryDevelopmentWorkspace).toHaveBeenCalledWith(PROJECT_A, 0) })
     // Until the facts arrive, the heading falls back to the selected id.
     expect(screen.getByRole('heading', { name: PROJECT_A })).toBeTruthy()

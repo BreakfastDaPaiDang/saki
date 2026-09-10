@@ -12,7 +12,9 @@ import { useSyncExternalStore } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SakiWireAccessProjection } from '@breakfastdapaidang/saki-host-api/wire'
 import { SakiSurfaceRoot } from '../src/client/components/SurfaceRoot.tsx'
-import { planningFixture } from './planning-fixture.client.ts'
+import * as ProjectPageModule from '../src/client/components/ProjectPage.tsx'
+import * as PlanningPageModule from '../src/client/components/PlanningPage.tsx'
+import { planningFixture, PROJECT_ID } from './planning-fixture.client.ts'
 import type { PlanningController } from '../src/client/planning-controller.ts'
 import { zh, NS } from '../src/client/locales.ts'
 
@@ -65,10 +67,35 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
     t,
   } as unknown as Parameters<typeof SakiSurfaceRoot>[0]
   controller.start()
-  return { navigation, face, props }
+  return { navigation, face, props, controller }
 }
 
 describe('SakiSurfaceRoot', () => {
+  it('opens the registered workspace and returns between the Board and workspace destinations', async () => {
+    const projectPage = vi.spyOn(ProjectPageModule, 'ProjectPage').mockImplementation(props => <>
+      <button onClick={() => { props.nav.selectProject(PROJECT_ID); props.showRegisteredWorkspace?.() }}>registered</button>
+      <button onClick={props.openBoard}>board</button>
+    </>)
+    const planningPage = vi.spyOn(PlanningPageModule, 'PlanningPage').mockImplementation(props =>
+      <button onClick={() => { props.actions.navigate({ view: 'workspace' }) }}>workspace</button>)
+    try {
+      const { props, controller } = bench(() => Promise.resolve(AUTHENTICATED), { page: 'project' })
+      render(<SakiSurfaceRoot {...props} />)
+      await screen.findByRole('button', { name: 'registered' })
+      fireEvent.click(screen.getByRole('button', { name: 'registered' }))
+      expect(controller.getSnapshot().project?.address.view).toBe('workspace')
+      fireEvent.click(screen.getByRole('button', { name: 'board' }))
+      await screen.findByRole('button', { name: 'workspace' })
+      expect(controller.getSnapshot().project?.address.view).toBe('board')
+      fireEvent.click(screen.getByRole('button', { name: 'workspace' }))
+      await screen.findByRole('button', { name: 'registered' })
+      expect(controller.getSnapshot().project?.address.view).toBe('workspace')
+    } finally {
+      cleanup()
+      projectPage.mockRestore()
+      planningPage.mockRestore()
+    }
+  })
   it('shows the loading hint while the first access read is in flight, then the bootstrap gate', async () => {
     const read = deferred<SakiWireAccessProjection>()
     const { props } = bench(() => read.promise, { page: 'work' })

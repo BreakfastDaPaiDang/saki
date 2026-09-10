@@ -44,6 +44,7 @@ async function bench() {
   // recorded listeners replays a user Session-navigation gesture.
   const navigationListeners = new Set<() => void>()
   const uiWorkspace = {
+    openSession: vi.fn(),
     onSessionNavigation: vi.fn((listener: () => void) => {
       navigationListeners.add(listener)
       return () => { navigationListeners.delete(listener) }
@@ -210,7 +211,7 @@ describe('saki-web-ui apply', () => {
   })
 
   it('delegates every surface-face read to the host client with the exact arguments', async () => {
-    const { ctx, slots, layout, hostClient } = await bench()
+    const { ctx, slots, layout, hostClient, uiWorkspace } = await bench()
     await ctx.plugin({ inject: [...inject], apply }).await()
     const face = (slots.entries('main.surface')[0]!.inject as () => {
       readAccess: (signal?: AbortSignal) => unknown
@@ -219,6 +220,7 @@ describe('saki-web-ui apply', () => {
       inspectProjectSelection: (hostId: string, directoryLocator: string, signal?: AbortSignal) => unknown
       queryDevelopmentWorkspace: (projectId: string, expectedRegistryRevision: number, signal?: AbortSignal) => unknown
       registerDevelopmentProject: (intent: unknown, requestToken: string, signal?: AbortSignal) => unknown
+      openSession: (id: string) => void
       nav: { showWork: () => void }
     })()
     const signal = new AbortController().signal
@@ -235,6 +237,11 @@ describe('saki-web-ui apply', () => {
     const intent = { type: 'register-development-project' }
     face.registerDevelopmentProject(intent, 'token-1', signal)
     expect(hostClient.registerDevelopmentProject).toHaveBeenCalledWith(intent, 'token-1', signal)
+    face.openSession('session-1')
+    expect(uiWorkspace.openSession).toHaveBeenCalledWith('session-1')
+    hostClient.readAccess.mockClear()
+    ctx.emit('connection/reset')
+    expect(hostClient.readAccess).toHaveBeenCalledOnce()
     // The face's nav is the shared navigation instance wired to the shell sync.
     face.nav.showWork()
     expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
