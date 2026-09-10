@@ -395,19 +395,19 @@ export async function startSaki(
  * @param port - Saki Host loopback port.
  * @param endpoint - logical `/saki` RPC endpoint.
  * @param payload - endpoint payload.
- * @param options - authenticated cookie and request token when required.
+ * @param options - authenticated cookie, request token, and optional caller-owned HTTP deadline.
  * @returns raw response and successful business result.
  */
 export async function rpc(
   port: number,
   endpoint: string,
   payload: unknown,
-  options: { readonly cookie?: string; readonly requestToken?: string } = {},
+  options: { readonly cookie?: string; readonly requestToken?: string; readonly timeoutMs?: number } = {},
 ): Promise<{ readonly response: Response; readonly value: unknown }> {
   const origin = `http://127.0.0.1:${String(port)}`
   const response = await fetch(`${origin}/saki/${endpoint}`, {
     method: 'POST',
-    signal: AbortSignal.timeout(SNAPSHOT_RPC_TIMEOUT_MS),
+    signal: AbortSignal.timeout(options.timeoutMs ?? SNAPSHOT_RPC_TIMEOUT_MS),
     headers: {
       'content-type': 'application/json',
       origin,
@@ -420,6 +420,8 @@ export async function rpc(
       method: endpoint,
       payload,
     }),
+  }).catch((cause: unknown) => {
+    throw new Error(`Saki snapshot RPC ${endpoint} did not return a response`, { cause })
   })
   expect(response.status).toBe(200)
   const envelope = await response.json() as { result: { ok: boolean; value?: unknown } }
@@ -500,12 +502,14 @@ export async function dropRpcResponse(
  * @param port - Saki Host loopback port.
  * @param bootstrapSecret - one-use launcher secret.
  * @param repository - isolated Git repository to register.
+ * @param options - optional HTTP deadline for each initialization request.
  * @returns access, inspection, Intent, and confirmed registration values.
  */
 export async function registerSnapshotProject(
   port: number,
   bootstrapSecret: string | undefined,
   repository: string,
+  options: { readonly timeoutMs?: number } = {},
 ): Promise<{
   readonly initial: Awaited<ReturnType<typeof rpc>>
   readonly exchangeValue: {
@@ -541,15 +545,15 @@ export async function registerSnapshotProject(
     }
   }
 }> {
-  const initial = await rpc(port, 'access/read', {})
-  const exchange = await rpc(port, 'access/exchange', { secret: bootstrapSecret })
+  const initial = await rpc(port, 'access/read', {}, options)
+  const exchange = await rpc(port, 'access/exchange', { secret: bootstrapSecret }, options)
   const exchangeValue = exchange.value as {
     readonly ok: true
     readonly access: { readonly kind: 'authenticated'; readonly requestToken: string }
   }
   const cookie = exchange.response.headers.get('set-cookie')?.split(';', 1)[0]
   if (cookie === undefined) throw new Error('Saki snapshot exchange returned no session cookie')
-  const query = await rpc(port, 'control/query', { type: 'project-index' }, { cookie })
+  const query = await rpc(port, 'control/query', { type: 'project-index' }, { ...options, cookie })
   const initialIndex = query.value as {
     readonly ok: true
     readonly projection: { readonly revision: number; readonly hosts: [{ readonly id: string }]; readonly projects: [] }
@@ -559,7 +563,7 @@ export async function registerSnapshotProject(
     type: 'inspect-project-selection',
     hostId,
     directoryLocator: repository,
-  }, { cookie })
+  }, { ...options, cookie })
   expect(inspected.value, 'Saki project-selection result').toMatchObject({
     ok: true,
     projection: { result: { ok: true } },
@@ -580,7 +584,7 @@ export async function registerSnapshotProject(
     port,
     'control/submit',
     registrationIntent,
-    { cookie, requestToken: exchangeValue.access.requestToken },
+    { ...options, cookie, requestToken: exchangeValue.access.requestToken },
   )
   const confirmed = registration.value as {
     readonly ok: true
