@@ -890,6 +890,18 @@ export type SakiMyWorkGroup =
   | 'waiting-for-operator'
   | 'recently-finished'
 
+/** Browser-safe execution choices shown before the operator authorizes a manual run. */
+export interface SakiAgentLaunchSummary {
+  readonly profileId: SakiAgentProfileId
+  readonly profileVersion: number
+  readonly provider: string
+  readonly model: string
+  readonly bindingId: SakiResourceBindingId
+  readonly bindingRevision: number
+  readonly displayLocation: string
+  readonly inheritedChangeEntryCount: number
+}
+
 /** At most one currently eligible next action projected for a My Work item. */
 export type SakiActionOffer =
   | {
@@ -899,6 +911,7 @@ export type SakiActionOffer =
     readonly expectedProjectRevision: number
     readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint
     readonly reason: string
+    readonly launch: SakiAgentLaunchSummary
   }
   | {
     readonly type: 'answer-intervention'

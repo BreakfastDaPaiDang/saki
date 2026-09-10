@@ -10,7 +10,7 @@ Saki 必须在一个 Web 产品中呈现本地 Git、GitHub 权威、Agent execu
 
 ## 提案
 
-已实现的[壳层登记](../../implemented/feature/2026-08-27-saki-web-shell-registration.zh.md)与[已确认规划视图](../../implemented/feature/2026-09-10-saki-confirmed-planning-views.zh.md)拥有各自已交付机制。本提案保留更广泛的 Work、Settings、执行与集成范围。
+已实现的[壳层登记](../../implemented/feature/2026-08-27-saki-web-shell-registration.zh.md)、[已确认规划视图](../../implemented/feature/2026-09-10-saki-confirmed-planning-views.zh.md)与[手动 Work 交互](../../implemented/feature/2026-09-10-saki-manual-work-interactions.zh.md)拥有各自已落地机制。本提案保留自动 Work、Settings、执行与更广泛集成范围。
 
 `packages/saki/web-ui` 在 0.1.0 中保持为一个 DSH 客户端 plugin，并遵循已发布的客户端 Cordis、slot、不可变 snapshot 与 React projection 架构。它通过 `SakiAccess` 执行 Access、bootstrap 与 logout，再通过 `saki-host-api` 消费完整受保护 Saki Projection 并提交 Control Intent；任何 component 都不直接调用 GitHub、Git、filesystem、credential 或 provider。`onChanged` 与 Host frame 使读模型失效，重连则重建它们。
 

@@ -177,6 +177,7 @@ export type {
   SakiAgentProfileId,
   SakiAccessLogoutResult,
   SakiAgentRunProjection,
+  SakiAgentLaunchSummary,
   SakiAuthenticatedAccessProjection,
   SakiBootstrapChallengeId,
   SakiBuildId,

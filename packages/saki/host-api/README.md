@@ -44,7 +44,7 @@ The private dual-face Saki Host API adapts the control plane to the shared Conne
 | `control/query` | `{ type: 'work-item-view', projectId, workItemId }` | Current targeted-confirmed Work Item, independently read Issue body, execution and delivery evidence, and recent activity references |
 | `control/query` | `{ type: 'project-milestones', projectId, after: null \| milestoneId }` | Up to 32 configured Milestone destinations and the next cursor |
 | `control/query` | `{ type: 'project-mapping', projectId }` | Complete existing GitHub fields, configuration revision, and current mapping-edit permission |
-| `control/query` | `{ type: 'my-work' }` | Complete current-Principal My Work Projection, or typed denied/unavailable result |
+| `control/query` | `{ type: 'my-work' }` | Complete current-Principal My Work Projection with safe manual launch summaries, or typed denied/unavailable result |
 | `control/query` | `{ type: 'attention' }` | Complete current-Principal derived Attention Projection, or typed denied/unavailable result |
 | `control/query` | `{ type: 'branch-delivery', projectId, workItemId, refresh: 'cached' \| 'interactive' }` | Browser-safe exact-Commit delivery and targeted source evidence, or typed rejection |
 | `control/query` | `{ type: 'milestone-view', projectId, milestoneId, refresh: 'cached' \| 'interactive' }` | Browser-safe Milestone phase, exact scope, and targeted release-source evidence, or typed rejection |

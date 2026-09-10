@@ -304,6 +304,15 @@ async function transcript(): Promise<string> {
     if (!projectIndex.ok) throw new Error(`Saki Agent Run snapshot project index failed: ${projectIndex.reason}`)
     const project = projectIndex.projection.projects.find(candidate => candidate.id === registration.receipt.projectId)
     if (project === undefined) throw new Error('Saki Agent Run snapshot lost its registered Project')
+    const myWork = await queryMyWork(port, cookie)
+    const recommendationBeforeRun = myWork.ok
+      ? myWork.projection.items.find(item => item.workItem.id === workItem.id)?.recommendation
+      : undefined
+    if (recommendationBeforeRun?.available !== true || recommendationBeforeRun.offer.type !== 'give-work-item-to-agent') {
+      throw new Error('Saki Agent Run snapshot has no manual launch offer')
+    }
+    const launch = recommendationBeforeRun.offer.launch
+    expect(launch.bindingId).toBe(project.binding.id)
 
     const intent = {
       type: 'give-work-item-to-agent',
@@ -461,6 +470,12 @@ async function transcript(): Promise<string> {
       {
         step: 'manual-agent-run',
         result: {
+          launch: {
+            profileId: normalizeAgentValue(launch.profileId, project.id), profileVersion: launch.profileVersion,
+            provider: launch.provider, model: launch.model, bindingMatchesProject: true,
+            bindingRevision: launch.bindingRevision, displayLocation: launch.displayLocation,
+            inheritedChangeEntryCount: launch.inheritedChangeEntryCount,
+          },
           receipt: normalizeAgentValue(given.receipt, project.id),
           modelRequests: firstSummary.modelRequests,
           providerMutation: {

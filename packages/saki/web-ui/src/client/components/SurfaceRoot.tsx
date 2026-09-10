@@ -25,6 +25,7 @@ export type SurfaceRootProps =
  */
 export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeof NS> }) {
   const state = props.usePlanning(snapshot => snapshot)
+  const work = props.useWork(snapshot => snapshot)
   const access = state.access
   const projectId = props.useNavigation(snapshot => snapshot.projectId)
   if (access === null || access === 'unavailable' || access.kind !== 'authenticated') {
@@ -32,7 +33,9 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
       t={props.t} exchange={props.exchangeBootstrap} />
   }
   if (props.matched.page === 'work') {
-    return <WorkPage openProject={() => { props.nav.showProject() }} t={props.t} />
+    return <WorkPage state={work} actions={props.work} openProject={() => { props.nav.showProject() }}
+      openBoard={(id) => { props.nav.selectProject(id); props.planning.navigate({ view: 'board' }) }}
+      openItem={(projectId, id) => { props.nav.selectProject(projectId); props.planning.openItem(id) }} t={props.t} />
   }
   if (state.project !== null && state.project.address.view !== 'workspace') {
     return <PlanningPage project={state.project} offline={state.offline} actions={props.planning}

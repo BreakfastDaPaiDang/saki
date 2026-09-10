@@ -95,6 +95,11 @@ class ControllableFakeLlm extends LlmAdapter {
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return
     }
+    if (process.env.SAKI_WORK_BROWSER_FIXTURE === '1' && interventionAnswer !== undefined) {
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'text-delta', index: 0, text: 'The existing repository changes are preserved. The requirement is ready for human inspection.' }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'The existing repository changes are preserved. The requirement is ready for human inspection.' } }
+    }
     yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } }
     yield { type: 'finish', reason: { kind: 'stop' } }
   }

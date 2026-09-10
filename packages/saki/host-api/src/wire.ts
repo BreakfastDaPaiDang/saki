@@ -1735,7 +1735,7 @@ const sakiReturnAddressSchema = z.discriminatedUnion('kind', [
   agentRunReturnAddressSchema,
 ])
 
-const interventionProjectionSchema = z.object({
+const interventionProjectionBase = z.object({
   id: interventionId,
   revision,
   kind: z.literal('text-input'),
@@ -1745,11 +1745,18 @@ const interventionProjectionSchema = z.object({
   createdAt: safeInteger,
   updatedAt: safeInteger,
   returnAddress: agentRunReturnAddressSchema,
-}).strict().superRefine((value, context) => {
+}).strict()
+
+function validateInterventionTimestamps(value: { createdAt: number; updatedAt: number }, context: z.RefinementCtx): void {
   if (value.updatedAt < value.createdAt) {
     context.addIssue({ code: 'custom', message: 'Intervention timestamps are not monotonic' })
   }
-})
+}
+
+const interventionProjectionSchema = interventionProjectionBase.superRefine(validateInterventionTimestamps)
+const planningInterventionProjectionSchema = interventionProjectionBase.extend({
+  state: z.enum(['open', 'answered', 'resolved', 'reconciliation-required']),
+}).superRefine(validateInterventionTimestamps)
 
 const actionOfferSchema = z.discriminatedUnion('type', [
   z.object({
@@ -1759,6 +1766,12 @@ const actionOfferSchema = z.discriminatedUnion('type', [
     expectedProjectRevision: revision,
     expectedRemoteFingerprint: boardRemoteFingerprint,
     reason: safeAgentDisplayText(200),
+    launch: z.object({
+      profileId: sakiAgentProfileIdSchema, profileVersion: z.number().int().positive(),
+      provider: safeAgentDisplayText(200), model: safeAgentDisplayText(200),
+      bindingId, bindingRevision: revision,
+      displayLocation, inheritedChangeEntryCount: z.number().int().nonnegative(),
+    }).strict(),
   }).strict(),
   z.object({
     type: z.literal('answer-intervention'),
@@ -2692,7 +2705,7 @@ export const sakiWorkItemViewResultSchema: z.ZodType<SakiQueryResult<'work-item-
       state: z.enum(['allocated', 'starting', 'running', 'waiting', 'resume-pending', 'canceled', 'reconciliation-required']),
       createdAt: timestamp, updatedAt: timestamp,
     }).strict()),
-    interventions: z.array(interventionProjectionSchema), milestones: z.array(planningMilestoneSchema),
+    interventions: z.array(planningInterventionProjectionSchema), milestones: z.array(planningMilestoneSchema),
     branchDelivery: branchDeliveryViewSchema.nullable(),
     activity: z.array(z.object({ intentId, type: z.enum(['create-work-item', 'move-work-item']), state: z.enum(['prepared', 'running', 'partial-failure', 'succeeded', 'conflict', 'reconciliation-required', 'canceled']), createdAt: timestamp, updatedAt: timestamp }).strict()).max(32),
     earlierActivity: z.boolean(),

@@ -1497,7 +1497,15 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     }
     const binding = this.projects.currentActiveBinding(project.id)
     if (typeof binding === 'string') return { available: false, reason: 'binding-unavailable' }
-    return { available: true }
+    const resource = registry.resourceBindings.find(candidate => candidate.id === project.resourceBindingId)
+    assert(resource !== undefined, 'An active Project binding must have a Registry resource')
+    const selection = resource.currentInspection?.projection ?? resource.registrationInspection.projection
+    return { available: true, launch: {
+      profileId: profile.id, profileVersion: profile.version,
+      provider: profile.modelRouteRequest.provider, model: profile.modelRouteRequest.model,
+      bindingId: resource.id, bindingRevision: resource.revision,
+      displayLocation: selection.displayLocation, inheritedChangeEntryCount: selection.inheritedChangeEntryCount,
+    } }
   }
 
   /** @inheritdoc */

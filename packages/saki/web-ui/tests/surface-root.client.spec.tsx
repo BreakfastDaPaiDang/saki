@@ -14,11 +14,11 @@ import type { SakiWireAccessProjection } from '@breakfastdapaidang/saki-host-api
 import { SakiSurfaceRoot } from '../src/client/components/SurfaceRoot.tsx'
 import * as ProjectPageModule from '../src/client/components/ProjectPage.tsx'
 import * as PlanningPageModule from '../src/client/components/PlanningPage.tsx'
+import { workFixture } from './work-fixture.client.ts'
 import { planningFixture, PROJECT_ID } from './planning-fixture.client.ts'
-import type { PlanningController } from '../src/client/planning-controller.ts'
 import { zh, NS } from '../src/client/locales.ts'
 
-const controllers = new Set<PlanningController>()
+const controllers = new Set<{ dispose: () => void }>()
 afterEach(() => { cleanup(); for (const controller of controllers) controller.dispose(); controllers.clear() })
 beforeEach(() => { localStorage.clear() })
 
@@ -54,12 +54,17 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
     queryDevelopmentWorkspace: vi.fn(),
     registerDevelopmentProject: vi.fn(),
   }
+  const work = workFixture().controller
+  controllers.add(work)
   const props = {
     matched,
     ...face,
     nav: navigation.actions,
     useNavigation,
     planning: controller,
+    work,
+    useWork: (select: (state: ReturnType<typeof work.getSnapshot>) => unknown) =>
+      select(useSyncExternalStore(work.subscribe, work.getSnapshot)),
     openSession: vi.fn(),
     exchangeBootstrap: controller.exchangeBootstrap,
     usePlanning: (select: (state: ReturnType<typeof controller.getSnapshot>) => unknown) =>
@@ -169,4 +174,21 @@ describe('SakiSurfaceRoot', () => {
     secondRender.unmount()
     await act(async () => { failed.reject(new Error('down')) })
   })
+})
+
+it('routes Work cards to their Project Board and Work Item through the shared navigation', async () => {
+  const workPage = await import('../src/client/components/WorkPage.tsx')
+  const mock = vi.spyOn(workPage, 'WorkPage').mockImplementation(props => <>
+    <button onClick={() => { props.openBoard(PROJECT_ID) }}>work-board</button>
+    <button onClick={() => { props.openItem(PROJECT_ID, 'work-item-1111111111111111111111111111111111111111111111111111111111111111' as Parameters<typeof props.openItem>[1]) }}>work-detail</button>
+  </>)
+  try {
+    const { props, navigation, controller } = bench(() => Promise.resolve(AUTHENTICATED), { page: 'work' })
+    render(<SakiSurfaceRoot {...props} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'work-board' }))
+    expect(navigation.store.getSnapshot().projectId).toBe(PROJECT_ID)
+    expect(controller.getSnapshot().project?.address.view).toBe('board')
+    fireEvent.click(screen.getByRole('button', { name: 'work-detail' }))
+    expect(controller.getSnapshot().project?.address.view).toBe('detail')
+  } finally { mock.mockRestore() }
 })

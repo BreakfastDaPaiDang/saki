@@ -14,6 +14,7 @@ kind: "package-reference"
 ## 目录
 
 - [使用本包](#use-this-package)
+- [管理我的工作](#manage-my-work)
 - [规划 Project](#plan-a-project)
 - [模型体验](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
@@ -31,6 +32,15 @@ kind: "package-reference"
 
 目录变更会使未完成的检查失效。登记 Intent 完成前路径不可编辑；发生冲突后，必须刷新登记表修订号与检查证据才能再次确认。
 
+<a id="manage-my-work"></a>
+## 管理我的工作
+
+「工作」页展示后端给出的跨 Project 分组，每张卡片只显示一项建议操作。选择 Project，填写标题、预期结果与验收标准，即可创建 GitHub Issue 并加入 Inbox。在 Board 中规划 Inbox 工作项；Ready 建议会出现在 My Work。表单使用该 Project 的当前修订号及 Board 映射修订号；一个 Project 不可用不会隐藏其他 Project 及其可读工作。
+
+Give to Agent 要求用户明确确认投影中的 Agent Profile、模型路由、binding 显示标签与继承变更数量。提交时重新检查显示的 Project 修订号和 Issue 指纹。按显示的修订号回答待处理 Intervention，再打开 Work Item 查看执行与交付证据，或返回其继承 Session。这些手动操作不会自动领取 Ready 工作，也不会自动标记 Done。
+
+需求草稿、回答文本与已提交的原始 Intent 按认证 Principal 持久保存。响应丢失后保留原始 payload；「查询或继续原请求」使用当前请求权限发送同一个 Intent。部分创建保留已知 Work Item 与后端给出的恢复操作。需要对账的结果仍可检查，不能关闭后转为重复创建。关闭成功创建的结果会清除对应已提交草稿。Principal 变化会取消旧读取，并隐藏其事实与输入。
+
 <a id="plan-a-project"></a>
 ## 规划 Project
 
@@ -45,16 +55,16 @@ Status 映射无效时，看板写入不可用。授权用户可在状态映射�
 <a id="model-experience"></a>
 ## 模型体验
 
-无——本插件不注册任何模型可见输入，也不发起提供方请求。
+通过已确认的 Give-to-Agent 与 Intervention-answer Intent 间接影响模型；相应持久 Session 输入、模型路由与执行由 Agent runtime 拥有。
 
 #### KV Cache 影响
 
-无；本插件只读取类型化 Projection。
+Session 输入与 KV-cache 影响遵循所属 Agent runtime 的行为。读取和刷新「工作」或「项目」视图不会添加模型输入。
 
 ## 已知限制与延期工作
 <a id="known-limitations-and-deferred-work"></a>
 
-- **尚无 My Work Projection** ——「工作」页显示明确的不可用状态并指向「项目」；真正的页面随 K2 切片到来。
+- **仅支持手动 Work** ——自动领取、预算暂停与自动完成仍属独立工作流。默认 bundle 不含生产模型适配器，Agent 执行需要已配置且可用的模型路由。
 - **仅列出已配置 Milestone** —— Milestone 目的地列出现有 Saki delivery 记录；创建 Milestone 或 Release 元数据由其所属工作流负责。
 - **目录选择是带校验的路径输入** —— 本切片不组合浏览对话框；后端在登记前重新检查任何提交的路径。
 - **修复与 rebind 在此只读** —— binding 的 `missing` / `repair-required` 状态保持历史可读但不提供修复操作；它们属于 Resource Binding 切片（#26）。
