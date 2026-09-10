@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -46,6 +46,7 @@ import {
   validateV2Database,
 } from '../src/schema.ts'
 import type { SqliteSchemaEffects } from '../src/schema.ts'
+import * as SqliteSchema from '../src/schema.ts'
 
 /** Mirror the loader: resolve schemastery defaults before construction. */
 function backendAt(
@@ -551,11 +552,20 @@ describe('sqlite backend specifics', () => {
         return bindMethod(Reflect.get(target, property, target) as unknown, target)
       },
     })
+    const frozenDirectories: string[] = []
+    const readDatabase = SqliteSchema.openExistingDatabaseReadonly
+    const ownedEffects = schemaEffects({
+      createDatabase: (databasePath, options) => {
+        frozenDirectories.push(dirname(databasePath))
+        return TEST_SCHEMA_EFFECTS.createDatabase(databasePath, options)
+      },
+    })
+    const trackedRead = vi.spyOn(SqliteSchema, 'openExistingDatabaseReadonly')
+      .mockImplementation((candidate, signal, effects) =>
+        readDatabase(candidate, signal, candidate === path ? ownedEffects : effects))
+    onTestFinished(() => { trackedRead.mockRestore() })
     const acquired = await internalBackend.acquireClosedRead(countingSignal)
     await acquired.release()
-    const frozenDirectoriesBeforeCancellation = (await readdir(tmpdir()))
-      .filter(name => name.startsWith('dsh-storage-sqlite-read-'))
-      .sort()
 
     const cancelled = new Error('cancelled after frozen view acquisition')
     let currentCheck = 0
@@ -572,9 +582,8 @@ describe('sqlite backend specifics', () => {
     })
     try {
       await expect(internalBackend.acquireClosedRead(cancellingSignal)).rejects.toBe(cancelled)
-      expect((await readdir(tmpdir()))
-        .filter(name => name.startsWith('dsh-storage-sqlite-read-'))
-        .sort()).toEqual(frozenDirectoriesBeforeCancellation)
+      expect(frozenDirectories).toHaveLength(2)
+      for (const directory of frozenDirectories) await expect(lstat(directory)).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       await backend.close()
     }
