@@ -86,7 +86,7 @@ function WorkCard(props: WorkPageProps & { item: WorkItem }) {
   return <article className={css.card}>
     <p className={css.detail}>{item.project.title} · {t(`planning.status.${item.workItem.status}`)}</p>
     <h3 className={css.cardTitle}>#{item.workItem.issueNumber} {item.workItem.title}</h3>
-    {recommendation.available ? <Button disabled={state.offline || state.items.loading || state.items.failure !== null || state.operations.some(operation => recommendation.offer.type === 'give-work-item-to-agent'
+    {recommendation.available ? <Button disabled={state.offline || state.items.failure !== null || state.operations.some(operation => recommendation.offer.type === 'give-work-item-to-agent'
       ? operation.intent.type === 'give-work-item-to-agent' && operation.intent.projectId === item.project.id && operation.intent.workItemId === item.workItem.id
       : operation.intent.type === 'answer-intervention' && operation.intent.interventionId === recommendation.offer.interventionId)}
     onClick={() => { actions.confirm(recommendation.offer) }}>{t(recommendation.offer.type === 'give-work-item-to-agent' ? 'work.give' : 'work.answer')}</Button> : <p className={css.detail}>{t(unavailableLabels.get(recommendation.reason) ?? 'work.noAction')}</p>}

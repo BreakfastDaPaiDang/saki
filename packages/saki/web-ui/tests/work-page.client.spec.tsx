@@ -66,6 +66,24 @@ it('shows the backend launch summary and makes no assignment before confirmation
   await waitFor(() => { expect(f.api.giveWorkItemToAgent).toHaveBeenCalledOnce() })
 })
 
+it('keeps a displayed offer actionable while its next Projection is pending', async () => {
+  const f = await bench()
+  const held = Promise.withResolvers<Awaited<ReturnType<typeof f.api.queryMyWork>>>()
+  f.api.queryMyWork.mockReturnValueOnce(held.promise)
+  let refreshing: Promise<void> | undefined
+  await act(async () => { refreshing = f.controller.refresh() })
+  try {
+    expect(f.controller.getSnapshot().items.loading).toBe(true)
+    const action = screen.getByRole<HTMLButtonElement>('button', { name: '交给 Agent' })
+    expect(action.disabled).toBe(false)
+    await click(action)
+    expect(screen.getByRole('dialog', { name: '交给 Agent' })).toBeTruthy()
+    expect(f.api.giveWorkItemToAgent).not.toHaveBeenCalled()
+  } finally {
+    await act(async () => { held.resolve(MY_WORK); await refreshing })
+  }
+})
+
 it('answers the exact Intervention revision and preserves its text through cancellation', async () => {
   const f = await bench()
   if (!MY_WORK.ok) throw new Error('fixture denied')

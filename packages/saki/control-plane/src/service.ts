@@ -19,7 +19,7 @@ import {
   type GitHubProjectFieldsFact,
   type SakiGitHub,
 } from '@breakfastdapaidang/saki-github'
-import type { ActiveHostProjectBinding } from '@breakfastdapaidang/saki-execution'
+import type { ActiveHostProjectBinding, ProjectSelectionInspection } from '@breakfastdapaidang/saki-execution'
 import { SakiAuthenticationContext } from './authentication.ts'
 import type {
   SakiAuthenticationRequest,
@@ -1499,7 +1499,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     if (typeof binding === 'string') return { available: false, reason: 'binding-unavailable' }
     const resource = registry.resourceBindings.find(candidate => candidate.id === project.resourceBindingId)
     assert(resource !== undefined, 'An active Project binding must have a Registry resource')
-    const selection = resource.currentInspection?.projection ?? resource.registrationInspection.projection
+    // The Registry schema requires a current inspection for every active Binding.
+    const selection = (resource.currentInspection as ProjectSelectionInspection).projection
     return { available: true, launch: {
       profileId: profile.id, profileVersion: profile.version,
       provider: profile.modelRouteRequest.provider, model: profile.modelRouteRequest.model,

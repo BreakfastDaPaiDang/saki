@@ -10,7 +10,7 @@ Status: implemented
 
 ## 决策
 
-[Web 客户端](../../../../packages/saki/web-ui/README.zh.md)在 React 之外拥有 Work 交互，并复用规划控制器的 Access 身份。My Work 分组与建议操作来自后端。创建候选来自授权 Project 索引及各 Project 的 Board，包括写入可用性，以及精确的 Project、同步与映射修订号。一个 Project 读取失败时保留其自身确认值，不影响其他 Project。显式刷新和创建完成会请求 Board 扫描；失效通知读取保持 cached，避免形成扫描反馈循环。
+[Web 客户端](../../../../packages/saki/web-ui/README.zh.md)在 React 之外拥有 Work 交互，并复用规划控制器的 Access 身份。My Work 分组与建议操作来自后端。创建候选来自授权 Project 索引及各 Project 的 Board，包括写入可用性，以及精确的 Project、同步与映射修订号。一个 Project 读取失败时保留其自身确认值，不影响其他 Project。显式刷新和创建完成会请求 Board 扫描；失效通知读取保持 cached，避免形成扫描反馈循环。My Work 读取尚未完成时，已显示的操作保持启用，直到新 Projection 或读取失败到达；提交仍保留原始修订号检查。
 
 需求草稿、回答文本与已提交的原始 Intent 按认证 Principal 持久保存。客户端先保存 Intent 再发送。响应丢失时保留其 id 和完整 payload；显式恢复使用当前请求权限重放该 payload，不会另行分配 Issue 创建 Intent。部分创建显示已知 Work Item，并遵循后端恢复操作。需要对账的结果保持可检查，且不能关闭。关闭成功创建的结果会清除对应已提交草稿。Principal 或请求权限替换会取消旧读取和请求、清除确认缓存，并防止迟到响应改变新身份的视图。
 

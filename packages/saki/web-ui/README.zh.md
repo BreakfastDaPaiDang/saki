@@ -37,7 +37,7 @@ kind: "package-reference"
 
 「工作」页展示后端给出的跨 Project 分组，每张卡片只显示一项建议操作。选择 Project，填写标题、预期结果与验收标准，即可创建 GitHub Issue 并加入 Inbox。在 Board 中规划 Inbox 工作项；Ready 建议会出现在 My Work。表单使用该 Project 的当前修订号及 Board 映射修订号；一个 Project 不可用不会隐藏其他 Project 及其可读工作。
 
-Give to Agent 要求用户明确确认投影中的 Agent Profile、模型路由、binding 显示标签与继承变更数量。提交时重新检查显示的 Project 修订号和 Issue 指纹。按显示的修订号回答待处理 Intervention，再打开 Work Item 查看执行与交付证据，或返回其继承 Session。这些手动操作不会自动领取 Ready 工作，也不会自动标记 Done。
+Give to Agent 要求用户明确确认投影中的 Agent Profile、模型路由、binding 显示标签与继承变更数量。后台刷新期间，已显示的操作保持可用；提交时重新检查显示的 Project 修订号和 Issue 指纹。按显示的修订号回答待处理 Intervention，再打开 Work Item 查看执行与交付证据，或返回其继承 Session。这些手动操作不会自动领取 Ready 工作，也不会自动标记 Done。
 
 需求草稿、回答文本与已提交的原始 Intent 按认证 Principal 持久保存。响应丢失后保留原始 payload；「查询或继续原请求」使用当前请求权限发送同一个 Intent。部分创建保留已知 Work Item 与后端给出的恢复操作。需要对账的结果仍可检查，不能关闭后转为重复创建。关闭成功创建的结果会清除对应已提交草稿。Principal 变化会取消旧读取，并隐藏其事实与输入。
 
