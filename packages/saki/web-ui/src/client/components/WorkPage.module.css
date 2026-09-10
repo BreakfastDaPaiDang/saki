@@ -42,12 +42,12 @@
 .form label { display: grid; gap: 8px; font-size: 13px; }
 .form input, .form textarea, .form select {
   width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px;
-  border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1);
+  border: 0.5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary); font: inherit;
 }
 .form textarea { min-height: 80px; resize: vertical; }
 .actions { margin-top: 12px; }
-.operation { padding-block: 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); }
-.dialog { overflow-wrap: anywhere; max-width: 560px; width: calc(100% - 64px); padding: 24px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); }
+.operation { padding-block: 12px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.dialog { overflow-wrap: anywhere; max-width: 560px; width: calc(100% - 64px); padding: 24px; border-radius: 12px; border: 0.5px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); }
 .dialog::backdrop { background: rgb(0 0 0 / 40%); }
 @media (max-width: 760px) { .groups { grid-template-columns: 1fr; } }
