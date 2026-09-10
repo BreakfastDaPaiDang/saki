@@ -502,14 +502,14 @@ export async function dropRpcResponse(
  * @param port - Saki Host loopback port.
  * @param bootstrapSecret - one-use launcher secret.
  * @param repository - isolated Git repository to register.
- * @param options - optional HTTP deadline for each initialization request.
+ * @param options - optional HTTP deadlines for initialization and the complete registration request.
  * @returns access, inspection, Intent, and confirmed registration values.
  */
 export async function registerSnapshotProject(
   port: number,
   bootstrapSecret: string | undefined,
   repository: string,
-  options: { readonly timeoutMs?: number } = {},
+  options: { readonly timeoutMs?: number; readonly registrationTimeoutMs?: number } = {},
 ): Promise<{
   readonly initial: Awaited<ReturnType<typeof rpc>>
   readonly exchangeValue: {
@@ -584,7 +584,12 @@ export async function registerSnapshotProject(
     port,
     'control/submit',
     registrationIntent,
-    { ...options, cookie, requestToken: exchangeValue.access.requestToken },
+    {
+      ...options,
+      ...(options.registrationTimeoutMs === undefined ? {} : { timeoutMs: options.registrationTimeoutMs }),
+      cookie,
+      requestToken: exchangeValue.access.requestToken,
+    },
   )
   const confirmed = registration.value as {
     readonly ok: true

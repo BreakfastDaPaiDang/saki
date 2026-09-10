@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-10-saki-manual-work-interactions.md
-2026-09-10-saki-manual-work-interactions.md: 891e0544b9d6f40e4215bccca5d0e6ca9f34f1ea
-2026-09-10-saki-manual-work-interactions.zh.md: 8e8199b34675708dbb249c9217a60f55abfe8a97
+2026-09-10-saki-manual-work-interactions.md: 5b05427b77eec7fa8118ca5a72bac378203496dc
+2026-09-10-saki-manual-work-interactions.zh.md: 3265eeb4f58708ea35733871f0d404a8025c8bbd

@@ -30,4 +30,6 @@ Work Item 详情同时接受已回答、已解决的 Intervention 历史和未�
 
 ## 后果
 
+Planning 与 Work 浏览器 fixture 为 Project 登记请求提供 240 秒期限。登记依次执行三次检查，每次包含两个具有 30 秒产品预算的仓库观察阶段，随后完成 Workspace 与持久 registry 写入。fixture 的登记期限覆盖这些工作的总预算；单次 RPC 与浏览器操作的期限独立设置。
+
 用户可以通过组合后的产品创建需求、规划任务、授权 Run、回答其问题并检查 Session。后端与浏览器测试覆盖启动摘要校验、身份替换、独立读取失败、精确重放、原生对话框操作及延迟确认。真实 bundle 浏览器用例拥有临时 Git 仓库与独立 Installation，仅替换外部 GitHub 和 LLM（大语言模型）Provider，并在手动流程中检查只创建一个 Issue。自动领取、预算暂停、自动 Done、生产模型供给及通用恢复仍属独立工作。

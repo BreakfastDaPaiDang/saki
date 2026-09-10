@@ -30,4 +30,6 @@ This implements the manual Work part of the [projection-driven client proposal](
 
 ## Consequences
 
+Planning and Work browser fixtures give the Project registration request 240 seconds. Registration performs three sequential inspections, each containing two repository observation rounds with a 30-second product budget, then completes Workspace and durable registry writes. The fixture's registration deadline covers that aggregate; individual RPC and browser gesture deadlines remain separate.
+
 Operators can create requirements, plan them, authorize a Run, answer its question, and inspect its Session through the composed product. Backend and browser tests cover launch-summary validation, identity replacement, independent read failures, exact replay, native dialog gestures, and delayed acknowledgement. The real-bundle browser case owns a temporary Git repository and isolated Installation, substitutes only external GitHub and LLM Providers, and checks one Issue creation through the manual flow. Automatic claiming, budget suspension, automatic Done, production model supply, and generalized recovery remain separate work.

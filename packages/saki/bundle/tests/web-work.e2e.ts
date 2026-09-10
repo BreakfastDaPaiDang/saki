@@ -39,7 +39,10 @@ it('creates one Issue, gives it to an Agent, answers its question, and returns t
     server.child.stderr.on('data', (chunk: string) => { diagnostics += chunk })
     const { url, secret } = await server.ready
     const port = Number(new URL(url).port)
-    const registered = await registerSnapshotProject(port, secret, repository, process.platform === 'win32' ? {} : { timeoutMs: stepMs })
+    const registered = await registerSnapshotProject(port, secret, repository, {
+      ...(process.platform === 'win32' ? {} : { timeoutMs: stepMs }),
+      registrationTimeoutMs: 240_000,
+    })
     expect(registered.confirmed.ok, JSON.stringify(registered.confirmed)).toBe(true)
     const projectId = registered.confirmed.receipt.projectId
     const credentials = { cookie: registered.cookie, requestToken: registered.exchangeValue.access.requestToken }
