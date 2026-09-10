@@ -1540,6 +1540,8 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     expect(await mapping()).toEqual({ ok: false, reason: 'unavailable' })
     const absentProject = 'project-11111111-1111-4111-8111-111111111111' as SakiDevelopmentProjectId
     for (const query of [
+      { type: 'board', projectId: absentProject, refresh: 'cached' },
+      { type: 'board', projectId: absentProject, refresh: 'interactive' },
       { type: 'project-mapping', projectId: absentProject },
       { type: 'project-milestones', projectId: absentProject, after: null },
       { type: 'work-item-view', projectId: absentProject, workItemId: `work-item-${'9'.repeat(64)}` as SakiBoardWorkItemId },
@@ -1630,6 +1632,22 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     expect(await pendingMapping).toEqual({ ok: false, reason: 'denied' })
     heldMapping.mockRestore()
     await setGrantActions(harness, HOST_OPERATOR_ACTIONS)
+    // oxlint-disable-next-line typescript/unbound-method -- The wrapper applies this method to the intercepted instance.
+    const requestScan = GitHubProjectSynchronization.prototype.requestScan
+    const revokingScan = vi.spyOn(GitHubProjectSynchronization.prototype, 'requestScan')
+      .mockImplementationOnce(async function (this: GitHubProjectSynchronization, ...args) {
+        const scheduled = await requestScan.apply(this, args)
+        await setGrantActions(harness, [])
+        return scheduled
+      })
+    try {
+      expect(await harness.control.query(harness.authentication, {
+        type: 'board', projectId: registered.receipt.projectId, refresh: 'interactive',
+      }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    } finally {
+      revokingScan.mockRestore()
+      await setGrantActions(harness, HOST_OPERATOR_ACTIONS)
+    }
     expect(await harness.control.query(harness.authentication, {
       ...detailQuery, workItemId: `work-item-${'8'.repeat(64)}` as SakiBoardWorkItemId,
     }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
@@ -1685,11 +1703,27 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     for (let attempt = 0; attempt < 200 && diagnostic.mock.calls.length === 0; attempt++) {
       await new Promise<void>(resolve => setTimeout(resolve, 0))
     }
-    expect(github.requests).toHaveLength(2)
-    expect(github.requests[1]).toMatchObject({ priority: 'interactive' })
+    expect(github.requests.at(-1)).toMatchObject({ priority: 'interactive' })
     expect(diagnostic).toHaveBeenCalledWith(
       'Saki GitHub synchronization provider failed outside its typed failure interface',
     )
+    const holdScan = vi.spyOn(GitHubSynchronizationConsumer.prototype, 'wake').mockImplementation(() => undefined)
+    const retainedSync = syncTable.get(registered.receipt.projectId)!
+    try {
+      expect(await harness.control.submit(harness.authentication, {
+        type: 'move-work-item', intentId: 'intent-21212121-2121-4121-8121-212121212121' as SakiControlIntentId,
+        projectId: registered.receipt.projectId, workItemId: selectedItem.id,
+        expectedRemoteFingerprint: selectedItem.remoteFingerprint, targetStatus: 'in-progress',
+      }, new AbortController().signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+      await syncTable.delete(retainedSync.id)
+      expect(await detail()).toMatchObject({ ok: true, projection: {
+        workItem: { id: selectedItem.id, status: 'in-progress' },
+        body: { state: 'unavailable', reason: 'mapping-unavailable' },
+      } })
+    } finally {
+      await syncTable.put(retainedSync.id, retainedSync)
+      holdScan.mockRestore()
+    }
     const readsStarted = Promise.withResolvers<undefined>()
     const detachedReadRelease = Promise.withResolvers<undefined>()
     let pendingReads = 0

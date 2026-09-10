@@ -3,6 +3,7 @@
  * @module @breakfastdapaidang/saki-control-plane/src/service
  */
 
+import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -1283,7 +1284,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     const consumer = this.githubSynchronizationConsumer
     if (github === undefined) return { state: 'unavailable', reason: 'provider-unavailable' }
     const settings = this.githubSynchronization.projectSettings(projectId)
-    const active = settings === 'not-found' ? undefined : settings.synchronization.active
+    assert(settings !== 'not-found', 'Selected Work Item Project must exist during its synchronous configuration lookup')
+    const active = settings.synchronization.active
     if (active === undefined) return { state: 'unavailable', reason: 'mapping-unavailable' }
     const configuration = active.configuration
     let detail: GitHubIssueDetailFact
