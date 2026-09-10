@@ -4578,16 +4578,8 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitHubBranchSafetyReadRequest {\n    readonly kind: \'branch-safety\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly branch: string;\n}',
   },
   {
-    name: 'GitHubCommitFact',
-    declaration: 'export interface GitHubCommitFact {\n    readonly id: GitHubCommitId;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly url: string;\n    readonly committedAt: number;\n    readonly observedAt: number;\n}',
-  },
-  {
     name: 'GitHubCommitId',
     declaration: 'export type GitHubCommitId = Branded<\'GitHubCommitId\'>;',
-  },
-  {
-    name: 'GitHubCommitReadRequest',
-    declaration: 'export interface GitHubCommitReadRequest {\n    readonly kind: \'commit\';\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly commitId: GitHubCommitId;\n}',
   },
   {
     name: 'GitHubExternalOperationId',
@@ -4706,6 +4698,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type GitHubProjectFieldId = Branded<\'GitHubProjectFieldId\'>;',
   },
   {
+    name: 'GitHubProjectFieldsFact',
+    declaration: 'export interface GitHubProjectFieldsFact {\n    readonly projectId: GitHubProjectId;\n    readonly fields: readonly GitHubProjectFieldFact[];\n    readonly observedAt: number;\n}',
+  },
+  {
+    name: 'GitHubProjectFieldsReadRequest',
+    declaration: 'export interface GitHubProjectFieldsReadRequest {\n    readonly kind: \'project-fields\';\n    readonly installation: GitHubInstallationProfile;\n    readonly projectId: GitHubProjectId;\n}',
+  },
+  {
     name: 'GitHubProjectId',
     declaration: 'export type GitHubProjectId = Branded<\'GitHubProjectId\'>;',
   },
@@ -4795,7 +4795,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GitHubReadMap',
-    declaration: 'export interface GitHubReadMap {\n    installation: {\n        readonly request: GitHubInstallationReadRequest;\n        readonly result: GitHubInstallationFact;\n    };\n    repository: {\n        readonly request: GitHubRepositoryReadRequest;\n        readonly result: GitHubRepositoryFact;\n    };\n    issue: {\n        readonly request: GitHubIssueReadRequest;\n        readonly result: GitHubIssueFact;\n    };\n    \'issue-detail\': {\n        readonly request: GitHubIssueDetailReadRequest;\n        readonly result: GitHubIssueDetailFact;\n    };\n    \'branch-safety\': {\n        readonly request: GitHubBranchSafetyReadRequest;\n        readonly result: GitHubBranchSafetyFact;\n    };\n    \'branch-head\': {\n        readonly request: GitHubBranchHeadReadRequest;\n        readonly result: GitHubBranchHeadFact;\n    };\n    project: {\n        readonly request: GitHubProjectReadRequest;\n        readonly result: GitHubProjectFact;\n    };\n    \'tag-reference\': {\n        readonly request: GitHubTagReferenceReadRequest;\n        readonly result: GitHubTagReferenceFact;\n    };\n    \'tag-object\': {\n        readonly request: GitHubTagObjectReadRequest;\n        readonly result: GitHubTagPeelFact;\n    };\n    \'release-by-tag\': {\n        readonly request: GitHubReleaseByTagReadRequest;\n        readonly result: GitHubReleaseByTagObservation;\n    };\n    commit: {\n        readonly request: GitHubCommitReadRequest;\n        readonly result: GitHubCommitFact;\n    };\n    \'public-commit\': {\n        readonly request: GitHubPub /* …truncated — full shape in source */',
+    declaration: 'export interface GitHubReadMap {\n    \'project-fields\': {\n        readonly request: GitHubProjectFieldsReadRequest;\n        readonly result: GitHubProjectFieldsFact;\n    };\n    installation: {\n        readonly request: GitHubInstallationReadRequest;\n        readonly result: GitHubInstallationFact;\n    };\n    repository: {\n        readonly request: GitHubRepositoryReadRequest;\n        readonly result: GitHubRepositoryFact;\n    };\n    issue: {\n        readonly request: GitHubIssueReadRequest;\n        readonly result: GitHubIssueFact;\n    };\n    \'issue-detail\': {\n        readonly request: GitHubIssueDetailReadRequest;\n        readonly result: GitHubIssueDetailFact;\n    };\n    \'branch-safety\': {\n        readonly request: GitHubBranchSafetyReadRequest;\n        readonly result: GitHubBranchSafetyFact;\n    };\n    \'branch-head\': {\n        readonly request: GitHubBranchHeadReadRequest;\n        readonly result: GitHubBranchHeadFact;\n    };\n    project: {\n        readonly request: GitHubProjectReadRequest;\n        readonly result: GitHubProjectFact;\n    };\n    \'tag-reference\': {\n        readonly request: GitHubTagReferenceReadRequest;\n        readonly result: GitHubTagReferenceFact;\n    };\n    \'tag-object\': {\n        readonly request: GitHubTagObjectReadRequest;\n        readonly result: GitHubTagPeelFact;\n    };\n    \'release-by-tag\': {\n        readonly request: GitHubReleaseByTagReadRequest;\n        readonly result: GitHubReleaseByTagObservation;\n    };\n    commit: {\n        readonly req /* …truncated — full shape in source */',
   },
   {
     name: 'GitHubReleaseByTagObservation',
@@ -6014,20 +6014,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SakiControlIntentId = Branded<\'SakiControlIntentId\'>;',
   },
   {
-    name: 'SakiCurrentGitOperationProjection',
-    declaration: 'export type SakiCurrentGitOperationProjection = SakiCurrentGitOperationProjectionFor<\'stage-files\'> | SakiCurrentGitOperationProjectionFor<\'unstage-files\'> | SakiCurrentGitOperationProjectionFor<\'create-commit\'>;',
-  },
-  {
     name: 'SakiDevelopmentProjectId',
     declaration: 'export type SakiDevelopmentProjectId = Branded<\'SakiDevelopmentProjectId\'>;',
   },
   {
     name: 'SakiDevelopmentProjectSummary',
     declaration: 'export interface SakiDevelopmentProjectSummary {\n    readonly id: SakiDevelopmentProjectId;\n    readonly revision: number;\n    readonly projectTitle: string;\n    readonly binding: {\n        readonly id: SakiResourceBindingId;\n        readonly revision: number;\n        readonly health: \'active\' | \'missing\' | \'repair-required\';\n        readonly hostId: SakiHostId;\n        readonly displayLocation: string;\n        readonly objectFormat: \'sha1\' | \'sha256\';\n        readonly head: ProjectGitHead;\n        readonly inheritedChangeEntryCount: number;\n        readonly baseline: \'complete\' | \'unavailable\';\n        readonly automaticMutationEligible: boolean;\n        readonly configurationGaps: readonly (\'baseline-unavailable\' | \'conversion-ambiguous\' | \'binding-missing\' | \'binding-repair-required\')[];\n    };\n}',
-  },
-  {
-    name: 'SakiDevelopmentWorkspaceProjection',
-    declaration: 'export interface SakiDevelopmentWorkspaceProjection {\n    readonly type: \'development-workspace\';\n    readonly registryRevision: number;\n    readonly project: SakiDevelopmentProjectSummary;\n    readonly currentSelection?: ProjectSelectionProjection;\n    readonly recovery: {\n        readonly state: \'ready\' | \'blocked\';\n        readonly reasons: readonly (\'binding-missing\' | \'binding-repair-required\' | \'baseline-unavailable\' | \'conversion-ambiguous\' | \'dirty\' | \'locked\')[];\n    };\n}',
   },
   {
     name: 'SakiDevelopmentWorkspaceQuery',
@@ -6040,18 +6032,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SakiGitHubSynchronizationReceipt',
     declaration: 'export type SakiGitHubSynchronizationReceipt = (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'prepared\';\n}) | (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'saved\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly synchronizationRevision: number;\n    readonly candidateRevision: number;\n}) | (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'conflict\';\n    readonly reason: \'expected-revision\' | \'project-not-found\' | \'configuration-incomplete\' | \'configuration-unchanged\';\n}) | (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'failure\';\n    readonly reason: \'authority\';\n});',
-  },
-  {
-    name: 'SakiGitOperationAvailabilityProjection',
-    declaration: 'export type SakiGitOperationAvailabilityProjection = {\n    readonly available: true;\n    readonly reasons: readonly [\n    ];\n} | {\n    readonly available: false;\n    readonly reasons: readonly SakiGitOperationUnavailableReason[];\n};',
-  },
-  {
-    name: 'SakiGitOperationsProjection',
-    declaration: 'export interface SakiGitOperationsProjection {\n    readonly stageFiles: SakiGitOperationAvailabilityProjection;\n    readonly unstageFiles: SakiGitOperationAvailabilityProjection;\n    readonly createCommit: SakiGitOperationAvailabilityProjection;\n    readonly current?: SakiCurrentGitOperationProjection;\n}',
-  },
-  {
-    name: 'SakiGitOperationUnavailableReason',
-    declaration: 'export type SakiGitOperationUnavailableReason = ProjectGitMutationBlocker | \'detached-head\' | \'no-staged-changes\' | \'status-unavailable\' | \'action-denied\' | \'write-admission-busy\' | \'write-admission-unavailable\';',
   },
   {
     name: 'SakiHostChoiceProjection',
@@ -6118,26 +6098,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SakiMyWorkQuery {\n    readonly type: \'my-work\';\n}',
   },
   {
-    name: 'SakiProjectChangesObservationResult',
-    declaration: 'export type SakiProjectChangesObservationResult = {\n    readonly ok: true;\n    readonly observation: ProjectGitStatusObservation;\n} | Extract<InspectProjectResult, {\n    readonly ok: false;\n}>;',
-  },
-  {
-    name: 'SakiProjectChangesProjection',
-    declaration: 'export interface SakiProjectChangesProjection {\n    readonly type: \'project-changes\';\n    readonly registryRevision: number;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly projectRevision: number;\n    readonly result: SakiProjectChangesObservationResult;\n    readonly gitOperations: SakiGitOperationsProjection;\n}',
-  },
-  {
-    name: 'SakiProjectChangesQuery',
-    declaration: 'export interface SakiProjectChangesQuery {\n    readonly type: \'project-changes\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n}',
-  },
-  {
-    name: 'SakiProjectDiffProjection',
-    declaration: 'export interface SakiProjectDiffProjection {\n    readonly type: \'project-diff\';\n    readonly registryRevision: number;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly projectRevision: number;\n    readonly result: ReadProjectDiffResult;\n}',
-  },
-  {
-    name: 'SakiProjectDiffQuery',
-    declaration: 'export interface SakiProjectDiffQuery {\n    readonly type: \'project-diff\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n    readonly request: ReadProjectDiffRequest;\n}',
-  },
-  {
     name: 'SakiProjectIndexProjection',
     declaration: 'export interface SakiProjectIndexProjection {\n    readonly type: \'project-index\';\n    readonly revision: number;\n    readonly hosts: readonly SakiHostChoiceProjection[];\n    readonly projects: readonly SakiDevelopmentProjectSummary[];\n}',
   },
@@ -6155,7 +6115,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiQueryMap',
-    declaration: 'export interface SakiQueryMap {\n    readonly \'my-work\': {\n        readonly request: SakiMyWorkQuery;\n        readonly projection: SakiMyWorkProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly attention: {\n        readonly request: SakiAttentionQuery;\n        readonly projection: SakiAttentionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'inspect-project-selection\': {\n        readonly request: SakiInspectProjectSelectionQuery;\n        readonly projection: SakiProjectSelectionInspectionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly projection: SakiProjectIndexProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'development-workspace\': {\n        readonly request: SakiDevelopmentWorkspaceQuery;\n        readonly projection: SakiDevelopmentWorkspaceProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'stale\' | \'not-found\';\n    };\n    readonly \'project-changes\': {\n        readonly request: SakiProjectChangesQuery;\n        readonly projection: SakiProjectChangesProjection;\n        readonly failure: \'denied\' | \'unavailable\' | \'stale\' | \'not-found\' | \'binding-unavailable\';\n    };\n    readonly \'project-diff\': {\n        readonly request: SakiProjectDiffQuery;\n        readonly projection: SakiProjectDiffProjection;\n        readonly failure: \'denied\' | \'unav /* …truncated — full shape in source */',
+    declaration: 'export interface SakiQueryMap {\n    readonly \'project-mapping\': {\n        readonly request: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n        };\n        readonly projection: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n            readonly synchronizationRevision: number;\n            readonly canConfigure: boolean;\n            readonly choices: GitHubProjectFieldsFact;\n        };\n        readonly failure: \'denied\' | \'unavailable\' | \'not-found\';\n    };\n    readonly \'my-work\': {\n        readonly request: SakiMyWorkQuery;\n        readonly projection: SakiMyWorkProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly attention: {\n        readonly request: SakiAttentionQuery;\n        readonly projection: SakiAttentionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'inspect-project-selection\': {\n        readonly request: SakiInspectProjectSelectionQuery;\n        readonly projection: SakiProjectSelectionInspectionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly projection: SakiProjectIndexProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'development-workspace\': {\n        readonly request: SakiDevelopmentWorkspaceQuery;\n        readonly projection /* …truncated — full shape in source */',
   },
   {
     name: 'SakiQueryResult',

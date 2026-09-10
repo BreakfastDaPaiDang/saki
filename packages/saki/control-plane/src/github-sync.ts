@@ -837,6 +837,7 @@ interface GitHubSynchronizationConsumerOptions {
   readonly github: SakiGitHub
   readonly attemptTtlMs: number
   readonly reportUnexpectedFailure: (scope: 'provider' | 'consumer') => void
+  readonly notifyChanged: () => void
 }
 
 interface FreshBoardScanWaiter {
@@ -965,6 +966,7 @@ export class GitHubSynchronizationConsumer {
         projectId: due.projectId,
         attemptId: begun.lease.attemptId,
       }
+      this.options.notifyChanged()
       try {
         let candidate: GitHubProjectBoardScanCandidate
         try {
@@ -1034,6 +1036,7 @@ export class GitHubSynchronizationConsumer {
     attemptId: SakiGitHubScanAttemptId,
     result: SakiGitHubFreshBoardScanResult,
   ): void {
+    this.options.notifyChanged()
     for (const waiter of [...(this.freshBoardScanWaiters.get(projectId) ?? [])]) {
       this.deliverFreshBoardScanCompletion(waiter, attemptId, result)
     }

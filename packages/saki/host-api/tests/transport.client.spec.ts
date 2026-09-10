@@ -35,6 +35,38 @@ if (parsedProjectQuery.type !== 'project-settings') {
 const PROJECT_ID = parsedProjectQuery.projectId
 
 describe('Saki browser Host client', () => {
+  it('preserves Project, Work Item, and Milestone cursor identities in planning reads', async () => {
+    const call = vi.fn(async () => ({ ok: true as const, value: { ok: false, reason: 'not-found' } }))
+    const ctx = new Context()
+    ctx.provide('connection', { rpc: { call } } as unknown as ConnectionHandle)
+    const fiber = await ctx.plugin(SakiHostClientService)
+    try {
+      const parsed = sakiQueryRequestSchema.parse({ type: 'work-item-view', projectId: PROJECT_ID, workItemId: `work-item-${'3'.repeat(64)}` })
+      if (parsed.type !== 'work-item-view') throw new Error('Expected Work Item query')
+      const signal = new AbortController().signal
+      await expect(ctx.sakiHostClient.queryWorkItemView(PROJECT_ID, parsed.workItemId, signal)).resolves.toEqual({ ok: false, reason: 'not-found' })
+      expect(call).toHaveBeenLastCalledWith('/saki', 'control/query', parsed, expect.objectContaining({ signal }))
+      await expect(ctx.sakiHostClient.queryProjectMapping(PROJECT_ID, signal)).resolves.toEqual({ ok: false, reason: 'not-found' })
+      expect(call).toHaveBeenLastCalledWith('/saki', 'control/query', { type: 'project-mapping', projectId: PROJECT_ID }, expect.objectContaining({ signal }))
+      await expect(ctx.sakiHostClient.queryProjectMilestones(PROJECT_ID, null, signal)).resolves.toEqual({ ok: false, reason: 'not-found' })
+      expect(call).toHaveBeenLastCalledWith('/saki', 'control/query', { type: 'project-milestones', projectId: PROJECT_ID, after: null }, expect.objectContaining({ signal }))
+    } finally { await fiber.dispose() }
+  })
+  it('waits for authenticated projection invalidations through Connection', async () => {
+    const cursor = '11111111-1111-4111-8111-111111111111'
+    const call = vi.fn(async () => ({ ok: true as const, value: { ok: true, cursor } }))
+    const ctx = new Context()
+    ctx.provide('connection', { rpc: { call } } as unknown as ConnectionHandle)
+    const fiber = await ctx.plugin(SakiHostClientService)
+    try {
+      const signal = new AbortController().signal
+      expect(await ctx.sakiHostClient.watchProjections(null, signal)).toEqual({ ok: true, cursor })
+      expect(call).toHaveBeenCalledWith('/saki', 'control/watch', { cursor: null }, expect.objectContaining({ signal }))
+    } finally {
+      await fiber.dispose()
+    }
+  })
+
   it('requires an active Connection carrier', () => {
     expect(() => new SakiHostClientService(new Context())).toThrow('active Connection carrier')
   })

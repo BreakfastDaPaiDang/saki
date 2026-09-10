@@ -32,6 +32,8 @@ import {
 } from '../src/milestone-delivery.ts'
 import type { ReleaseEvidencePolicyV1Snapshot } from '../src/release-evidence-policy.ts'
 import { controlIntentActorSchema } from '../src/spec.ts'
+import { planningMilestone, planningMilestones, planningReferences, SAKI_PLANNING_REFERENCE_LIMIT } from '../src/planning-views.ts'
+import { SAKI_BOARD_PROJECTION_FIXTURES } from '../src/fixtures.ts'
 
 const PROJECT_ID = sakiDevelopmentProjectIdSchema.parse('project-00000000-0000-4000-8000-000000000301')
 const SAVE_INTENT_ID = sakiControlIntentIdSchema.parse('intent-00000000-0000-4000-8000-000000000302')
@@ -101,6 +103,63 @@ class MemoryTable<K extends string, V> implements KvTable<K, V> {
 }
 
 describe('MilestoneDeliveryOperations', () => {
+  it('pages only the selected Project in stable identity order and joins only observed Issue scope', async () => {
+    const harness = createHarness()
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'planned'), ACTOR, signal())
+    const initial = milestoneDeliveryRecordSchema.parse(harness.deliveries.get(milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)))
+    const records = Array.from({ length: SAKI_PLANNING_REFERENCE_LIMIT + 2 }, (_, index) => {
+      const milestoneId = githubMilestoneId(`M_${String(index).padStart(3, '0')}`)
+      return milestoneDeliveryRecordSchema.parse({ ...initial, id: milestoneDeliveryId(PROJECT_ID, milestoneId),
+        release: { ...initial.release, milestoneId, milestoneNumber: index + 1 } })
+    })
+    const otherProject = sakiDevelopmentProjectIdSchema.parse('project-00000000-0000-4000-8000-000000000999')
+    const foreign = milestoneDeliveryRecordSchema.parse({ ...initial, projectId: otherProject,
+      id: milestoneDeliveryId(otherProject, MILESTONE_ID) })
+    const table = new Map([...records.slice(16), foreign, ...records.slice(0, 16)].map(record => [record.id, record]))
+    const first = planningMilestones(table, PROJECT_ID, null)
+    expect(first.items.map(item => item.id)).toEqual(
+      records.slice(0, SAKI_PLANNING_REFERENCE_LIMIT).map(record => record.release.milestoneId),
+    )
+    expect(first.next).toBe(records[SAKI_PLANNING_REFERENCE_LIMIT - 1]?.release.milestoneId)
+    const second = planningMilestones(table, PROJECT_ID, first.next)
+    expect(second.items.map(item => item.id)).toEqual(
+      records.slice(SAKI_PLANNING_REFERENCE_LIMIT).map(record => record.release.milestoneId),
+    )
+    expect(second.next).toBeNull()
+    expect(planningMilestones([], PROJECT_ID, null).items).toEqual([])
+
+    const item = SAKI_BOARD_PROJECTION_FIXTURES.confirmedStaleFailure.confirmed.items[0]
+    const observed = releaseSnapshot(200, 200).milestone.confirmed!
+    const scoped = milestoneDeliveryRecordSchema.parse({ ...initial, sources: { ...initial.sources, milestone: {
+      confirmed: { ...observed, value: { ...observed.value, issues: [{ ...observed.value.issues[0], id: item.source.issueId }] } },
+    } } })
+    const unrelated = milestoneDeliveryRecordSchema.parse({
+      ...initial, sources: { ...initial.sources, milestone: { confirmed: observed } },
+    })
+    const references = planningReferences(PROJECT_ID, item, {
+      assignments: [], runs: [], interventions: [], activity: [],
+      milestones: [['foreign', foreign], ['unobserved', initial], ['unrelated', unrelated], ['scoped', scoped]],
+    })
+    expect(references.milestones).toEqual([planningMilestone(scoped)])
+  })
+  it('summarizes planning destinations without deriving phase from the GitHub Milestone state', async () => {
+    const harness = createHarness()
+    const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)
+    await harness.operations.submit(saveIntent(SAVE_INTENT_ID, null, 'in-progress'), ACTOR, signal())
+    const initial = milestoneDeliveryRecordSchema.parse(harness.deliveries.get(id))
+    expect(planningMilestone(initial)).toMatchObject({
+      id: MILESTONE_ID, title: null, url: null, dueAt: null, issueState: null,
+      observedAt: null, phase: 'in-progress', repairRequired: false,
+    })
+    const observed = releaseSnapshot(200, 200).milestone.confirmed!
+    const closed = milestoneDeliveryRecordSchema.parse({ ...initial, sources: { ...initial.sources, milestone: {
+      confirmed: { ...observed, value: { ...observed.value, state: 'closed' as const, dueOn: 500 } },
+    } } })
+    expect(planningMilestone(closed)).toMatchObject({
+      title: '0.1.0', url: observed.value.url, dueAt: 500, issueState: 'closed',
+      observedAt: 200, phase: 'in-progress', repairRequired: true,
+    })
+  })
   it('retains the newest source facts and failure times across delayed and empty refreshes', async () => {
     const harness = createHarness()
     const id = milestoneDeliveryId(PROJECT_ID, MILESTONE_ID)

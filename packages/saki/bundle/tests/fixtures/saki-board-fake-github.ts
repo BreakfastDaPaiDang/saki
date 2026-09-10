@@ -1,6 +1,7 @@
 /** Deterministic keyless GitHub Provider for the assembled Saki Board snapshot. */
 
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
+import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { setTimeout as delay } from 'node:timers/promises'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import {
@@ -102,14 +103,17 @@ function mutationStatePath(providerStatePath: string): string {
   return `${providerStatePath}.mutation.json`
 }
 
-async function writeMutationStateFile(
+/**
+ * Replace the controlled remote facts between awaited external operations.
+ * @param providerStatePath - scan-admission path whose sidecar owns mutation state.
+ * @param state - complete remote state for the next Provider observation.
+ * @returns when atomic replacement completes.
+ */
+export async function writeSakiBoardSnapshotMutationState(
   providerStatePath: string,
   state: SakiBoardSnapshotMutationState,
 ): Promise<void> {
-  const target = mutationStatePath(providerStatePath)
-  const temporary = `${target}.next`
-  await writeFile(temporary, `${JSON.stringify(state)}\n`)
-  await rename(temporary, target)
+  await writeFileAtomic(mutationStatePath(providerStatePath), `${JSON.stringify(state)}\n`, { mode: 0o600 })
 }
 
 /**
@@ -125,7 +129,7 @@ export async function initializeSakiBoardSnapshotMutationState(
   if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u.test(baseCommitId)) {
     throw new TypeError('Saki Board snapshot base Commit id is invalid')
   }
-  await writeMutationStateFile(providerStatePath, { ...initialMutationState(), baseCommitId })
+  await writeSakiBoardSnapshotMutationState(providerStatePath, { ...initialMutationState(), baseCommitId })
 }
 
 /**
@@ -192,7 +196,7 @@ async function writeProviderMutationState(state: SakiBoardSnapshotMutationState)
     inMemoryMutationState = structuredClone(state)
     return
   }
-  await writeMutationStateFile(path, state)
+  await writeSakiBoardSnapshotMutationState(path, state)
 }
 
 function assertDeliveryPushTarget(
@@ -707,6 +711,11 @@ export class SakiBoardSnapshotGitHub extends SakiGitHub {
         throw new GitHubProviderError({ code: 'not-found', resource: 'saki-board-snapshot-project' })
       }
       return projectFact(observedAt)
+    }
+    if (request.kind === 'project-fields') {
+      assertProductInstallation(request.installation)
+      if (request.projectId !== PROJECT_ID) throw new GitHubProviderError({ code: 'not-found', resource: request.kind })
+      return { projectId: PROJECT_ID, fields: scanSource(state).fields, observedAt }
     }
     if (request.kind === 'issue') {
       assertProductRepositoryRequest(request)

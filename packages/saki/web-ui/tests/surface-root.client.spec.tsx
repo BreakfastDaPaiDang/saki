@@ -12,20 +12,22 @@ import { useSyncExternalStore } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SakiWireAccessProjection } from '@breakfastdapaidang/saki-host-api/wire'
 import { SakiSurfaceRoot } from '../src/client/components/SurfaceRoot.tsx'
-import { createSakiNavigationStore } from '../src/client/navigation.ts'
+import { planningFixture } from './planning-fixture.client.ts'
+import type { PlanningController } from '../src/client/planning-controller.ts'
 import { zh, NS } from '../src/client/locales.ts'
 
-afterEach(() => { cleanup() })
+const controllers = new Set<PlanningController>()
+afterEach(() => { cleanup(); for (const controller of controllers) controller.dispose(); controllers.clear() })
 beforeEach(() => { localStorage.clear() })
 
 const t = ((key: string) => (zh as Record<string, string>)[key] ?? key) as TranslateNS<typeof NS>
 
-const AUTHENTICATED: SakiWireAccessProjection = {
+const AUTHENTICATED: Extract<SakiWireAccessProjection, { kind: 'authenticated' }> = {
   kind: 'authenticated',
   principal: { id: 'principal-0a1b2c3d-0000-4000-8000-000000000001', displayName: '你' },
   expiresAt: 1,
   requestToken: 'token-1',
-} as SakiWireAccessProjection
+} as Extract<SakiWireAccessProjection, { kind: 'authenticated' }>
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -35,14 +37,16 @@ function deferred<T>() {
 }
 
 function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { page: 'work' | 'project' }) {
-  const navigation = createSakiNavigationStore().create()
+  const fixture = planningFixture()
+  const { navigation, controller } = fixture
+  controllers.add(controller)
+  fixture.api.readAccess.mockImplementation(readAccess)
   const subscribe = (listener: () => void) => navigation.store.subscribe(listener)
   const getSnapshot = () => navigation.store.getSnapshot()
   const useNavigation = <S,>(select: (state: ReturnType<typeof getSnapshot>) => S): S =>
     select(useSyncExternalStore(subscribe, getSnapshot))
   const face = {
-    readAccess: vi.fn(readAccess),
-    exchangeBootstrap: vi.fn(),
+    ...fixture.api,
     queryProjectIndex: vi.fn(),
     inspectProjectSelection: vi.fn(),
     queryDevelopmentWorkspace: vi.fn(),
@@ -53,8 +57,14 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
     ...face,
     nav: navigation.actions,
     useNavigation,
+    planning: controller,
+    openSession: vi.fn(),
+    exchangeBootstrap: controller.exchangeBootstrap,
+    usePlanning: (select: (state: ReturnType<typeof controller.getSnapshot>) => unknown) =>
+      select(useSyncExternalStore(controller.subscribe, controller.getSnapshot)),
     t,
   } as unknown as Parameters<typeof SakiSurfaceRoot>[0]
+  controller.start()
   return { navigation, face, props }
 }
 
@@ -89,7 +99,7 @@ describe('SakiSurfaceRoot', () => {
     fireEvent.change(screen.getByLabelText('粘贴 bootstrap secret'), { target: { value: 'secret-1' } })
     fireEvent.click(screen.getByRole('button', { name: '完成引导' }))
     await waitFor(() => { expect(screen.getByRole('heading', { name: '我的工作' })).toBeTruthy() })
-    expect(face.exchangeBootstrap).toHaveBeenCalledWith('secret-1')
+    expect(face.exchangeBootstrap).toHaveBeenCalledWith('secret-1', expect.any(AbortSignal))
     // The work page's 打开项目 action routes through the shared navigation actions.
     fireEvent.click(screen.getByRole('button', { name: '打开项目' }))
     expect(navigation.store.getSnapshot().surface).toBe('project')

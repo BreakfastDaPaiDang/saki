@@ -11,6 +11,9 @@ import {
   sakiBranchDeliveryIntentResultSchema,
   sakiBranchDeliveryResultSchema,
   sakiBoardResultSchema,
+  sakiWorkItemViewResultSchema,
+  sakiProjectMilestonesResultSchema,
+  sakiProjectMappingResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiCreateCommitResultSchema,
   sakiCreateWorkItemResultSchema,
@@ -24,6 +27,8 @@ import {
   sakiRegisterDevelopmentProjectResultSchema,
   sakiProjectIndexResultSchema,
   sakiProjectSettingsResultSchema,
+  sakiProjectionWatchRequestSchema,
+  sakiProjectionWatchResultSchema,
   sakiMoveWorkItemResultSchema,
   sakiMyWorkResultSchema,
   sakiStageFilesResultSchema,
@@ -44,6 +49,9 @@ import type {
   SakiWireBranchDeliveryResult,
   SakiWireBoardRefresh,
   SakiWireBoardResult,
+  SakiWireWorkItemViewResult,
+  SakiWireProjectMilestonesResult,
+  SakiWireProjectMappingResult,
   SakiWireConfigureGitHubSynchronizationIntent,
   SakiWireConfigureGitHubSynchronizationResult,
   SakiWireCreateCommitIntent,
@@ -62,6 +70,8 @@ import type {
   SakiWireProjectIndexResult,
   SakiWireProjectChangesResult,
   SakiWireProjectSettingsResult,
+  SakiWireProjectionCursor,
+  SakiWireProjectionWatchResult,
   SakiWireMoveWorkItemIntent,
   SakiWireMoveWorkItemResult,
   SakiWireMarkBranchDeliveryInReviewIntent,
@@ -91,6 +101,13 @@ const REQUEST_TOKEN_HEADER = 'x-saki-request-token'
  * failures, and invalid outbound payloads reject the returned Promise.
  */
 export interface SakiHostClient {
+  /**
+   * Wait for a committed change or heartbeat before re-reading protected Projections.
+   * @param cursor - last observed cursor; null synchronizes a fresh Client.
+   * @param signal - cancellation when the observing Client leaves.
+   * @returns an invalidation hint or unavailable after access expires or is revoked.
+   */
+  watchProjections(cursor: SakiWireProjectionCursor | null, signal: AbortSignal): Promise<SakiWireProjectionWatchResult>
   /**
    * Read the current browser access state.
    * @param signal - optional cancellation.
@@ -202,6 +219,29 @@ export interface SakiHostClient {
     refresh: SakiWireBoardRefresh,
     signal?: AbortSignal,
   ): Promise<SakiWireBoardResult>
+  /**
+   * Read complete mapping choices for the selected Project.
+   * @param projectId - selected Project.
+   * @param signal - optional cancellation.
+   * @returns complete field choices with a configuration revision, or failure.
+   */
+  queryProjectMapping(projectId: SakiWireProjectId, signal?: AbortSignal): Promise<SakiWireProjectMappingResult>
+  /**
+   * Read a Work Item's body and durable references.
+   * @param projectId - selected Project.
+   * @param workItemId - confirmed Work Item identity.
+   * @param signal - optional cancellation.
+   * @returns detail or an explicit failure.
+   */
+  queryWorkItemView(projectId: SakiWireProjectId, workItemId: SakiWireMoveWorkItemIntent['workItemId'], signal?: AbortSignal): Promise<SakiWireWorkItemViewResult>
+  /**
+   * List a page of Milestones already tracked by this Project.
+   * @param projectId - selected Project.
+   * @param after - previous page cursor, or null for the first page.
+   * @param signal - optional cancellation.
+   * @returns safe Milestone summaries and the next cursor.
+   */
+  queryProjectMilestones(projectId: SakiWireProjectId, after: SakiWireSaveMilestoneDeliveryIntent['release']['milestoneId'] | null, signal?: AbortSignal): Promise<SakiWireProjectMilestonesResult>
   /**
    * Read one Work Item's Branch Delivery projection.
    * @param projectId - stable Project id.
@@ -454,12 +494,21 @@ export class SakiHostClientService extends Service implements SakiHostClient {
 
   private readonly connection: ConnectionHandle
 
-  /** @param ctx - Client context carrying Connection. */
+  /**
+   * @param ctx - Client context carrying Connection.
+   */
   constructor(ctx: Context) {
     super(ctx, 'sakiHostClient')
     const connection = ctx.get('connection') as ConnectionHandle | undefined
     if (connection === undefined) throw new Error('saki Host client requires the active Connection carrier')
     this.connection = connection
+  }
+
+  /** @inheritdoc */
+  async watchProjections(cursor: SakiWireProjectionCursor | null, signal: AbortSignal): Promise<SakiWireProjectionWatchResult> {
+    return sakiProjectionWatchResultSchema.parse(await this.call(
+      'control/watch', sakiProjectionWatchRequestSchema.parse({ cursor }), signal,
+    ))
   }
 
   /** @inheritdoc */
@@ -573,6 +622,21 @@ export class SakiHostClientService extends Service implements SakiHostClient {
       { type: 'board', projectId, refresh },
       signal,
     ))
+  }
+
+  /** @inheritdoc */
+  async queryProjectMapping(projectId: SakiWireProjectId, signal?: AbortSignal): Promise<SakiWireProjectMappingResult> {
+    return sakiProjectMappingResultSchema.parse(await this.call('control/query', { type: 'project-mapping', projectId }, signal))
+  }
+
+  /** @inheritdoc */
+  async queryWorkItemView(projectId: SakiWireProjectId, workItemId: SakiWireMoveWorkItemIntent['workItemId'], signal?: AbortSignal): Promise<SakiWireWorkItemViewResult> {
+    return sakiWorkItemViewResultSchema.parse(await this.call('control/query', { type: 'work-item-view', projectId, workItemId }, signal))
+  }
+
+  /** @inheritdoc */
+  async queryProjectMilestones(projectId: SakiWireProjectId, after: SakiWireSaveMilestoneDeliveryIntent['release']['milestoneId'] | null, signal?: AbortSignal): Promise<SakiWireProjectMilestonesResult> {
+    return sakiProjectMilestonesResultSchema.parse(await this.call('control/query', { type: 'project-milestones', projectId, after }, signal))
   }
 
   /** @inheritdoc */

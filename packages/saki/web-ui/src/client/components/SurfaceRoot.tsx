@@ -3,13 +3,12 @@
  * renders the page the chain selector matched. Authentication gates the
  * pages; nothing Projection-backed renders before it resolves.
  */
-import { useCallback, useEffect, useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SakiWireAccessProjection } from '@breakfastdapaidang/saki-host-api/wire'
 import type { SakiInjected } from '../index.ts'
 import { NS } from '../locales.ts'
 import { AccessGate } from './AccessGate.tsx'
 import { WorkPage } from './WorkPage.tsx'
+import { PlanningPage } from './PlanningPage.tsx'
 import { ProjectPage } from './ProjectPage.tsx'
 
 /** Full composed props for the Saki surface root. */
@@ -25,39 +24,24 @@ export type SurfaceRootProps =
  * @returns the surface element.
  */
 export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeof NS> }) {
-  const [access, setAccess] = useState<SakiWireAccessProjection | 'unavailable' | null>(null)
-  const [reloadKey, setReloadKey] = useState(0)
-  // Hooks run unconditionally before any early return below.
-  const projectId = props.useNavigation(state => state.projectId)
-
-  useEffect(() => {
-    let cancelled = false
-    void props.readAccess().then((projection) => {
-      if (!cancelled) setAccess(projection)
-    }).catch(() => {
-      if (!cancelled) setAccess('unavailable')
-    })
-    return () => { cancelled = true }
-    // The inject face is created once per apply, so readAccess is stable.
-  }, [props.readAccess, reloadKey])
-
-  const reload = useCallback(() => { setReloadKey(key => key + 1) }, [])
-  const exchange = props.exchangeBootstrap
-
+  const state = props.usePlanning(snapshot => snapshot)
+  const access = state.access
+  const projectId = props.useNavigation(snapshot => snapshot.projectId)
   if (access === null || access === 'unavailable' || access.kind !== 'authenticated') {
-    return <AccessGate access={access} reload={reload} t={props.t} exchange={async (secret) => {
-      const result = await exchange(secret)
-      if (result.ok) {
-        setAccess(result.access)
-      }
-      return result
-    }} />
+    return <AccessGate access={access} reload={() => { void props.planning.reloadAccess() }}
+      t={props.t} exchange={props.exchangeBootstrap} />
   }
   if (props.matched.page === 'work') {
     return <WorkPage openProject={() => { props.nav.showProject() }} t={props.t} />
   }
+  if (state.project !== null && state.project.address.view !== 'workspace') {
+    return <PlanningPage project={state.project} offline={state.offline} actions={props.planning}
+      nav={props.nav} openSession={props.openSession} t={props.t} />
+  }
   return (
     <ProjectPage
+      showRegisteredWorkspace={() => { props.planning.navigate({ view: 'workspace' }) }}
+      openBoard={() => { props.planning.navigate({ view: 'board' }) }}
       access={access}
       projectId={projectId}
       queryProjectIndex={props.queryProjectIndex}

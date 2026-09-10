@@ -1,6 +1,8 @@
 /** Exact Product App read operations. @module @breakfastdapaidang/saki-github-app/reads */
 
 import { z } from 'zod'
+import { readProjectFieldsFromSession } from './project-fields.ts'
+import { githubProjectFieldsFactSchema } from '@breakfastdapaidang/saki-github'
 import {
   GitHubProviderError,
   githubBranchSafetyFactSchema,
@@ -34,6 +36,8 @@ import type {
   GitHubIssueReadRequest,
   GitHubProjectFact,
   GitHubProjectReadRequest,
+  GitHubProjectFieldsReadRequest,
+  GitHubProjectFieldsFact,
   GitHubReleaseByTagObservation,
   GitHubReleaseByTagReadRequest,
   GitHubRepositoryFact,
@@ -760,4 +764,26 @@ export function invalid(operation: string): never {
  */
 export function notFound(resource: string): never {
   throw new GitHubProviderError({ code: 'not-found', resource })
+}
+
+/**
+ * Discover mapping choices only after verifying the exact Project owner.
+ * @param request - exact Project and Installation identity.
+ * @param privateKey - operation-scoped signing material.
+ * @param config - validated provider limits.
+ * @param signal - operation lifetime.
+ * @param queue - installation scheduler.
+ * @returns complete field choices with their observation time.
+ */
+export async function readProjectFields(
+  request: GitHubProjectFieldsReadRequest,
+  privateKey: string,
+  config: ResolvedConfig,
+  signal: AbortSignal,
+  queue: InstallationPriorityQueue,
+): Promise<GitHubProjectFieldsFact> {
+  await readProject({ ...request, kind: 'project' }, privateKey, config, signal, queue)
+  const session = await createSession(request.installation, privateKey, undefined, config, signal, queue)
+  const fields = await readProjectFieldsFromSession(session, request.projectId, config, signal)
+  return githubProjectFieldsFactSchema.parse({ projectId: request.projectId, fields, observedAt: Date.now() })
 }

@@ -30,6 +30,8 @@ Saki 私有 GitHub Service Definition 注册 `ctx.sakiGitHub`。它拥有提供�
 <a id="capability-interface"></a>
 ## 能力接口
 
+`project-fields` 读取返回准确 Project 的完整现有字段集合，字段 id 与各单选字段的选项 id 均不重复。Consumer 使用这些原始选项显式修复映射，不猜测名称，也不要求旧 Status 字段仍然有效。
+
 `SakiGitHub.read(request, signal)` 由可通过声明合并扩展的 `GitHubReadMap` 确定类型。它定义 GitHub App installation、Repository、Issue revision、完整且有界的 Issue detail、branch safety、精确 branch head、Project v2、pull request 与 branch association、精确 Commit 的原始 CI source、完整分页的 Milestone Issue scope、精确 `refs/tags/saki-v*` 引用、递归 annotated tag 剥离、按 tag 查找 Release、经 installation 授权或公开的精确 Commit，以及 Commit 比较读取。Branch safety 描述策略，而 branch-head 独立返回精确 remote Commit 或明确缺失。CI fact 保留 workflow、run、check 与 commit-status identity，不派生 Saki success。
 
 `pull-request-reviews` read 为一个精确 pull request 及其 head Commit 返回完整且有界的 fact。它保留每项 review 的原始 GitHub state 和可空的 author、Commit 与 submission time，但不具有验收决定权。Provider 在每一页校验请求的 pull-request、Repository 和 owner identity，以及稳定的 head、更新时间和 `totalCount`；cursor loop、重复 review id、计数缺口或达到配置的 page 与 item 边界都会拒绝本次 read，而不会返回部分集合。

@@ -99,7 +99,23 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/github-app/src/index.ts:76`](../packages/saki/github-app/src/index.ts)
+Source: [`packages/saki/github-app/src/index.ts:77`](../packages/saki/github-app/src/index.ts)
+
+<a id="breakfastdapaidangsaki-host-api"></a>
+
+## `@breakfastdapaidang/saki-host-api`
+
+需要： `connection` · `sakiControlPlane`
+
+```ts config-catalog
+/** Deployment timing for authenticated Projection invalidation reads. */
+export interface Config {
+  /** Maximum idle wait before clients recheck access and retained Projection freshness. */
+  changeWaitMs?: number
+}
+```
+
+Source: [`packages/saki/host-api/src/index.ts:70`](../packages/saki/host-api/src/index.ts)
 
 <a id="breakfastdapaidangsaki-tool-intervention"></a>
 
@@ -3540,7 +3556,6 @@ export interface Config {
 这些插件通过 `cordis.yml` 中不含 `config:` 块的条目加载；它们未声明任何配置接口。
 
 - `@breakfastdapaidang/saki-bundle` ([`packages/saki/bundle/src/index.ts`](../packages/saki/bundle/src/index.ts))
-- `@breakfastdapaidang/saki-host-api` — 需要 `connection` · `sakiControlPlane` ([`packages/saki/host-api/src/index.ts`](../packages/saki/host-api/src/index.ts))
 - `@breakfastdapaidang/saki-web-ui` ([`packages/saki/web-ui/src/index.ts`](../packages/saki/web-ui/src/index.ts))
 - `@deepseek-ai/dsh-acp-app` — 需要 `cmdlineArgs` ([`packages/bundle/acp-app/src/index.ts`](../packages/bundle/acp-app/src/index.ts))
 - `@deepseek-ai/dsh-agent` ([`packages/core/agent/src/index.ts`](../packages/core/agent/src/index.ts))

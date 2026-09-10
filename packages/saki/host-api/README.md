@@ -33,6 +33,7 @@ The private dual-face Saki Host API adapts the control plane to the shared Conne
 | `access/read` | `{}` | Closed Access Projection |
 | `access/exchange` | `{ secret }` | Bootstrap exchange result; `Set-Cookie` stays outside JSON |
 | `access/logout` | `{}` plus request-token header | Logout result; cookie expiry stays outside JSON |
+| `control/watch` | `{ cursor: null \| priorCursor }` | Authenticated invalidation cursor after a committed change or heartbeat; contains no product facts |
 | `control/query` | `{ type: 'inspect-project-selection', hostId, directoryLocator }` | Authorized Projection containing a safe selection or bounded selection rejection, or outer denied/unavailable |
 | `control/query` | `{ type: 'project-index' }` | Revisioned Project-index Projection or denial |
 | `control/query` | `{ type: 'development-workspace', projectId, expectedRegistryRevision }` | One Development Workspace Projection or typed rejection |
@@ -40,6 +41,9 @@ The private dual-face Saki Host API adapts the control plane to the shared Conne
 | `control/query` | `{ type: 'project-diff', projectId, expectedRegistryRevision, request }` | One bounded file-scoped Diff page selected by opaque change id |
 | `control/query` | `{ type: 'project-settings', projectId }` | Current safe GitHub synchronization configuration, activation state, and complete-scan evidence, or typed rejection |
 | `control/query` | `{ type: 'board', projectId, refresh: 'cached' \| 'interactive' }` | Current complete Board generation and synchronization evidence, or typed rejection |
+| `control/query` | `{ type: 'work-item-view', projectId, workItemId }` | Current targeted-confirmed Work Item, independently read Issue body, execution and delivery evidence, and recent activity references |
+| `control/query` | `{ type: 'project-milestones', projectId, after: null \| milestoneId }` | Up to 32 configured Milestone destinations and the next cursor |
+| `control/query` | `{ type: 'project-mapping', projectId }` | Complete existing GitHub fields, configuration revision, and current mapping-edit permission |
 | `control/query` | `{ type: 'my-work' }` | Complete current-Principal My Work Projection, or typed denied/unavailable result |
 | `control/query` | `{ type: 'attention' }` | Complete current-Principal derived Attention Projection, or typed denied/unavailable result |
 | `control/query` | `{ type: 'branch-delivery', projectId, workItemId, refresh: 'cached' \| 'interactive' }` | Browser-safe exact-Commit delivery and targeted source evidence, or typed rejection |
@@ -65,6 +69,8 @@ Branch Delivery reviews carry a complete exact-pull-request fact with independen
 <a id="transport-responsibilities"></a>
 ## Transport responsibilities
 
+`changeWaitMs` configures the maximum idle `control/watch` wait and defaults to 25,000 ms. The Host authenticates before waiting and again before returning; cancellation and Host disposal release every wait. Cursor changes are invalidation hints, so clients re-read complete authorized Projections. A new Host cursor also invalidates values retained across restart.
+
 Connection owns route trust, bounded JSON framing, correlation, cancellation, disposal, and JSON Content-Type. The `/saki` registration requires `Cache-Control: no-store` and the fixed opaque error on the Connection channel, so those policies also cover failures before the Host adapter runs. The Host adapter reads Cookie, Origin, and `x-saki-request-token` only from Connection's trusted request metadata. It asks the control plane's Host-only resolver for an AuthenticationContext and consumes the opaque post-commit cookie handoff. Neither AuthenticationContext nor raw cookie material enters browser JSON.
 
 The browser client uses same-origin credentials on every call. Logout and every Intent submission require the current request token. It exposes exact methods for selection inspection, Project-index, Development-Workspace, Changes, file-scoped Diff, Project Settings, Board, `queryMyWork`, `queryAttention`, Branch Delivery and Milestone View lookup, first registration, field-scoped GitHub synchronization configuration, structured Git and Work Item mutations, all six Branch Delivery transitions, both Milestone Delivery transitions, `giveWorkItemToAgent`, and `answerIntervention`; each method parses only its corresponding result schema. `queryMyWork()`, `queryAttention()`, `queryBoard(projectId, 'cached')`, `queryBranchDelivery(projectId, workItemId, 'cached')`, and `queryMilestoneView(projectId, milestoneId, 'cached')` are pure durable reads. The three refreshable queries' `interactive` policies request bounded refresh work while still returning only validated projections. Business denials remain typed successful RPC values, while cancellation, carrier failures, and schema mismatches reject through the fixed opaque Connection RPC error envelope.
@@ -83,7 +89,7 @@ None; the package neither assembles nor sends a provider request.
 - **Constrained Board writes** — the Host API exposes CreateWorkItem and MoveWorkItem only. Rebind, retire, arbitrary Issue editing, and provider-authority inputs remain outside its operation set.
 - **Constrained structured Git writes** — CreateCommit is hook-free and unsigned; repositories that require hooks, signing, or unsupported external filters use Terminal or a later explicitly trusted provider.
 - **No frontend composition** — this package supplies the client service and schemas, not routes or rendered UI.
-- **Projection schema only** — Work Item detail and Agent Run schemas validate frontend fixtures but are not connected to `control/query`, the Host route, or the browser client in this slice.
+- **Bounded planning history** — Work Item views include the latest 32 activity references; complete Intent records remain with the control plane. Project Milestones enumerate existing delivery records.
 
 ### Dev Note
 

@@ -155,6 +155,15 @@ const otherFieldSchema = z.object({
 /** Strict raw Project-field union schema. */
 export const githubProjectFieldFactSchema = z.discriminatedUnion('kind', [singleSelectFieldSchema, otherFieldSchema])
 
+/** Complete field discovery with distinct field and single-select option identities. */
+export const githubProjectFieldsFactSchema = z.object({
+  projectId: githubProjectIdSchema,
+  fields: z.array(githubProjectFieldFactSchema).max(GITHUB_PROJECT_BOARD_FIELD_LIMIT).superRefine((fields, ctx) => {
+    rejectDuplicate(fields.map(field => field.id), 'Project field id', ctx)
+  }),
+  observedAt: safeTimestamp,
+}).strict()
+
 /** Strict raw Issue-fact schema. */
 export const githubIssueFactSchema = z.object({
   id: githubIssueIdSchema,
@@ -413,6 +422,9 @@ export const githubProjectReadRequestSchema = z.object({
   installation: githubInstallationProfileSchema,
   projectId: githubProjectIdSchema,
 }).strict()
+
+/** Strict field-discovery request for one exact Project and Installation. */
+export const githubProjectFieldsReadRequestSchema = githubProjectReadRequestSchema.extend({ kind: z.literal('project-fields') })
 
 /** Strict exact tag-reference read request schema. */
 export const githubTagReferenceReadRequestSchema = z.object({

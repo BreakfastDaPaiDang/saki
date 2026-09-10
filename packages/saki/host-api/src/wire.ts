@@ -1,6 +1,7 @@
 /** Browser-safe Saki Host API schemas and inferred wire values. @module @breakfastdapaidang/saki-host-api/wire */
 
 import { z } from 'zod'
+import type { Branded } from '@deepseek-ai/dsh-brand'
 import {
   canonicalDigest,
   commitHostOperationRequestSchema,
@@ -43,6 +44,7 @@ import {
   githubIssueIdSchema,
   githubMilestoneFactSchema,
   githubMilestoneIdSchema,
+  githubProjectFieldFactSchema,
   githubProjectBoardFingerprintSchema,
   githubProjectIdSchema,
   githubPullRequestFactSchema,
@@ -223,6 +225,22 @@ function boundedArray<T extends z.ZodType>(element: T, minimum: number, maximum:
 /** Strict body schema for endpoints with no operation fields. */
 export const sakiEmptyRequestSchema = z.object({}).strict()
 
+/** Opaque cursor replaced after a committed change or Host restart. */
+export type SakiWireProjectionCursor = Branded<'SakiProjectionCursor'>
+const projectionCursorSchema = z.uuid().transform(value => value as SakiWireProjectionCursor)
+
+/** Long-poll request containing no Principal, Project, or authority selectors. */
+export const sakiProjectionWatchRequestSchema = z.object({ cursor: projectionCursorSchema.nullable() }).strict()
+
+/** An authenticated invalidation hint, or the same generic unavailable response as a query. */
+export const sakiProjectionWatchResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), cursor: projectionCursorSchema }).strict(),
+  z.object({ ok: z.literal(false), reason: z.literal('unavailable') }).strict(),
+])
+
+/** Browser-safe invalidation result; every product fact still requires a protected query. */
+export type SakiWireProjectionWatchResult = z.infer<typeof sakiProjectionWatchResultSchema>
+
 /** Strict bootstrap exchange body schema. */
 export const sakiBootstrapExchangeRequestSchema = z.object({
   secret: z.string().min(1).max(512),
@@ -263,6 +281,9 @@ export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
     projectId,
     refresh: z.enum(['cached', 'interactive']),
   }).strict(),
+  z.object({ type: z.literal('project-mapping'), projectId }).strict(),
+  z.object({ type: z.literal('work-item-view'), projectId, workItemId: boardWorkItemId }).strict(),
+  z.object({ type: z.literal('project-milestones'), projectId, after: githubMilestoneIdSchema.nullable() }).strict(),
   z.object({
     type: z.literal('branch-delivery'),
     projectId,
@@ -2362,6 +2383,16 @@ const branchDeliveryBrowserRecordSchema = z.object({
   updatedAt: safeInteger,
 }).strict()
 
+const branchDeliveryViewSchema: z.ZodType<BranchDeliveryQueryProjection['branchDelivery']> = z.object({
+  delivery: branchDeliveryBrowserRecordSchema,
+  remoteRef: branchDeliverySourceProjectionSchema(githubBranchHeadFactSchema),
+  pullRequest: branchDeliverySourceProjectionSchema(githubPullRequestFactSchema),
+  reviews: branchDeliverySourceProjectionSchema(githubPullRequestReviewsFactSchema),
+  ci: branchDeliverySourceProjectionSchema(githubCommitCiFactSchema).extend({
+    confirmedSummary: commitCiSummarySchema.optional(),
+  }),
+}).strict()
+
 /** Strict browser-safe Branch Delivery projection without Host-local or credential references. */
 export const sakiBranchDeliveryProjectionSchema: z.ZodType<BranchDeliveryQueryProjection> = z.object({
   type: z.literal('branch-delivery'),
@@ -2369,15 +2400,7 @@ export const sakiBranchDeliveryProjectionSchema: z.ZodType<BranchDeliveryQueryPr
     requested: z.enum(['cached', 'interactive']),
     state: z.enum(['cached', 'confirmed', 'unavailable', 'immutable']),
   }).strict(),
-  branchDelivery: z.object({
-    delivery: branchDeliveryBrowserRecordSchema,
-    remoteRef: branchDeliverySourceProjectionSchema(githubBranchHeadFactSchema),
-    pullRequest: branchDeliverySourceProjectionSchema(githubPullRequestFactSchema),
-    reviews: branchDeliverySourceProjectionSchema(githubPullRequestReviewsFactSchema),
-    ci: branchDeliverySourceProjectionSchema(githubCommitCiFactSchema).extend({
-      confirmedSummary: commitCiSummarySchema.optional(),
-    }),
-  }).strict(),
+  branchDelivery: branchDeliveryViewSchema,
 }).strict()
 
 const releaseEvidenceBlockageSchema = z.union([
@@ -2645,6 +2668,52 @@ export const sakiMilestoneViewResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), reason: z.enum(['denied', 'not-found']) }).strict(),
 ]) satisfies z.ZodType<SakiQueryResult<'milestone-view'>>
 
+
+const timestamp = z.number().int().nonnegative()
+const planningMilestoneSchema = z.object({
+  id: githubMilestoneIdSchema, number: z.number().int().positive(), title: z.string().nullable(),
+  url: z.url().nullable(), dueAt: timestamp.nullable(), issueState: z.enum(['open', 'closed']).nullable(),
+  observedAt: timestamp.nullable(), phase: z.enum(['planned', 'in-progress', 'ready-to-release', 'released', 'canceled']),
+  repairRequired: z.boolean(), tagName: githubReleaseTagNameSchema,
+}).strict()
+
+/** Strict safe detail response with independently unavailable Issue body. */
+export const sakiWorkItemViewResultSchema: z.ZodType<SakiQueryResult<'work-item-view'>> = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: z.object({
+    type: z.literal('work-item-view'), projectId, workItem: boardWorkItemWireSchema,
+    body: z.discriminatedUnion('state', [
+      z.object({ state: z.literal('confirmed'), markdown: z.string().max(65_536), issueUpdatedAt: timestamp, observedAt: timestamp, matchesBoard: z.boolean() }).strict(),
+      z.object({ state: z.literal('unavailable'), reason: z.enum(['provider-unavailable', 'mapping-unavailable', 'read-failed', 'stale-remote']) }).strict(),
+    ]),
+    assignments: z.array(z.object({ id: assignmentId, state: z.enum(['assigned', 'active', 'canceled', 'reconciliation-required']), primaryWorkSessionId: sakiWorkSessionIdSchema }).strict()),
+    runs: z.array(z.object({
+      id: sakiAgentRunIdSchema, assignmentId, workSessionId: sakiWorkSessionIdSchema,
+      sessionId: sakiAgentRunSessionId,
+      state: z.enum(['allocated', 'starting', 'running', 'waiting', 'resume-pending', 'canceled', 'reconciliation-required']),
+      createdAt: timestamp, updatedAt: timestamp,
+    }).strict()),
+    interventions: z.array(interventionProjectionSchema), milestones: z.array(planningMilestoneSchema),
+    branchDelivery: branchDeliveryViewSchema.nullable(),
+    activity: z.array(z.object({ intentId, type: z.enum(['create-work-item', 'move-work-item']), state: z.enum(['prepared', 'running', 'partial-failure', 'succeeded', 'conflict', 'reconciliation-required', 'canceled']), createdAt: timestamp, updatedAt: timestamp }).strict()).max(32),
+    earlierActivity: z.boolean(),
+  }).strict() }).strict(), boardFailureSchema,
+]) satisfies z.ZodType<SakiQueryResult<'work-item-view'>>
+
+/** Strict page of Milestones tracked by the selected Project. */
+export const sakiProjectMilestonesResultSchema: z.ZodType<SakiQueryResult<'project-milestones'>> = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: z.object({ type: z.literal('project-milestones'), projectId, items: z.array(planningMilestoneSchema).max(32), next: githubMilestoneIdSchema.nullable() }).strict() }).strict(), boardFailureSchema,
+]) satisfies z.ZodType<SakiQueryResult<'project-milestones'>>
+
+/** Complete mapping choices, fenced by the saved synchronization revision. */
+export const sakiProjectMappingResultSchema: z.ZodType<SakiQueryResult<'project-mapping'>> = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: z.object({
+    type: z.literal('project-mapping'), projectId, synchronizationRevision: revision, canConfigure: z.boolean(),
+    choices: z.object({
+      projectId: githubNodeId<GitHubProjectId>(), fields: z.array(githubProjectFieldFactSchema), observedAt: timestamp,
+    }).strict(),
+  }).strict() }).strict(), boardFailureSchema,
+])
+
 /** Union schema retained for callers that intentionally handle every query kind. */
 export const sakiQueryResultSchema = z.union([
   sakiMyWorkResultSchema,
@@ -2656,6 +2725,9 @@ export const sakiQueryResultSchema = z.union([
   sakiProjectDiffResultSchema,
   sakiProjectSettingsResultSchema,
   sakiBoardResultSchema,
+  sakiWorkItemViewResultSchema,
+  sakiProjectMilestonesResultSchema,
+  sakiProjectMappingResultSchema,
   sakiBranchDeliveryResultSchema,
   sakiMilestoneViewResultSchema,
 ])
@@ -3343,3 +3415,11 @@ export type SakiWireAnswerInterventionResult = z.infer<typeof sakiAnswerInterven
 export type SakiWireHostId = SakiHostId
 /** Branded Project id accepted by the browser client. */
 export type SakiWireProjectId = SakiDevelopmentProjectId
+
+/** Browser Work Item detail result. */
+export type SakiWireWorkItemViewResult = z.infer<typeof sakiWorkItemViewResultSchema>
+/** Browser Milestone destination page. */
+export type SakiWireProjectMilestonesResult = z.infer<typeof sakiProjectMilestonesResultSchema>
+
+/** Browser mapping choices result. */
+export type SakiWireProjectMappingResult = z.infer<typeof sakiProjectMappingResultSchema>

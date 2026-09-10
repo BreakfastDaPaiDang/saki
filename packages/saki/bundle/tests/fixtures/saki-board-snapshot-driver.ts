@@ -190,7 +190,9 @@ try {
         ...(fakeProviderEnabled ? [{
           insert: [{
             id: 'saki-board-snapshot-github',
-            name: './tests/fixtures/saki-board-fake-github.ts',
+            name: process.env.SAKI_PLANNING_BROWSER_FIXTURE === '1'
+              ? './tests/fixtures/saki-planning-fake-github.ts'
+              : './tests/fixtures/saki-board-fake-github.ts',
           }],
         }] : []),
         ...(agentRunSnapshot || deliverySnapshot ? [
@@ -232,7 +234,9 @@ try {
           product: 'saki',
           bootstrapPurpose: handoff.purpose,
           bootstrapSecret: handoff.consume(),
-          url: `http://127.0.0.1:${String(app.webServer.port)}`,
+          url: process.env.SAKI_PLANNING_BROWSER_FIXTURE === '1'
+            ? app.connection.authenticatedUrl(`http://127.0.0.1:${String(app.webServer.port)}`)
+            : `http://127.0.0.1:${String(app.webServer.port)}`,
         })}\n`)
       }
       await stopped

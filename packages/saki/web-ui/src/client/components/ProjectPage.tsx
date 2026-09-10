@@ -22,6 +22,8 @@ import css from './ProjectPage.module.css'
 
 /** Props for the 项目 page. */
 export interface ProjectPageProps {
+  openBoard?: () => void
+  showRegisteredWorkspace?: () => void
   access: Extract<SakiWireAccessProjection, { kind: 'authenticated' }>
   /** Selected Project id from the navigation store (null renders the selector). */
   projectId: SakiWireProjectId | null
@@ -98,6 +100,7 @@ export function ProjectPage(props: ProjectPageProps) {
   if (props.projectId !== null) {
     return (
       <WorkspaceView
+        openBoard={props.openBoard}
         projectId={props.projectId}
         index={index}
         queryDevelopmentWorkspace={props.queryDevelopmentWorkspace}
@@ -178,6 +181,7 @@ export function ProjectPage(props: ProjectPageProps) {
             void (async () => {
               await loadIndex()
               props.nav.selectProject(projectId)
+              props.showRegisteredWorkspace?.()
             })()
           }}
           t={t}
@@ -189,6 +193,7 @@ export function ProjectPage(props: ProjectPageProps) {
 
 /** The Development Workspace of one selected Project. */
 function WorkspaceView(props: {
+  openBoard?: (() => void) | undefined
   projectId: SakiWireProjectId
   index: IndexState
   queryDevelopmentWorkspace: ProjectPageProps['queryDevelopmentWorkspace']
@@ -229,6 +234,7 @@ function WorkspaceView(props: {
           {workspace.phase === 'ready' ? workspace.projection.project.projectTitle : props.projectId}
         </h1>
         <div className={css.workspaceActions}>
+          {props.openBoard === undefined ? null : <button type="button" className={css.secondaryAction} onClick={props.openBoard}>{t('planning.board')}</button>}
           <button type="button" className={css.secondaryAction} onClick={() => { props.nav.clearProject() }}>
             {t('workspace.backToSelector')}
           </button>

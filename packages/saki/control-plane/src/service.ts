@@ -14,6 +14,8 @@ import type {} from '@deepseek-ai/dsh-workspace'
 import {
   githubCommitIdSchema,
   type GitHubCommitId,
+  type GitHubIssueDetailFact,
+  type GitHubProjectFieldsFact,
   type SakiGitHub,
 } from '@breakfastdapaidang/saki-github'
 import type { ActiveHostProjectBinding } from '@breakfastdapaidang/saki-execution'
@@ -104,6 +106,8 @@ import {
   projectMilestoneView,
 } from './milestone-view.ts'
 import { readReleaseSnapshotV1 } from './release-snapshot-reader.ts'
+import { planningBody, planningMilestones, planningReferences, planningWorkItem } from './planning-views.ts'
+import type { SakiWorkItemBodyProjection } from './planning-views.ts'
 import type {
   ReleaseEvidencePolicyV1Expectation,
   ReleaseEvidencePolicyV1Snapshot,
@@ -148,6 +152,7 @@ import type {
   SakiBootstrapTransportContext,
   SakiBrowserSessionId,
   SakiBoardWorkItemId,
+  SakiBoardWorkItemProjection,
   SakiBoardProjection,
   SakiChangedDisposer,
   SakiDevelopmentProjectId,
@@ -523,7 +528,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     ),
   }
 
-  /** @param ctx - owning Cordis context. @param config - resolved access configuration. */
+  /**
+   * @param ctx - owning Cordis context.
+   * @param config - resolved access configuration.
+   */
   constructor(ctx: Context, private readonly config: Required<Config>) {
     super(ctx, 'sakiControlPlane')
     this.installationState = Object.freeze({
@@ -1071,6 +1079,35 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           },
         }
       }
+      case 'project-mapping': {
+        if (!this.authorized(authentication, 'project-settings:read')) return { ok: false, reason: 'denied' }
+        const settings = this.githubSynchronization.projectSettings(query.projectId)
+        if (settings === 'not-found') return { ok: false, reason: 'not-found' }
+        const configuration = settings.synchronization.pending?.configuration ?? settings.synchronization.active?.configuration
+        const github = this.githubProvider
+        const consumer = this.githubSynchronizationConsumer
+        if (configuration === undefined || github === undefined) return { ok: false, reason: 'unavailable' }
+        let choices: GitHubProjectFieldsFact
+        try {
+          choices = await github.read<'project-fields'>({ kind: 'project-fields', projectId: configuration.projectNodeId,
+            installation: { appId: configuration.appId, installationId: configuration.githubInstallationId,
+              accountId: configuration.accountNodeId, privateKeyRef: configuration.credentialRef },
+          }, signal)
+        } catch {
+          // Field discovery fails independently from the retained Board and settings.
+          signal.throwIfAborted()
+          return { ok: false, reason: 'unavailable' }
+        }
+        signal.throwIfAborted()
+        if (!this.authorized(authentication, 'project-settings:read')) return { ok: false, reason: 'denied' }
+        const current = this.githubSynchronization.projectSettings(query.projectId)
+        if (consumer !== this.githubSynchronizationConsumer || choices.projectId !== configuration.projectNodeId
+          || current === 'not-found' || current.synchronization.revision !== settings.synchronization.revision) return { ok: false, reason: 'unavailable' }
+        return { ok: true, projection: { type: 'project-mapping', projectId: query.projectId,
+          synchronizationRevision: current.synchronization.revision,
+          canConfigure: this.authorized(authentication, 'github-synchronization:configure'), choices,
+        } }
+      }
       case 'project-settings': {
         if (!this.authorized(authentication, 'project-settings:read')) return { ok: false, reason: 'denied' }
         const projection = this.githubSynchronization.projectSettings(query.projectId)
@@ -1108,24 +1145,37 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           if (scheduled === 'not-found') return { ok: false, reason: 'not-found' }
           this.githubSynchronizationConsumer?.wake()
         }
-        const projection = this.githubSynchronization.board(query.projectId)
-        if (projection === 'not-found') return { ok: false, reason: 'not-found' }
-        return {
-          ok: true,
-          projection: {
-            ...projection,
-            ...this.githubWorkItemOperations.project(
-              query.projectId,
-              projection.confirmed,
-              projection.effectiveMutationAvailability,
-              {
-                'work-item:create': this.authorized(authentication, 'work-item:create'),
-                'work-item:move': this.authorized(authentication, 'work-item:move'),
-              },
-              projection.checkpoint?.observedAt,
-            ),
-          },
-        }
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        const projection = this.planningBoard(authentication, query.projectId)
+        return projection === 'not-found' ? { ok: false, reason: 'not-found' } : { ok: true, projection }
+      }
+      case 'project-milestones': {
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        if (this.githubSynchronization.board(query.projectId) === 'not-found') return { ok: false, reason: 'not-found' }
+        return { ok: true, projection: planningMilestones(this.milestoneDeliveryTable.entries(), query.projectId, query.after) }
+      }
+      case 'work-item-view': {
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        const initial = this.planningBoard(authentication, query.projectId)
+        if (initial === 'not-found') return { ok: false, reason: 'not-found' }
+        const item = planningWorkItem(initial, query.workItemId)
+        if (item === undefined) return { ok: false, reason: 'not-found' }
+        const body = await this.readPlanningBody(query.projectId, item, signal)
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        const current = this.planningBoard(authentication, query.projectId)
+        const workItem = current === 'not-found' ? undefined : planningWorkItem(current, query.workItemId)
+        if (workItem === undefined) return { ok: false, reason: 'not-found' }
+        const references = planningReferences(query.projectId, workItem, {
+          assignments: this.workAssignmentTable.entries(), runs: this.agentRunTable.entries(),
+          interventions: this.interventionRequestTable.entries(), activity: this.githubWorkItemIntentTable.entries(),
+          milestones: this.milestoneDeliveryTable.entries(),
+        })
+        return { ok: true, projection: {
+          type: 'work-item-view', projectId: query.projectId, workItem,
+          body: workItem.remoteFingerprint === item.remoteFingerprint ? body : { state: 'unavailable', reason: 'stale-remote' },
+          ...references,
+          branchDelivery: this.branchDeliveryOperations.project(branchDeliveryId(query.projectId, query.workItemId), Date.now()) ?? null,
+        } }
       }
       case 'branch-delivery': {
         if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
@@ -1210,6 +1260,54 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       /* v8 ignore next 2 -- SakiQuery is closed and Host wire parsing rejects unknown tags before dispatch. */
       default: return assertNever(query)
     }
+  }
+
+  private planningBoard(authentication: SakiAuthenticationContext, projectId: SakiDevelopmentProjectId): SakiBoardProjection | 'not-found' {
+    const projection = this.githubSynchronization.board(projectId)
+    if (projection === 'not-found') return projection
+    return { ...projection, ...this.githubWorkItemOperations.project(
+      projectId, projection.confirmed, projection.effectiveMutationAvailability,
+      {
+        'work-item:create': this.authorized(authentication, 'work-item:create'),
+        'work-item:move': this.authorized(authentication, 'work-item:move'),
+      }, projection.checkpoint?.observedAt,
+    ) }
+  }
+
+  private async readPlanningBody(
+    projectId: SakiDevelopmentProjectId,
+    item: SakiBoardWorkItemProjection,
+    signal: AbortSignal,
+  ): Promise<SakiWorkItemBodyProjection> {
+    const github = this.githubProvider
+    const consumer = this.githubSynchronizationConsumer
+    if (github === undefined) return { state: 'unavailable', reason: 'provider-unavailable' }
+    const settings = this.githubSynchronization.projectSettings(projectId)
+    const active = settings === 'not-found' ? undefined : settings.synchronization.active
+    if (active === undefined) return { state: 'unavailable', reason: 'mapping-unavailable' }
+    const configuration = active.configuration
+    let detail: GitHubIssueDetailFact
+    try {
+      detail = await github.read<'issue-detail'>({
+        kind: 'issue-detail',
+        installation: {
+          appId: configuration.appId, installationId: configuration.githubInstallationId,
+          accountId: configuration.accountNodeId, privateKeyRef: configuration.credentialRef,
+        },
+        repositoryId: configuration.repositoryNodeId, repositoryDatabaseId: configuration.repositoryDatabaseId,
+        issueId: item.source.issueId,
+      }, signal)
+    } catch {
+      // Provider read failures leave the other independently confirmed planning facts available.
+      signal.throwIfAborted()
+      return { state: 'unavailable', reason: 'read-failed' }
+    }
+    signal.throwIfAborted()
+    const current = this.githubSynchronization.projectSettings(projectId)
+    if (consumer !== this.githubSynchronizationConsumer || current === 'not-found'
+      || current.synchronization.active?.revision !== active.revision
+      || detail.repositoryDatabaseId !== configuration.repositoryDatabaseId) return { state: 'unavailable', reason: 'stale-remote' }
+    return planningBody(item, detail, Date.now())
   }
 
   private principalWorkProjectionSources(
@@ -1349,7 +1447,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         throw new MilestoneReleaseReadUnavailable(`fresh Board scan ended in ${scan.state}`)
       }
     }
-    if (this.githubSynchronizationConsumer !== consumer || this.githubProvider !== github) {
+    if (this.githubSynchronizationConsumer !== consumer) {
       throw new MilestoneReleaseReadUnavailable('GitHub Product App Provider changed during release read')
     }
     const registry = this.projects.registry()
@@ -1374,7 +1472,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       board: milestoneBoardEvidence(boardProjection, Date.now()),
     }, signal)
     signal.throwIfAborted()
-    if (this.githubSynchronizationConsumer !== consumer || this.githubProvider !== github) {
+    if (this.githubSynchronizationConsumer !== consumer) {
       throw new MilestoneReleaseReadUnavailable('GitHub Product App Provider changed during release read')
     }
     return snapshot
@@ -2442,12 +2540,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         synchronization: this.githubSynchronization,
         github: provider,
         attemptTtlMs: this.config.githubScanAttemptTtlMs,
+        notifyChanged: () => { this.notify(['project-settings', 'board']) },
         reportUnexpectedFailure: (scope) => {
           this.ctx.logger.error(`Saki GitHub synchronization ${scope} failed outside its typed failure interface`)
         },
       })
       this.githubProvider = provider
       this.githubSynchronizationConsumer = consumer
+      this.notify(['project-settings', 'board'])
       consumer.wake()
       const pendingPolling = this.runOwnedOperation(
         providerLifetime.signal,
@@ -2463,6 +2563,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         // Cordis drains the injected fiber before loading its replacement.
         this.githubSynchronizationConsumer = undefined
         this.githubProvider = undefined
+        this.notify(['project-settings', 'board'])
         await Promise.all([consumer.dispose(), pendingPolling, branchDeliveryRecovery])
       }, 'saki-control-plane.githubSynchronizationConsumer')
     })

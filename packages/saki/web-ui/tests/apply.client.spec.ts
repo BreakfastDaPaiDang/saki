@@ -5,13 +5,16 @@
  * gesture-driven Session-navigation hand-back, reload restore, and teardown
  * cleanup.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { apply, inject } from '@breakfastdapaidang/saki-web-ui/client'
 import { apply as hostApply } from '../src/index.ts'
+
+const contexts = new Set<Context>()
+afterEach(async () => { await Promise.all([...contexts].map(ctx => ctx.fiber.dispose())); contexts.clear() })
 
 interface NavigationSnapshot {
   surface: 'work' | 'project' | null
@@ -22,7 +25,7 @@ interface NavigationSnapshot {
 function fakeHostClient() {
   return {
     readAccess: vi.fn(async () => ({ kind: 'bootstrap-required' as const, message: 'Local bootstrap is required.' })),
-    exchangeBootstrap: vi.fn(),
+    exchangeBootstrap: vi.fn(async () => ({ ok: false as const, reason: 'unavailable' as const })),
     queryProjectIndex: vi.fn(),
     inspectProjectSelection: vi.fn(),
     queryDevelopmentWorkspace: vi.fn(),
@@ -32,6 +35,7 @@ function fakeHostClient() {
 
 async function bench() {
   const ctx = new Context()
+  contexts.add(ctx)
   await ctx.plugin(SlotRegistry).await()
   const layout = { requestSurface: vi.fn(), toggleSidebar: vi.fn(), openDetails: vi.fn(), closeDetails: vi.fn() }
   const sessionsList = createSnapshotStore<{ current: string | undefined }>({ current: undefined })
@@ -220,8 +224,8 @@ describe('saki-web-ui apply', () => {
     const signal = new AbortController().signal
     face.readAccess(signal)
     expect(hostClient.readAccess).toHaveBeenCalledWith(signal)
-    face.exchangeBootstrap('secret-1', signal)
-    expect(hostClient.exchangeBootstrap).toHaveBeenCalledWith('secret-1', signal)
+    await face.exchangeBootstrap('secret-1', signal)
+    expect(hostClient.exchangeBootstrap).toHaveBeenCalledWith('secret-1', expect.any(AbortSignal))
     face.queryProjectIndex(signal)
     expect(hostClient.queryProjectIndex).toHaveBeenCalledWith(signal)
     face.inspectProjectSelection('host-1', 'D:\\p', signal)

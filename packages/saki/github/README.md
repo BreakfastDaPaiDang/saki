@@ -30,6 +30,8 @@ The private Saki GitHub Service Definition registers `ctx.sakiGitHub`. It owns p
 <a id="capability-interface"></a>
 ## Capability interface
 
+The `project-fields` read returns the complete existing field collection for one exact Project, with distinct field ids and distinct single-select option ids. Consumers use these raw choices for explicit mapping repair without guessing names or requiring a valid old Status field.
+
 `SakiGitHub.read(request, signal)` is keyed by the declaration-merge extensible `GitHubReadMap`. It defines reads for an App installation, Repository, Issue revision, complete bounded Issue detail, branch safety, exact branch head, Project v2, pull request and branch association, raw exact-Commit CI sources, fully paginated Milestone Issue scope, exact `refs/tags/saki-v*` reference, recursive annotated-tag peeling, Release by tag, installation-authorized or public exact Commit, and Commit comparison. Branch safety describes policy, while branch-head independently returns the exact remote Commit or explicit absence. CI facts preserve workflow, run, check, and commit-status identities without deriving Saki success.
 
 The `pull-request-reviews` read returns one complete bounded fact for an exact pull request and head Commit. It retains each review's raw GitHub state and nullable author, Commit, and submission time without acceptance authority. A Provider verifies the requested pull-request, Repository, and owner identities plus stable head, update time, and `totalCount` on every page; cursor loops, duplicate review ids, count gaps, or configured page and item bounds reject the read instead of returning a partial collection.

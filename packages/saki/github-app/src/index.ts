@@ -35,6 +35,7 @@ import {
   readIssue,
   readIssueDetail,
   readProject,
+  readProjectFields,
   readReleaseByTag,
   readRepository,
   readTagObject,
@@ -95,7 +96,10 @@ export class SakiGitHubApp extends SakiGitHub {
   private readonly publicQueue = new InstallationPriorityQueue()
   private readonly scanGate: ScanConcurrencyGate
 
-  /** @param ctx - Host context carrying the credential-reference provider. @param config - resolved limits. */
+  /**
+   * @param ctx - Host context carrying the credential-reference provider.
+   * @param config - resolved limits.
+   */
   constructor(ctx: Context, private readonly config: ResolvedConfig) {
     super(ctx)
     this.scanGate = new ScanConcurrencyGate(config.maxConcurrentScans)
@@ -133,6 +137,9 @@ export class SakiGitHubApp extends SakiGitHub {
         }
         if (admitted.kind === 'branch-safety') {
           return await readBranchSafety(admitted, privateKey, this.config, operationSignal, queue)
+        }
+        if (admitted.kind === 'project-fields') {
+          return await readProjectFields(admitted, privateKey, this.config, operationSignal, queue)
         }
         if (admitted.kind === 'project') {
           return await readProject(admitted, privateKey, this.config, operationSignal, queue)

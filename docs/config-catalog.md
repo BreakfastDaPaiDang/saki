@@ -97,7 +97,23 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/github-app/src/index.ts:76`](../packages/saki/github-app/src/index.ts)
+Source: [`packages/saki/github-app/src/index.ts:77`](../packages/saki/github-app/src/index.ts)
+
+<a id="breakfastdapaidangsaki-host-api"></a>
+
+## `@breakfastdapaidang/saki-host-api`
+
+Requires: `connection` · `sakiControlPlane`
+
+```ts config-catalog
+/** Deployment timing for authenticated Projection invalidation reads. */
+export interface Config {
+  /** Maximum idle wait before clients recheck access and retained Projection freshness. */
+  changeWaitMs?: number
+}
+```
+
+Source: [`packages/saki/host-api/src/index.ts:70`](../packages/saki/host-api/src/index.ts)
 
 <a id="breakfastdapaidangsaki-tool-intervention"></a>
 
@@ -3538,7 +3554,6 @@ Source: [`packages/workflow/workflow-worker-thread/src/index.ts:32`](../packages
 These load from a `cordis.yml` entry with no `config:` block; they declare no configuration API.
 
 - `@breakfastdapaidang/saki-bundle` ([`packages/saki/bundle/src/index.ts`](../packages/saki/bundle/src/index.ts))
-- `@breakfastdapaidang/saki-host-api` — requires `connection` · `sakiControlPlane` ([`packages/saki/host-api/src/index.ts`](../packages/saki/host-api/src/index.ts))
 - `@breakfastdapaidang/saki-web-ui` ([`packages/saki/web-ui/src/index.ts`](../packages/saki/web-ui/src/index.ts))
 - `@deepseek-ai/dsh-acp-app` — requires `cmdlineArgs` ([`packages/bundle/acp-app/src/index.ts`](../packages/bundle/acp-app/src/index.ts))
 - `@deepseek-ai/dsh-agent` ([`packages/core/agent/src/index.ts`](../packages/core/agent/src/index.ts))

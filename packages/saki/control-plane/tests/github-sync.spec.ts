@@ -1021,6 +1021,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const ctx = new Context()
     const timer = vi.spyOn(globalThis, 'setTimeout')
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: new UnusedGitHub(ctx),
       attemptTtlMs: 60_000,
@@ -3318,6 +3319,7 @@ describe('GitHub synchronization coordinator regressions', () => {
       },
     ])
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: provider,
       attemptTtlMs: 60_000,
@@ -3375,6 +3377,7 @@ describe('GitHub synchronization coordinator regressions', () => {
       new GitHubProviderError({ code: 'transient-transport', retryAfterMs: 1_000 }),
     ])
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: provider,
       attemptTtlMs: 60_000,
@@ -3400,6 +3403,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const failScan = vi.spyOn(harness.synchronization, 'failScan').mockResolvedValue({ state: 'stale' })
     const ctx = new Context()
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: new ScriptedGitHub(ctx, [new GitHubProviderError({ code: 'transient-transport' })]),
       attemptTtlMs: 60_000,
@@ -3420,6 +3424,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const ctx = new Context()
     const report = vi.fn()
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: new ScriptedGitHub(ctx, [new Error('unsafe provider detail')]),
       attemptTtlMs: 60_000,
@@ -3459,6 +3464,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const publish = vi.spyOn(harness.synchronization, 'publishScan').mockResolvedValue(outcome)
     const ctx = new Context()
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: new ScriptedGitHub(ctx, [boardCandidate()]),
       attemptTtlMs: 60_000,
@@ -3479,6 +3485,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const harness = synchronizationHarness()
     const ctx = new Context()
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: new UnusedGitHub(ctx),
       attemptTtlMs: 60_000,
@@ -3507,6 +3514,7 @@ describe('GitHub synchronization coordinator regressions', () => {
       })
     const ctx = new Context()
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: new UnusedGitHub(ctx),
       attemptTtlMs: 60_000,
@@ -3537,6 +3545,7 @@ describe('GitHub synchronization coordinator regressions', () => {
       throw new Error('unreachable scan completion')
     }])
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: provider,
       attemptTtlMs: 60_000,
@@ -3568,6 +3577,7 @@ describe('GitHub synchronization coordinator regressions', () => {
       throw new Error('unreachable scan completion')
     }])
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: provider,
       attemptTtlMs: 60_000,
@@ -3590,6 +3600,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const ctx = new Context()
     const provider = new ScriptedGitHub(ctx, [boardCandidate()])
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: provider,
       attemptTtlMs: 60_000,
@@ -3613,6 +3624,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const harness = synchronizationHarness()
     const ctx = new Context()
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: new UnusedGitHub(ctx),
       attemptTtlMs: 60_000,
@@ -3639,6 +3651,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const request = vi.spyOn(harness.synchronization, 'requestScanAfterCurrent').mockRejectedValue(failure)
     const ctx = new Context()
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: new UnusedGitHub(ctx),
       attemptTtlMs: 60_000,
@@ -3670,7 +3683,13 @@ describe('GitHub synchronization coordinator regressions', () => {
       boardCandidate(githubConfiguration),
     ])
     const report = vi.fn()
+    const observed: string[] = []
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: () => {
+        const board = harness.synchronization.board(PROJECT_A)
+        if (board === 'not-found') throw new Error('Notification lost the Project')
+        observed.push(board.scan.state)
+      },
       synchronization: harness.synchronization,
       github: provider,
       attemptTtlMs: 1_000,
@@ -3689,6 +3708,7 @@ describe('GitHub synchronization coordinator regressions', () => {
       expect(provider.requests).toHaveLength(2)
       expect(harness.synchronization.board(PROJECT_A)).toMatchObject({ state: 'confirmed' })
       expect(report).not.toHaveBeenCalled()
+      expect(observed).toEqual(['in-flight', 'scheduled', 'in-flight', 'scheduled'])
     } finally {
       await consumer.dispose()
       await ctx.fiber.dispose()
@@ -3701,6 +3721,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const idleContext = new Context()
     const idleReport = vi.fn()
     const idleConsumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: idleHarness.synchronization,
       github: new UnusedGitHub(idleContext),
       attemptTtlMs: 1_000,
@@ -3718,6 +3739,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const malformedContext = new Context()
     const malformedReport = vi.fn()
     const malformedConsumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: malformedHarness.synchronization,
       github: new UnusedGitHub(malformedContext),
       attemptTtlMs: 1_000,
@@ -3749,6 +3771,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     const staleContext = new Context()
     const staleReport = vi.fn()
     const staleConsumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: staleHarness.synchronization,
       github: new UnusedGitHub(staleContext),
       attemptTtlMs: 1_000,
@@ -3793,6 +3816,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     ])
     const report = vi.fn()
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: provider,
       attemptTtlMs: 1_000,
@@ -3835,6 +3859,7 @@ describe('GitHub synchronization coordinator regressions', () => {
     }])
     const report = vi.fn()
     const consumer = new GitHubSynchronizationConsumer({
+      notifyChanged: vi.fn(),
       synchronization: harness.synchronization,
       github: provider,
       attemptTtlMs: 1_000,
@@ -3888,6 +3913,7 @@ describe('GitHub synchronization coordinator regressions', () => {
       }])
       const report = vi.fn()
       const consumer = new GitHubSynchronizationConsumer({
+        notifyChanged: vi.fn(),
         synchronization: consumerHarness.synchronization,
         github: provider,
         attemptTtlMs: 1_000,

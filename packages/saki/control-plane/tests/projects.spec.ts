@@ -75,6 +75,7 @@ import SakiControlPlane, {
   type RegisterDevelopmentProjectIntent,
   type SakiAuthenticationContext,
   type SakiBoardProjection,
+  type SakiBoardWorkItemId,
   type SakiControlIntentId,
   type SakiControlPlaneModule,
   type SakiDevelopmentProjectId,
@@ -149,6 +150,9 @@ class FakeBoardGitHub extends SakiGitHub {
   override async read<K extends keyof GitHubReadMap>(
     request: GitHubReadMap[K]['request'],
   ): Promise<GitHubReadMap[K]['result']> {
+    if (request.kind === 'project-fields') {
+      return { projectId: this.candidate.project.id, fields: structuredClone(this.candidate.fields), observedAt: Date.now() }
+    }
     if (this.agentIssueBody !== undefined && request.kind === 'issue-detail') {
       const item = this.candidate.items.find(candidate => candidate.content.kind === 'issue'
         && candidate.content.issue.id === request.issueId)
@@ -1512,7 +1516,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     }
   })
 
-  it('drives durable configuration work through an optional GitHub Provider', async () => {
+  it('drives durable configuration work through an optional GitHub Provider', { timeout: process.platform === 'win32' ? 180_000 : 60_000 }, async () => {
     const durable = await paths()
     const repo = await repository(durable.root, 'github-sync-consumer')
     const configuration = githubSynchronizationConfiguration()
@@ -1522,14 +1526,27 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       github = new FakeBoardGitHub(providerContext, githubBoardCandidate(configuration))
     })
     const harness = await mountControlPlane(ctx)
+    const selection = await inspected(harness, repo)
     const registered = await harness.control.submit(harness.authentication, intent(
       'intent-20202020-2020-4020-8020-202020202020',
       'GitHub synchronization Consumer',
       repo,
       0,
-      await inspected(harness, repo),
+      selection,
     ), new AbortController().signal)
     if (!registered.ok) throw new Error('registration failed')
+    const mappingQuery = { type: 'project-mapping' as const, projectId: registered.receipt.projectId }
+    const mapping = () => harness.control.query(harness.authentication, mappingQuery, new AbortController().signal)
+    expect(await mapping()).toEqual({ ok: false, reason: 'unavailable' })
+    const absentProject = 'project-11111111-1111-4111-8111-111111111111' as SakiDevelopmentProjectId
+    for (const query of [
+      { type: 'project-mapping', projectId: absentProject },
+      { type: 'project-milestones', projectId: absentProject, after: null },
+      { type: 'work-item-view', projectId: absentProject, workItemId: `work-item-${'9'.repeat(64)}` as SakiBoardWorkItemId },
+    ] as const) {
+      expect(await harness.control.query(harness.authentication, query, new AbortController().signal))
+        .toEqual({ ok: false, reason: 'not-found' })
+    }
 
     expect(await harness.control.submit(harness.authentication, {
       type: 'configure-github-synchronization',
@@ -1541,6 +1558,13 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
 
     const board = await waitForConfirmedBoard(harness, registered.receipt.projectId)
     if (github === undefined) throw new Error('GitHub Provider fixture did not start')
+    expect(await mapping()).toMatchObject({ ok: true, projection: {
+      type: 'project-mapping', projectId: registered.receipt.projectId, synchronizationRevision: 1, canConfigure: true,
+      choices: { projectId: configuration.projectNodeId, fields: githubBoardCandidate(configuration).fields },
+    } })
+    const unavailableFields = vi.spyOn(github, 'read').mockRejectedValueOnce(new GitHubProviderError({ code: 'transient-transport' }))
+    expect(await mapping()).toEqual({ ok: false, reason: 'unavailable' })
+    unavailableFields.mockRestore()
     expect(github.requests).toHaveLength(1)
     expect(github.requests[0]).toMatchObject({
       installation: { appId: configuration.appId },
@@ -1553,6 +1577,104 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       confirmed: { generation: 1, configurationRevision: 1 },
       checkpoint: { generation: 1, configurationRevision: 1 },
     })
+    const selectedItem = board.confirmed?.items[0]
+    if (selectedItem === undefined) throw new Error('Board Work Item is missing')
+    const detailQuery = { type: 'work-item-view' as const, projectId: registered.receipt.projectId, workItemId: selectedItem.id }
+    const detail = () => harness.control.query(harness.authentication, detailQuery, new AbortController().signal)
+    expect(await detail()).toMatchObject({ ok: true, projection: {
+      workItem: { id: selectedItem.id }, body: { state: 'unavailable', reason: 'read-failed' },
+      assignments: [], runs: [], interventions: [], milestones: [], activity: [], earlierActivity: false,
+    } })
+    github.agentIssueBody = '## Acceptance criteria\n- Preserve confirmed Board facts.'
+    expect(await detail()).toMatchObject({ ok: true, projection: { body: {
+      state: 'confirmed', markdown: github.agentIssueBody, matchesBoard: true,
+    } } })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-milestones', projectId: registered.receipt.projectId, after: null,
+    }, new AbortController().signal)).toEqual({ ok: true, projection: {
+      type: 'project-milestones', projectId: registered.receipt.projectId, items: [], next: null,
+    } })
+    const started = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const originalRead = github.read.bind(github)
+    const heldRead = vi.spyOn(github, 'read').mockImplementationOnce(async (request) => {
+      started.resolve(undefined)
+      await release.promise
+      return await originalRead(request)
+    })
+    const pendingDetail = detail()
+    try {
+      await started.promise
+      await setGrantActions(harness, [])
+    } finally {
+      release.resolve(undefined)
+    }
+    expect(await pendingDetail).toEqual({ ok: false, reason: 'denied' })
+    heldRead.mockRestore()
+    expect(await detail()).toEqual({ ok: false, reason: 'denied' })
+    expect(await mapping()).toEqual({ ok: false, reason: 'denied' })
+    expect(await harness.control.query(harness.authentication, {
+      type: 'project-milestones', projectId: registered.receipt.projectId, after: null,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    await setGrantActions(harness, HOST_OPERATOR_ACTIONS)
+    const mappingStarted = Promise.withResolvers<undefined>()
+    const mappingRelease = Promise.withResolvers<undefined>()
+    const heldMapping = vi.spyOn(github, 'read').mockImplementationOnce(async (request) => {
+      mappingStarted.resolve(undefined)
+      await mappingRelease.promise
+      return await originalRead(request)
+    })
+    const pendingMapping = mapping()
+    await mappingStarted.promise
+    try { await setGrantActions(harness, []) } finally { mappingRelease.resolve(undefined) }
+    expect(await pendingMapping).toEqual({ ok: false, reason: 'denied' })
+    heldMapping.mockRestore()
+    await setGrantActions(harness, HOST_OPERATOR_ACTIONS)
+    expect(await harness.control.query(harness.authentication, {
+      ...detailQuery, workItemId: `work-item-${'8'.repeat(64)}` as SakiBoardWorkItemId,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    const syncTable = liveSakiDomain(ctx).table('github_project_sync')
+    const registryTable = liveSakiDomain(ctx).table('development_project_registry')
+    const savedSync = syncTable.get(registered.receipt.projectId)!
+    const savedRegistry = registryTable.get('development-project-registry')!
+    const readWhileChanging = async (operation: () => Promise<unknown>, destination: 'mapping' | 'detail') => {
+      const changing = vi.spyOn(github!, 'read').mockImplementationOnce(async (request) => {
+        const observed = await originalRead(request)
+        await operation()
+        return observed
+      })
+      try { return await (destination === 'mapping' ? mapping() : detail()) } finally {
+        changing.mockRestore()
+        await syncTable.put(savedSync.id, savedSync)
+        await registryTable.put('development-project-registry', savedRegistry)
+      }
+    }
+    for (const destination of ['mapping', 'detail'] as const) {
+      expect(await readWhileChanging(() => registryTable.put('development-project-registry', {
+        ...savedRegistry, projects: [], resourceBindings: [], agentProfiles: [],
+        canonicalWorktreeIndex: [], gitDirectoryIndex: [], intentMappings: [],
+      }), destination)).toEqual({ ok: false, reason: destination === 'mapping' ? 'unavailable' : 'not-found' })
+    }
+    expect(await readWhileChanging(() => syncTable.delete(savedSync.id), 'mapping'))
+      .toEqual({ ok: false, reason: 'unavailable' })
+    expect(await readWhileChanging(() => syncTable.delete(savedSync.id), 'detail'))
+      .toEqual({ ok: false, reason: 'not-found' })
+    expect(await readWhileChanging(() => syncTable.put(savedSync.id, {
+      ...savedSync, confirmedBoard: { ...savedSync.confirmedBoard!, items: savedSync.confirmedBoard!.items.map(item => ({
+        ...item, remoteFingerprint: `remote-fingerprint-${'7'.repeat(64)}` as typeof item.remoteFingerprint,
+      })) },
+    }), 'detail')).toMatchObject({ ok: true, projection: { body: { state: 'unavailable', reason: 'stale-remote' } } })
+    const wrongFields = vi.spyOn(github, 'read').mockResolvedValueOnce({
+      projectId: 'P_other', fields: [], observedAt: Date.now(),
+    } as never)
+    expect(await mapping()).toEqual({ ok: false, reason: 'unavailable' })
+    wrongFields.mockRestore()
+    const wrongBody = vi.spyOn(github, 'read').mockImplementationOnce(async (request) => {
+      const observed = await originalRead(request)
+      return { ...observed, repositoryDatabaseId: githubRepositoryDatabaseId('999') }
+    })
+    expect(await detail()).toMatchObject({ ok: true, projection: { body: { state: 'unavailable', reason: 'stale-remote' } } })
+    wrongBody.mockRestore()
     const diagnostic = vi.spyOn(ctx.logger, 'error').mockImplementation(() => ctx.logger)
     github.nextFailure = new Error('provider escaped its typed failure interface')
     expect(await harness.control.query(harness.authentication, {
@@ -1568,7 +1690,24 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     expect(diagnostic).toHaveBeenCalledWith(
       'Saki GitHub synchronization provider failed outside its typed failure interface',
     )
-    await providerFiber.dispose()
+    const readsStarted = Promise.withResolvers<undefined>()
+    const detachedReadRelease = Promise.withResolvers<undefined>()
+    let pendingReads = 0
+    const detachedRead = vi.spyOn(github, 'read').mockImplementation(async (request) => {
+      const observed = await originalRead(request)
+      if (++pendingReads === 2) readsStarted.resolve(undefined)
+      await detachedReadRelease.promise
+      return observed
+    })
+    const mappingBeforeDetach = mapping()
+    const detailBeforeDetach = detail()
+    await readsStarted.promise
+    try { await providerFiber.dispose() } finally { detachedReadRelease.resolve(undefined) }
+    expect(await mappingBeforeDetach).toEqual({ ok: false, reason: 'unavailable' })
+    expect(await detailBeforeDetach).toMatchObject({ ok: true, projection: { body: { state: 'unavailable', reason: 'stale-remote' } } })
+    detachedRead.mockRestore()
+    expect(await mapping()).toEqual({ ok: false, reason: 'unavailable' })
+    expect(await detail()).toMatchObject({ ok: true, projection: { body: { state: 'unavailable', reason: 'provider-unavailable' } } })
     await harness.close()
   })
 
