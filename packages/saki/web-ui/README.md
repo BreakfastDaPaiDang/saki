@@ -14,6 +14,7 @@ Register an existing directory as a Development Project, plan its GitHub Work It
 ## Table of Contents
 
 - [Use this package](#use-this-package)
+- [Manage My Work](#manage-my-work)
 - [Plan a Project](#plan-a-project)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
@@ -31,6 +32,15 @@ Mount this plugin in a composition that also carries the shell roster and the `/
 
 Directory edits supersede pending inspections. Registration disables path edits until the submitted Intent settles; a conflict requires refreshed registry revision and inspection evidence before confirmation becomes available again.
 
+<a id="manage-my-work"></a>
+## Manage My Work
+
+The Work page displays the backend's cross-Project groups and one recommended action per card. Select a Project, enter a title, intended outcome, and acceptance criteria, then create the GitHub Issue in Inbox. Plan the Inbox item on its Board; Ready suggestions appear in My Work. The form uses that Project's current revision and Board mapping revisions; an unavailable Project does not hide other Projects or their readable work.
+
+Give to Agent requires explicit confirmation of the projected Agent Profile, model route, binding label, and inherited change count. Displayed actions remain available during background refresh; submission rechecks the displayed Project revision and Issue fingerprint. Answer a pending Intervention at its displayed revision, then open the Work Item to inspect execution and delivery evidence or return to its inherited Session. These manual gestures do not automatically claim Ready work or mark it Done.
+
+Requirement drafts, answer text, and exact submitted Intents persist under the authenticated Principal. A lost response retains the original payload; Check or resume sends that same Intent with current request authority. Partial creation retains the known Work Item and the backend's recovery action. Reconciliation results remain inspectable; they cannot be dismissed into a duplicate creation. Dismissing a successful creation clears its submitted draft. Principal changes cancel old reads and hide their facts and inputs.
+
 <a id="plan-a-project"></a>
 ## Plan a Project
 
@@ -45,16 +55,16 @@ One planning controller owns protected query caches and cancellable invalidation
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as the plugin registers no model-facing input and makes no provider request.
+Indirectly, through confirmed Give-to-Agent and Intervention-answer Intents whose durable Session input, model routing, and execution belong to the Agent runtime.
 
 #### KV Cache effect
 
-None; the plugin reads typed Projections only.
+Session input and KV-cache effects follow the owning Agent runtime. Reading and refreshing Work or Project views adds no model input.
 
 ## Known Limitations and Deferred Work
 <a id="known-limitations-and-deferred-work"></a>
 
-- **No My Work Projection yet** — the 「工作」 page renders an explicit unavailable state pointing at 「项目」; the real page arrives with the K2 slice.
+- **Manual Work only** — automatic claiming, budget suspension, and automatic completion remain separate workflows. The default bundle has no production model adapter, so a usable configured model route is required for Agent execution.
 - **Configured Milestones only** — the Milestone destination lists existing Saki delivery records; creating Milestone or Release metadata belongs to its owning workflow.
 - **Directory selection is a validated path input** — the browse dialog is not composed in this slice; the backend re-inspects any submitted path before registration.
 - **Repair and rebind are read-only here** — binding `missing` / `repair-required` states render with history readable and no repair action; they belong to the Resource Binding slice (#26).

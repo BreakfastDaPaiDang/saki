@@ -45,7 +45,7 @@ Saki 私有控制面模块拥有本地 Installation 置备、Installation Access
 
 手动 Give-to-Agent 路径会重验当前 Issue 身份与远端指纹、活跃 Binding、Host Operator 权限和默认 Agent Profile。持久接受前，当前 LLM 适配器必须解析精确的 provider/model 路由；失败会返回 `model-route-unavailable`，不会启动生成。Intent 不要求特定模板，保留完整 Issue 正文，并固定模型可见输入和子记录身份。任务状态、阻塞项、分支保护、detached HEAD 和工作树改动不决定手动输入能否投递，启动 Run 也不改变 Work Item 状态。短期 Dispatch Claim 选择一次投递；最终接受在同一 claim 仍为当前且未过期时固定该 Dispatch 的 Host 准入修订号。精确重放复用这些记录；未知证据需要对账。参见[手动分派决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-manual-give-to-agent-dispatch.zh.md)。
 
-`intervention_requests` 在重启后保留 Development Agent 问题及其首个已接受回答。工具会在结束轮次前提交 `opening`；精确 Session 证据先把 Run 移入 `waiting`，再把问题设为 `open`。回答会重验请求修订号、Principal、Grant、Assignment、Session 与当前 Binding，随后为同一 Run 和 Session 创建独立准入的 Dispatch 及稳定的回答 MessageId。只有输入投递被确认后才清除阻塞。My Work 与 Attention 从当前记录推导候选动作；提交时重验权限和操作条件。参见[持久 Intervention 决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-durable-intervention-answer.zh.md)。
+`intervention_requests` 在重启后保留 Development Agent 问题及其首个已接受回答。工具会在结束轮次前提交 `opening`；精确 Session 证据先把 Run 移入 `waiting`，再把问题设为 `open`。回答会重验请求修订号、Principal、Grant、Assignment、Session 与当前 Binding，随后为同一 Run 和 Session 创建独立准入的 Dispatch 及稳定的回答 MessageId。只有输入投递被确认后才清除阻塞。My Work 与 Attention 从当前记录推导候选动作；提交时重验权限和操作条件。参见[持久 Intervention 决策](../../../.agents/notes/implemented/feature/2026-08-18-saki-durable-intervention-answer.zh.md)。 Give-to-Agent 建议包含面向浏览器的安全启动摘要，列出 Profile 版本、精确模型路由、binding 显示标签与修订号及继承变更数量，供用户明确确认。
 
 启动流程会先根据已成功的 Host Operation 与物理 Session 恢复每个经过验证的 running Agent，再协调保留的 Intent 和 Intervention，最后进入 ready。接受前取消会记录 canceled Dispatch；接受后取消会保留已接受回执和终态 Host 快照。只有 live Agent 成功释放后，才能持久化子记录取消。重启以幂等方式补全有效的终态及 Intervention 写入前缀。
 

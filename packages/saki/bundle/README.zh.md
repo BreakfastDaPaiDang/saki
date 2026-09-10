@@ -21,7 +21,7 @@ kind: "package-bundle"
 <a id="use-this-package"></a>
 ## 使用本包
 
-Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁挂载定时调度、默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@10`、`saki_host_execution@5` 与 `saki_storage_generation@8`；此外还挂载 JSONL Session 持久化及 Session projection registry、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API、带壳层花名册与 Saki [`web-ui`](../web-ui/README.zh.md) 插件的 DSH 客户端模块系统、为构建产物 web 前端 dist 提供服务的 fallback 座服务器，以及 `saki-readiness`；以上组合建立在空的 [`cordis.yml`](cordis.yml) 上。
+Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.patch.yml`](cordis.patch.yml)；该补丁挂载定时调度、默认 JSON 存储后端、由启动器替换为同一 manifest-selected generation 的惰性 SQLite 路由，其中共用该 generation 的三个 domain 是 `saki_control_plane@10`、`saki_host_execution@5` 与 `saki_storage_generation@8`；此外还挂载 JSONL Session 持久化及 Session projection registry、与提供方无关的 LLM、Agent、System Prompt、Tools、Agent Loop、preset 与 checkpoint policy 运行时、Workspace、本地文件系统与子进程提供方、沙箱化 PowerShell 栈、Local Host 执行提供方、回环 Web 服务器、Connection、Saki 控制面、`/saki` Host API、带壳层花名册与 Saki [`web-ui`](../web-ui/README.zh.md) 插件的 DSH 客户端模块系统、Chat 消息 target 与 Tool 渲染及其资源注册表与详情侧栏、为构建产物 web 前端 dist 提供服务的 fallback 座服务器，以及 `saki-readiness`；以上组合建立在空的 [`cordis.yml`](cordis.yml) 上。
 
 启动器把 preset 名册绑定到包内 `config/agent-presets` 的绝对路径，并禁用 DSH 随包 preset 和用户 preset 根目录。随包提供的 `development` preset 提供仓库指令、持久 `request_intervention` 工具、Windows 前台 PowerShell，以及基于 Agent 隔离沙箱文件系统的 `read`、`write` 与 `edit` 工具；Host 操作继续使用独立的本地文件系统提供方。生产组合不安装模型 adapter；创建或恢复 Agent 后会保持 idle，直至拥有该 Agent Run 的 operation 提交持久输入。
 

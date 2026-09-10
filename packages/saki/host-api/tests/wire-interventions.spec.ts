@@ -1,3 +1,4 @@
+import { SAKI_BOARD_PROJECTION_FIXTURES, SAKI_AGENT_RUN_PROJECTION_FIXTURES } from '@breakfastdapaidang/saki-control-plane/fixtures'
 import { describe, expect, it } from 'vitest'
 import {
   sakiAnswerInterventionIntentSchema,
@@ -6,6 +7,7 @@ import {
   sakiIntentRequestSchema,
   sakiIntentResultSchema,
   sakiMyWorkResultSchema,
+  sakiWorkItemViewResultSchema,
   sakiQueryRequestSchema,
 } from '../src/wire.ts'
 
@@ -112,6 +114,7 @@ const readyItem = {
       expectedProjectRevision: 2,
       expectedRemoteFingerprint: REMOTE_FINGERPRINT,
       reason: 'ready',
+      launch: { profileId: 'agent-profile-11111111-1111-4111-8111-111111111111', profileVersion: 1, provider: 'deepseek', model: 'deepseek-chat', bindingId: 'binding-11111111-1111-4111-8111-111111111111', bindingRevision: 1, displayLocation: 'saki', inheritedChangeEntryCount: 0 },
     },
   },
 } as const
@@ -420,4 +423,30 @@ describe('Saki Intervention and Principal work wire contract', () => {
       expect(sakiIntentResultSchema.parse(result)).toEqual(result)
     }
   })
+})
+
+it.each([
+  { profileVersion: 0 }, { inheritedChangeEntryCount: -1 }, { displayLocation: '/private/repository' },
+  { provider: '' }, { model: 'model\u0000' }, { unexpectedAuthority: 'secret' },
+])('rejects unsafe or invalid manual launch summaries: %j', (patch) => {
+  expect(sakiMyWorkResultSchema.safeParse({ ok: true, projection: { ...myWork, items: [{ ...readyItem, recommendation: {
+    available: true, offer: { ...readyItem.recommendation.offer, launch: { ...readyItem.recommendation.offer.launch, ...patch } },
+  } }] } }).success).toBe(false)
+})
+
+it.each(['open', 'answered', 'resolved', 'reconciliation-required'] as const)('keeps Work Item execution history readable for a %s Intervention', (state) => {
+  const board = SAKI_BOARD_PROJECTION_FIXTURES.confirmedStaleFailure
+  const item = board.confirmed.items[0]
+  const run = SAKI_AGENT_RUN_PROJECTION_FIXTURES.running
+  const history = { ...intervention, state, returnAddress: { kind: 'agent-run', projectId: board.projectId, workItemId: item.id, workSessionId: run.workSessionId, agentRunId: run.id } }
+  const value = { ok: true, projection: {
+    type: 'work-item-view', projectId: board.projectId, workItem: item,
+    body: { state: 'unavailable', reason: 'read-failed' }, assignments: [], runs: [{ id: run.id, assignmentId: run.assignmentId, workSessionId: run.workSessionId, sessionId: run.sessionId, state: run.state, createdAt: run.createdAt, updatedAt: run.updatedAt }],
+    interventions: [history], milestones: [], branchDelivery: null, activity: [], earlierActivity: false,
+  } }
+  expect(sakiWorkItemViewResultSchema.parse(value)).toEqual(value)
+  expect(sakiWorkItemViewResultSchema.safeParse({
+    ...value, projection: { ...value.projection, interventions: [{ ...history, updatedAt: 0 }] },
+  }).success).toBe(false)
+  expect(sakiWorkItemViewResultSchema.safeParse({ ...value, projection: { ...value.projection, interventions: [{ ...history, state: 'opening' }] } }).success).toBe(false)
 })

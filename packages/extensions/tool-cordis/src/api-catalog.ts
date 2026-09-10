@@ -5911,7 +5911,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiActionOffer',
-    declaration: 'export type SakiActionOffer = {\n    readonly type: \'give-work-item-to-agent\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly workItemId: SakiBoardWorkItemId;\n    readonly expectedProjectRevision: number;\n    readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint;\n    readonly reason: string;\n} | {\n    readonly type: \'answer-intervention\';\n    readonly interventionId: SakiInterventionRequestId;\n    readonly expectedInterventionRevision: number;\n    readonly requiredAnswer: SakiInterventionRequiredAnswer;\n    readonly reason: string;\n};',
+    declaration: 'export type SakiActionOffer = {\n    readonly type: \'give-work-item-to-agent\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly workItemId: SakiBoardWorkItemId;\n    readonly expectedProjectRevision: number;\n    readonly expectedRemoteFingerprint: SakiBoardRemoteFingerprint;\n    readonly reason: string;\n    readonly launch: SakiAgentLaunchSummary;\n} | {\n    readonly type: \'answer-intervention\';\n    readonly interventionId: SakiInterventionRequestId;\n    readonly expectedInterventionRevision: number;\n    readonly requiredAnswer: SakiInterventionRequiredAnswer;\n    readonly reason: string;\n};',
   },
   {
     name: 'SakiActionRecommendation',
@@ -5928,6 +5928,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SakiAgentInterventions',
     declaration: 'export interface SakiAgentInterventions {\n    request(request: SakiAgentInterventionRequest, signal: AbortSignal): Promise<SakiAgentInterventionRequestResult>;\n    finalizeOpening(interventionId: SakiInterventionRequestId, signal: AbortSignal): Promise<\'open\' | \'pending\' | \'reconciliation-required\'>;\n}',
+  },
+  {
+    name: 'SakiAgentLaunchSummary',
+    declaration: 'export interface SakiAgentLaunchSummary {\n    readonly profileId: SakiAgentProfileId;\n    readonly profileVersion: number;\n    readonly provider: string;\n    readonly model: string;\n    readonly bindingId: SakiResourceBindingId;\n    readonly bindingRevision: number;\n    readonly displayLocation: string;\n    readonly inheritedChangeEntryCount: number;\n}',
   },
   {
     name: 'SakiAgentProfileId',

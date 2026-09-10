@@ -10,7 +10,7 @@ Saki must present local Git, GitHub authority, Agent execution, model supply, au
 
 ## Proposal
 
-The implemented [shell registration](../../implemented/feature/2026-08-27-saki-web-shell-registration.md) and [confirmed planning views](../../implemented/feature/2026-09-10-saki-confirmed-planning-views.md) own their shipped mechanisms. This proposal retains the broader Work, Settings, execution, and integration scope.
+The implemented [shell registration](../../implemented/feature/2026-08-27-saki-web-shell-registration.md), [confirmed planning views](../../implemented/feature/2026-09-10-saki-confirmed-planning-views.md), and [manual Work interactions](../../implemented/feature/2026-09-10-saki-manual-work-interactions.md) own their shipped mechanisms. This proposal retains the automatic Work, Settings, execution, and broader integration scope.
 
 `packages/saki/web-ui` remains one DSH client plugin for version 0.1.0 and follows the shipped client Cordis, slot, immutable-snapshot, and React-projection architecture. It uses `SakiAccess` for Access, bootstrap, and logout, then consumes complete protected Saki Projections and submits Control Intents through `saki-host-api`; no component calls GitHub, Git, filesystem, credentials, or providers directly. `onChanged` and Host frames invalidate read models, while reconnect rebuilds them.
 

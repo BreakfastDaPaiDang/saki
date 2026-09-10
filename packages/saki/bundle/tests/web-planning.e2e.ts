@@ -59,9 +59,11 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
     server.child.stderr.on('data', (chunk: string) => { serverDiagnostics += chunk })
     const { url, secret } = await server.ready
     const port = Number(new URL(url).port)
-    // Registration rechecks the repository and creates its workspace; keep the browser step budget and Windows' larger fixture budget.
-    const registered = await registerSnapshotProject(port, secret, repository,
-      process.platform === 'win32' ? {} : { timeoutMs: stepMs })
+    // Registration owns six 30-second observation rounds plus Workspace and registry writes.
+    const registered = await registerSnapshotProject(port, secret, repository, {
+      ...(process.platform === 'win32' ? {} : { timeoutMs: stepMs }),
+      registrationTimeoutMs: 240_000,
+    })
     expect(registered.confirmed.ok, JSON.stringify(registered.confirmed)).toBe(true)
     const projectId = registered.confirmed.receipt.projectId
     const credentials = { cookie: registered.cookie, requestToken: registered.exchangeValue.access.requestToken }

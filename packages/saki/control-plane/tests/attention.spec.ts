@@ -9,6 +9,7 @@ import {
 } from '../src/attention.ts'
 import type { InterventionRequestRecord } from '../src/spec.ts'
 import type {
+  SakiAgentLaunchSummary,
   SakiBoardRemoteFingerprint,
   SakiBoardWorkItemId,
   SakiAgentRunId,
@@ -43,6 +44,11 @@ const DISPATCH_ID = 'dispatch-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' as SakiExecu
 const LATER_DISPATCH_ID = 'dispatch-dddddddd-dddd-4ddd-8ddd-dddddddddddd' as SakiExecutionDispatchId
 const OTHER_INTERVENTION_ID = 'intervention-cccccccc-cccc-4ccc-8ccc-cccccccccccc' as SakiInterventionRequestId
 
+const LAUNCH = {
+  profileId: 'agent-profile-11111111-1111-4111-8111-111111111111', profileVersion: 1,
+  provider: 'deepseek', model: 'deepseek-chat', bindingId: 'binding-11111111-1111-4111-8111-111111111111',
+  bindingRevision: 1, displayLocation: 'saki', inheritedChangeEntryCount: 0,
+} as SakiAgentLaunchSummary
 function sources(
   patch: Partial<SakiPrincipalWorkProjectionSources> = {},
 ): SakiPrincipalWorkProjectionSources {
@@ -69,7 +75,7 @@ function sources(
     agentRuns: [],
     executionDispatches: [],
     interventions: [],
-    giveToAgentAvailability: new Map([[PROJECT_ID, new Map([[WORK_ITEM_ID, { available: true }]])]]),
+    giveToAgentAvailability: new Map([[PROJECT_ID, new Map([[WORK_ITEM_ID, { available: true, launch: LAUNCH }]])]]),
     ...patch,
   }
 }
@@ -269,8 +275,8 @@ describe('Principal work projections', () => {
         { id: OTHER_PROJECT_ID, confirmedBoard: sync.confirmedBoard },
       ],
       giveToAgentAvailability: new Map([
-        [PROJECT_ID, new Map([[WORK_ITEM_ID, { available: true }]])],
-        [OTHER_PROJECT_ID, new Map([[WORK_ITEM_ID, { available: true }]])],
+        [PROJECT_ID, new Map([[WORK_ITEM_ID, { available: true, launch: LAUNCH }]])],
+        [OTHER_PROJECT_ID, new Map([[WORK_ITEM_ID, { available: true, launch: LAUNCH }]])],
       ]),
       workAssignments: [assignment()],
       agentRuns: [agentRun()],
@@ -430,8 +436,8 @@ describe('Principal work projections', () => {
         agentRuns: [agentRun(), ...ghostRuns],
         executionDispatches: [executionDispatch('accepted'), pendingDispatch],
         giveToAgentAvailability: new Map([[PROJECT_ID, new Map([
-          [WORK_ITEM_ID, { available: true }],
-          [OTHER_WORK_ITEM_ID, { available: true }],
+          [WORK_ITEM_ID, { available: true, launch: LAUNCH }],
+          [OTHER_WORK_ITEM_ID, { available: true, launch: LAUNCH }],
         ])]]),
       })
       const byWorkItem = new Map(projection.myWork.items.map(entry => [entry.workItem.id, entry]))
@@ -724,7 +730,7 @@ describe('Principal work projections', () => {
   it('never treats an eligibility input or an Attention entry as current authority', () => {
     const ready = deriveSakiPrincipalWork(sources({
       allowedActions: new Set(),
-      giveToAgentAvailability: new Map([[PROJECT_ID, new Map([[WORK_ITEM_ID, { available: true }]])]]),
+      giveToAgentAvailability: new Map([[PROJECT_ID, new Map([[WORK_ITEM_ID, { available: true, launch: LAUNCH }]])]]),
     }))
     expect(ready.myWork.items[0]?.recommendation).toEqual({ available: false, reason: 'action-denied' })
 

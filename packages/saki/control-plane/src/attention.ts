@@ -2,6 +2,7 @@
 
 import type {
   SakiAgentRunId,
+  SakiAgentLaunchSummary,
   SakiActionRecommendation,
   SakiAttentionItemProjection,
   SakiAttentionProjection,
@@ -36,7 +37,7 @@ export type SakiGiveToAgentUnavailableReason =
 
 /** Current Give-to-Agent operation eligibility supplied by its authoritative owner. */
 export type SakiGiveToAgentAvailability =
-  | { readonly available: true }
+  | { readonly available: true; readonly launch: SakiAgentLaunchSummary }
   | { readonly available: false; readonly reason: SakiGiveToAgentUnavailableReason }
 
 interface ProjectSource {
@@ -270,6 +271,7 @@ function recommendationFor(context: WorkItemContext): SakiActionRecommendation {
       workItemId: item.id,
       expectedProjectRevision: project.revision,
       expectedRemoteFingerprint: item.remoteFingerprint,
+      launch: { ...availability.launch },
     },
   }
 }

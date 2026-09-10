@@ -181,7 +181,7 @@ try {
     lifetime.signal,
     async (prepared) => {
       const fakeProviderEnabled = process.env.SAKI_BOARD_SNAPSHOT_PROVIDER_ENABLED !== '0'
-      const agentRunSnapshot = process.env.SAKI_AGENT_RUN_SNAPSHOT === '1'
+      const agentRunSnapshot = process.env.SAKI_AGENT_RUN_SNAPSHOT === '1' || process.env.SAKI_WORK_BROWSER_FIXTURE === '1'
       const deliverySnapshot = process.env.SAKI_DELIVERY_SNAPSHOT === '1'
       const bundlePatches = loadOverlayPatches('saki-board-snapshot', BUNDLE_PATCH)
       const patches = [

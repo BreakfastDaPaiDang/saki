@@ -485,8 +485,8 @@ function ciConsumerGates(): Gate[] {
     builtBinSmokeGate(validatedBuild),
     pnpmExec('saki-web-registration', [
       'vitest', 'run', '--config', 'vitest.e2e.config.ts',
-      'packages/saki/bundle/tests/web-registration.e2e.ts', 'packages/saki/bundle/tests/web-planning.e2e.ts', '--retry=0',
-    ], { label: 'Saki browser registration and planning', needs: validatedBuild }),
+      'packages/saki/bundle/tests/web-registration.e2e.ts', 'packages/saki/bundle/tests/web-planning.e2e.ts', 'packages/saki/bundle/tests/web-work.e2e.ts', '--retry=0',
+    ], { label: 'Saki browser registration, planning, and Work', needs: validatedBuild }),
   ]
 }
 
