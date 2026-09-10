@@ -1,0 +1,47 @@
+.page { box-sizing: border-box; width: 100%; min-width: 0; padding: 28px; max-width: 1760px; margin: 0 auto; color: var(--dsw-alias-label-primary); }
+.header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.header h1 { margin: 0 0 8px; font-size: 22px; font-weight: 650; }
+.page a { color: var(--dsw-alias-label-primary); text-underline-offset: 3px; }
+.actions, .tabs, .filters, .sync, .destinations, .distribution { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tabs { margin: 20px 0 12px; padding-bottom: 12px; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.tabs [aria-current="page"], .destinations [aria-current="page"] { box-shadow: inset 0 -2px var(--dsw-alias-label-primary); }
+.sync, .meta, .hint { font-size: 12px; color: var(--dsw-alias-label-secondary); line-height: 1.6; }
+.sync p { margin: 0; flex-basis: 100%; }
+.filters { margin: 20px 0; }
+.filters > :first-child { max-width: 360px; flex: 1; }
+.filters label { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(240px, 1fr); gap: 12px; overflow-x: auto; align-items: start; padding: 0 2px 20px; }
+.column { min-height: 250px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 12px; padding: 12px; }
+.column h2 { font-size: 13px; margin: 0 0 14px; display: flex; justify-content: space-between; }
+.column h2 span { color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
+.card { border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 9px; padding: 12px; margin-bottom: 10px; background: var(--dsw-alias-bg-layer-1); }
+.card[draggable="true"] { cursor: grab; }
+.cardTitle { background: none; border: 0; padding: 0; color: inherit; font: inherit; font-size: 13px; font-weight: 600; line-height: 1.55; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.cardTitle:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 5px; border-radius: 3px; }
+.card p { margin: 8px 0; }
+.pending { border-style: dashed; opacity: 0.78; }
+.badge { display: inline-block; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 5px; padding: 3px 6px; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.notice { margin: 12px 0; padding: 12px 14px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 9px; font-size: 13px; line-height: 1.6; }
+.notices { max-width: 960px; }
+.detail { max-width: 960px; margin: 24px auto; overflow-wrap: anywhere; }
+.detail h2 { font-size: 20px; line-height: 1.5; }
+.detail h3 { font-size: 15px; margin: 28px 0 12px; }
+.detail h4 { font-size: 13px; }
+.facts { display: grid; gap: 14px; font-size: 13px; }
+.facts > div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; }
+.facts dt { color: var(--dsw-alias-label-secondary); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.rows { padding: 0; list-style: none; }
+.rows li { padding: 10px 0; border-bottom: 0.5px solid var(--dsw-alias-border-l2); font-size: 13px; }
+.rows code, .reference { display: block; font-size: 11px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; box-sizing: border-box; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 14px; padding: 24px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); }
+.dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.dialog h2 { margin-top: 0; font-size: 18px; }
+.dialog label, .mappingForm label { display: grid; gap: 8px; margin: 16px 0; font-size: 13px; }
+.dialog select, .mappingForm select { width: 100%; padding: 9px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 7px; font: inherit; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); }
+.dialog .actions { margin-top: 24px; justify-content: flex-end; }
+.mappingForm { max-width: 580px; }
+.mappingForm fieldset { border: 0; padding: 0; }
+.distribution { padding: 14px 0; font-size: 13px; }
+.live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 720px) { .page { padding: 18px 12px; } .header h1 { font-size: 20px; } .board { grid-auto-columns: minmax(240px, 82vw); scroll-snap-type: x proximity; } .column { scroll-snap-align: start; } .facts > div { grid-template-columns: 1fr; gap: 4px; } .detail { margin-top: 16px; } .filters > :first-child { max-width: none; flex-basis: 100%; } }

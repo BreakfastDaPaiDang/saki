@@ -53,6 +53,7 @@
     "@deepseek-ai/cordis": "workspace:^"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-brand": "workspace:^",
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
     "@breakfastdapaidang/saki-execution": "workspace:^",
     "@breakfastdapaidang/saki-execution-local": "workspace:^",

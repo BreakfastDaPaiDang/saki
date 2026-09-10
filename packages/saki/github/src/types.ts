@@ -353,6 +353,20 @@ export interface GitHubProjectReadRequest {
   readonly projectId: GitHubProjectId
 }
 
+/** Complete current fields for one exact Project, including single-select options. */
+export interface GitHubProjectFieldsReadRequest {
+  readonly kind: 'project-fields'
+  readonly installation: GitHubInstallationProfile
+  readonly projectId: GitHubProjectId
+}
+
+/** Complete field discovery result; a failed or truncated read produces no result. */
+export interface GitHubProjectFieldsFact {
+  readonly projectId: GitHubProjectId
+  readonly fields: readonly GitHubProjectFieldFact[]
+  readonly observedAt: number
+}
+
 /** Read one exact `refs/tags/saki-v*` reference. */
 export interface GitHubTagReferenceReadRequest {
   readonly kind: 'tag-reference'
@@ -970,6 +984,7 @@ export interface GitHubProjectItemAddInspection {
 
 /** Declaration-merge operation map for provider-neutral GitHub reads. */
 export interface GitHubReadMap {
+  'project-fields': { readonly request: GitHubProjectFieldsReadRequest; readonly result: GitHubProjectFieldsFact }
   installation: { readonly request: GitHubInstallationReadRequest; readonly result: GitHubInstallationFact }
   repository: { readonly request: GitHubRepositoryReadRequest; readonly result: GitHubRepositoryFact }
   issue: { readonly request: GitHubIssueReadRequest; readonly result: GitHubIssueFact }

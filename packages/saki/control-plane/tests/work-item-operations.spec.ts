@@ -445,6 +445,7 @@ class StatusGitHub extends SakiGitHub {
   positionedAfter = false
   positionDuplicateMembership = false
   positionNeighborDrift = false
+  anchorIssueState: 'open' | 'closed' = 'open'
   anchorStatusOptionId: GitHubProjectOptionId = CONFIGURATION.statusOptionNodeIds.inProgress
   addDispatchMode: 'success' | 'fail-before-effect' | 'mutate-then-fail' = 'success'
   createDispatchMode: 'success' | 'fail-before-effect' | 'mutate-then-fail' | 'effect-then-process-crash' = 'success'
@@ -723,7 +724,7 @@ class StatusGitHub extends SakiGitHub {
           item: {
             id: anchor.membership.item.id,
             projectId: anchor.membership.item.projectId,
-            issue: anchor.issue,
+            issue: { ...anchor.issue, state: this.anchorIssueState },
             statusOptionId: anchor.membership.item.statusOptionId,
             archived: anchor.membership.item.archived,
             apiOrder: anchor.membership.item.apiOrder,
@@ -5345,6 +5346,55 @@ describe('GitHub Work Item operations', () => {
     })
     expect(state.github.calls.slice(-2)).toEqual(['inspect:issue-state', 'inspect'])
     expect(state.github.calls.filter(call => call === 'dispatch:issue-state')).toHaveLength(1)
+  })
+
+  it.each(['done', 'canceled'] as const)('classifies an externally closed Issue as %s without reopening it', async (targetStatus) => {
+    const remoteFingerprint = targetedJoinedFingerprint(CONFIGURATION.statusOptionNodeIds.ready, 'closed')
+    const state = harness({ ok: true, context: contextWithItem(item => ({
+      ...item, issueState: 'closed', remoteFingerprint,
+    })) })
+    state.github.issueState = 'closed'
+    const result = await state.operations.submit({
+      ...moveIntent(), expectedRemoteFingerprint: remoteFingerprint, targetStatus,
+    }, ACTOR, new AbortController().signal)
+    expect(result).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    expect(state.github.issueState).toBe('closed')
+    expect(state.github.statusOptionId).toBe(CONFIGURATION.statusOptionNodeIds[targetStatus])
+    expect(state.github.calls.filter(call => call === 'dispatch:issue-state')).toEqual([])
+  })
+
+  it.each(['top', 'after', 'changed-anchor'] as const)('orders a closed terminal Issue with %s placement', async (placement) => {
+    const source = positionTargetSnapshot(CONFIGURATION.statusOptionNodeIds.done, placement === 'top', 'closed')
+    const openAnchor = positionAnchorSnapshot(placement === 'top', CONFIGURATION.statusOptionNodeIds.done)
+    const anchor = { ...openAnchor, issue: { ...openAnchor.issue, state: 'closed' as const } }
+    const remoteFingerprint = targetedBoardRemoteFingerprint(source)
+    const anchorFingerprint = targetedBoardRemoteFingerprint(anchor)
+    const context: GitHubWorkItemMutationContext = {
+      ...POSITION_CONTEXT,
+      confirmedBoard: { ...POSITION_CONTEXT.confirmedBoard, items: POSITION_CONTEXT.confirmedBoard.items.map(item => ({
+        ...item, status: 'done', issueState: 'closed', latestNonTerminalStatus: 'ready',
+        remoteFingerprint: item.id === WORK_ITEM_ID ? remoteFingerprint : anchorFingerprint,
+      })) },
+    }
+    const state = harness({ ok: true, context })
+    state.github.positionScenario = true
+    state.github.positionedAfter = placement === 'top'
+    state.github.issueState = 'closed'
+    state.github.statusOptionId = CONFIGURATION.statusOptionNodeIds.done
+    state.github.anchorStatusOptionId = CONFIGURATION.statusOptionNodeIds.done
+    state.github.anchorIssueState = placement === 'changed-anchor' ? 'open' : 'closed'
+    const result = await state.operations.submit({
+      ...moveIntent(), expectedRemoteFingerprint: remoteFingerprint, targetStatus: 'done',
+      position: placement === 'top' ? { afterWorkItemId: null } : {
+        afterWorkItemId: ANCHOR_WORK_ITEM_ID, expectedAfterRemoteFingerprint: anchorFingerprint,
+      },
+    }, ACTOR, new AbortController().signal)
+    expect(result).toMatchObject(placement === 'changed-anchor'
+      ? { ok: false, reason: 'conflict', receipt: { reason: 'stale-remote' } }
+      : { ok: true, receipt: { state: 'succeeded' } })
+    expect(state.github.calls.filter(call => call === 'dispatch:issue-state')).toEqual([])
+    expect(state.github.calls.filter(call => call === 'dispatch:position')).toHaveLength(placement === 'changed-anchor' ? 0 : 1)
+    expect(state.github.issueState).toBe('closed')
   })
 
   it('reopens a terminal Work Item before restoring the backlog Status', async () => {

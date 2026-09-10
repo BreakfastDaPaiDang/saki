@@ -1,6 +1,7 @@
 /** Host half of the typed Saki `/saki` Connection channel. @module @breakfastdapaidang/saki-host-api */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { z } from 'zod'
 import type {
   ConnectionRpcReply,
   ConnectionRpcRequestMetadata,
@@ -21,6 +22,9 @@ import {
   sakiBranchDeliveryIntentResultSchema,
   sakiBranchDeliveryResultSchema,
   sakiBoardResultSchema,
+  sakiWorkItemViewResultSchema,
+  sakiProjectMilestonesResultSchema,
+  sakiProjectMappingResultSchema,
   sakiBootstrapExchangeRequestSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiCreateCommitResultSchema,
@@ -38,11 +42,13 @@ import {
   sakiProjectChangesResultSchema,
   sakiProjectSettingsResultSchema,
   sakiQueryRequestSchema,
+  sakiProjectionWatchRequestSchema,
   sakiMoveWorkItemResultSchema,
   sakiMyWorkResultSchema,
   sakiStageFilesResultSchema,
   sakiUnstageFilesResultSchema,
 } from './wire.ts'
+import { ProjectionChanges } from './projection-changes.ts'
 
 export * from './wire.ts'
 
@@ -60,14 +66,29 @@ export const name = 'saki-host-api'
 /** Host transport and control-plane services required by this adapter. */
 export const inject = ['connection', 'sakiControlPlane']
 
+/** Deployment timing for authenticated Projection invalidation reads. */
+export interface Config {
+  /** Maximum idle wait before clients recheck access and retained Projection freshness. */
+  changeWaitMs?: number
+}
+
+const configSchema = z.object({ changeWaitMs: z.number().int().min(1).max(2_147_483_647).default(25_000) }).strict()
+
 /**
  * Register the Access, protected query, and Control Intent endpoints over the shared Connection carrier.
  * @param ctx - Host context carrying Connection and the Saki control plane.
+ * @param config - maximum invalidation wait before a heartbeat.
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config = {}): void {
+  const resolved = configSchema.parse(config)
+  const changes = new ProjectionChanges()
+  ctx.effect(() => ctx.sakiControlPlane.onChanged(() => { changes.invalidate() }))
+  ctx.effect(() => () => { changes.dispose() })
   ctx.connection.rpc.handle(
     SAKI_CONNECTION_CHANNEL,
-    (endpoint, payload, signal, request) => dispatch(ctx.sakiControlPlane, endpoint, payload, signal, request),
+    (endpoint, payload, signal, request) => dispatch(
+      ctx.sakiControlPlane, changes, resolved.changeWaitMs, endpoint, payload, signal, request,
+    ),
     {
       authority: 'loopback',
       requiredResponseHeaders: { 'cache-control': 'no-store' },
@@ -78,6 +99,8 @@ export function apply(ctx: Context): void {
 
 async function dispatch(
   controlPlane: SakiControlPlaneModule,
+  changes: ProjectionChanges,
+  changeWaitMs: number,
   endpoint: string,
   payload: unknown,
   signal: AbortSignal,
@@ -90,6 +113,7 @@ async function dispatch(
       case 'access/exchange': return await exchangeBootstrap(controlPlane, payload, signal, request)
       case 'access/logout': return await authenticatedMutation(controlPlane, 'logout', payload, signal, request)
       case 'control/query': return await query(controlPlane, payload, signal, request)
+      case 'control/watch': return await watch(controlPlane, changes, changeWaitMs, payload, signal, request)
       case 'control/submit': return await authenticatedMutation(controlPlane, 'submit', payload, signal, request)
       default: return reply(badRequest())
     }
@@ -101,6 +125,28 @@ async function dispatch(
       error: SAKI_UNAVAILABLE_ERROR,
     })
   }
+}
+
+async function watch(
+  controlPlane: SakiControlPlaneModule,
+  changes: ProjectionChanges,
+  waitMs: number,
+  payload: unknown,
+  signal: AbortSignal,
+  request: ConnectionRpcRequestMetadata,
+): Promise<ConnectionRpcReply> {
+  const parsed = sakiProjectionWatchRequestSchema.safeParse(payload)
+  if (!parsed.success) return reply(badRequest())
+  const authenticate = () => resolveSakiAuthentication(
+    controlPlane,
+    sessionCookie(request, sakiSessionCookieName(controlPlane)),
+    { origin: request.headers.get('origin') ?? undefined, mutation: false },
+    signal,
+  )
+  if (!(await authenticate()).ok) return reply({ ok: true, value: { ok: false, reason: 'unavailable' } })
+  const cursor = await changes.wait(parsed.data.cursor, waitMs, signal)
+  if (!(await authenticate()).ok) return reply({ ok: true, value: { ok: false, reason: 'unavailable' } })
+  return reply({ ok: true, value: { ok: true, cursor } })
 }
 
 async function readAccess(
@@ -177,6 +223,9 @@ async function query(
     case 'board': {
       return reply({ ok: true, value: sakiBoardResultSchema.parse(result) })
     }
+    case 'project-mapping': return reply({ ok: true, value: sakiProjectMappingResultSchema.parse(result) })
+    case 'work-item-view': return reply({ ok: true, value: sakiWorkItemViewResultSchema.parse(result) })
+    case 'project-milestones': return reply({ ok: true, value: sakiProjectMilestonesResultSchema.parse(result) })
     case 'branch-delivery': {
       return reply({ ok: true, value: sakiBranchDeliveryResultSchema.parse(result) })
     }

@@ -1,6 +1,13 @@
 /** Saki Installation control plane and local Access interface. @module @breakfastdapaidang/saki-control-plane */
 
 export { SakiControlPlaneService } from './service.ts'
+export type {
+  SakiMilestoneSummary,
+  SakiPlanningRunProjection,
+  SakiProjectMilestonesProjection,
+  SakiWorkItemBodyProjection,
+  SakiWorkItemViewProjection,
+} from './planning-views.ts'
 export {
   MAX_INTERVENTION_ANSWER_CHARS,
   MAX_INTERVENTION_PROMPT_CHARS,

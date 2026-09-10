@@ -170,9 +170,53 @@ afterEach(async () => {
   await Promise.all([...activeContexts].map(async (context) => { await context.fiber.dispose() }))
   activeContexts.clear()
   await Promise.all(tempDirectories.splice(0).map(path => rm(path, { recursive: true, force: true })))
-})
+}, process.platform === 'win32' ? 300_000 : undefined)
 
 describe('Saki /saki Host transport', () => {
+  it('exposes invalidation cursors only while the browser session remains authenticated', async () => {
+    const host = await start()
+    expect((await rpc(host, 'control/watch', { cursor: null })).message.result).toEqual({
+      ok: true, value: { ok: false, reason: 'unavailable' },
+    })
+    expect((await rpc(host, 'control/watch', { cursor: 'invalid' })).message.result).toMatchObject({ ok: false })
+    const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
+    const exchange = await rpc(host, 'access/exchange', { secret })
+    const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
+    const access = (exchange.message.result as { value: { access: { requestToken: string } } }).value.access
+    const observed = await rpc(host, 'control/watch', { cursor: null }, { cookie })
+    expect(observed.message.result).toMatchObject({ ok: true, value: { ok: true } })
+    const cursor = (observed.message.result as { value: { cursor: string } }).value.cursor
+    expect(typeof cursor).toBe('string')
+    const missingOrigin = await fetch(`${host.origin}/saki/control/watch`, {
+      method: 'POST', headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'watch-no-origin', method: 'control/watch', payload: { cursor: null } }),
+    })
+    expect((await missingOrigin.json() as ServerResponse).result)
+      .toMatchObject({ ok: true, value: { ok: true } })
+    const waiting = rpc(host, 'control/watch', { cursor }, { cookie })
+    await rpc(host, 'access/logout', {}, { cookie, 'x-saki-request-token': access.requestToken })
+    expect((await waiting).message.result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
+  })
+
+  it('routes all three planning destinations through authenticated query parsing', async () => {
+    const host = await start()
+    const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
+    const exchange = await rpc(host, 'access/exchange', { secret })
+    const cookie = cookiePair(exchange.response.headers.get('set-cookie')!)
+    const projectId = 'project-22222222-2222-4222-8222-222222222222'
+    const query = vi.spyOn(host.context.sakiControlPlane, 'query')
+    for (const payload of [
+      { type: 'project-mapping', projectId },
+      { type: 'project-milestones', projectId, after: null },
+      { type: 'work-item-view', projectId, workItemId: `work-item-${'5'.repeat(64)}` },
+    ]) {
+      query.mockResolvedValueOnce({ ok: false, reason: 'not-found' } as never)
+      expect((await rpc(host, 'control/query', payload, { cookie })).message.result)
+        .toEqual({ ok: true, value: { ok: false, reason: 'not-found' } })
+      expect(query.mock.lastCall?.[1]).toEqual(payload)
+    }
+  })
+
   it('bootstraps, inspects, registers, queries the Project, and logs out over the real Connection route', async () => {
     const host = await start()
     const repo = await repository(host)
@@ -352,7 +396,7 @@ describe('Saki /saki Host transport', () => {
     expect((await rpc(host, 'control/query', { type: 'project-index' }, { cookie })).message.result)
       .toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
     await host.close()
-  }, 20_000)
+  }, process.platform === 'win32' ? 300_000 : undefined)
 
   it('denies inspection and registration after the current Grant narrows or is revoked', async () => {
     const host = await start()
@@ -416,7 +460,7 @@ describe('Saki /saki Host transport', () => {
     expect((await rpc(host, 'access/read', {}, { cookie })).message.result)
       .toMatchObject({ ok: true, value: { kind: 'authenticated' } })
     await host.close()
-  }, 20_000)
+  }, process.platform === 'win32' ? 300_000 : undefined)
 
   it('rejects query strings before dispatch and marks denied and internal replies no-store', async () => {
     const host = await start()

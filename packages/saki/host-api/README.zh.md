@@ -33,6 +33,7 @@ Saki 私有双侧 Host API 把控制面适配到共享 Connection 载体。Host 
 | `access/read` | `{}` | 封闭的 Access Projection |
 | `access/exchange` | `{ secret }` | Bootstrap 交换结果；`Set-Cookie` 保持在 JSON 之外 |
 | `access/logout` | `{}` 与请求令牌请求头 | 登出结果；Cookie 失效响应头保持在 JSON 之外 |
+| `control/watch` | `{ cursor: null \| priorCursor }` | 在提交变更或心跳后返回经认证的失效游标；不包含产品事实 |
 | `control/query` | `{ type: 'inspect-project-selection', hostId, directoryLocator }` | 含安全选择或有界选择拒绝的已授权 Projection，或外层 denied/unavailable 结果 |
 | `control/query` | `{ type: 'project-index' }` | 带修订号的 Project-index Projection 或拒绝结果 |
 | `control/query` | `{ type: 'development-workspace', projectId, expectedRegistryRevision }` | 单个 Development Workspace Projection 或类型化拒绝结果 |
@@ -40,6 +41,9 @@ Saki 私有双侧 Host API 把控制面适配到共享 Connection 载体。Host 
 | `control/query` | `{ type: 'project-diff', projectId, expectedRegistryRevision, request }` | 由不透明变更 id 选择的单个有界文件级 Diff 分页 |
 | `control/query` | `{ type: 'project-settings', projectId }` | 当前安全的 GitHub 同步配置、激活状态与完整扫描证据，或类型化拒绝结果 |
 | `control/query` | `{ type: 'board', projectId, refresh: 'cached' \| 'interactive' }` | 当前完整 Board 代次与同步证据，或类型化拒绝结果 |
+| `control/query` | `{ type: 'work-item-view', projectId, workItemId }` | 当前经过定向确认的 Work Item、独立读取的 Issue 正文、执行与交付证据及近期活动引用 |
+| `control/query` | `{ type: 'project-milestones', projectId, after: null \| milestoneId }` | 最多 32 个已配置 Milestone 目的地及下一页游标 |
+| `control/query` | `{ type: 'project-mapping', projectId }` | GitHub 全部现有字段、配置修订号及当前映射编辑权限 |
 | `control/query` | `{ type: 'my-work' }` | 完整的当前 Principal My Work Projection，或类型化 denied/unavailable 结果 |
 | `control/query` | `{ type: 'attention' }` | 完整的当前 Principal 派生 Attention Projection，或类型化 denied/unavailable 结果 |
 | `control/query` | `{ type: 'branch-delivery', projectId, workItemId, refresh: 'cached' \| 'interactive' }` | 适用于浏览器的准确 Commit 交付与定向来源证据，或类型化拒绝结果 |
@@ -65,6 +69,8 @@ Branch Delivery review 携带完整的精确 pull-request fact，并具有独立
 <a id="transport-responsibilities"></a>
 ## 传输职责
 
+`changeWaitMs` 配置 `control/watch` 的最长空闲等待，默认 25,000 ms。Host 在等待前及返回前分别认证；取消和 Host 处置会释放所有等待。游标变化仅提示失效，客户端因此重新读取完整且经授权的 Projection。Host 重启后产生的新游标也会使此前保留值失效。
+
 Connection 负责路由信任校验、有界 JSON 封装、请求关联、取消、dispose（资源释放）和 JSON Content-Type。`/saki` 注册要求 Connection 通道应用 `Cache-Control: no-store` 与固定的不透明错误，因此这些策略也覆盖 Host 适配器运行前的故障。Host 适配器只从 Connection 提供的可信请求元数据读取 Cookie、Origin 与 `x-saki-request-token`。它通过控制面仅供 Host 使用的解析器取得 AuthenticationContext，并消费持久提交后不透明的 Cookie 交接值。AuthenticationContext 与原始 Cookie 材料都不会进入浏览器 JSON。
 
 浏览器客户端的每次调用都使用同源凭据。登出与每次 Intent 提交都需要当前请求令牌。客户端提供选择检查、Project-index、Development-Workspace、Changes、文件级 Diff、Project Settings、Board、`queryMyWork`、`queryAttention`、Branch Delivery 与 Milestone View 查询、首次登记、字段级 GitHub 同步配置、结构化 Git 与 Work Item mutation、全部六种 Branch Delivery transition、两种 Milestone Delivery transition、`giveWorkItemToAgent` 与 `answerIntervention` 的准确方法；每个方法只解析与自身对应的结果 schema。`queryMyWork()`、`queryAttention()`、`queryBoard(projectId, 'cached')`、`queryBranchDelivery(projectId, workItemId, 'cached')` 与 `queryMilestoneView(projectId, milestoneId, 'cached')` 都只读取持久状态。三项可刷新的 query 的 `interactive` 策略请求有界刷新，但仍只返回通过校验的 Projection。业务拒绝仍作为类型化的 RPC 成功值返回；取消、载体故障与 schema 校验不匹配则通过 Connection 固定且不透明的 RPC 错误信封拒绝 Promise。
@@ -85,7 +91,7 @@ Connection 负责路由信任校验、有界 JSON 封装、请求关联、取消
 - **受限的 Board 写入**：Host API 只公开 CreateWorkItem 与 MoveWorkItem。重新绑定、退役、任意 Issue 编辑与提供方权限输入仍不属于其操作集。
 - **受限的结构化 Git 写入**：CreateCommit 不运行钩子且不签名；要求钩子、签名或不受支持的外部过滤器的仓库需使用 Terminal 或之后明确受信任的提供方。
 - **不包含前端组合**：该包提供客户端服务与 schema，不拥有路由或渲染后的 UI。
-- **仅提供 Projection schema**：Work Item detail 与 Agent Run schema 会校验前端 fixture，但本切片不会把它们接入 `control/query`、Host route 或浏览器 client。
+- **有界规划历史**：Work Item 视图包含最近 32 条活动引用；完整 Intent 记录由控制面保留。Project Milestone 列出现有 delivery 记录。
 
 <a id="dev-note"></a>
 ### 开发备注

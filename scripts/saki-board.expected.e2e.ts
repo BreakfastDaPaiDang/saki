@@ -9,6 +9,9 @@ import {
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiMoveWorkItemResultSchema,
   sakiProjectSettingsResultSchema,
+  sakiWorkItemViewResultSchema,
+  sakiProjectMappingResultSchema,
+  sakiProjectMilestonesResultSchema,
 } from '@breakfastdapaidang/saki-host-api'
 import type {
   SakiBoardProjection,
@@ -19,6 +22,7 @@ import { describe, expect, it } from 'vitest'
 import {
   SAKI_BOARD_SNAPSHOT_CONFIGURATION,
   readSakiBoardSnapshotMutationState,
+  writeSakiBoardSnapshotMutationState,
 } from '../packages/saki/bundle/tests/fixtures/saki-board-fake-github.ts'
 import {
   cleanupSnapshot,
@@ -304,9 +308,31 @@ async function transcript(): Promise<string> {
       },
     )
 
-    await setProviderState(providerStatePath, 'hold')
     const movingItem = initialBoard.confirmed.items.find(item => item.issueNumber === 27)
     if (movingItem === undefined) throw new Error('Saki Board snapshot has no movable Issue')
+    const detail = sakiWorkItemViewResultSchema.parse((await rpc(port, 'control/query', {
+      type: 'work-item-view', projectId: registration.receipt.projectId, workItemId: movingItem.id,
+    }, { cookie })).value)
+    const mapping = sakiProjectMappingResultSchema.parse((await rpc(port, 'control/query', {
+      type: 'project-mapping', projectId: registration.receipt.projectId,
+    }, { cookie })).value)
+    const milestones = sakiProjectMilestonesResultSchema.parse((await rpc(port, 'control/query', {
+      type: 'project-milestones', projectId: registration.receipt.projectId, after: null,
+    }, { cookie })).value)
+    if (!detail.ok || !mapping.ok || !milestones.ok || detail.projection.body.state !== 'confirmed') {
+      throw new Error('Saki planning destinations did not resolve confirmed reads')
+    }
+    records.push({ step: 'planning-destinations', result: {
+      issueNumber: detail.projection.workItem.issueNumber,
+      body: { markdown: detail.projection.body.markdown, matchesBoard: detail.projection.body.matchesBoard },
+      assignments: detail.projection.assignments, runs: detail.projection.runs,
+      interventions: detail.projection.interventions, branchDelivery: detail.projection.branchDelivery,
+      activity: detail.projection.activity, earlierActivity: detail.projection.earlierActivity,
+      mapping: { synchronizationRevision: mapping.projection.synchronizationRevision,
+        canConfigure: mapping.projection.canConfigure, fields: mapping.projection.choices.fields },
+      milestones: { items: milestones.projection.items, next: milestones.projection.next },
+    } })
+    await setProviderState(providerStatePath, 'hold')
     const moveIntent = {
       type: 'move-work-item',
       intentId: 'intent-33333333-3333-4333-8333-333333333333',
@@ -501,6 +527,27 @@ async function transcript(): Promise<string> {
         effectiveMutationAvailability: capacityBoard.effectiveMutationAvailability,
       },
     })
+    const externallyClosed = await readSakiBoardSnapshotMutationState(providerStatePath)
+    await writeSakiBoardSnapshotMutationState(providerStatePath, { ...externallyClosed, issueState: 'closed' })
+    await setProviderState(providerStatePath, 'complete')
+    await queryBoard(port, cookie, registration.receipt.projectId, 'interactive')
+    const classificationBoard = await waitForConfirmedBoard(port, cookie, registration.receipt.projectId,
+      projection => projection.confirmed.items.some(item => item.id === movingItem.id && item.issueState === 'closed'))
+    const classificationItem = classificationBoard.confirmed.items.find(item => item.id === movingItem.id)
+    if (classificationItem === undefined) throw new Error('External close lost its Work Item')
+    const classified = sakiMoveWorkItemResultSchema.parse((await rpc(port, 'control/submit', {
+      type: 'move-work-item', intentId: 'intent-44444444-4444-4444-8444-444444444444',
+      projectId: registration.receipt.projectId, workItemId: classificationItem.id,
+      expectedRemoteFingerprint: classificationItem.remoteFingerprint, targetStatus: 'done',
+    }, { cookie, requestToken: exchangeValue.access.requestToken })).value)
+    expect(classified.ok).toBe(true)
+    const classifiedRemote = await readSakiBoardSnapshotMutationState(providerStatePath)
+    records.push({ step: 'explicit-external-close-classification', result: {
+      sourceStatus: classificationItem.status, sourceIssueState: classificationItem.issueState,
+      receiptState: classified.ok ? classified.receipt.state : classified.reason,
+      targetStatus: 'done', issueState: classifiedRemote.issueState,
+      issueStateDispatchCount: classifiedRemote.issueStateDispatchCount,
+    } })
     const output = serializeSnapshotRecords(
       records,
       [directory, repository, providerStatePath, bootstrapSecret, cookie, exchangeValue.access.requestToken],

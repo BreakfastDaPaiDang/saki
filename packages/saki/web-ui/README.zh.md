@@ -1,5 +1,5 @@
 ---
-description: "Saki Web 客户端插件：DSH 壳层可累加 slot 上的「工作」「项目」顶层入口、Access gate、Project 选择器、登记对话框与 Development Workspace 视图。"
+description: "在 Saki Web 客户端登记本地 Project，在已确认看板上规划 GitHub Work Item，并查看 Issue、执行、Milestone 与 Release 证据。"
 kind: "package-reference"
 ---
 
@@ -9,11 +9,12 @@ kind: "package-reference"
 
 ## 概述
 
-Saki 的 Web 客户端插件。它把「工作」「项目」两个顶层入口注册进 DSH 壳层可累加的 `sidebar.primary.action` list slot，并向 `main.surface` chain slot 注册一个接管条目——其 fallback 仍是现有的 Conversation。插件拥有一个跨 reload 持久化的小型导航 store（活动 surface、已选与最近 Project），并通过 `ctx.sakiHostClient` 完成访问、Project 索引、目录检查、登记与 Development Workspace 读取。它不直接调用 GitHub、Git、文件系统或凭据，也不根据原始状态推导按钮。
+将已有目录登记为 Development Project，规划其 GitHub Work Item，并查看 Issue、执行与 Release 证据。「项目」页在重新加载后保留已选看板卡片、详情、Milestone 或工作区。读取失败时，确认值与来源健康状态保持可见；尚未收到确认的移动保留原始 Intent，供用户显式恢复。所有受保护读写均通过 `ctx.sakiHostClient`。
 
 ## 目录
 
 - [使用本包](#use-this-package)
+- [规划 Project](#plan-a-project)
 - [模型体验](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
 - [开发备注](#dev-note)
@@ -30,6 +31,17 @@ Saki 的 Web 客户端插件。它把「工作」「项目」两个顶层入口�
 
 目录变更会使未完成的检查失效。登记 Intent 完成前路径不可编辑；发生冲突后，必须刷新登记表修订号与检查证据才能再次确认。
 
+<a id="plan-a-project"></a>
+## 规划 Project
+
+选择已登记 Project 打开看板。七种映射状态遵循服务端确认的 GitHub Project 顺序；Canceled 默认隐藏。尚未加入 Project 的开放仓库 Issue 带有明确 Inbox 标记。拖拽卡片或使用移动对话框会提交同一种携带预期指纹的操作，可选指定前驱卡片。待确认位置与已确认状态分开展示。冲突会恢复最新确认事实，并要求用户重新发起手势。
+
+打开卡片可查看完整 Issue 正文与验收条件、关联 Session 与 Run、待答复 Intervention、Git/PR/CI 与验收证据、Milestone 和近期活动引用。打开 Session 使用继承的 Conversation；返回 Project 会恢复其地址。Milestone 视图区分 Saki 阶段与 Work Item 状态，并保留独立 Release 来源的确认事实及阻塞原因。
+
+Status 映射无效时，看板写入不可用。授权用户可在状态映射中选择已有 GitHub 单选字段及七个互不重复的选项；只有完整扫描成功后才恢复写入。工作区和继承的 Session 目的地仍可进入。Project 规划不提供 Issue 创建表单；部分完成的创建事实链接回拥有提交和恢复职责的「工作」流程。
+
+一个规划控制器拥有受保护查询缓存及可取消的失效轮询。通知触发完整读取，不会局部修改看板。Principal 变化会清除业务事实缓存。持久状态仅包含按 Principal 隔离的地址、草稿和未确认原始 Intent，不包含 request token 或 GitHub 凭据。传输失败后，用户刷新或连接重置通知会恢复轮询。
+
 <a id="model-experience"></a>
 ## 模型体验
 
@@ -43,7 +55,7 @@ Saki 的 Web 客户端插件。它把「工作」「项目」两个顶层入口�
 <a id="known-limitations-and-deferred-work"></a>
 
 - **尚无 My Work Projection** ——「工作」页显示明确的不可用状态并指向「项目」；真正的页面随 K2 切片到来。
-- **客户端没有推送通道** —— 本切片在导航、刷新与 Intent 后重新查询；`onChanged` 仅在 Host 侧。
+- **仅列出已配置 Milestone** —— Milestone 目的地列出现有 Saki delivery 记录；创建 Milestone 或 Release 元数据由其所属工作流负责。
 - **目录选择是带校验的路径输入** —— 本切片不组合浏览对话框；后端在登记前重新检查任何提交的路径。
 - **修复与 rebind 在此只读** —— binding 的 `missing` / `repair-required` 状态保持历史可读但不提供修复操作；它们属于 Resource Binding 切片（#26）。
 

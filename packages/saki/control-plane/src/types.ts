@@ -9,6 +9,7 @@ import type {
   GitHubInstallationId,
   GitHubIssueId,
   GitHubMilestoneId,
+  GitHubProjectFieldsFact,
   GitHubProjectBoardFingerprint,
   GitHubProjectBoardScanCandidate,
   GitHubProjectBoardScanRequest,
@@ -62,6 +63,7 @@ import type {
 } from './milestone-delivery.ts'
 import type { MilestoneViewProjection } from './milestone-view.ts'
 import type { SakiGitHubFailureProjection } from './github-failure-projection.ts'
+import type { SakiProjectMilestonesProjection, SakiWorkItemViewProjection } from './planning-views.ts'
 
 export type {
   SakiAgentRunId,
@@ -233,6 +235,20 @@ export interface SakiBoardQuery {
   readonly type: 'board'
   readonly projectId: SakiDevelopmentProjectId
   readonly refresh: 'cached' | 'interactive'
+}
+
+/** One Work Item's complete planning view, including a targeted current Issue-body read. */
+export interface SakiWorkItemViewQuery {
+  readonly type: 'work-item-view'
+  readonly projectId: SakiDevelopmentProjectId
+  readonly workItemId: SakiBoardWorkItemId
+}
+
+/** Bounded, stable-id-ordered Milestone destination page from retained Project records. */
+export interface SakiProjectMilestonesQuery {
+  readonly type: 'project-milestones'
+  readonly projectId: SakiDevelopmentProjectId
+  readonly after: GitHubMilestoneId | null
 }
 
 /** One Work Item's Branch Delivery with an explicit targeted-refresh policy. */
@@ -1082,6 +1098,19 @@ export interface SakiProjectSettingsProjection {
 
 /** Control-plane Projection query map. */
 export interface SakiQueryMap {
+  /** Complete current Status mapping choices at an exact saved configuration revision. */
+  readonly 'project-mapping': {
+    readonly request: { readonly type: 'project-mapping'; readonly projectId: SakiDevelopmentProjectId }
+    readonly projection: {
+      readonly type: 'project-mapping'
+      readonly projectId: SakiDevelopmentProjectId
+      readonly synchronizationRevision: number
+      readonly canConfigure: boolean
+      readonly choices: GitHubProjectFieldsFact
+    }
+    readonly failure: 'denied' | 'unavailable' | 'not-found'
+  }
+
   /** Principal-scoped cross-Project Work. */
   readonly 'my-work': {
     readonly request: SakiMyWorkQuery
@@ -1134,6 +1163,18 @@ export interface SakiQueryMap {
   readonly board: {
     readonly request: SakiBoardQuery
     readonly projection: SakiBoardProjection
+    readonly failure: 'denied' | 'unavailable' | 'not-found'
+  }
+  /** One selected Work Item's joined specification and durable execution evidence. */
+  readonly 'work-item-view': {
+    readonly request: SakiWorkItemViewQuery
+    readonly projection: SakiWorkItemViewProjection
+    readonly failure: 'denied' | 'unavailable' | 'not-found'
+  }
+  /** One bounded page of Milestone destinations already tracked by this Project. */
+  readonly 'project-milestones': {
+    readonly request: SakiProjectMilestonesQuery
+    readonly projection: SakiProjectMilestonesProjection
     readonly failure: 'denied' | 'unavailable' | 'not-found'
   }
   /** One Work Item's current Branch Delivery. */

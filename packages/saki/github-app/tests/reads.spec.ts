@@ -251,4 +251,58 @@ describe('Saki Product GitHub App exact reads', () => {
       failure: { code: 'not-found', resource: 'repository' },
     })
   })
+
+  it.each(['complete', 'wrong-owner', 'wrong-project', 'duplicate-field', 'duplicate-option', 'missing-page'] as const)(
+    'discovers complete mapping fields and rejects %s admission failures', async (scenario) => {
+      let fieldReads = 0
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const request = new Request(input, init)
+        const pathname = new URL(request.url).pathname
+        if (pathname === '/app/installations/98765/access_tokens') return json({
+          token: 'ghs_mapping_fields', expires_at: '2030-01-02T03:04:05Z',
+          permissions: expectedReadPermissions, repository_selection: 'selected', repositories: [{ id: 4_242 }],
+        }, { status: 201 })
+        if (pathname !== '/graphql') throw new Error(`Unexpected field-discovery request: ${pathname}`)
+        const body = JSON.parse(await request.text()) as { query: string; variables: { after?: string | null } }
+        if (!body.query.includes('SakiProjectFields')) return json({ data: { node: {
+          __typename: 'ProjectV2', id: 'PVT_kwDOBoard', number: 1, title: 'Saki', closed: false,
+          url: 'https://github.com/orgs/BreakfastDaPaiDang/projects/1', updatedAt: '2026-08-26T08:00:00Z',
+          owner: { id: scenario === 'wrong-owner' ? 'O_another_owner' : profile.accountId },
+        }, rateLimit } })
+        fieldReads += 1
+        const first = body.variables.after === null
+        const field = first ? { __typename: 'ProjectV2Field', id: 'PVTF_title', name: 'Title', dataType: 'TITLE' }
+          : { __typename: 'ProjectV2SingleSelectField', id: scenario === 'duplicate-field' ? 'PVTF_title' : 'PVTSSF_status',
+            name: 'Status', options: [
+              { id: 'option-ready', name: 'Ready' },
+              { id: scenario === 'duplicate-option' ? 'option-ready' : 'option-done', name: 'Done' },
+            ] }
+        return json({ data: { project: {
+          __typename: 'ProjectV2', id: scenario === 'wrong-project' ? 'PVT_another_project' : 'PVT_kwDOBoard',
+          fields: { totalCount: 2, nodes: [field], pageInfo: {
+            hasNextPage: first && scenario !== 'missing-page', endCursor: first ? 'field-page-2' : null,
+          } },
+        }, rateLimit } })
+      }))
+      const ctx = new Context()
+      contexts.push(ctx)
+      new TestCredentials(ctx, privateKey, true)
+      await ctx.plugin(SakiGitHubApp, {})
+      const result = ctx.sakiGitHub.read({
+        kind: 'project-fields', installation: profile, projectId: githubProjectId('PVT_kwDOBoard'),
+      }, new AbortController().signal)
+      if (scenario === 'complete') {
+        await expect(result).resolves.toMatchObject({ projectId: 'PVT_kwDOBoard', fields: [
+          { kind: 'field', id: 'PVTF_title' },
+          { kind: 'single-select', id: 'PVTSSF_status', options: [{ id: 'option-ready' }, { id: 'option-done' }] },
+        ] })
+        expect(fieldReads).toBe(2)
+      } else {
+        await expect(result).rejects.toMatchObject({ failure: {
+          code: scenario === 'wrong-owner' ? 'permission-mismatch' : 'invalid-external-response',
+        } })
+        if (scenario === 'wrong-owner') expect(fieldReads).toBe(0)
+      }
+    },
+  )
 })

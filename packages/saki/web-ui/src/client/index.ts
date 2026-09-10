@@ -20,6 +20,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { SakiHostClient } from '@breakfastdapaidang/saki-host-api/client'
 import { createSakiNavigationStore, surfaceTokenOf, type SakiNavigationActionsFace, type SakiSurface } from './navigation.ts'
 import { en, NS, zh, type SakiKey } from './locales.ts'
+import { PlanningController } from './planning-controller.ts'
+import type { PlanningActions } from './planning-controller.ts'
+import type { SakiWireWorkItemViewResult } from '@breakfastdapaidang/saki-host-api/wire'
 import { SakiNavEntry } from './components/SakiNavEntry.tsx'
 import { SakiSurfaceRoot } from './components/SurfaceRoot.tsx'
 
@@ -55,7 +58,9 @@ type NavigationStore = ReturnType<ReturnType<typeof createSakiNavigationStore>['
 /** Inject face shared by every Saki entry. */
 export interface SakiInjected extends SakiHostFace {
   nav: SakiNavigationActionsFace
-  hooks: { navigation: NavigationStore }
+  planning: PlanningActions
+  openSession: (id: Extract<SakiWireWorkItemViewResult, { ok: true }>['projection']['runs'][number]['sessionId']) => void
+  hooks: { navigation: NavigationStore; planning: PlanningController }
 }
 
 /**
@@ -70,9 +75,12 @@ export function apply(ctx: ClientContext): void {
   // One navigation instance for the whole apply (sidebar entries, the surface
   // entry, and the sync effects all share it).
   const navigation = createSakiNavigationStore().create()
+  const planning = new PlanningController(ctx.sakiHostClient, navigation)
+  ctx.effect(() => { planning.start(); return () => { planning.dispose() } }, 'saki-web-ui: planning lifecycle')
+  ctx.effect(() => ctx.on('connection/reset', () => { void planning.reloadAccess() }), 'saki-web-ui: planning reconnect')
   const injected: SakiInjected = {
     readAccess: signal => ctx.sakiHostClient.readAccess(signal),
-    exchangeBootstrap: (secret, signal) => ctx.sakiHostClient.exchangeBootstrap(secret, signal),
+    exchangeBootstrap: (secret, signal) => planning.exchangeBootstrap(secret, signal),
     queryProjectIndex: signal => ctx.sakiHostClient.queryProjectIndex(signal),
     inspectProjectSelection: (hostId, directoryLocator, signal) =>
       ctx.sakiHostClient.inspectProjectSelection(hostId, directoryLocator, signal),
@@ -81,7 +89,12 @@ export function apply(ctx: ClientContext): void {
     registerDevelopmentProject: (intent, requestToken, signal) =>
       ctx.sakiHostClient.registerDevelopmentProject(intent, requestToken, signal),
     nav: navigation.actions,
-    hooks: { navigation: navigation.store },
+    planning: { reloadAccess: planning.reloadAccess, refresh: planning.refresh, navigate: planning.navigate,
+      openItem: planning.openItem, closeDetail: planning.closeDetail, beginMove: planning.beginMove, closeMove: planning.closeMove,
+      move: planning.move, drop: planning.drop, backToBoard: planning.backToBoard, retryMove: planning.retryMove,
+      repairMapping: planning.repairMapping, retryMapping: planning.retryMapping },
+    openSession: (id) => { ctx.uiWorkspace.openSession(id) },
+    hooks: { navigation: navigation.store, planning },
   }
 
   // Nav state → shell surface token: the sidebar entries set the surface; the

@@ -1412,7 +1412,7 @@ export class GitHubWorkItemOperations {
     if (view === undefined || item?.id !== request.projectItemId || item.archived) {
       return 'mapping-repair-required'
     }
-    if (snapshot.issue.state !== 'open' || item.statusOptionId !== target.desiredStatusOptionId) {
+    if (snapshot.issue.state !== expectedProjectMutationIssueState(record) || item.statusOptionId !== target.desiredStatusOptionId) {
       return 'stale-remote'
     }
     const position = target.position
@@ -1421,8 +1421,7 @@ export class GitHubWorkItemOperations {
       if (snapshot.after.state !== 'present'
         || snapshot.after.item.id !== position.projectItemId
         || snapshot.after.item.archived
-        || snapshot.after.item.statusOptionId !== target.desiredStatusOptionId
-        || snapshot.after.item.issue.state !== 'open') {
+        || snapshot.after.item.statusOptionId !== target.desiredStatusOptionId) {
         return 'stale-remote'
       }
       const anchor = positionAnchorView(snapshot, snapshot.after, target.desiredStatusOptionId)
@@ -1455,7 +1454,7 @@ export class GitHubWorkItemOperations {
     const membership = recovered.facts.membership.item
     /* v8 ignore next -- Position recovery validates these durable target fields before materializing the frontier. */
     if (membership.id !== target.projectItemId || membership.archived
-      || recovered.facts.issue.state !== 'open'
+      || recovered.facts.issue.state !== expectedProjectMutationIssueState(record)
       || membership.statusOptionId !== target.desiredStatusOptionId) return false
     const position = target.position
     if (position.kind === 'top') return true
@@ -1620,7 +1619,7 @@ export class GitHubWorkItemOperations {
     if ((target.source.membership === 'present'
       && recovery?.confirmed.sourceIntentId !== record.id
       && currentRemoteFingerprint !== intent.expectedRemoteFingerprint)
-      || (recovered?.facts.issue.state ?? item.issueState) === 'closed'
+      || (recovered?.facts.issue.state ?? item.issueState) !== expectedProjectMutationIssueState(record)
       || recoveredMembership?.archived === true
       || currentProjectItemId === undefined) return false
     return target.issueId === currentIssueId
@@ -2695,20 +2694,24 @@ function targetedObservation(
   }
 }
 
+/** Issue state authorized by the source observation and the confirmed Issue-state prefix. */
+function expectedProjectMutationIssueState(record: GitHubWorkItemIntentRecord): 'open' | 'closed' {
+  const precedingIssueState = record.stages.slice(0, record.observedPrefix.length)
+    .find(stage => stage.resolvedTarget?.kind === 'issue-state-set')
+    ?.resolvedTarget
+  return precedingIssueState?.kind === 'issue-state-set'
+    ? precedingIssueState.desiredState
+    : record.target.kind === 'move-work-item'
+      ? record.target.source.issueState
+      : 'open'
+}
+
 function statusIsDesired(
   record: GitHubWorkItemIntentRecord,
   request: GitHubProjectItemStatusSetRequest,
   inspection: GitHubProjectItemStatusSetInspection,
 ): boolean {
   const snapshot = inspection.snapshot
-  const precedingIssueState = record.stages.slice(0, record.observedPrefix.length)
-    .find(stage => stage.resolvedTarget?.kind === 'issue-state-set')
-    ?.resolvedTarget
-  const expectedIssueState = precedingIssueState?.kind === 'issue-state-set'
-    ? precedingIssueState.desiredState
-    : record.target.kind === 'move-work-item'
-      ? record.target.source.issueState
-      : 'open'
   return snapshot.repositoryId === request.repositoryId
     && snapshot.repositoryDatabaseId === request.repositoryDatabaseId
     && snapshot.projectId === request.projectId
@@ -2718,7 +2721,7 @@ function statusIsDesired(
     && snapshot.membership.item.id === request.projectItemId
     && snapshot.membership.item.statusOptionId === request.desiredStatusOptionId
     && !snapshot.membership.item.archived
-    && snapshot.issue.state === expectedIssueState
+    && snapshot.issue.state === expectedProjectMutationIssueState(record)
 }
 
 function targetConfigurationMatches(

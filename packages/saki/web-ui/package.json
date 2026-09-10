@@ -1,6 +1,6 @@
 {
   "name": "@breakfastdapaidang/saki-web-ui",
-  "description": "Saki Web client plugin: the 工作/项目 top-level entries over the DSH shell",
+  "description": "Saki Web client plugin: the \u5de5\u4f5c/\u9879\u76ee top-level entries over the DSH shell",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -53,11 +53,16 @@
     "@deepseek-ai/dsh-client-ui-workspace": "workspace:^",
     "@deepseek-ai/dsh-util-crypto": "workspace:^",
     "@types/react": "~18.3.1",
-    "react": "^18.2.0"
+    "react": "^18.2.0",
+    "@deepseek-ai/dsh-client-ui-primitives": "workspace:^",
+    "@breakfastdapaidang/saki-control-plane": "workspace:^"
   },
   "files": [
     "lib/index.js",
     "lib/client.js",
     "lib/types/**/*.d.ts"
-  ]
+  ],
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
 }

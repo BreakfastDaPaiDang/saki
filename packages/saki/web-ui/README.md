@@ -1,5 +1,5 @@
 ---
-description: "Saki Web client plugin: the 工作/项目 top-level entries over the DSH shell's additive slots, the Access gate, Project selector, registration dialog, and Development Workspace view."
+description: "Register local Projects, plan GitHub Work Items on a confirmed Board, and inspect Issue, execution, Milestone, and Release evidence in the Saki Web client."
 kind: "package-reference"
 ---
 
@@ -9,11 +9,12 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The Saki Web client plugin. It registers the two top-level Saki entries — 「工作」 and 「项目」 — into the DSH shell's additive `sidebar.primary.action` list slot, and one takeover entry into the `main.surface` chain slot whose fallback stays the shipped Conversation. The plugin owns the small navigation store (active surface, selected and last Project) persisted across reloads, and drives `ctx.sakiHostClient` for access, Project index, selection inspection, registration, and Development Workspace reads. It never calls GitHub, Git, the filesystem, or credentials directly, and never infers buttons from raw status.
+Register an existing directory as a Development Project, plan its GitHub Work Items, and inspect Issue, execution, and Release evidence. The 「项目」 page preserves the selected Board card, detail, Milestone, or workspace across reloads. Failed reads retain confirmed values with their source health; unacknowledged moves retain the exact original Intent for explicit recovery. All protected reads and writes use `ctx.sakiHostClient`.
 
 ## Table of Contents
 
 - [Use this package](#use-this-package)
+- [Plan a Project](#plan-a-project)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -30,6 +31,17 @@ Mount this plugin in a composition that also carries the shell roster and the `/
 
 Directory edits supersede pending inspections. Registration disables path edits until the submitted Intent settles; a conflict requires refreshed registry revision and inspection evidence before confirmation becomes available again.
 
+<a id="plan-a-project"></a>
+## Plan a Project
+
+Select a registered Project to open its Board. The seven mapped statuses follow the server's confirmed GitHub Project order; Canceled is hidden until selected. Open repository Issues outside the Project have an explicit Inbox marker. Drag a card or use its move dialog to submit the same fingerprint-fenced operation, including an optional predecessor. Pending placement stays separate from the confirmed status. A conflict restores the latest confirmed facts and requires a new gesture.
+
+Open a card for its complete Issue body and acceptance criteria, linked Sessions and Runs, pending Intervention questions, Git/PR/CI and acceptance evidence, Milestones, and recent activity references. Opening a Session uses the inherited Conversation; returning to Project restores its address. Milestone views separate Saki phase from Work Item status and retain independent Release-source confirmations and blockage reasons.
+
+Invalid Status mapping disables Board writes. Authorized users can select an existing GitHub single-select field and seven distinct options in Status mapping; only a successful complete scan re-enables writes. Workspace and inherited Session destinations remain reachable. Project planning has no Issue creation form; incomplete creation facts link to the Work flow that owns submission and recovery.
+
+One planning controller owns protected query caches and cancellable invalidation polling. Notifications trigger complete reads; they never patch a Board. Principal changes clear cached business facts. Persisted state contains Principal-scoped addresses, drafts, and exact unacknowledged Intents, without request tokens or GitHub credentials. A transport failure requires refresh or a connection-reset notification before polling resumes.
+
 <a id="model-experience"></a>
 ## Model Experience
 
@@ -43,7 +55,7 @@ None; the plugin reads typed Projections only.
 <a id="known-limitations-and-deferred-work"></a>
 
 - **No My Work Projection yet** — the 「工作」 page renders an explicit unavailable state pointing at 「项目」; the real page arrives with the K2 slice.
-- **No client push channel** — the client re-queries on navigation, refresh, and after Intents; `onChanged` is host-side only in this slice.
+- **Configured Milestones only** — the Milestone destination lists existing Saki delivery records; creating Milestone or Release metadata belongs to its owning workflow.
 - **Directory selection is a validated path input** — the browse dialog is not composed in this slice; the backend re-inspects any submitted path before registration.
 - **Repair and rebind are read-only here** — binding `missing` / `repair-required` states render with history readable and no repair action; they belong to the Resource Binding slice (#26).
 
