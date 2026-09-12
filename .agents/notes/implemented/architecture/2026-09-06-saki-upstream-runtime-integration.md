@@ -14,7 +14,7 @@ Saki reads the `events` slice from each `SessionHandleReadResult` without mutati
 
 Storage keeps the optional closed-unit lease and explicit create-only migration operations alongside upstream per-record layouts. Ordinary SQLite serving requires physical v2; closed migration can read physical v1 without modifying the source. JSON single-unit writes retain strict lossless JSON and root-identity checks. These are separate from released Session generations, which follow the [Session migration decision](2026-08-31-released-session-format-migrations.md).
 
-POSIX Session writer locks load `fs-ext` only on their execution path. The dependency is optional at installation so Windows can use its kernel semaphore without building a POSIX addon; a POSIX deployment missing the addon fails when it acquires a lock. No unlocked fallback exists.
+POSIX Session writer locks use the lazy `./flock` entry of the [prebuilt system primitives](2026-09-07-prebuilt-system-primitives.md). Windows uses its kernel semaphore without loading a POSIX addon; missing POSIX bindings reject lock acquisition. No unlocked fallback exists.
 
 Persistent PowerShell uses the upstream headless terminal emulator for protocol replies through the same serialized terminal writes as caller input. The noninteractive host and foreground child-process input remain distinct: host prompts reject while child REPLs can read from the PTY. The [persistent PTY decision](../../archived/architecture/2026-08-11-pwsh-persistent-pty.md) owns readiness and input ordering.
 
