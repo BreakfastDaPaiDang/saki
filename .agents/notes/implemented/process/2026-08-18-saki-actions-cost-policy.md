@@ -12,7 +12,9 @@ The repository still needs one trustworthy merge gate. Deferring all validation 
 
 ## Decision
 
-[CI](../../../../.github/workflows/ci.yml) is a ready-pull-request merge gate plus an explicit manual-suite host. It listens for `opened`, `synchronize`, `reopened`, `ready_for_review`, and `converted_to_draft`, but required jobs allocate runners only when the pull request is not a draft. The stable `all checks passed` result retains the complete keyless dependency set, including an isolated Node 24 benchmark job on `ubuntu-24.04` with a fifteen-minute budget. A newer run on the same ref cancels stale work, including a draft conversion that replaces an in-flight ready run with an all-skipped run, and a push to `master` starts no CI run.
+[CI](../../../../.github/workflows/ci.yml) is a ready-pull-request merge gate plus an explicit manual-suite host. It listens for `opened`, `synchronize`, `reopened`, `ready_for_review`, and `converted_to_draft`, but heavyweight jobs allocate runners only when the pull request is not a draft. The stable `all checks passed` result retains the complete keyless dependency set, including an isolated Node 24 benchmark job on `ubuntu-24.04` with a fifteen-minute budget. A newer run on the same ref cancels stale work, including a draft conversion that stops in-flight heavyweight jobs, and a push to `master` starts no CI run.
+
+The required aggregate runs on every pull-request event, including drafts, and rejects failed, cancelled, or skipped dependencies. Drafts therefore publish a failed verdict until a ready run completes the required work; their skipped jobs cannot satisfy branch protection during the transition to ready. Manual suites give the skipped aggregate a separate name so they cannot publish a merge verdict for the same commit.
 
 The Wine-hosted Windows job remains required. The complete native Windows inventory runs only through the `windows-native` manual suite on `windows-latest`; it is the default manual-suite selection so an ordinary dispatch cannot queue an unavailable larger-runner pool. The unavailable self-hosted standby jobs and the master-only Wine cache job are absent.
 
@@ -26,9 +28,11 @@ This Saki-specific policy supersedes only the trigger cadence, runner allocation
 
 ## Verification
 
-[`scripts/saki-actions-workflow.spec.ts`](../../../../scripts/saki-actions-workflow.spec.ts) parses the workflow files and rejects a master CI trigger, draft runner allocation, Saki-inapplicable standby jobs, an automatic native Windows job, release workflows outside their tag families, missing Pages protection, a Node Addon System master trigger, an automatic real-API trigger, or reviewer routing outside its owning repository. [`scripts/ci-workflow.spec.ts`](../../../../scripts/ci-workflow.spec.ts) continues to pin the required merge aggregate and manual native Windows command.
+[`scripts/saki-actions-workflow.spec.ts`](../../../../scripts/saki-actions-workflow.spec.ts) parses the workflow files and rejects a master CI trigger, heavyweight draft runner allocation, a skipped draft aggregate, Saki-inapplicable standby jobs, an automatic native Windows job, release workflows outside their tag families, missing Pages protection, a Node Addon System master trigger, an automatic real-API trigger, or reviewer routing outside its owning repository. [`scripts/ci-workflow.spec.ts`](../../../../scripts/ci-workflow.spec.ts) continues to pin the required merge aggregate and manual native Windows command.
 
 ## Alternatives considered
+
+**Skip the required aggregate on drafts.** [GitHub accepts skipped required checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks), so marking the same commit ready can allow automatic merging before its new CI finishes. One small verdict job per draft event preserves the merge requirement without running heavyweight work.
 
 **Run every workflow only on version tags.** This minimizes hosted minutes but removes pre-merge evidence from `all checks passed`, so ordinary integration failures reach `master` before detection.
 
