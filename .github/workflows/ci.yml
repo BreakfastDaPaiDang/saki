@@ -872,9 +872,11 @@ jobs:
   # `if: always()` is load-bearing: without it a failed dependency
   # would SKIP this job, and GitHub counts a skipped required check as passing
   # — so this job always runs and fails on any non-success result, including
-  # 'cancelled' and 'skipped'.
+  # 'cancelled' and 'skipped'. Drafts must also produce a failing verdict so
+  # their skipped dependencies cannot satisfy protection after ready_for_review.
   all-checks-passed:
-    name: all checks passed
+    # Manual suites cannot publish a skipped check under the protected PR name.
+    name: ${{ github.event_name == 'pull_request' && 'all checks passed' || 'manual suite (no merge verdict)' }}
     # This bookkeeping-only verdict must not depend on custom-pool
     # provisioning — and under Linux failover it follows the same selector as
     # the worker jobs it aggregates, so a standard-hosted outage cannot strand
@@ -889,7 +891,7 @@ jobs:
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
           || 'ubuntu-latest' }}
     needs: [node-24, node-24-coverage, node-24-bench, node-24-consumers, node-compat, python-sdk, python-runtime, windows]
-    if: always() && github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    if: always() && github.event_name == 'pull_request'
     steps:
       - name: Fail if any needed job did not succeed
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
