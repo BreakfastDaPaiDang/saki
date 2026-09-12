@@ -1,12 +1,13 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { SubprocessSpawnSpec, SubprocessTerminalHandle } from '@deepseek-ai/dsh-subprocess'
 import LocalSubprocessRuntime from '../src/index.ts'
 import { launchLinuxScope, probeLinuxScope } from '../src/linux-scope.ts'
+import * as linuxScope from '../src/linux-scope.ts'
 import { targetEnvironment } from '../src/runner-launch.ts'
 import { bindManagedProcess } from '../src/spawn.ts'
 
@@ -144,6 +145,94 @@ async function waitForInputReadiness(handle: SubprocessTerminalHandle): Promise<
 const linuxNative = process.platform === 'linux' && probeLinuxScope()
 
 describe.skipIf(!linuxNative)('Linux user-systemd native containment', () => {
+  it('joins cancellation and runtime disposal after a pre-establishment manager reply arrives late', async () => {
+    const directory = mkdtempSync(join(scratch, 'late-manager-reply-'))
+    const launcher = join(directory, 'systemd-run')
+    const pidFile = join(directory, 'target.pid')
+    writeFileSync(launcher, '#!/bin/sh\nwhile [ ! -e "$0.gate" ]; do sleep 0.01; done\nexec systemd-run "$@"\n', { mode: 0o700 })
+    const queryRead = Promise.withResolvers<{ status: number; stdout: string; stderr: string }>()
+    const releaseReply = Promise.withResolvers<undefined>()
+    let firstQuery = true
+    let child: ReturnType<typeof spawn> | undefined
+    let childClosed: Promise<void> | undefined
+    const realLaunch = linuxScope.launchLinuxScope
+    const launchSpy = vi.spyOn(linuxScope, 'launchLinuxScope').mockImplementation((request, environment) =>
+      realLaunch(request, environment, {
+        systemdRun: launcher,
+        spawn: ((...args: Parameters<typeof spawn>) => {
+          child = spawn(...args)
+          childClosed = new Promise((resolve) => { child?.once('close', () => { resolve() }) })
+          return child
+        }) as typeof spawn,
+        systemctlQuery: async (command, args) => {
+          const result = await new Promise<{ status: number; stdout: string; stderr: string }>((resolve) => {
+            execFile(command, [...args], {
+              encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 5_000,
+            }, (error, stdout, stderr) => {
+              resolve({ status: error === null ? 0 : Number(error.code), stdout, stderr })
+            })
+          })
+          if (firstQuery) {
+            firstQuery = false
+            queryRead.resolve(result)
+            await releaseReply.promise
+          }
+          return result
+        },
+      }))
+    const ctx = new Context()
+    let fiber: { dispose(): Promise<void> } | undefined
+    let bound: ReturnType<typeof setTimeout> | undefined
+    try {
+      const runtimeFiber = await ctx.plugin(LocalSubprocessRuntime)
+      fiber = runtimeFiber
+      const request = spec([
+        process.execPath, '--input-type=module', '-e',
+        'import { writeFileSync } from "node:fs"; process.on("SIGTERM", () => {}); writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)',
+        pidFile,
+      ])
+      request.stdio = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' }
+      const controller = new AbortController()
+      const handle = ctx.subprocess.spawn({ ...request, signal: controller.signal })
+      expect(launchSpy).toHaveBeenCalledOnce()
+      handle.stdout?.resume()
+      handle.stderr?.resume()
+      const waiting = handle.waitForExit()
+      const deadline = new Promise<never>((_resolve, reject) => {
+        bound = setTimeout(() => { reject(new Error('Linux scope cancellation did not reach quiescent disposal')) }, 10_000)
+      })
+      const exercise = async (): Promise<void> => {
+        const absent = await queryRead.promise
+        expect(`${absent.stdout}\n${absent.stderr}`).toMatch(/LoadState=not-found|could not be found|not loaded/u)
+        writeFileSync(`${launcher}.gate`, '')
+        const pid = await waitForPid(pidFile)
+        controller.abort('deadline')
+        releaseReply.resolve(undefined)
+        const disposing = runtimeFiber.dispose()
+        await expect(handle.done).resolves.toEqual({ exitCode: null, signal: 'SIGKILL' })
+        await expect(waiting).resolves.toBe(true)
+        await disposing
+        await childClosed
+        await waitGone(pid)
+        expect(handle.stdout?.readableEnded).toBe(true)
+        expect(handle.stderr?.readableEnded).toBe(true)
+      }
+      await Promise.race([Promise.all([waiting, exercise()]), deadline])
+    } finally {
+      if (bound !== undefined) clearTimeout(bound)
+      releaseReply.resolve(undefined)
+      if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+        try { process.kill(-child.pid, 'SIGKILL') } catch { /* The owned launch group already exited. */ }
+      }
+      await childClosed
+      try {
+        await fiber?.dispose()
+      } finally {
+        launchSpy.mockRestore()
+      }
+    }
+  }, 15_000)
+
   it('terminates a setsid descendant and waits for the scope to become empty', async () => {
     const pidFile = join(scratch, `setsid-${Date.now()}.pid`)
     const command = `setsid sh -c 'echo $$ > "$1"; trap "" TERM; while :; do sleep 60; done' sh ${JSON.stringify(pidFile)} & wait`
