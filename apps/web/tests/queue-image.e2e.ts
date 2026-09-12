@@ -118,6 +118,9 @@ describe('web e2e: queued image submission', () => {
 
     const settled = scaffold.whenTurnSettled()
     await input.fill('Continue with the queued comparison')
+    // The stop/send button shares its hover state across turns.
+    await page.mouse.move(0, 0)
+    await page.getByRole('tooltip', { name: 'Send message', exact: true }).waitFor({ state: 'hidden' })
     await input.press('Enter')
     await settled
     // The queued image message and the waking text run as two further turns;
