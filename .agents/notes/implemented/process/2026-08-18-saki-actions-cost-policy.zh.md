@@ -18,13 +18,15 @@ Saki 继承的工作流面向拥有私有运行器池与更高自动化预算的
 
 [DSH 发布打包](../../../../.github/workflows/release.yml)由 `dsh-v*` tag 或手动 dispatch 触发，[vendor 发布打包](../../../../.github/workflows/release-vendor.yml)由 `vendor-*-v*` tag 或手动 dispatch 触发。即使 tag 启动了打包，发布仍然只能手动进行。[Sandbox](../../../../.github/workflows/sandbox.yml)由 `saki-v*` 或 `dsh-v*` tag 以及手动 dispatch 触发；[文档部署](../../../../.github/workflows/docs-pages.yml)由 `saki-v*` tag 或手动 dispatch 触发。文档作业还要求 `SAKI_DOCS_PAGES_ENABLED == 'true'`，因此未启用 Pages 的仓库会记录一个跳过的作业，而不是错误的部署失败。
 
-[Landlock 验证](../../../../.github/workflows/landlock-run.yml)继续针对已就绪 PR 按路径触发，也支持手动 dispatch；合并后不会重复运行。携带 secret 的 [DeepSeek 真实 API 套件](../../../../.github/workflows/e2e.yml)只能手动运行，并在 secret 缺失时明确失败。它禁止使用 `pull_request_target`；[已归档的自动触发分析](../../archived/testing/2026-06-19-real-api-e2e-ci.md)保留了该威胁模型。因此，无密钥 PR 门禁负责日常正确性，凭据、发布产物与诊断性平台矩阵则需要显式承担成本的事件。
+[Node Addon System 验证](../../../../.github/workflows/node-addon-system.yml)继续针对已就绪 PR 按路径触发，也支持手动 dispatch；合并后不会重复运行。携带 secret 的 [DeepSeek 真实 API 套件](../../../../.github/workflows/e2e.yml)只能手动运行，并在 secret 缺失时明确失败。它禁止使用 `pull_request_target`；[已归档的自动触发分析](../../archived/testing/2026-06-19-real-api-e2e-ci.md)保留了该威胁模型。因此，无密钥 PR 门禁负责日常正确性，凭据、发布产物与诊断性平台矩阵则需要显式承担成本的事件。
+
+[自动审阅人路由](../../../../.github/workflows/request-review.yml)仅在 `deepseek-ai/deepseek-harness` 中运行。其归属文件列出的是上游维护者，因此 Saki 不得向他们请求审阅或修改其审阅指派。
 
 这项 Saki 专属策略仅取代继承的[文档投影](../../archived/process/2026-07-13-documentation-site-projection.md)、[串行参考流程](2026-07-21-serial-cross-platform-ci-reference.zh.md)、[大型运行器测量](../../archived/process/2026-07-22-evidence-based-larger-hosted-runners.md)、[本地钩子](../../archived/process/2026-07-22-fast-local-git-hooks.md)、[可移植 PR CI](../../archived/process/2026-07-23-portable-required-pull-request-ci.md)、[已归档的 CI 故障切换](../../archived/process/2026-07-26-ci-failover-runbook.md)、[pnpm 缓存](../../archived/process/2026-07-26-pnpm-action-setup-for-symmetric-ci-caching.md)、[原生 Windows](2026-08-08-native-windows-pull-request-ci.zh.md)、[npm 发布](2026-08-10-npm-release-sequences.zh.md)、[Landlock 发布](../../archived/process/2026-08-06-in-repository-landlock-release.md)、[基于属性的测试](../../archived/testing/2026-06-11-property-based-testing.md)、[浏览器 GUI 车道](../testing/2026-07-24-web-gui-browser-e2e-lane.zh.md)、[浏览器快照 CI](../testing/2026-07-30-web-browser-snapshot-ci-gate.zh.md)、[已归档的真实 API 自动化](../../archived/testing/2026-06-19-real-api-e2e-ci.md)与[Python 运行时](../../archived/testing/2026-08-12-required-python-runtime-pull-request-ci.md)决策中的触发频率、运行器分配和缓存生产方结论。工作流仍在使用的测试约定、发布机制、测量结果与安全分析继续适用。
 
 ## 验证
 
-[`scripts/saki-actions-workflow.spec.ts`](../../../../scripts/saki-actions-workflow.spec.ts)解析工作流文件，并拒绝 master CI 触发器、为草稿分配运行器、不适用于 Saki 的热备作业、自动运行的原生 Windows 作业、脱离各自 tag 族的发布工作流、缺少 Pages 保护、Landlock master 触发器或自动真实 API 触发器。[`scripts/ci-workflow.spec.ts`](../../../../scripts/ci-workflow.spec.ts)继续固定必需合并聚合流程与手动原生 Windows 命令。
+[`scripts/saki-actions-workflow.spec.ts`](../../../../scripts/saki-actions-workflow.spec.ts)解析工作流文件，并拒绝 master CI 触发器、为草稿分配运行器、不适用于 Saki 的热备作业、自动运行的原生 Windows 作业、脱离各自 tag 族的发布工作流、缺少 Pages 保护、Node Addon System master 触发器、自动真实 API 触发器或在归属仓库之外执行的审阅人路由。[`scripts/ci-workflow.spec.ts`](../../../../scripts/ci-workflow.spec.ts)继续固定必需合并聚合流程与手动原生 Windows 命令。
 
 ## 考虑过的替代方案
 

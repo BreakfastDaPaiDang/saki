@@ -26,14 +26,72 @@ describe('CI workflow', () => {
 
     expect(setups.length).toBeGreaterThan(0)
     for (const { jobName, step } of setups) {
-      expect(step, `${jobName} must not share pnpm/action-setup's default destination`).toMatchObject({
-        with: {
-          dest: jobName === 'windows-native'
-            ? nativeWindowsPnpmDestination
-            : runnerPrivatePnpmDestination,
-        },
+      const stepDest = (step as { with?: { dest?: unknown } }).with?.dest
+      if (jobName.startsWith('windows-')) {
+        expect(stepDest, `${jobName} must use the native Windows pnpm destination`).toBe(nativeWindowsPnpmDestination)
+        expect(step).not.toMatchObject({ with: { standalone: true } })
+      } else {
+        expect(typeof stepDest, `${jobName} must use a runner-and-run-private pnpm destination`).toBe('string')
+        expect(stepDest as string).toMatch(runnerPrivatePnpmDestination)
+      }
+    }
+  })
+
+  it.each(['node-24', 'node-24-coverage', 'node-24-consumers'])(
+    '%s keeps tool and fixture temporary files under runner cleanup',
+    (jobName) => {
+      const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), jobName)
+      if (!Array.isArray(job.steps)) throw new TypeError(`${jobName} must define steps`)
+      expect(job.steps[0]).toEqual({
+        name: 'Use runner-owned temporary storage',
+        run: [
+          'echo "TMPDIR=${{ runner.temp }}" >> "$GITHUB_ENV"',
+          ...(jobName === 'node-24-consumers'
+            ? ['echo "PLAYWRIGHT_BROWSERS_PATH=${RUNNER_TEMP%/*}/ms-playwright" >> "$GITHUB_ENV"']
+            : []),
+          '',
+        ].join('\n'),
       })
-      if (jobName === 'windows-native') expect(step).not.toMatchObject({ with: { standalone: true } })
+      if (jobName === 'node-24-consumers') {
+        const browserCache: unknown = job.steps.find(step => isRecord(step) && isRecord(step.with)
+          && step.with.path === '${{ env.PLAYWRIGHT_BROWSERS_PATH }}')
+        expect(browserCache).toMatchObject({ uses: 'actions/cache/restore@v4' })
+      }
+      const store: unknown = job.steps.find(step => isRecord(step) && step.name === 'Configure pnpm store path')
+      expect(store).toMatchObject({
+        run: [
+          'store_root="$HOME/.local/share/pnpm/store"',
+          'echo "PNPM_CONFIG_STORE_DIR=$store_root" >> "$GITHUB_ENV"',
+          'store_path=$(PNPM_CONFIG_STORE_DIR="$store_root" pnpm store path --silent)',
+          'echo "path=$store_path" >> "$GITHUB_OUTPUT"',
+          '',
+        ].join('\n'),
+      })
+      for (const step of job.steps) {
+        if (isRecord(step) && isRecord(step.env)) {
+          expect(step.env.TMPDIR).toBeUndefined()
+          expect(step.env.npm_config_cache).toBeUndefined()
+        }
+      }
+    },
+  )
+
+  it('isolates the python SDK exe pnpm setup destination per job', () => {
+    const workflow: unknown = yaml.load(readFileSync(resolve(root, '.github/workflows/build-exe-for-python-sdk.yml'), 'utf8'))
+    if (!isRecord(workflow) || !isRecord(workflow.jobs)) throw new TypeError('build-exe-for-python-sdk.yml must define jobs')
+    const setups: Array<{ step: unknown }> = []
+    for (const job of Object.values(workflow.jobs)) {
+      if (!isRecord(job) || !Array.isArray(job.steps)) continue
+      for (const step of job.steps) {
+        if (!isRecord(step) || typeof step.uses !== 'string' || !step.uses.startsWith('pnpm/action-setup@')) continue
+        setups.push({ step })
+      }
+    }
+    expect(setups.length).toBeGreaterThan(0)
+    for (const { step } of setups) {
+      expect(step).toMatchObject({
+        with: { dest: nativeWindowsPnpmDestination },
+      })
     }
   })
 
@@ -503,6 +561,47 @@ describe('Python release workflows', () => {
     expect(JSON.stringify(windows.script)).toContain('win_amd64.whl')
     expect(JSON.stringify(windows.script)).toContain('--scenario all --installed-wheel')
     expect(publish.needs).toContainEqual({ job: 'runtime-windows-x64', artifacts: true })
+  })
+})
+
+describe('Request review workflow', () => {
+  it('runs trusted routing on pull request review-state updates', () => {
+    const workflow = loadWorkflow('.github/workflows/request-review.yml')
+    const event = workflowEvent(workflow, 'pull_request_target')
+    const job = workflowJob(workflow, 'request-review')
+    if (!isRecord(workflow.on)) throw new TypeError('request-review workflow must define events')
+    if (!Array.isArray(job.steps)) throw new TypeError('request-review job must define steps')
+    const steps = job.steps.filter(isRecord)
+    const checkout = steps.find(step => step.name === 'Check out trusted review policy')
+    const request = steps.find(step => step.name === 'Request reviewers')
+
+    expect(workflow.name).toBe('request-review')
+    expect(Object.keys(workflow.on)).toEqual(['pull_request_target'])
+    expect(event.types).toEqual(['opened', 'synchronize', 'reopened', 'ready_for_review', 'converted_to_draft'])
+    expect(workflow.permissions).toEqual({ contents: 'read', 'pull-requests': 'write' })
+    expect(workflow.concurrency).toEqual({
+      group: 'request-review-${{ github.event.pull_request.number }}',
+      'cancel-in-progress': true,
+    })
+    expect(job).toMatchObject({
+      name: 'request-review',
+      'runs-on': 'ubuntu-latest',
+      'timeout-minutes': 5,
+    })
+    expect(job.if).toBe("github.repository == 'deepseek-ai/deepseek-harness'")
+    expect(checkout).toMatchObject({
+      uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      with: {
+        ref: '${{ github.event.repository.default_branch }}',
+        'persist-credentials': false,
+      },
+    })
+    expect(request).toMatchObject({
+      env: { GITHUB_TOKEN: '${{ github.token }}' },
+      run: 'node .github/review-ownership/request-review.mjs',
+    })
+    expect(JSON.stringify(workflow)).not.toContain('github.event.pull_request.head')
+    expect(JSON.stringify(workflow)).not.toContain('secrets.')
   })
 })
 

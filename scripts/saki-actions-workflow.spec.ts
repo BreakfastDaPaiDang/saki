@@ -109,19 +109,28 @@ describe('Saki Actions cost policy', () => {
     expect(workflowJob(docs, 'deploy').if).toBe("vars.SAKI_DOCS_PAGES_ENABLED == 'true'")
   })
 
-  it('runs Landlock only for ready path-matched pull requests or manual dispatch', () => {
-    const workflow = loadWorkflow('.github/workflows/landlock-run.yml')
+  it('runs Node Addon System only for ready path-matched pull requests or manual dispatch', () => {
+    const workflow = loadWorkflow('.github/workflows/node-addon-system.yml')
     const events = workflowEvents(workflow)
     const pullRequest = workflowEvent(workflow, 'pull_request')
 
     expect(events).not.toHaveProperty('push')
     expect(events).toHaveProperty('workflow_dispatch', null)
     expect(pullRequest.types).toEqual(readyPullRequestTypes)
-    expect(pullRequest.paths).toEqual(expect.arrayContaining(['native/landlock-run/**']))
+    expect(pullRequest.paths).toEqual(expect.arrayContaining(['native/system/**']))
     expect(workflowJob(workflow, 'matrix').if)
       .toBe("github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false")
-    expect(workflowJob(workflow, 'darwin').if)
-      .toBe("github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false")
+    expect(workflowJob(workflow, 'native').needs).toBe('matrix')
+    expect(workflowJob(workflow, 'compatibility').needs).toEqual(['matrix', 'native'])
+    expect(workflowJobNames(workflow)).toEqual(['matrix', 'native', 'compatibility'])
+  })
+
+  it('restricts the upstream reviewer policy to its owning repository', () => {
+    const workflow = loadWorkflow('.github/workflows/request-review.yml')
+
+    expect(workflowJobNames(workflow)).toEqual(['request-review'])
+    expect(workflowJob(workflow, 'request-review').if)
+      .toBe("github.repository == 'deepseek-ai/deepseek-harness'")
   })
 
   it('keeps the secret-bearing DeepSeek suite manual-only', () => {

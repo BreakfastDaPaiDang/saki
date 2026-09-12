@@ -16,7 +16,7 @@
 
 Web 快照固定使用 `Asia/Shanghai`；针对特定时区的场景覆盖它。
 
-Session fixture 保留 header 与 payload；replay 会合成省略的正文 seq/time envelope。Replay、record 与 refresh 会选择每个 parent/child 角色的最高 generation。v2 使用 `.v2`、每个事件一行，并包含紧凑 Assistant stream；保留的 v0（无后缀）与 v1（`.v1`）可以为迁移覆盖保留规范 packed row。[迁移器](../scripts/migrate-packed-session-fixtures.ts)会改写更旧的布局。
+Session fixture 保留 header 与 payload，但省略正文 seq/time envelope；replay 会合成这些 envelope。Replay、record 与 refresh 会选择每个 parent/child 角色的最高 generation。当前 V3 使用 `.v3`、每个事件一行，并嵌入紧凑 Assistant stream。历史 fixture 保留其已发布表示；显式 `sessionFormat` 所有者保留迁移覆盖。按照[格式版本实操手册](cookbook/adding-a-session-format-version.zh.md#snapshot-successors)添加后继代际，不改动前代。
 
 ## spec 如何被执行
 
