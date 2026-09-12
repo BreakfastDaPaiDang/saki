@@ -39,6 +39,7 @@ import { takeSakiCookieHeader } from '@breakfastdapaidang/saki-control-plane/hos
 import { sakiControlPlaneDomainSpec } from '@breakfastdapaidang/saki-control-plane/src/domain-spec.ts'
 import { CONTROL_STATE_KEY } from '@breakfastdapaidang/saki-control-plane/src/spec.ts'
 import * as SakiHostApi from '../src/index.ts'
+import { ProjectionChanges } from '../src/projection-changes.ts'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
@@ -193,9 +194,15 @@ describe('Saki /saki Host transport', () => {
     })
     expect((await missingOrigin.json() as ServerResponse).result)
       .toMatchObject({ ok: true, value: { ok: true } })
-    const waiting = rpc(host, 'control/watch', { cursor }, { cookie })
-    await rpc(host, 'access/logout', {}, { cookie, 'x-saki-request-token': access.requestToken })
-    expect((await waiting).message.result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
+    const subscription = vi.spyOn(ProjectionChanges.prototype, 'wait')
+    try {
+      const waiting = rpc(host, 'control/watch', { cursor }, { cookie })
+      await expect.poll(() => subscription.mock.calls.some(([requested]) => requested === cursor)).toBe(true)
+      await rpc(host, 'access/logout', {}, { cookie, 'x-saki-request-token': access.requestToken })
+      expect((await waiting).message.result).toEqual({ ok: true, value: { ok: false, reason: 'unavailable' } })
+    } finally {
+      subscription.mockRestore()
+    }
   })
 
   it('routes all three planning destinations through authenticated query parsing', async () => {

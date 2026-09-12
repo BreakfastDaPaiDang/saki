@@ -43,6 +43,7 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
   let server: ReturnType<typeof startWebServerProcess> | undefined
   let page: Page | undefined
   let serverDiagnostics = ''
+  let boardDiagnostics = ''
   try {
     const admission = join(scratch, 'admission')
     const remotePath = join(scratch, 'remote.json')
@@ -80,6 +81,7 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
     const board = async (refresh: 'interactive' | 'cached' = 'cached') => {
       const result = sakiBoardResultSchema.parse((await rpc(port, 'control/query', { type: 'board', projectId, refresh }, credentials)).value)
       if (!result.ok) throw new Error(`Board unavailable: ${result.reason}`)
+      boardDiagnostics = JSON.stringify(result.projection)
       return result.projection
     }
     await expect.poll(async () => (await board()).effectiveMutationAvailability.available, { timeout: stepMs }).toBe(true)
@@ -209,6 +211,8 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
       { timeout: stepMs }).toBe(false)
     await writeFileAtomic(admission, 'transient-transport\n', { mode: 0o600 })
     await page.getByRole('button', { name: '刷新远端事实', exact: true }).click()
+    await expect.poll(async () => (await board()).failure?.failure, { timeout: stepMs })
+      .toMatchObject({ kind: 'provider', failure: { code: 'transient-transport' } })
     await page.getByText('本次扫描未发布：GitHub 读取失败', { exact: true }).waitFor()
     await page.getByRole('button', { name: '#30 Unplanned repository issue', exact: true }).waitFor()
     await page.screenshot({ path: join(frames, '03-retained.png') })
@@ -247,6 +251,7 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
     expect(errors).toEqual([])
   } catch (error) {
     console.error(serverDiagnostics)
+    console.error('Planning Board at last observation', boardDiagnostics)
     if (page !== undefined && !page.isClosed()) {
       await page.screenshot({ path: join(frames, 'failure.png'), timeout: 5_000 }).catch(() => undefined)
       console.error('Planning browser failure', await page.locator('body').innerText({ timeout: 5_000 }).catch(() => ''), frames)
