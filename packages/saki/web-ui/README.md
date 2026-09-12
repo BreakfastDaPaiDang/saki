@@ -50,7 +50,7 @@ Open a card for its complete Issue body and acceptance criteria, linked Sessions
 
 Invalid Status mapping disables Board writes. Authorized users can select an existing GitHub single-select field and seven distinct options in Status mapping; only a successful complete scan re-enables writes. Workspace and inherited Session destinations remain reachable. Project planning has no Issue creation form; incomplete creation facts link to the Work flow that owns submission and recovery.
 
-One planning controller owns protected query caches and cancellable invalidation polling. Notifications trigger complete reads; they never patch a Board. Principal changes clear cached business facts. Persisted state contains Principal-scoped addresses, drafts, and exact unacknowledged Intents, without request tokens or GitHub credentials. A transport failure requires refresh or a connection-reset notification before polling resumes.
+One planning controller owns protected query caches and cancellable invalidation polling. Notifications trigger complete reads; they never patch a Board. Refresh remains available while reads are pending, so a background read cannot interrupt a pointer gesture. An explicit refresh supersedes the previous Board request; cached reads cannot cancel that interactive request. Principal changes clear cached business facts. Persisted state contains Principal-scoped addresses, drafts, and exact unacknowledged Intents, without request tokens or GitHub credentials. A transport failure requires refresh or a connection-reset notification before polling resumes.
 
 <a id="model-experience"></a>
 ## Model Experience

@@ -331,6 +331,16 @@ jobs:
       - name: Run compatibility, snapshot, and artifact gates
         run: pnpm run check:ci:consumers
 
+      - name: Retain Saki planning diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: saki-planning-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .playwright-mcp/planning-*/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
 
   node-compat:
     if: github.event_name == 'pull_request' && github.event.pull_request.draft == false

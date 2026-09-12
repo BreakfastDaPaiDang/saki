@@ -76,4 +76,11 @@ pnpm run saki
 
 `./launcher` 导出提供 `sakiServingInstallationOptions`、`sakiPreparedStoragePatch` 和 `sakiAgentPresetsPatch`，供应用夹具通过构建后的包导出使用启动器的 Installation 路径、存储选择与预设资源。就绪插件不加载启动器依赖。
 
+<a id="planning-browser-diagnostics"></a>
+#### 规划浏览器诊断
+
+执行 `pnpm run build` 后，运行 `pnpm exec vitest run --config vitest.e2e.config.ts packages/saki/bundle/tests/web-planning.e2e.ts --retry=0` 验证无密钥规划流程。每次运行创建独立的 `.playwright-mcp/planning-<uuid>/` 目录：`browser.jsonl` 记录准备阶段、Board 请求与 Host 响应及发布观察结果；`provider.jsonl` 记录扫描开始、完成与失败。失败时，`last-board.json`、`host-stderr.log` 及浏览器截图在夹具清理前保留最后观察结果。跟踪的 RPC 记录仅包含 Board 查询及结果，不包含请求头或 bootstrap 交接信息。
+
+consumer CI 任务在检查成功或失败后，将这些目录上传为 `saki-planning-<run_id>-<run_attempt>`，保留七天。浏览器与 Provider 使用不同的跟踪文件，独立进程不会共用写入器。成功记录可用于比较失败运行，但不能证明间歇性缺陷已修复。
+
 </details>

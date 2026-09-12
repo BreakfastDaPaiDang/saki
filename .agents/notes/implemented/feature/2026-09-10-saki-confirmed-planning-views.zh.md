@@ -12,7 +12,7 @@ Project 规划将完整 GitHub Board 与独立刷新的 Issue 正文、执行记
 
 [Web 客户端](../../../../packages/saki/web-ui/README.zh.md) 在 React 外使用一个规划控制器，拥有经认证的查询缓存、可取消的失效轮询及准确 pending Intent；组件接收普通快照与手势回调。完整 Board 结果保持为基线，服务端确认的定向 overlay 携带更新的准确 Work Item 事实，乐观位置只改变展示。拖拽在开始时捕获卡片指纹；键盘对话框在打开时捕获指纹。两者提交相同 MoveWorkItem 操作，并保留用户看到的选中前驱指纹。Status 与位置阶段根据捕获的源状态和已确认的 Issue-state 前缀确定预期 Issue 状态，因此可显式归类和排序已关闭的 Issue，无需重新打开。前驱指纹在新的位置 effect 前保护其捕获状态。
 
-未确认 Intent 在提交前按 Principal 与 Project 持久化。重新加载与切换 Project 保留准确载荷；显式恢复使用当前 request token 重放原始 Intent。终态确认或冲突会清除 pending 载荷。Principal 变化会取消受保护读取并清空业务缓存。传输失败保留确认值并停止轮询，直到刷新或 Connection 重置使其恢复。缓存失效读取不会取消正在执行的用户远端刷新。
+未确认 Intent 在提交前按 Principal 与 Project 持久化。重新加载与切换 Project 保留准确载荷；显式恢复使用当前 request token 重放原始 Intent。终态确认或冲突会清除 pending 载荷。Principal 变化会取消受保护读取并清空业务缓存。传输失败保留确认值并停止轮询，直到刷新或 Connection 重置使其恢复。读取期间刷新操作保持可用；用户再次请求刷新时，控制器会替代前一个 Board 请求。缓存失效读取不会取消正在执行的用户远端刷新。
 
 [Host API](../../../../packages/saki/host-api/README.zh.md) 提供不包含产品事实的经认证长轮询游标。扫描准入、完整发布、失败及 Provider 挂载变化，在其状态可读后使相关 Board 失效。提交变更会替换游标；心跳与 Host 重启促使浏览器重新读取完整且经授权的 Projection。Host 在等待前及返回前检查 Browser Session 权限，处置会释放所有计时器与监听器。该机制保留完整读取的权威，同时不增加第二套传输。
 
@@ -32,6 +32,10 @@ Project 规划将完整 GitHub Board 与独立刷新的 Issue 正文、执行记
 
 **另加 WebSocket 或发布变更增量。** 已有 Connection 请求载体支持有界取消与同源认证。失效游标不需要第二套事件协议或浏览器增量重建。
 
+**读取缓存事实时禁用刷新。** 失效通知可能在指针按下与松开之间禁用按钮，使交互式请求根本没有发出。完整 Board 随后保持不变，直到下一次已安排的轮询。控制器已经拥有请求替代逻辑，按钮可用性无需再维护一套请求生命周期。
+
 ## 后果
 
 浏览器能在独立失败期间保留有用确认值，而不会把乐观位置提升为权威。代价是保留按 Project 隔离的查询状态、失效后的完整重读，以及传输是否送达未知时的显式恢复手势。近期活动限定为 32 条引用；Milestone 列表只包含已配置 delivery 记录，不发现任意 GitHub Milestone。Provider 读取测试、规划对象测试、Host 认证测试和真实 bundle 浏览器流程覆盖对应所有权及失败场景。
+
+规划浏览器回归在指针按下与松开之间挂起由失效通知触发的缓存请求，观察交互式请求，并要求新建 Issue 出现在完整 Board 中。[诊断产物](../../../../packages/saki/bundle/README.zh.md#planning-browser-diagnostics)保留浏览器请求、Host 响应、Provider 扫描及发布观察结果。该测试无需依赖调度时机，即可复现 [Issue 107](https://github.com/BreakfastDaPaiDang/saki/issues/107) 所报告的请求缺失及未来轮询状态。
