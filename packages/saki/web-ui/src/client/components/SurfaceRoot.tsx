@@ -10,6 +10,7 @@ import { AccessGate } from './AccessGate.tsx'
 import { WorkPage } from './WorkPage.tsx'
 import { PlanningPage } from './PlanningPage.tsx'
 import { ProjectPage } from './ProjectPage.tsx'
+import { ChangesPage } from './ChangesPage.tsx'
 
 /** Full composed props for the Saki surface root. */
 export type SurfaceRootProps =
@@ -26,6 +27,7 @@ export type SurfaceRootProps =
 export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeof NS> }) {
   const state = props.usePlanning(snapshot => snapshot)
   const work = props.useWork(snapshot => snapshot)
+  const changes = props.useChanges(snapshot => snapshot)
   const access = state.access
   const projectId = props.useNavigation(snapshot => snapshot.projectId)
   if (access === null || access === 'unavailable' || access.kind !== 'authenticated') {
@@ -36,6 +38,10 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
     return <WorkPage state={work} actions={props.work} openProject={() => { props.nav.showProject() }}
       openBoard={(id) => { props.nav.selectProject(id); props.planning.navigate({ view: 'board' }) }}
       openItem={(projectId, id) => { props.nav.selectProject(projectId); props.planning.openItem(id) }} t={props.t} />
+  }
+  if (state.project?.address.view === 'changes') {
+    return <ChangesPage project={state.project} state={changes} actions={props.changes}
+      planning={props.planning} openSession={props.openSession} t={props.t} />
   }
   if (state.project !== null && state.project.address.view !== 'workspace') {
     return <PlanningPage project={state.project} offline={state.offline} actions={props.planning}

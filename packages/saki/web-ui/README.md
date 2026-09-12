@@ -16,6 +16,7 @@ Register an existing directory as a Development Project, plan its GitHub Work It
 - [Use this package](#use-this-package)
 - [Manage My Work](#manage-my-work)
 - [Plan a Project](#plan-a-project)
+- [Review local changes](#review-local-changes)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -51,6 +52,15 @@ Open a card for its complete Issue body and acceptance criteria, linked Sessions
 Invalid Status mapping disables Board writes. Authorized users can select an existing GitHub single-select field and seven distinct options in Status mapping; only a successful complete scan re-enables writes. Workspace and inherited Session destinations remain reachable. Project planning has no Issue creation form; incomplete creation facts link to the Work flow that owns submission and recovery.
 
 One planning controller owns protected query caches and cancellable invalidation polling. Notifications trigger complete reads; they never patch a Board. Principal changes clear cached business facts. Persisted state contains Principal-scoped addresses, drafts, and exact unacknowledged Intents, without request tokens or GitHub credentials. A transport failure requires refresh or a connection-reset notification before polling resumes.
+
+<a id="review-local-changes"></a>
+## Review local changes
+
+Open Changes from the Project, a Work Item, or a Run. The page covers the entire bound workspace; a Run link preserves the return destination without attributing every file to that Run. Each file identifies whether its evidence matches the changes present at registration. Select the staged or unstaged Diff, review one bounded page at a time, and stage or unstage individual files. Unsupported content and stale observations display the Host's reason; refresh after files change elsewhere.
+
+Enter a commit message and review the complete staged-file list before confirming a local commit. The confirmation freezes the shown index and message, includes inherited staged changes, and states that Git hooks do not run. The Host rechecks all displayed revision fences before writing. Successful receipts display the resulting commit id; they do not imply Push, PR creation, or acceptance.
+
+Commit drafts and original submitted requests persist per Principal and Project. Pending, unacknowledged, and reconciliation requests block replacement gestures. Check / retry replays the original id and payload using current request authority, including after browser reload. Only a durable terminal receipt can be acknowledged and cleared; denied or conflicting replies without receipts cannot prove an earlier attempt had no effect. Reads refresh after a returned operation result, explicit refresh, or connection reset. Git inspection does not poll on every planning notification.
 
 <a id="model-experience"></a>
 ## Model Experience

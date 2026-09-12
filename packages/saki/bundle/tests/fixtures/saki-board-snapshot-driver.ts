@@ -208,6 +208,11 @@ try {
           },
         ] : []),
         ...(deliverySnapshot ? [deliveryExecutionPatch(bundlePatches)] : []),
+        ...(process.env.SAKI_CHANGES_BROWSER_FIXTURE === '1' && process.platform === 'win32' ? [{
+          id: 'saki-execution-local',
+          // Native Git startup consumes the observation budget on Windows test hosts.
+          config: { inventoryMaxCaptureMs: 120_000, baselineMaxCaptureMs: 120_000 },
+        }] : []),
         sakiPreparedStoragePatch(prepared.databasePath),
       ]
       app = await announceSakiReadiness(

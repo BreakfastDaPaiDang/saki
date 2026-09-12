@@ -20,6 +20,12 @@ System Git 副作用不能在控制面 storage transaction 内运行。进程可
 
 `project-diff` 查询接受精确 status fingerprint、opaque change id、layer 与可选 cursor。Host 针对新的稳定仓库视图解析该 tuple，并返回一个有界页面，其中 patch fingerprint 与 cursor 会把每页绑定到一份完整 patch。陈旧 observation、缺失或含糊 row、不支持的 binary 或 untracked 内容、格式错误的输出，以及配置的 byte、line 或 time limit 都会返回封闭安全失败，而不是局部 authority。
 
+### 浏览器检查与恢复
+
+`saki-web-ui` 的 Changes controller 跨组件挂载拥有读取与已提交请求。其持久交互状态按 Principal 和 Project 隔离，并在发送前保存完整原始 Intent。Retry 保留所有修订围栏与请求 id，同时使用当前请求权限。不含 receipt 的拒绝或冲突不会结束先前尚未确认的请求：权限可能在副作用成功后变化。只有持久终态 receipt 才允许清除请求并接纳新手势。
+
+Work Item 与 Run 链接保留导航上下文，不表示文件归因。Changes 始终检查完整 Project binding；每行保留相对于登记 baseline 的归因。Commit 确认固定显示的索引与说明，并列出全部已暂存文件，包括继承变更。Diff 分页替换显示页，并保留 Host 给出的省略行数。显式刷新与操作回复会取得新的完整 observation；无关规划通知不会触发 Git 检查。
+
 ### 直接 Control Intent Host Operation
 
 `StageFiles`、`UnstageFiles` 与 `CreateCommit` 是持久 Control Intent。其不可变 payload 会固定已认证 Actor、Grant evidence、预期 Registry 与 Project revision、Resource Binding revision、status fingerprint、HEAD、精确 index tree、worktree fingerprint、完整 pre-effect baseline，以及带 fingerprint 的已选 change id 或 Commit message。Host 不接收调用者选择的路径。

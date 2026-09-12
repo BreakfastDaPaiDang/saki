@@ -16,6 +16,7 @@ kind: "package-reference"
 - [使用本包](#use-this-package)
 - [管理我的工作](#manage-my-work)
 - [规划 Project](#plan-a-project)
+- [检查本地变更](#review-local-changes)
 - [模型体验](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
 - [开发备注](#dev-note)
@@ -51,6 +52,15 @@ Give to Agent 要求用户明确确认投影中的 Agent Profile、模型路由�
 Status 映射无效时，看板写入不可用。授权用户可在状态映射中选择已有 GitHub 单选字段及七个互不重复的选项；只有完整扫描成功后才恢复写入。工作区和继承的 Session 目的地仍可进入。Project 规划不提供 Issue 创建表单；部分完成的创建事实链接回拥有提交和恢复职责的「工作」流程。
 
 一个规划控制器拥有受保护查询缓存及可取消的失效轮询。通知触发完整读取，不会局部修改看板。Principal 变化会清除业务事实缓存。持久状态仅包含按 Principal 隔离的地址、草稿和未确认原始 Intent，不包含 request token 或 GitHub 凭据。传输失败后，用户刷新或连接重置通知会恢复轮询。
+
+<a id="review-local-changes"></a>
+## 检查本地变更
+
+从 Project、Work Item 或 Run 打开「变更」。页面覆盖整个绑定工作区；Run 链接保留返回目的地，不会把每个文件归因于该 Run。每个文件标明其证据是否与登记时已有变更一致。选择暂存区或未暂存 Diff，每次检查一页有界内容，并逐文件暂存或取消暂存。不支持的内容与过期 observation 显示 Host 给出的原因；文件在其他地方变化后应刷新。
+
+输入提交说明，检查完整的已暂存文件列表后，明确确认本地提交。确认会固定显示的索引与说明，包含继承的已暂存变更，并说明不会运行 Git hooks。Host 在写入前重新核对所有显示的修订围栏。成功 receipt 显示生成的 commit id；它不表示已 Push、创建 PR 或通过验收。
+
+提交草稿与已提交的原始请求按 Principal 和 Project 持久保存。待处理、尚未确认及需要对账的请求会阻止替代操作。「核对 / 重试原操作」使用当前请求权限重放原始 id 与 payload，浏览器重新加载后也保持不变。只有持久终态 receipt 才能被确认并清除；不含 receipt 的拒绝或冲突回复无法证明先前尝试没有副作用。操作返回结果、用户显式刷新或连接重置后会重新读取。Git 检查不会因每次规划通知而轮询。
 
 <a id="model-experience"></a>
 ## 模型体验

@@ -383,7 +383,7 @@ export class PlanningController {
     const tasks: Promise<void>[] = []
     if (refresh || heartbeat || cache.board.value === null) tasks.push(this.readBoard(selected.id, 'cached'))
     if (refresh || cache.milestones.value === null) tasks.push(this.readMilestones(selected.id))
-    if (selected.address.view === 'detail' && selected.address.workItemId !== null) {
+    if ((selected.address.view === 'detail' || selected.address.view === 'changes') && selected.address.workItemId !== null) {
       const id = selected.address.workItemId
       if (refresh || !cache.details.has(id)) tasks.push(this.readDetail(selected.id, id))
     }

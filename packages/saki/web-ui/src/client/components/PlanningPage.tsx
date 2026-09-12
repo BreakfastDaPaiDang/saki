@@ -54,6 +54,7 @@ export function PlanningPage(props: PlanningPageProps) {
       <Button aria-current={project.address.view === 'board' ? 'page' : undefined} onClick={actions.backToBoard}>{t('planning.board')}</Button>
       <Button aria-current={project.address.view === 'milestone' ? 'page' : undefined} onClick={() => { actions.navigate({ view: 'milestone' }) }}>{t('planning.milestones')}</Button>
       <Button onClick={() => { actions.navigate({ view: 'workspace' }) }}>{t('planning.workspace')}</Button>
+      <Button onClick={() => { actions.navigate({ view: 'changes', workItemId: null, changesRunId: null }) }}>{t('changes.title')}</Button>
       <Button aria-current={project.address.view === 'mapping' ? 'page' : undefined} onClick={() => { actions.navigate({ view: 'mapping' }) }}>{t('planning.mapping')}</Button>
     </nav>
     <div className={css.live} role="status" aria-live="polite" aria-atomic="true">{announcement} {resultAnnouncement}</div>

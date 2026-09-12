@@ -591,7 +591,8 @@ describe('Node 24 lane ownership', () => {
     })
     expect(subject.find(item => item.id === 'saki-web-registration')?.args).toEqual(
       expect.arrayContaining([
-        'packages/saki/bundle/tests/web-registration.e2e.ts', 'packages/saki/bundle/tests/web-planning.e2e.ts', 'packages/saki/bundle/tests/web-work.e2e.ts', '--retry=0',
+        'packages/saki/bundle/tests/web-registration.e2e.ts', 'packages/saki/bundle/tests/web-planning.e2e.ts',
+        'packages/saki/bundle/tests/web-work.e2e.ts', 'packages/saki/bundle/tests/web-changes.e2e.ts', '--retry=0',
       ]),
     )
   })

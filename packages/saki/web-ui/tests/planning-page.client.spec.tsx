@@ -263,6 +263,8 @@ it('opens each planning destination and restores focus only to a retained Board 
   }
   const view = render(<PlanningPage {...initial} project={project} />)
   expect(document.activeElement).toBe(screen.getByRole('button', { name: `#${ITEM.issueNumber} ${ITEM.title}` }))
+  fireEvent.click(screen.getByRole('button', { name: t('changes.title') }))
+  expect(initial.actions.navigate).toHaveBeenLastCalledWith({ view: 'changes', workItemId: null, changesRunId: null })
   for (const destination of ['mapping', 'detail', 'milestone'] as const) {
     view.rerender(<PlanningPage {...initial} project={{ ...project, address: { ...project.address, view: destination } }} />)
     expect(screen.queryByRole('article')).toBeNull()
