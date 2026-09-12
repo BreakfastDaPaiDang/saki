@@ -196,6 +196,8 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
     const partial = sakiCreateWorkItemResultSchema.parse((await rpc(port, 'control/submit', partialRequest, credentials)).value)
     expect(partial).toMatchObject({ ok: false, receipt: { state: 'partial-failure', stage: 'project-item-add' } })
     await page.getByRole('button', { name: '刷新远端事实', exact: true }).click()
+    await expect.poll(async () => (await board()).confirmed?.items.find(item => item.issueNumber === 104)?.notInProject,
+      { timeout: stepMs }).toBe(true)
     const partialCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: '#104 Recover Project membership', exact: true }) })
     await partialCard.getByText('尚未加入 GitHub Project', { exact: true }).waitFor()
     await page.getByRole('button', { name: '返回「工作」查看提交与恢复', exact: true }).waitFor()
