@@ -217,7 +217,7 @@ describe.skipIf(!linuxNative)('Linux user-systemd native containment', () => {
         expect(handle.stdout?.readableEnded).toBe(true)
         expect(handle.stderr?.readableEnded).toBe(true)
       }
-      await Promise.race([exercise(), deadline])
+      await Promise.race([Promise.all([waiting, exercise()]), deadline])
     } finally {
       if (bound !== undefined) clearTimeout(bound)
       releaseReply.resolve(undefined)

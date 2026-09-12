@@ -59,6 +59,7 @@ class FakeChild extends EventEmitter {
 const directories: string[] = []
 
 afterEach(() => {
+  vi.useRealTimers()
   for (const directory of directories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
   }
@@ -236,9 +237,14 @@ describe('Linux scope establishment and quiescence', () => {
       await expect(handle.done).resolves.toEqual({ exitCode: null, signal: 'SIGKILL' })
       await expect(waiting).resolves.toBe(true)
     } finally {
+      killed = true
+      firstQuery.resolve(unloadedUnit())
+      launched.result.owner.signal('SIGKILL')
       launched.child.exit(null, 'SIGKILL')
+      launched.child.stdin.destroy()
       launched.child.stdout.destroy()
       launched.child.stderr.destroy()
+      await Promise.allSettled([handle.done, handle.waitForExit()])
       launched.result.owner.cleanup?.()
       vi.useRealTimers()
     }
