@@ -73,4 +73,11 @@ No runtime invariant companion is published because the package owns static comp
 
 The `./launcher` export provides `sakiServingInstallationOptions`, `sakiPreparedStoragePatch`, and `sakiAgentPresetsPatch` so application fixtures use the launcher's Installation paths, storage selection, and preset assets through built package exports. The readiness plugin does not load launcher dependencies.
 
+<a id="planning-browser-diagnostics"></a>
+#### Planning browser diagnostics
+
+After `pnpm run build`, run `pnpm exec vitest run --config vitest.e2e.config.ts packages/saki/bundle/tests/web-planning.e2e.ts --retry=0` for the keyless planning flow. Each run creates a private `.playwright-mcp/planning-<uuid>/` directory: `browser.jsonl` records preparation phases, Board requests and Host responses, and publication observations; `provider.jsonl` records scan start, completion, and failure. On failure, `last-board.json`, `host-stderr.log`, and the browser screenshot retain the last observation before fixture cleanup. The traced RPC records contain only Board queries and results, without request headers or bootstrap handoffs.
+
+The consumer CI job uploads these directories as `saki-planning-<run_id>-<run_attempt>` after successful or failed gates and retains them for seven days. Browser and Provider traces use separate files so independent processes do not share a writer. Successful traces provide the comparison for a failing run; they do not establish that an intermittent defect is fixed.
+
 </details>

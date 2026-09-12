@@ -1,5 +1,6 @@
 /** Controllable external GitHub state for the real K3 browser flow. */
 import { readFile } from 'node:fs/promises'
+import { appendFileSync } from 'node:fs'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { z } from 'zod'
 import {
@@ -75,6 +76,10 @@ function path(): string {
   if (value === undefined) throw new Error('Planning browser Provider requires its remote sidecar')
   return value
 }
+function scanDiagnostic(event: Readonly<Record<string, unknown>>): void {
+  const tracePath = process.env.SAKI_PLANNING_BROWSER_DIAGNOSTICS
+  if (tracePath !== undefined) appendFileSync(tracePath, `${JSON.stringify({ at: Date.now(), ...event })}\n`)
+}
 function fields(state: PlanningRemote) {
   return [{
     kind: 'single-select' as const,
@@ -123,24 +128,32 @@ export default class PlanningGitHub extends SakiBoardSnapshotGitHub {
   }
   /** @inheritdoc */
   override async scan<K extends keyof GitHubScanMap>(request: GitHubScanMap[K]['request'], signal: AbortSignal): Promise<GitHubScanMap[K]['result']> {
-    const base = await super.scan({
-      ...request, statusFieldId: config.statusFieldNodeId, requiredStatusOptionIds: Object.values(config.statusOptionNodeIds),
-    }, signal)
-    const state = await readPlanningRemote(path())
-    if (!fields(state).some(field => field.id === request.statusFieldId)) {
-      throw new GitHubProviderError({
-        code: 'mapping-mismatch', reason: 'field-missing-or-not-single-select',
-        statusFieldId: request.statusFieldId,
-      })
+    scanDiagnostic({ phase: 'scan-start' })
+    try {
+      const base = await super.scan({
+        ...request, statusFieldId: config.statusFieldNodeId, requiredStatusOptionIds: Object.values(config.statusOptionNodeIds),
+      }, signal)
+      const state = await readPlanningRemote(path())
+      if (!fields(state).some(field => field.id === request.statusFieldId)) {
+        throw new GitHubProviderError({
+          code: 'mapping-mismatch', reason: 'field-missing-or-not-single-select',
+          statusFieldId: request.statusFieldId,
+        })
+      }
+      const all = items(state)
+      const openIssues = state.issues.filter(row => row.fact.state === 'open').map(row => row.fact)
+      const fence = { ...base.fences.before, projectItemCount: all.length, openIssueCount: openIssues.length }
+      const source = {
+        ...base, statusFieldId: request.statusFieldId, fields: fields(state), items: all, openIssues,
+        fences: { before: fence, after: fence },
+      }
+      const result = githubProjectBoardScanCandidateSchema.parse({ ...source, fingerprint: computeGitHubProjectBoardFingerprint(source) })
+      scanDiagnostic({ phase: 'scan-complete', issueNumbers: state.issues.map(row => row.fact.number), fingerprint: result.fingerprint })
+      return result
+    } catch (error) {
+      scanDiagnostic({ phase: 'scan-failed', errorType: error instanceof Error ? error.name : typeof error })
+      throw error
     }
-    const all = items(state)
-    const openIssues = state.issues.filter(row => row.fact.state === 'open').map(row => row.fact)
-    const fence = { ...base.fences.before, projectItemCount: all.length, openIssueCount: openIssues.length }
-    const source = {
-      ...base, statusFieldId: request.statusFieldId, fields: fields(state), items: all, openIssues,
-      fences: { before: fence, after: fence },
-    }
-    return githubProjectBoardScanCandidateSchema.parse({ ...source, fingerprint: computeGitHubProjectBoardFingerprint(source) })
   }
   /** @inheritdoc */
   override async dispatch<K extends keyof GitHubMutationMap>(request: GitHubMutationMap[K]['request'], signal: AbortSignal): Promise<GitHubMutationMap[K]['result']> {
