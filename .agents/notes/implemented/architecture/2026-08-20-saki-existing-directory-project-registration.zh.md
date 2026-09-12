@@ -24,9 +24,13 @@ Status: implemented
 
 ## 验证
 
+原始 Git 超时分类测试控制时钟，并将进程树完成与直接进程结果分别控制。它验证 runner 等待清理后才返回，且只暴露有界的超时错误。真实进程取消与后代进程测试负责原生清理证据；分类夹具不能证明平台进程约束。
+
 登记约定测试固定严格的安全与可信 schema、raw-byte baseline 完整性、恶意路径拒绝、双观察稳定性、取消、边界，以及 Project-selection 请求不携带 mutation authority。Local provider 测试覆盖 ordinary、linked、detached 与 separate Git directory repository，common 与 worktree-specific config 优先级，只使用私有控制数据的 repository Git，直接 reparse 拒绝，source config 与 checkout 竞态，SHA-256 object，明确拒绝非 files ref storage，source object alternate 拒绝，以及所需 shared index 位于私有视图之外时的 split-index 失败。控制面测试在每个持久登记转换处注入中断，包括 Workspace effect 可能发生的窗口，以及 Registry 已提交但 Intent 尚未推进的窗口；随后重新打开存储，并验证结果稳定且没有重复 effect。测试还覆盖准确重放、payload 变化冲突、路径索引冲突、恶意持久记录、effect 前的当前 Grant 检查、dispatch 后撤销恢复、Projection 失效和与阶段匹配的回执。组装后的源码与普通 Node 组合包场景会登记一个真实临时 Git 仓库，使用同一个 SQLite 数据库重启，重放同一个 Intent，并验证 Project、Binding 与 Workspace 身份稳定，且 transcript（文本记录）不包含路径、凭据或原始继承变更值。
 
 ## 已考虑的替代方案
+
+**用真实进程的短截止时间测试错误分类。** 原生启动、管理器查询与清理会把 Host 调度引入调用方错误类别的断言。受控时钟使该断言保持确定性，无需扩大截止时间，也不会把分类测试通过当作原生清理证据。
 
 **把浏览器 locator 或返回的可信路径作为权限依据。** 陈旧或被替换的路径可能在没有当前 Host 观察时授权后续 Workspace effect，而且规范 Host 路径会泄漏到浏览器状态。
 

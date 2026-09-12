@@ -24,9 +24,13 @@ This decision implements only the Host-inspection and first-registration subset 
 
 ## Verification
 
+The raw Git timeout-classification test controls the clock and holds process-tree completion separately from the direct result. It verifies that the runner waits for cleanup and exposes only the bounded timeout error. Real-process abort and descendant tests own native cleanup evidence; a classification fixture cannot prove platform containment.
+
 Registration contract tests pin strict safe and trusted schemas, raw-byte baseline completeness, hostile-path rejection, two-observation stability, cancellation, bounds, and the absence of mutation authority from the Project-selection request. Local-provider tests exercise ordinary, linked, detached, and separate-Git-directory repositories; common and worktree-specific config precedence; private-only repository Git; direct reparse rejection; source-config and checkout races; SHA-256 objects; explicit non-files ref-storage rejection; source object-alternate rejection; and split-index failure when the required shared index is outside the private view. Control-plane tests inject interruptions at every durable registration transition, including the possible Workspace-effect window and the Registry-commit-before-Intent window; reopen storage; and verify one stable result without duplicate effects. They also cover exact replay, changed-payload conflicts, path-index collisions, hostile durable records, current-Grant checks before effects, post-dispatch revocation recovery, Projection invalidation, and phase-specific receipts. The assembled source and plain-Node bundle scenarios register a real temporary Git repository, restart against the same SQLite database, replay the same Intent, and verify stable Project, Binding, and Workspace identities without recording a path, credential, or raw inherited-change value in the transcript.
 
 ## Alternatives considered
+
+**Use a short real-process deadline to test error classification.** Native launch, manager queries, and teardown introduce host scheduling into an assertion about the caller's error category. A controlled clock keeps that assertion deterministic without widening deadlines or treating a classification pass as native cleanup evidence.
 
 **Treat the browser locator or returned trusted path as authority.** A stale or substituted path could authorize a later Workspace effect without a current Host observation, and canonical Host paths would escape into browser state.
 

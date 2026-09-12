@@ -49,7 +49,9 @@ class ControllableFakeLlm extends LlmAdapter {
       this.probe.lastAgentRunComposition = {
         provider: options.provider,
         model: options.model,
-        developmentPersona: options.system?.includes("You are Saki's Development Agent.") === true,
+        developmentPersona: options.messages[0]?.role === 'system'
+          && options.messages[0].content.some(block =>
+            block.type === 'text' && block.text.includes("You are Saki's Development Agent.")),
         filesystemTools: (options.tools ?? [])
           .map(tool => tool.name)
           .filter(name => name === 'read' || name === 'write' || name === 'edit')
