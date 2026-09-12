@@ -16,7 +16,7 @@ Status: implemented
 
 同一 Node 模块可从受信任默认分支的 Actions 和本地 CLI 运行。只读状态报告当前 head、Issue 和被分配者。GitHub 记录与[维护流程](../../../../docs/saki/maintenance.zh.md)在 Agent 宿主之间承载检查点。GitHub 命令显式指定仓库，因为 fork 中的 `gh` 推断可能选中上游父仓库。
 
-Dependabot 为共享锁文件分组提出 npm 安全更新。Saki 的常规版本提案保持禁用，[依赖隔离与评审](../../archived/process/2026-07-27-dependabot-version-updates.md)仍然适用。分组减少重复工作；当生成的提案包含无关的刚发布版本时，Agent 仍须检查依赖闭包并保留发布时长检查。
+Dependabot 为共享锁文件分组提出 npm 安全更新。Saki 的常规版本提案保持禁用，[依赖隔离与评审](../../archived/process/2026-07-27-dependabot-version-updates.md)仍然适用。分组减少重复工作；当生成的提案包含无关的刚发布版本时，Agent 仍须检查依赖闭包并保留发布时长检查。如果当前主版本有安全修复回移，Agent 优先采用该版本，并同步更新 peer 版本要求相互关联的包；主版本迁移需要单独的兼容性证据。
 
 ## 考虑过的替代方案
 
