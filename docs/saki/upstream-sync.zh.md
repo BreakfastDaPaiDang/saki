@@ -37,6 +37,8 @@ node .github/maintenance/upstream.mjs status
 
 从 Pull Request 正文读取固定的官方 commit，再将当前 Saki 基线和精确的 Pull Request head 获取到独立 worktree。若 head 仍等于官方 commit，从 Saki `master` 开始并合并该 commit；若已有修复 commit，则从当前 Pull Request head 继续并合并当前 Saki 基线。保留官方 commit 的祖先关系、Saki 产品行为、持久数据及 [Saki Actions 政策](../../.agents/notes/implemented/process/2026-08-18-saki-actions-cost-policy.zh.md)。应用仓库的合并冲突与推送前检查 skill，包括 vendored 源码变更所要求的检查。
 
+上游修改系统提示、模型请求、Session 格式或 preset 组合时，本地验证必须包括[完整 Saki Agent Run 预期输出测试](../../scripts/saki-agent-run.expected.e2e.ts)，以及 [SDK 快照入口](../../snapshots/sdk/sdk.snapshot.ts)中的两个 `saki-skill-pack` 用例。保留已提交的 Session 代次；使测试消费者适配上游 API 时，要求这些检查继续验证原有 Saki 行为。
+
 将修复发布到 `automation/upstream-sync` 时，用精确 lease 匹配已获取的 Pull Request head。远程 ref 发生移动时停止发布并进行协调。迭代期间保持 draft；本地检查通过后标为 Ready，等待当前 head 的 `all checks passed` 检查以 `success` 结束，再通过 `gh pr merge --repo BreakfastDaPaiDang/saki --auto` 配合 `--merge --match-head-commit <tested-head>` 启用自动合并。上游同步使用 merge commit 保留官方历史。接取下一个目标前，验证合并结果和 Issue 完成状态。
 
 工作流错误会保留为失败运行。若初次发布在创建 Pull Request 后中断，重试准备会保留该 Pull Request。检查失败步骤与当前 head，再围绕同一目标补齐缺失的标签、兼容性 Issue 或自动合并配置。对于合并干净且等待 CI 的目标，`status` 中没有 Issue 属于正常状态；若冲突或失败 CI 需要 Agent 处理，则必须补齐。

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/upstream-sync.md
-upstream-sync.md: f791a8ed6925afa74bd9b702b5a370f67e1be357
-upstream-sync.zh.md: 7f4437d4d900e78f7a8fd60a74e6c659eec53bc6
+upstream-sync.md: e7d23b5f8501c6a7514be3f996c6210e4f565dba
+upstream-sync.zh.md: 2cb7d2aef8d5260285660e94fa0a2b367c6b1202
