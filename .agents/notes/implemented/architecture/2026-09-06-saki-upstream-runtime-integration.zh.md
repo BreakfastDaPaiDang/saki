@@ -14,7 +14,7 @@ Saki 从每个 `SessionHandleReadResult` 读取 `events` 切片而不修改事�
 
 存储在上游逐记录布局之外保留可选 closed-unit lease 和显式仅创建迁移操作。普通 SQLite 服务要求物理 v2；closed 迁移可读取物理 v1 而不修改源。JSON 单 unit 写入保留严格无损 JSON 与根目录身份检查。这些机制独立于已发布 Session 代际，后者遵循 [Session 迁移决策](2026-08-31-released-session-format-migrations.zh.md)。
 
-POSIX Session 写锁只在其执行路径加载 `fs-ext`。该依赖在安装时可选，使 Windows 能使用内核信号量而无需构建 POSIX addon；缺少 addon 的 POSIX 部署会在取得锁时失败。不存在无锁回退。
+POSIX Session 写锁使用[预构建系统原语](2026-09-07-prebuilt-system-primitives.zh.md)的惰性 `./flock` 入口。Windows 使用内核信号量而不加载 POSIX addon；POSIX 绑定缺失时会拒绝取得锁。不存在无锁回退。
 
 持久 PowerShell 使用上游无界面终端模拟器处理协议回复，协议与调用方输入经过相同的串行终端写入。非交互宿主与前台子进程输入各有语义：宿主提示会拒绝，子 REPL 仍可从 PTY 读取。[持久 PTY 决策](../../archived/architecture/2026-08-11-pwsh-persistent-pty.md) 拥有就绪与输入顺序规则。
 

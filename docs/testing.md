@@ -16,7 +16,7 @@ How this repo tests, tier by tier, and the rules that keep a green suite meaning
 
 Web snapshots pin `Asia/Shanghai`; timezone-specific scenarios override it.
 
-Session fixtures retain headers and payloads; replay synthesizes omitted body sequence/time envelopes. Replay, record, and refresh select each parent/child role's highest generation. v2 uses `.v2` with one event per row and compact Assistant streams; retained v0 (suffixless) and v1 (`.v1`) may keep canonical packed rows for migration coverage. [The migrator](../scripts/migrate-packed-session-fixtures.ts) rewrites older layouts.
+Session fixtures retain headers and payloads but omit body sequence/time envelopes; replay synthesizes them. Replay, record, and refresh select each parent/child role's highest generation. Current V3 uses `.v3`, one row per event, and embedded compact Assistant streams. Historical fixtures retain their released representation; explicit `sessionFormat` owners preserve migration coverage. Follow the [format-version cookbook](cookbook/adding-a-session-format-version.md#snapshot-successors) to add successors without changing predecessors.
 
 ## How specs execute
 

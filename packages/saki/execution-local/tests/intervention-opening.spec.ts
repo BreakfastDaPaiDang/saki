@@ -122,7 +122,7 @@ describe('inspectLocalInterventionOpening', () => {
       ['result before call', changed((events) => { toolResult(events).seq = toolCall(events).seq })],
       ['result in another turn', changed((events) => { toolResult(events).data.turn = 2 })],
       ['result in another step', changed((events) => { toolResult(events).data.step = 2 })],
-      ['replacement result', changed((events) => { toolResult(events).surfaceOp = { op: 'replace', start: SessionSeq(1), end: SessionSeq(1) } })],
+      ['replacement result', changed((events) => { toolResult(events).surfaceOp = { op: 'replace', startSeq: SessionSeq(1), endSeq: SessionSeq(1) } })],
       ['wrong result source seq', changed((events) => { toolResult(events).sourceEventSeqs = [SessionSeq(1)] })],
       ['result failure identity', changed((events) => { toolResult(events).data.error = { name: 'Error', code: 'FAIL' } })],
       ['message source mismatch', changed((events) => {
