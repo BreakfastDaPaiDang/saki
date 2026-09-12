@@ -37,9 +37,15 @@ describe('Saki Actions cost policy', () => {
     }
 
     const aggregate = workflowJob(workflow, 'all-checks-passed')
-    expect(aggregate.name).toBe('all checks passed')
+    expect(aggregate.name)
+      .toBe("${{ github.event_name == 'pull_request' && 'all checks passed' || 'manual suite (no merge verdict)' }}")
     expect(aggregate.if)
-      .toBe(`always() && ${readyPullRequestCondition}`)
+      .toBe("always() && github.event_name == 'pull_request'")
+    expect(aggregate.steps).toContainEqual({
+      name: 'Fail if any needed job did not succeed',
+      if: "contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')",
+      run: 'echo "::error::Needed job results: ${{ join(needs.*.result, \', \') }}"\nexit 1\n',
+    })
     expect(aggregate.needs).toEqual([
       'node-24',
       'node-24-coverage',

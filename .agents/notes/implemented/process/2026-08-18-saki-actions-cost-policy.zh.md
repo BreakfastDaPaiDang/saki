@@ -12,7 +12,9 @@ Saki 继承的工作流面向拥有私有运行器池与更高自动化预算的
 
 ## 决策
 
-[CI](../../../../.github/workflows/ci.yml) 既是面向已就绪 PR 的合并门禁，也是显式手动套件的宿主。它监听 `opened`、`synchronize`、`reopened`、`ready_for_review` 与 `converted_to_draft`，但必需作业只在 PR 不是草稿时分配运行器。稳定的 `all checks passed` 结果继续依赖完整的无密钥检查集合，包括在 `ubuntu-24.04` 上运行、预算为十五分钟的独立 Node 24 benchmark 作业。同一 ref 上的新运行会取消陈旧工作，包括用一个全部跳过的运行取代正在执行的已就绪运行的草稿转换；推送到 `master` 不会启动 CI 运行。
+[CI](../../../../.github/workflows/ci.yml) 既是面向已就绪 PR 的合并门禁，也是显式手动套件的宿主。它监听 `opened`、`synchronize`、`reopened`、`ready_for_review` 与 `converted_to_draft`，但重量级作业只在 PR 不是草稿时分配运行器。稳定的 `all checks passed` 结果继续依赖完整的无密钥检查集合，包括在 `ubuntu-24.04` 上运行、预算为十五分钟的独立 Node 24 benchmark 作业。同一 ref 上的新运行会取消陈旧工作，包括会停止正在执行的重量级作业的草稿转换；推送到 `master` 不会启动 CI 运行。
+
+必需汇总作业在每次 PR 事件上运行，包括草稿，并拒绝失败、取消或跳过的依赖。因此，在已就绪运行完成必需工作之前，草稿会发布失败裁决；其跳过的作业不能在转为就绪期间满足分支保护。手动套件为跳过的汇总作业使用独立名称，因此不能为同一提交发布合并裁决。
 
 由 Wine 承载的 Windows 作业仍是必需项。完整的原生 Windows 清单只能通过 `windows-native` 手动套件在 `windows-latest` 上运行；它是手动套件的默认选项，因此普通 dispatch 不会排队等待不可用的大型运行器池。不可用的自托管热备作业与仅供 master 使用的 Wine 缓存作业均不存在。
 
@@ -26,9 +28,11 @@ Saki 继承的工作流面向拥有私有运行器池与更高自动化预算的
 
 ## 验证
 
-[`scripts/saki-actions-workflow.spec.ts`](../../../../scripts/saki-actions-workflow.spec.ts)解析工作流文件，并拒绝 master CI 触发器、为草稿分配运行器、不适用于 Saki 的热备作业、自动运行的原生 Windows 作业、脱离各自 tag 族的发布工作流、缺少 Pages 保护、Node Addon System master 触发器、自动真实 API 触发器或在归属仓库之外执行的审阅人路由。[`scripts/ci-workflow.spec.ts`](../../../../scripts/ci-workflow.spec.ts)继续固定必需合并聚合流程与手动原生 Windows 命令。
+[`scripts/saki-actions-workflow.spec.ts`](../../../../scripts/saki-actions-workflow.spec.ts)解析工作流文件，并拒绝 master CI 触发器、为草稿分配重量级运行器、跳过草稿汇总作业、不适用于 Saki 的热备作业、自动运行的原生 Windows 作业、脱离各自 tag 族的发布工作流、缺少 Pages 保护、Node Addon System master 触发器、自动真实 API 触发器或在归属仓库之外执行的审阅人路由。[`scripts/ci-workflow.spec.ts`](../../../../scripts/ci-workflow.spec.ts)继续固定必需合并聚合流程与手动原生 Windows 命令。
 
 ## 考虑过的替代方案
+
+**跳过草稿的必需汇总作业。** [GitHub 接受被跳过的必需检查](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)，因此将同一提交标为就绪可能在新 CI 完成前允许自动合并。每次草稿事件运行一个小型裁决作业，能够保留合并要求而不运行重量级工作。
 
 **让所有工作流只在版本 tag 上运行。** 这会最大程度减少托管分钟数，但也会移除 `all checks passed` 的合并前证据，使普通集成故障在被发现前进入 `master`。
 

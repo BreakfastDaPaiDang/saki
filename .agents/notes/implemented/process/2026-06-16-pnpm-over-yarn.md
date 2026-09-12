@@ -12,7 +12,7 @@ The switching cost is at its lowest right now. Nothing publishes from this repo 
 
 ## Decision
 
-Adopt **pnpm 11.7.0**, pinned via the `packageManager` field. Contributor setup uses Corepack, while CI installs that pin through `pnpm/action-setup`:
+Adopt **pnpm**, pinned via the `packageManager` field. Contributor setup uses Corepack, while CI installs that pin through `pnpm/action-setup`:
 
 - **Workspaces** move from the `package.json` `workspaces` array + `.yarnrc.yml` to `pnpm-workspace.yaml`; vendored packages, grouped packages, applications, the website, native launchers, and the Python runtime closure are explicit members.
 - **Strict symlinked linker** (pnpm's default) replaces Yarn's hoisted `node-modules` linker. We deliberately add **no** `node-linker=hoisted` / `shamefully-hoist` escape hatch: pnpm's non-flat `node_modules` makes phantom dependencies (importing an undeclared transitive dep) fail loudly, which is a *feature* for a repo whose whole quality story is mechanical gates ([mechanical quality gates](2026-06-11-quality-gates.md)). The gate suite — typecheck, lint, test, and build — is the safety net that proves no such phantom imports exist.
