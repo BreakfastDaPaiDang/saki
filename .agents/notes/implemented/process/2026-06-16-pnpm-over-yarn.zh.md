@@ -12,7 +12,7 @@ Status: implemented
 
 ## 决策
 
-采用 **pnpm 11.7.0**，通过 `packageManager` 字段固定版本。贡献者环境使用 Corepack，CI 则通过 `pnpm/action-setup` 安装该固定版本：
+采用 **pnpm**，通过 `packageManager` 字段固定版本。贡献者环境使用 Corepack，CI 则通过 `pnpm/action-setup` 安装该固定版本：
 
 - **Workspaces** 从 `package.json` 的 `workspaces` 数组 + `.yarnrc.yml` 迁移到 `pnpm-workspace.yaml`；vendored 包、分组包、应用、网站、原生 launcher 与 Python runtime closure 都是显式成员。
 - **严格符号链接链接器**（pnpm 默认）取代 Yarn 的提升式 `node-modules` 链接器。我们刻意**不**添加 `node-linker=hoisted` / `shamefully-hoist` 逃生口：pnpm 的非扁平 `node_modules` 会使幻影依赖（引用未声明的传递依赖）明确报错，这对于一个以机械门禁为核心质量保障的仓库（见[机械质量门禁](2026-06-11-quality-gates.zh.md)）是一项*优势*。门禁套件（类型检查、lint、test 和 build）是证明不存在此类幻影导入的安全网。
