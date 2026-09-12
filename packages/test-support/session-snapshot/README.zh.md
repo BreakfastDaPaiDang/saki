@@ -91,6 +91,7 @@ Spill 场景通过真实本地 provider 保存到私有临时根目录。夹具�
 ### 可能出什么问题
 
 - **子会话轮次等待失败**——即使首次日志收集就超过期限，`waitForSubagentTurnEnd` 也会指出子会话、目标轮次与等待期限，并通过错误的 cause 保留底层失败。
+- **SDK 回放在分配运行时后失败**——`.artifacts/sdk-snapshots/*.jsonl` 记录等待阶段、最近的 RPC 请求、父子会话事件与生命周期状态，随后记录关闭与工作区清理结果。快照 CI job 将这些文件保留七天。记录不含请求参数和事件正文。
 - **fixture 保护拒绝已提交文件**——遗留场景目录、缺失文件、一个 header 类别包含多个 pin、重复的伴随文件内容、未擦除的提示文本或工具 schema、没有前置 `system/message` 的 `request/header`，以及格式错误的 pin header 都会在比较运行前使套件失败。
 - **会话收集需要原始 JSONL mode**——快照配置使用 JSONL 后端的 `compression: 'none'`；压缩 JSONL 没有快照收集路径。
 - **构建 mode 需要当前产物**——选择 `DSH_EXAMPLE_MODE=lib` 前先运行 `pnpm run build`；源 mode 仍是零构建路径。
@@ -106,6 +107,8 @@ Spill 场景通过真实本地 provider 保存到私有临时根目录。夹具�
 本节解释工具包的设计；可观察行为已在[使用本包](#use-this-package)中完整说明。
 
 ### 设计
+
+SDK 继承 fixture 将子会话回放阻塞到父会话第一轮结束并进入空闲状态，使录制中的第二轮保持确定性：若子会话在父会话运行期间完成，完成通知可能改为插入父会话当前轮。取消子会话或卸载 fixture 会释放等待，且不会继续回放。
 
 共享核心拥有 manifest、generation 限定角色选择、workspace 设置／比较、类型化身份映射、normalizer 与 fixture 不变式。ACP 适配器增加四个可组合层：launcher、场景 harness、normalizer 与 suite factory。`launchAcpTestAgent` 在 tsx 下启动源码 profile，或在普通 Node 下启动已构建 `lib` profile，通过原始字节 stdout tee 连接 SDK client，收集 Session update 与 stderr，默认拒绝未处理的权限请求，并负责关闭。`runScenario` 驱动 ACP JSON-RPC stdio，并收集每个 Session 目录中数值最高的持久原始 JSONL generation。纯 normalizer 把 cwd 路径与类型化身份变为稳定 token，将时间归零、展开物理来源区间，并擦除系统提示词文本与工具 schema bulk。`defineAcpSnapshotSuite` 注册比较、generation 限定 fixture 回写与实时一致性保护。
 

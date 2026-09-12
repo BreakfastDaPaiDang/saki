@@ -10,11 +10,12 @@
  */
 
 import { existsSync } from 'node:fs'
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, type TestContext } from 'vitest'
 import {
   assertPersistedSessionVersion,
   assertSessionFixtureVersion,
@@ -533,7 +534,7 @@ function authoredPatches(scenario: CorpusScenario, replaying: boolean): string[]
 }
 
 /** One SDK-controlled recorded scenario against a fresh `dsh --profile sdk` subprocess. */
-async function runScenario(scenario: CorpusScenario): Promise<{
+async function runScenario(scenario: CorpusScenario, test: TestContext): Promise<{
   results: RunResult[]
   notifications: HarnessNotification[]
   observedMethods: ReadonlySet<string>
@@ -617,11 +618,86 @@ async function runScenario(scenario: CorpusScenario): Promise<{
     provider: route.provider,
     model: route.model,
   })
+  const sessionId = 'fixture-root-session'
+  const settled = Promise.withResolvers<void>()
+  const states = new Map<string, JsonObject>()
+  let phase = 'initialize'
+  let closePhase = 'not-started'
+  let lastRequest: { method: string; state: string } | undefined
+  const client = harness.client
+  const request = client.request
+  client.request = async (...args) => {
+    const observed = { method: args[0], state: 'pending' }
+    lastRequest = observed
+    try {
+      const result = await request.call(client, ...args)
+      observed.state = 'fulfilled'
+      return result
+    } catch (error) {
+      observed.state = 'rejected'
+      throw error
+    }
+  }
+  const diagnostics = client.subscribe(notification => {
+    const params = notification.params
+    const id = params.sessionId ?? params.childSessionId
+    if (typeof id !== 'string') return false
+    const state = states.get(id) ?? {}
+    state.method = notification.method
+    const event = notificationEvent(notification)
+    if (event !== undefined) {
+      state.event = event.type
+      const data = event.data as JsonObject | undefined
+      if (typeof data?.turn === 'number') state.turn = data.turn
+    }
+    if (typeof params.status === 'string') state.status = params.status
+    if (notification.method === 'subagent.started' || notification.method === 'subagent.finished') {
+      state.lifecycle = notification.method
+      state.parentSessionId = params.parentSessionId
+    }
+    states.set(id, state)
+    return false
+  })
+  const close = async (): Promise<void> => {
+    closePhase = 'pending'
+    try {
+      await harness.close()
+      closePhase = 'closed'
+    } catch (error) {
+      closePhase = 'failed'
+      throw error
+    }
+  }
+  test.onTestFinished(async ({ task }) => {
+    let diagnosticPath: string | undefined
+    try {
+      if (task.result?.state === 'fail') {
+        const record = `${JSON.stringify({
+          scenario: scenario.name, cwd, phase, closePhase, lastRequest,
+          rootSessionId: sessionId, sessions: Object.fromEntries(states),
+        })}\n`
+        const root = join(corpusRoot, '..', '.artifacts', 'sdk-snapshots')
+        await mkdir(root, { recursive: true })
+        const path = join(root, `${scenario.name}-${randomUUID()}.jsonl`)
+        await writeFile(path, record, { flag: 'wx' })
+        diagnosticPath = path
+        console.error(`SDK snapshot diagnostics: ${path}`)
+      }
+    } finally {
+      try {
+        await close()
+        await settled.promise
+      } finally {
+        if (diagnosticPath !== undefined) {
+          await appendFile(diagnosticPath, `${JSON.stringify({ cleanup: closePhase, workspaceRemoved: !existsSync(cwd) })}\n`)
+        }
+      }
+    }
+  })
   try {
     const notifications: HarnessNotification[] = []
     const observedMethods = new Set<string>()
     const results: RunResult[] = []
-    const sessionId = 'fixture-root-session'
     const liveSessions: (string | undefined)[] = [sessionId]
     await harness.start()
     const subscription = harness.client.subscribeSessionTree(sessionId)
@@ -636,6 +712,7 @@ async function runScenario(scenario: CorpusScenario): Promise<{
       const session = harness.session(sessionId)
       for (const action of turnActions(primaryFixture)) {
         if (action.content === undefined) {
+          phase = `wait for root turn/end ${action.turn}`
           await waitForRootEvent(
             subscription,
             sessionId,
@@ -644,6 +721,7 @@ async function runScenario(scenario: CorpusScenario): Promise<{
           )
           continue
         }
+        phase = `run root turn ${action.turn}`
         const result = await session.run(materializeInput(action.content, scenario, cwd, liveSessions), {
           onNotification: (notification) => {
             notifications.push(notification)
@@ -657,6 +735,7 @@ async function runScenario(scenario: CorpusScenario): Promise<{
             'feedback/record', 'feedback/message-put', 'feedback/message-put', 'feedback/message-delete',
           ])
         }
+        phase = `wait for root turn/end ${action.turn}`
         await waitForRootEvent(
           subscription,
           sessionId,
@@ -665,12 +744,15 @@ async function runScenario(scenario: CorpusScenario): Promise<{
         )
       }
       for (const type of postTurnEventTypes(primaryFixture)) {
+        phase = `wait for root ${type}`
         await waitForRootEvent(subscription, sessionId, event => event.type === type, observe)
       }
     } finally {
       subscription.close()
     }
-    await harness.close()
+    phase = 'close runtime'
+    await close()
+    phase = 'collect persisted logs and workspace'
     const logs = (await Promise.all([
       persistedLogs(sessionsRoot),
       ...(childSessionsRoot === undefined ? [] : [persistedLogs(childSessionsRoot)]),
@@ -678,10 +760,17 @@ async function runScenario(scenario: CorpusScenario): Promise<{
     const finalWorkspace = await captureWorkspaceSnapshot(cwd, {
       ignoredRootEntries: ignoredWorkspaceEntries,
     })
+    phase = 'compare snapshots'
     return { results, notifications, observedMethods, logs, initialWorkspace, finalWorkspace, cwd }
   } finally {
-    await harness.close()
-    await rm(cwd, { recursive: true, force: true })
+    try {
+      await close()
+      await rm(cwd, { recursive: true, force: true })
+    } finally {
+      diagnostics.close()
+      client.request = request
+      settled.resolve()
+    }
   }
 }
 
@@ -809,7 +898,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
       && (scenario.manifest.recording === 'authored' || scenario.manifest.sessionFormat !== undefined)
       ? it.skip
       : it
-    scenarioTest(`${mode}s ${scenario.name} through dsh --profile sdk`, async () => {
+    scenarioTest(`${mode}s ${scenario.name} through dsh --profile sdk`, async (test) => {
       const scenarioDir = scenario.dir
       const retained = scenario.manifest.sessionFormat !== undefined
       const notificationsExpectedPath = join(scenarioDir, retained ? 'notifications.current.expected.jsonl' : 'notifications.expected.jsonl')
@@ -825,7 +914,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         expect(writerFiles, 'native writer oracle inventory').toEqual(retained
           ? files.map((_, index) => writerSnapshotName(index)).sort() : [])
       }
-      const { results, notifications, observedMethods, logs, initialWorkspace, finalWorkspace, cwd } = await runScenario(scenario)
+      const { results, notifications, observedMethods, logs, initialWorkspace, finalWorkspace, cwd } = await runScenario(scenario, test)
       const ordered = orderLogs(
         logs,
         recording ? logs.length : files.length,
