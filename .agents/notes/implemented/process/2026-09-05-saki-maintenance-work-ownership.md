@@ -16,7 +16,7 @@ Compatibility Issue identity is the synchronization pull request, including the 
 
 The same Node module runs from trusted default-branch Actions and a local CLI. Its read-only status reports the current head, Issue, and assignees. GitHub records and the [maintenance procedure](../../../../docs/saki/maintenance.md) carry checkpoints across Agent hosts. GitHub commands name the repository explicitly because fork-local `gh` inference can select the upstream parent.
 
-Dependabot groups npm security updates for the shared lockfile. Saki's routine version proposals remain disabled, while [dependency quarantine and review](../../archived/process/2026-07-27-dependabot-version-updates.md) still apply. Grouping reduces duplicate work; agents still inspect dependency closure and retain release-age checks when a generated proposal contains unrelated fresh releases.
+Dependabot groups npm security updates for the shared lockfile. Saki's routine version proposals remain disabled, while [dependency quarantine and review](../../archived/process/2026-07-27-dependabot-version-updates.md) still apply. Grouping reduces duplicate work; agents still inspect dependency closure and retain release-age checks when a generated proposal contains unrelated fresh releases. When the installed major has a security backport, agents prefer that release and update packages with coupled peer requirements together; a major migration needs separate compatibility evidence.
 
 ## Alternatives considered
 
