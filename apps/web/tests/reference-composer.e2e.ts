@@ -175,7 +175,8 @@ describe.skipIf(MODE === 'record')('web e2e: file and session references through
     const snapshot = await captureStableAria(
       page, '[role="listbox"]', scaffold.workspaceCwd, {
         normalizeAge: true,
-        replacements: [[abbreviateHomePath(scaffold.workspaceCwd, homedir()), '{{cwd}}']],
+        // ARIA quoted labels escape Windows path separators.
+        replacements: [[JSON.stringify(abbreviateHomePath(scaffold.workspaceCwd, homedir())).slice(1, -1), '{{cwd}}']],
       },
     )
     await compareOrRefreshGolden(MENU_EXPECTED, snapshot, MODE)

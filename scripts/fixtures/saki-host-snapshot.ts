@@ -653,7 +653,7 @@ export async function rawRequest(
 }
 
 /**
- * Re-read the snapshot repository through an isolated external Git process.
+ * Read independent snapshot Git evidence without updating the repository index.
  * @param repository - exact snapshot repository root.
  * @returns independent HEAD, index, worktree, and diff evidence for `tracked.txt`.
  */
@@ -667,6 +667,8 @@ export async function inspectSnapshotRepositoryGitState(
       '--no-optional-locks',
       '-c', 'core.hooksPath=',
       '-c', 'core.autocrlf=false',
+      // Porcelain diff refreshes uncached index metadata independently of optional locks.
+      '-c', 'diff.autoRefreshIndex=false',
       ...arguments_,
     ], { cwd: repository, env: environment, timeout: 20_000, windowsHide: true, encoding: 'utf8' })
     return stdout.trim()
@@ -677,7 +679,11 @@ export async function inspectSnapshotRepositoryGitState(
     }
     return value
   }
-  const paths = (value: string): readonly string[] => value === '' ? [] : value.split('\n')
+  const paths = (value: string): readonly string[] => value === '' ? [] : value.split('\n').map((record) => {
+    const match = /^(?:\d+|-)\t(?:\d+|-)\t(.+)$/.exec(record)
+    if (match?.[1] === undefined) throw new Error('Saki snapshot external Git returned an invalid numstat record')
+    return match[1]
+  })
   const indexEntry = await gitText(['ls-files', '--stage', '--', 'tracked.txt'])
   const indexMatch = /^[0-7]{6} ([0-9a-f]{40}(?:[0-9a-f]{24})?) 0\ttracked\.txt$/.exec(indexEntry)
   if (indexMatch?.[1] === undefined) throw new Error('Saki snapshot external Git returned an invalid index entry')
@@ -695,8 +701,9 @@ export async function inspectSnapshotRepositoryGitState(
       'worktree blob object id',
     ),
     commitCount,
-    stagedPaths: paths(await gitText(['diff', '--cached', '--name-only', '--'])),
-    unstagedPaths: paths(await gitText(['diff', '--name-only', '--'])),
+    // Numstat compares content even when the real index has no cached file metadata.
+    stagedPaths: paths(await gitText(['diff', '--cached', '--numstat', '--no-renames', '--'])),
+    unstagedPaths: paths(await gitText(['diff', '--numstat', '--no-renames', '--'])),
   }
 }
 

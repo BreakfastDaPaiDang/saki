@@ -83,4 +83,9 @@ pnpm run saki
 
 consumer CI 任务在检查成功或失败后，将这些目录上传为 `saki-planning-<run_id>-<run_attempt>`，保留七天。浏览器与 Provider 使用不同的跟踪文件，独立进程不会共用写入器。成功记录可用于比较失败运行，但不能证明间歇性缺陷已修复。
 
+<a id="changes-browser-diagnostics"></a>
+#### Changes 浏览器诊断
+
+Changes 浏览器用例 `packages/saki/bundle/tests/web-changes.e2e.ts` 在独立的 `.playwright-mcp/changes-<uuid>/` 目录中记录阶段时间戳、截图及 `host-processes.log`。进程日志记录匿名序号、启动时间和命令结束耗时，不记录参数或环境变量值。consumer CI 将该目录保留为 `saki-changes-<run_id>-<run_attempt>`，保留七天。Linux 与 Windows 源码路径为每条 Git 命令启动托管 TypeScript runner；一次完整 Diff 包含多轮仓库观察，因此外层等待覆盖完整操作，而非单条命令。
+
 </details>

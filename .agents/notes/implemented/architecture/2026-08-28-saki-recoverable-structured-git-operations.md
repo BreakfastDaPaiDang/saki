@@ -20,6 +20,12 @@ Parent status commands and non-gitlink Diff commands run with every submodule ig
 
 The `project-diff` query accepts the exact status fingerprint, opaque change id, layer, and optional cursor. The Host resolves that tuple against a new stable repository view and returns a bounded page whose patch fingerprint and cursor bind every page to one complete patch. Stale observations, missing or ambiguous rows, unsupported binary or untracked content, malformed output, and configured byte, line, or time limits return closed safe failures rather than partial authority.
 
+### Browser review and recovery
+
+The Changes controller in `saki-web-ui` owns reads and submitted requests across component mounts. Its persisted interaction state is partitioned by Principal and Project and stores the exact original Intent before sending it. Retry preserves every revision fence and the request id while using current request authority. A denial or conflict without a receipt does not settle a previously unacknowledged request: access may have changed after the effect succeeded. Only a durable terminal receipt permits clearing the request and admitting a new gesture.
+
+Work Item and Run links preserve navigation context, not file attribution. Changes always reviews the complete Project binding; registration-baseline attribution remains visible on each row. Commit confirmation freezes the displayed index and message and lists all staged files, including inherited changes. Diff pagination replaces the displayed page and keeps the Host's omitted-line counts visible. Explicit refresh and operation responses obtain new complete observations; unrelated planning notifications do not trigger Git inspection.
+
 ### Direct Control Intent Host Operations
 
 `StageFiles`, `UnstageFiles`, and `CreateCommit` are durable Control Intents. Their immutable payload freezes the authenticated Actor, Grant evidence, expected Registry and Project revisions, Resource Binding revision, status fingerprint, HEAD, exact index tree, worktree fingerprint, complete pre-effect baseline, and either selected change ids with fingerprints or the Commit message. The Host receives no caller-selected path.
