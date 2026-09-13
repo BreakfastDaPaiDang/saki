@@ -24,6 +24,7 @@ import { PlanningController } from './planning-controller.ts'
 import type { PlanningActions } from './planning-controller.ts'
 import { WorkController } from './work-controller.ts'
 import type { WorkActions } from './work-controller.ts'
+import { ChangesController, type ChangesActions } from './changes-controller.ts'
 import type { SakiWireWorkItemViewResult } from '@breakfastdapaidang/saki-host-api/wire'
 import { SakiNavEntry } from './components/SakiNavEntry.tsx'
 import { SakiSurfaceRoot } from './components/SurfaceRoot.tsx'
@@ -62,8 +63,9 @@ export interface SakiInjected extends SakiHostFace {
   nav: SakiNavigationActionsFace
   planning: PlanningActions
   work: WorkActions
+  changes: ChangesActions
   openSession: (id: Extract<SakiWireWorkItemViewResult, { ok: true }>['projection']['runs'][number]['sessionId']) => void
-  hooks: { navigation: NavigationStore; planning: PlanningController; work: WorkController }
+  hooks: { navigation: NavigationStore; planning: PlanningController; work: WorkController; changes: ChangesController }
 }
 
 /**
@@ -79,9 +81,11 @@ export function apply(ctx: ClientContext): void {
   const navigation = createSakiNavigationStore().create()
   const planning = new PlanningController(ctx.sakiHostClient, navigation)
   const work = new WorkController(ctx.sakiHostClient, planning)
+  const changes = new ChangesController(ctx.sakiHostClient, planning)
   ctx.effect(() => { planning.start(); return () => { planning.dispose() } }, 'saki-web-ui: planning lifecycle')
   ctx.effect(() => { work.start(); return () => { work.dispose() } }, 'saki-web-ui: work lifecycle')
-  ctx.effect(() => ctx.on('connection/reset', () => { void (async () => { await planning.reloadAccess(); await work.refresh() })() }), 'saki-web-ui: reconnect')
+  ctx.effect(() => { changes.start(); return () => { changes.dispose() } }, 'saki-web-ui: changes lifecycle')
+  ctx.effect(() => ctx.on('connection/reset', () => { void (async () => { await planning.reloadAccess(); await Promise.all([work.refresh(), changes.refresh()]) })() }), 'saki-web-ui: reconnect')
   const injected: SakiInjected = {
     readAccess: signal => ctx.sakiHostClient.readAccess(signal),
     exchangeBootstrap: (secret, signal) => planning.exchangeBootstrap(secret, signal),
@@ -99,8 +103,11 @@ export function apply(ctx: ClientContext): void {
       repairMapping: planning.repairMapping, retryMapping: planning.retryMapping },
     work: { refresh: work.refresh, selectProject: work.selectProject, editDraft: work.editDraft, editAnswer: work.editAnswer,
       confirm: work.confirm, create: work.create, submitOffer: work.submitOffer, retry: work.retry, dismiss: work.dismiss },
+    changes: { refresh: changes.refresh, selectDiff: changes.selectDiff, editMessage: changes.editMessage,
+      changeIndex: changes.changeIndex, prepareCommit: changes.prepareCommit, cancelCommit: changes.cancelCommit,
+      confirmCommit: changes.confirmCommit, retry: changes.retry, dismiss: changes.dismiss },
     openSession: (id) => { ctx.uiWorkspace.openSession(id) },
-    hooks: { navigation: navigation.store, planning, work },
+    hooks: { navigation: navigation.store, planning, work, changes },
   }
 
   // Startup Session restoration leaves the persisted Saki page intact;

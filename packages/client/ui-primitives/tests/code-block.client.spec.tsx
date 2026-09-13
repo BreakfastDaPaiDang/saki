@@ -42,7 +42,8 @@ describe('highlightToHtml', () => {
     'xml', 'lua',
   ]
 
-  it('lazily loads every read-card grammar: plain first, highlighted after load', async () => {
+  // Cold imports and regex compilation for all 23 grammars can exceed 5 s during the full GUI lane.
+  it('lazily loads every read-card grammar: plain first, highlighted after load', { timeout: 30_000 }, async () => {
     const registered = Promise.withResolvers<undefined>()
     // Registration notifications, not a private polling deadline, establish readiness.
     const stop = subscribeGrammarLoaded(() => {

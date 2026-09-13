@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import { sakiConfigureGitHubSynchronizationIntentSchema, sakiMoveWorkItemIntentSchema } from '@breakfastdapaidang/saki-host-api/wire'
-import type { SakiWireProjectId, SakiWireMoveWorkItemIntent, SakiWireSaveMilestoneDeliveryIntent } from '@breakfastdapaidang/saki-host-api/wire'
+import type { SakiWireProjectId, SakiWireMoveWorkItemIntent, SakiWireSaveMilestoneDeliveryIntent, SakiWireWorkItemViewResult } from '@breakfastdapaidang/saki-host-api/wire'
 
 /** Stable selected Work Item id. */
 export type WorkItemId = SakiWireMoveWorkItemIntent['workItemId']
@@ -10,9 +10,11 @@ export type WorkItemId = SakiWireMoveWorkItemIntent['workItemId']
 export type MilestoneId = SakiWireSaveMilestoneDeliveryIntent['release']['milestoneId']
 /** Backend-mapped Work Item status. */
 export type BoardStatus = SakiWireMoveWorkItemIntent['targetStatus']
+type AgentRunId = Extract<SakiWireWorkItemViewResult, { ok: true }>['projection']['runs'][number]['id']
 
 const addressSchema = z.object({
-  view: z.enum(['board', 'workspace', 'detail', 'milestone', 'mapping']),
+  view: z.enum(['board', 'workspace', 'detail', 'milestone', 'mapping', 'changes']),
+  changesRunId: z.string().min(1).max(512).transform(value => value as AgentRunId).nullable().default(null),
   workItemId: sakiMoveWorkItemIntentSchema.shape.workItemId.nullable(),
   milestoneId: z.string().min(1).max(512).transform(value => value as MilestoneId).nullable(),
   returnView: z.enum(['board', 'milestone']),
@@ -80,5 +82,5 @@ export function createPlanningStore(): EngineStoreHandle<PlanningState, Planning
  * @returns Board address with archived Canceled items hidden.
  */
 export function initialPlanningAddress(): PlanningAddress {
-  return { view: 'board', workItemId: null, milestoneId: null, returnView: 'board', filter: '', includeCanceled: false, moveDraft: null, mappingDraft: null }
+  return { view: 'board', workItemId: null, milestoneId: null, returnView: 'board', filter: '', includeCanceled: false, moveDraft: null, mappingDraft: null, changesRunId: null }
 }

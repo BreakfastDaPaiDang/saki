@@ -1,0 +1,23 @@
+.page { box-sizing: border-box; padding: 24px; overflow: auto; min-width: 0; height: 100%; color: var(--dsw-alias-label-primary); font: var(--dsw-font-xs-13); }
+.page h1 { margin: 0 0 8px; font-size: 22px; font-weight: 650; }
+.page h2 { margin: 16px 0; font-size: 16px; font-weight: 600; }
+.page p { line-height: 1.6; }
+.header, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.header { justify-content: space-between; }
+.notice { padding: 12px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 8px; }
+.facts { display: flex; flex-wrap: wrap; gap: 24px; }
+.facts dd { margin: 4px 0; overflow-wrap: anywhere; }
+.workspace { display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, 2fr); gap: 20px; }
+.files ul { padding: 0; list-style: none; }
+.files li { padding: 12px 0; border-bottom: 0.5px solid var(--dsw-alias-border-l2); }
+.path { overflow-wrap: anywhere; font-size: 13px; }
+.diff { min-width: 0; }
+.diff pre { overflow: auto; max-height: 60vh; padding: 12px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 8px; font: var(--dsw-font-markdown-code-block); }
+.added { color: var(--dsw-alias-state-success-primary); }
+.removed { color: var(--dsw-alias-label-error); }
+.commit { display: grid; gap: 8px; margin-top: 24px; }
+.commit textarea { min-height: 84px; padding: 12px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 8px; font: inherit; }
+.dialog { max-width: min(640px, 90vw); max-height: 85vh; overflow: auto; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 12px; padding: 24px; }
+.dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dialog::backdrop { background: rgb(0 0 0 / 40%); }
+@media (max-width: 720px) { .page { padding: 16px; } .workspace { grid-template-columns: minmax(0, 1fr); } }

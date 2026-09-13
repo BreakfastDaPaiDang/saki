@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SakiWireAccessProjection, SakiWireBoardResult, SakiWireMoveWorkItemResult } from '@breakfastdapaidang/saki-host-api/wire'
-import { SAKI_WORK_ITEM_RESULT_FIXTURES } from '@breakfastdapaidang/saki-control-plane/fixtures'
+import { SAKI_AGENT_RUN_PROJECTION_FIXTURES, SAKI_WORK_ITEM_RESULT_FIXTURES } from '@breakfastdapaidang/saki-control-plane/fixtures'
 import { PlanningController } from '../src/client/planning-controller.ts'
 import { createPlanningStore } from '../src/client/planning-state.ts'
 import { AUTH, BOARD, ITEM, MAPPING, MAPPING_PATCH, OTHER_PROJECT_ID, PROJECT_ID, planningFixture, successfulMove } from './planning-fixture.client.ts'
@@ -13,6 +13,17 @@ afterEach(() => { for (const controller of live) controller.dispose(); live.clea
 async function fixture() { const fixture = planningFixture(); live.add(fixture.controller); await fixture.start(); return fixture }
 
 describe('planning object', () => {
+  it('restores the Work Item and Run return context when reopening Changes', async () => {
+    const { controller, api, navigation } = await fixture()
+    const runId = SAKI_AGENT_RUN_PROJECTION_FIXTURES.running.id
+    controller.navigate({ view: 'changes', workItemId: ITEM.id, changesRunId: runId })
+    controller.dispose()
+    const restored = new PlanningController(api, navigation); live.add(restored)
+    await restored.reloadAccess()
+    expect(restored.getSnapshot().project?.address).toMatchObject({ view: 'changes', workItemId: ITEM.id, changesRunId: runId })
+    expect(restored.getSnapshot().project?.detail.value?.workItem.id).toBe(ITEM.id)
+  })
+
   it('accepts an invalidation before the Principal has saved any planning interaction', async () => {
     const { controller, api, invalidate } = await fixture()
     invalidate()

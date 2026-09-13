@@ -15,6 +15,7 @@ import { SakiSurfaceRoot } from '../src/client/components/SurfaceRoot.tsx'
 import * as ProjectPageModule from '../src/client/components/ProjectPage.tsx'
 import * as PlanningPageModule from '../src/client/components/PlanningPage.tsx'
 import { workFixture } from './work-fixture.client.ts'
+import { changesFixture } from './changes-fixture.client.ts'
 import { planningFixture, PROJECT_ID } from './planning-fixture.client.ts'
 import { zh, NS } from '../src/client/locales.ts'
 
@@ -56,6 +57,8 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
   }
   const work = workFixture().controller
   controllers.add(work)
+  const changes = changesFixture().controller
+  controllers.add(changes)
   const props = {
     page: matched.page,
     ...face,
@@ -63,6 +66,9 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
     useNavigation,
     planning: controller,
     work,
+    changes,
+    useChanges: (select: (state: ReturnType<typeof changes.getSnapshot>) => unknown) =>
+      select(useSyncExternalStore(changes.subscribe, changes.getSnapshot)),
     useWork: (select: (state: ReturnType<typeof work.getSnapshot>) => unknown) =>
       select(useSyncExternalStore(work.subscribe, work.getSnapshot)),
     openSession: vi.fn(),
@@ -76,6 +82,15 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
 }
 
 describe('SakiSurfaceRoot', () => {
+  it('opens Changes as a Project destination and retains its Work Item return address', async () => {
+    const { props, controller, navigation } = bench(() => Promise.resolve(AUTHENTICATED), { page: 'project' })
+    render(<SakiSurfaceRoot {...props} />)
+    await act(async () => { await controller.reloadAccess(); navigation.actions.selectProject(PROJECT_ID) })
+    await act(async () => { controller.navigate({ view: 'changes' }) })
+    expect(screen.getByRole('heading', { name: '变更' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '返回看板' }))
+    expect(controller.getSnapshot().project?.address.view).toBe('board')
+  })
   it('opens the registered workspace and returns between the Board and workspace destinations', async () => {
     const projectPage = vi.spyOn(ProjectPageModule, 'ProjectPage').mockImplementation(props => <>
       <button onClick={() => { props.nav.selectProject(PROJECT_ID); props.showRegisteredWorkspace?.() }}>registered</button>
