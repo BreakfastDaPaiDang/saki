@@ -30,6 +30,10 @@ Headless stderr 重建会同时展开 `assistant/message` 与仅写入日志的 
 
 Workspace 输入继续归各场景本地所有。变更文件的场景比较完整的预期最终 workspace，record 与 refresh 绝不改写该预期，因此模型或工具的自报结果无法满足测试。现有的有意会话复用继续使用显式、无环的所有者引用；语料不增加 workspace 继承或通用 fixture 合并机制。
 
+录制中的后台顺序也归场景所有。SDK 继承 fixture 在模型回放前阻塞子会话，直到父会话第一轮结束并进入空闲状态。可续跑子代理的完成通知会插入正在运行的父会话当前轮，却会为已空闲的父会话排入新一轮；没有该屏障，等待录制中的第二轮就可能在两个 Agent 都完成后仍然挂起。延迟、重试或通知规范化都不能建立所需顺序。屏障响应子会话取消和 fixture 卸载，两者都会释放未完成的等待，且不会允许新的模型调用。
+
+SDK 回放诊断保留阶段与 RPC 完成状态元数据，以及各 Session 最近的事件、轮次、状态和子代理生命周期边沿，不含请求参数和事件正文。测试超时时，完成钩子先保存中断时的状态，再启动运行时关闭流程、等待场景清理结束，并追加结果。即使快照门禁失败，CI 也会保留这些文件；缺失清理记录就意味着尚未证明拆卸完成。
+
 当前 writer 的 request-header pin 与保留的迁移输入分离：`tool-call-turn` 固定 default 组合，`empty-response-retry-current` 固定 retry 组合。可读 sidecar 仍由 `text-turn` 持有。六份保留的历史输入保持字节冻结，并继续被选为回放输入；其固定历史版本的目录不含会取代它们的规范 V3 同角色文件。单独的 `writer.expected.jsonl` 与 `writer.<ordinal>.expected.jsonl` 文件固定精确的规范化原生 V3 父子会话输出，保留历史输入的 SDK 场景则通过 `notifications.current.expected.jsonl` 固定当前通知。这些输出比较基准不是 replay 代际。[快照工具包](../../../../packages/test-support/session-snapshot/README.zh.md)负责选择与刷新行为。结构迁移可以保留请求含义而不复现原生 writer 的事件布局，因此正式迁移拥有独立的正确性测试。反向投影为历史 header、剥除结构差异、跳过输出相等断言或替换冻结输入都会掩盖回归，而不是验证这些相互独立的约定。
 
 ## Alternatives considered

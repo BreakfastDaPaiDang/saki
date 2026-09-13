@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { useSyncExternalStore } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { PlanningPage, type PlanningPageProps } from '../src/client/components/PlanningPage.tsx'
 import { zh, NS } from '../src/client/locales.ts'
@@ -44,6 +45,35 @@ async function props(): Promise<PlanningPageProps> {
     }
   } finally { fixture.controller.dispose() }
 }
+
+it('accepts a refresh gesture while watch invalidation rereads the cached Board', async () => {
+  const fixture = planningFixture()
+  const cached = Promise.withResolvers<Awaited<ReturnType<typeof fixture.api.queryBoard>>>()
+  function View() {
+    const snapshot = useSyncExternalStore(fixture.controller.subscribe, fixture.controller.getSnapshot)
+    return <PlanningPage project={snapshot.project!} offline={snapshot.offline} actions={fixture.controller}
+      nav={fixture.navigation.actions} openSession={vi.fn()} t={t} />
+  }
+  try {
+    await fixture.start()
+    render(<View />)
+    const refresh = screen.getByRole('button', { name: t('planning.refresh') })
+    fireEvent.mouseDown(refresh)
+    fixture.api.queryBoard.mockImplementationOnce(() => cached.promise)
+    await act(async () => { fixture.invalidate() })
+    await vi.waitFor(() => { expect(fixture.controller.getSnapshot().project!.board.loading).toBe(true) })
+    await act(async () => {
+      fireEvent.mouseUp(refresh)
+      fireEvent.click(refresh)
+    })
+    expect(fixture.api.queryBoard.mock.calls.some(([, refresh]) => refresh === 'interactive')).toBe(true)
+  } finally {
+    await act(async () => {
+      cached.resolve({ ok: true, projection: BOARD })
+      fixture.controller.dispose()
+    })
+  }
+})
 
 it('displays confirmed status alongside optimistic position and an independent refresh failure', async () => {
   const initial = await props()

@@ -91,6 +91,7 @@ A scenario requiring a non-Windows host declares `posixOnly`, which skips its ru
 ### What can go wrong
 
 - **A child turn wait fails** — `waitForSubagentTurnEnd` identifies the child, requested turn, and deadline even when the first log harvest exceeds that deadline, and retains the underlying failure as the error cause.
+- **An SDK replay fails after runtime allocation** — `.artifacts/sdk-snapshots/*.jsonl` records the waiting phase, last RPC request, parent/child event and lifecycle state, then the shutdown and workspace-cleanup result. The snapshot CI job retains these files for seven days. Request parameters and event bodies are excluded.
 - **A fixture guard rejects the committed files** — orphan scenario dirs, missing files, multiple pins for one header class, duplicate sidecar content, unscrubbed prompt text or tool schemas, a `request/header` with no preceding `system/message`, and malformed pinning headers all fail the suite before comparisons run.
 - **The session harvest needs raw JSONL mode** — snapshot configs set the JSONL backend's `compression: 'none'`; compressed JSONL has no snapshot-harvest path.
 - **Built mode needs current artifacts** — run `pnpm run build` before selecting `DSH_EXAMPLE_MODE=lib`; source mode remains the zero-build path.
@@ -106,6 +107,8 @@ A scenario requiring a non-Windows host declares `posixOnly`, which skips its ru
 This section explains the design of the kit; the observable behavior is fully covered in [Use this package](#use-this-package).
 
 ### Design
+
+The SDK inheritance fixture holds child replay until the parent's first turn ends and the parent becomes idle. This makes the recorded second turn deterministic: a child settling while the parent is running can instead steer its current turn. Cancelling the child or disposing the fixture releases the wait without continuing replay.
 
 The shared core owns manifests, generation-qualified role selection, workspace setup/comparison, typed identity mapping, normalizers, and fixture invariants. The ACP adapter adds four composable layers: launcher, scenario harness, normalizers, and suite factory. `launchAcpTestAgent` boots a source profile under tsx or a built `lib` profile under plain Node, connects the SDK client over a raw-byte stdout tee, collects Session updates and stderr, fails closed on unhandled permission requests, and owns shutdown. `runScenario` drives ACP JSON-RPC stdio and harvests the numerically highest persisted raw JSONL generation for every Session directory. The pure normalizers replace cwd paths and typed identities with stable tokens, zero times, expand physical provenance ranges, and scrub system-prompt text and tool-schema bulk. `defineAcpSnapshotSuite` registers comparisons, generation-qualified fixture write-back, and the live uniformity guard.
 

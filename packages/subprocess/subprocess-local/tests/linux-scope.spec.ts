@@ -17,6 +17,7 @@ import {
   writeLinuxStartupError,
 } from '../src/runner-protocol.ts'
 import { SUBPROCESS_RUNNER_ENV } from '../src/runner-launch.ts'
+import { bindManagedProcess } from '../src/spawn.ts'
 
 const childProcessMocks = vi.hoisted(() => ({
   execFile: vi.fn(),
@@ -58,6 +59,7 @@ class FakeChild extends EventEmitter {
 const directories: string[] = []
 
 afterEach(() => {
+  vi.useRealTimers()
   for (const directory of directories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
   }
@@ -197,6 +199,57 @@ describe('Linux native capability selection', () => {
 })
 
 describe('Linux scope establishment and quiescence', () => {
+  it.each([
+    { absent: missingUnit(), cancelAfterConsumption: false },
+    { absent: unloadedUnit(), cancelAfterConsumption: false },
+    { absent: missingUnit(), cancelAfterConsumption: true },
+    { absent: unloadedUnit(), cancelAfterConsumption: true },
+  ])('escalates cancellation when a missing-unit reply predates bootstrap consumption: $cancelAfterConsumption / $absent.status', async ({ absent, cancelAfterConsumption }) => {
+    vi.useFakeTimers()
+    const firstQuery = Promise.withResolvers<ReturnType<typeof activeUnit>>()
+    let killed = false
+    const query = vi.fn()
+      .mockImplementationOnce(() => firstQuery.promise)
+      .mockImplementation(async () => killed ? unloadedUnit() : activeUnit())
+    const signalScope = vi.fn((_command: string, args: readonly string[]) => {
+      if (args.includes('--signal=SIGKILL')) {
+        killed = true
+        launched.child.exit(null, 'SIGKILL')
+        launched.child.stdout.destroy()
+        launched.child.stderr.destroy()
+      }
+      return { status: 0, stdout: '', stderr: '' }
+    })
+    const launched = launch(query, { spawnSync: signalScope as never })
+    vi.spyOn(process, 'kill').mockReturnValue(true)
+    const controller = new AbortController()
+    const handle = bindManagedProcess({ ...spec(), signal: controller.signal }, launched.result)
+    try {
+      const waiting = handle.waitForExit()
+      if (!cancelAfterConsumption) controller.abort('deadline')
+      expect(query).toHaveBeenCalledOnce()
+      consumeLinuxLaunchRequest(launched.requestPath)
+      if (cancelAfterConsumption) controller.abort('deadline')
+      firstQuery.resolve(absent)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(signalScope.mock.calls.map(([, args]) => args.find(arg => arg.startsWith('--signal='))))
+        .toEqual(['--signal=SIGTERM', '--signal=SIGKILL'])
+      await expect(handle.done).resolves.toEqual({ exitCode: null, signal: 'SIGKILL' })
+      await expect(waiting).resolves.toBe(true)
+    } finally {
+      killed = true
+      firstQuery.resolve(unloadedUnit())
+      launched.result.owner.signal('SIGKILL')
+      launched.child.exit(null, 'SIGKILL')
+      launched.child.stdin.destroy()
+      launched.child.stdout.destroy()
+      launched.child.stderr.destroy()
+      await Promise.allSettled([handle.done, handle.waitForExit()])
+      launched.result.owner.cleanup?.()
+      vi.useRealTimers()
+    }
+  })
+
   it('does not mistake pre-establishment unit absence for quiescence and settles an empty range after cancellation', async () => {
     const { child, result, requestPath, spawnSync } = launch(async () => missingUnit())
     const waiting = result.owner.waitForExit()

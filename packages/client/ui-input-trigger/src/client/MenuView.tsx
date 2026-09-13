@@ -3,8 +3,8 @@
  * conversation.input.overlay anchor. Closed state renders null (the overlay
  * slot stays mounted); groups render in roster order under localized title
  * rows. A pending group keeps showing the items it already had (the reducer
- * retains them across a query refinement) and falls back to two skeleton
- * rows only while it has none; pointer picks route back through
+ * retains them across a query refinement), exposes them as aria-disabled,
+ * and falls back to two skeleton rows only while it has none; pointer picks route back through
  * the service (combobox pattern — focus never leaves the textarea, so rows
  * are mousedown-handled and the highlight is exposed via
  * aria-activedescendant on the listbox). A source publishing crumbs gets a
@@ -134,6 +134,7 @@ export function MenuView({ menu, headers, onPick, onCrumb, onHover, onDismiss, t
                         id={optionId(group.source, index)}
                         type="button"
                         role="option"
+                        aria-disabled={group.status === 'pending' || undefined}
                         aria-selected={active}
                         className={clsx(css.item, active && css.active)}
                         // mousedown, not click: the textarea keeps focus (combobox

@@ -123,6 +123,8 @@ Inspection 与模型请求相互独立。每条 Agent 输入都会在可复用 p
 
 不发布 runtime invariant companion，因为领域解析器在打开及写入前校验 Host Operation 记录；实时接纳回调不属于持久状态。
 
+Git 超时分类使用受控时钟和进程树完成屏障；真实进程取消与后代进程测试覆盖原生进程结束（[验证依据](../../../.agents/notes/implemented/architecture/2026-08-20-saki-existing-directory-project-registration.zh.md)）。
+
 应用夹具通过根入口的内部导出 `installLocalGitPushInternals` 安装作用于应用根 Context 的 Push 传输。该导出使夹具与构建后的提供方使用同一个适配器注册表。
 
 </details>

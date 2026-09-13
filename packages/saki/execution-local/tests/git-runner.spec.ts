@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
-import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
+import type { SubprocessRuntime, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -348,18 +348,56 @@ describe('bounded raw command runner', () => {
   })
 
   it('classifies timeout without exposing child output', async () => {
-    const ctx = await runtime()
-    const pending = runBoundedCommand(ctx.subprocess, {
-      argv: [process.execPath, '-e', 'setInterval(() => {}, 1000)'],
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const outcome = Promise.withResolvers<{ exitCode: number | null; signal: NodeJS.Signals | null }>()
+    const treeExit = Promise.withResolvers<boolean>()
+    const waitForExit = vi.fn(() => treeExit.promise)
+    const terminate = vi.fn()
+    const aborted = vi.fn(() => { outcome.resolve({ exitCode: null, signal: 'SIGTERM' }) })
+    const spawn = vi.fn((spec: SubprocessSpawnSpec) => {
+      spec.signal?.addEventListener('abort', aborted, { once: true })
+      return {
+        stdout: Readable.from(['private stdout']),
+        stderr: Readable.from(['private stderr']),
+        done: outcome.promise,
+        terminate,
+        waitForExit,
+      }
+    })
+    const pending = runBoundedCommand({ spawn } as unknown as SubprocessRuntime, {
+      argv: ['git', 'status'],
       cwd: process.cwd(),
       env: {},
-      maxStdoutBytes: 2,
-      maxStderrBytes: 2,
+      maxStdoutBytes: 32,
+      maxStderrBytes: 32,
       timeoutMs: 20,
       terminationGraceMs: 10,
-    }, new AbortController().signal)
+    }, new AbortController().signal).then(result => result, (error: unknown) => error)
+    const returned = vi.fn()
+    void pending.then(returned)
+    try {
+      await vi.advanceTimersByTimeAsync(19)
+      expect(aborted).not.toHaveBeenCalled()
+      expect(returned).not.toHaveBeenCalled()
 
-    await expect(pending).rejects.toMatchObject({ code: 'timeout' })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(aborted).toHaveBeenCalledOnce()
+      expect(terminate).toHaveBeenCalledOnce()
+      expect(waitForExit).toHaveBeenCalledOnce()
+      expect(returned).not.toHaveBeenCalled()
+
+      treeExit.resolve(true)
+      const failure = await pending
+      expect(failure).toBeInstanceOf(GitCommandError)
+      expect(failure).toMatchObject({ code: 'timeout', message: 'Saki Git inspection failed: timeout' })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      outcome.resolve({ exitCode: null, signal: 'SIGTERM' })
+      treeExit.resolve(true)
+      await pending
+      spawn.mock.calls[0]?.[0].signal?.removeEventListener('abort', aborted)
+      vi.useRealTimers()
+    }
   })
 
   it('retains only the bounded numeric fact needed to distinguish Git config exits', async () => {

@@ -1,15 +1,17 @@
 /** Real Saki browser planning flow with an isolated repository and controlled external GitHub Provider. */
 import { randomUUID } from 'node:crypto'
+import { appendFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chromium, type Browser, type Page } from 'playwright'
+import { chromium, type Browser, type Page, type Request } from 'playwright'
 import { expect, it } from 'vitest'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
+import { clientRequestSchema, serverResponseSchema } from '@deepseek-ai/dsh-client-connection'
 import { githubProjectOptionId } from '@breakfastdapaidang/saki-github'
 import {
-  sakiBoardResultSchema, sakiConfigureGitHubSynchronizationResultSchema,
+  sakiBoardResultSchema, sakiConfigureGitHubSynchronizationResultSchema, sakiQueryRequestSchema,
   sakiCreateWorkItemResultSchema, sakiProjectIndexResultSchema, sakiMilestoneDeliveryIntentResultSchema,
 } from '@breakfastdapaidang/saki-host-api/wire'
 import { createRepository, registerSnapshotProject, rpc } from '../../../../scripts/fixtures/saki-host-snapshot.ts'
@@ -26,6 +28,13 @@ const driver = fileURLToPath(new URL('./fixtures/saki-board-snapshot-driver.ts',
 const stepMs = 120_000
 const intentId = () => `intent-${randomUUID()}`
 
+function browserBoardRequest(request: Request) {
+  if (new URL(request.url()).pathname !== '/saki/control/query') return
+  const envelope = clientRequestSchema.parse(request.postDataJSON())
+  const query = sakiQueryRequestSchema.parse(envelope.payload)
+  if (query.type === 'board') return { rpcId: envelope.rpcId, refresh: query.refresh }
+}
+
 async function keyboardMove(page: Page, title: string, status: string, position?: string): Promise<void> {
   const card = page.getByRole('article').filter({ has: page.getByRole('button', { name: title, exact: true }) })
   await card.getByRole('button', { name: '移动或排序', exact: true }).click()
@@ -39,11 +48,22 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
   const scratch = await mkdtemp(join(tmpdir(), 'saki-k3-browser-'))
   const frames = join(root, '.playwright-mcp', `planning-${randomUUID()}`)
   await mkdir(frames, { recursive: true })
+  const tracePath = join(frames, 'browser.jsonl')
+  const providerTracePath = join(frames, 'provider.jsonl')
+  await writeFile(tracePath, '', { flag: 'wx', mode: 0o600 })
+  await writeFile(providerTracePath, '', { flag: 'wx', mode: 0o600 })
+  const trace = (event: Readonly<Record<string, unknown>>) => {
+    appendFileSync(tracePath, `${JSON.stringify({ at: Date.now(), ...event })}\n`)
+  }
   let browser: Browser | undefined
   let server: ReturnType<typeof startWebServerProcess> | undefined
   let page: Page | undefined
   let serverDiagnostics = ''
+  let boardDiagnostics = ''
+  const boardRequests: { at: number; refresh: string }[] = []
+  const responses: Promise<void>[] = []
   try {
+    trace({ phase: 'prepare-repository' })
     const admission = join(scratch, 'admission')
     const remotePath = join(scratch, 'remote.json')
     await writeFile(admission, 'complete\n')
@@ -54,10 +74,13 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
       DSH_HOME: join(scratch, 'home'), SAKI_PORT: '0', TSX_TSCONFIG_PATH: join(root, 'tsconfig.json'),
       SAKI_BOARD_SNAPSHOT_PROVIDER_STATE: admission,
       SAKI_PLANNING_BROWSER_FIXTURE: '1', SAKI_PLANNING_BROWSER_STATE: remotePath,
+      SAKI_PLANNING_BROWSER_DIAGNOSTICS: providerTracePath,
     })
     server = startWebServerProcess(process.execPath, ['--import', 'tsx/esm', driver], env, stepMs)
     server.child.stderr.on('data', (chunk: string) => { serverDiagnostics += chunk })
+    trace({ phase: 'wait-host-ready' })
     const { url, secret } = await server.ready
+    trace({ phase: 'register-project' })
     const port = Number(new URL(url).port)
     // Registration owns six 30-second observation rounds plus Workspace and registry writes.
     const registered = await registerSnapshotProject(port, secret, repository, {
@@ -77,9 +100,12 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
       expectedSynchronizationRevision: 0, patch: config,
     }, credentials)).value)
     expect(configured.ok, JSON.stringify(configured)).toBe(true)
+    trace({ phase: 'wait-initial-board' })
     const board = async (refresh: 'interactive' | 'cached' = 'cached') => {
       const result = sakiBoardResultSchema.parse((await rpc(port, 'control/query', { type: 'board', projectId, refresh }, credentials)).value)
       if (!result.ok) throw new Error(`Board unavailable: ${result.reason}`)
+      boardDiagnostics = JSON.stringify(result.projection)
+      trace({ phase: 'board-observation', refresh, projection: result.projection })
       return result.projection
     }
     await expect.poll(async () => (await board()).effectiveMutationAvailability.available, { timeout: stepMs }).toBe(true)
@@ -119,9 +145,32 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
     const separator = registered.cookie.indexOf('=')
     await context.addCookies([{ name: registered.cookie.slice(0, separator), value: registered.cookie.slice(separator + 1), url }])
     page = await context.newPage()
+    page.on('request', (request) => {
+      const query = browserBoardRequest(request)
+      if (query === undefined) return
+      boardRequests.push({ at: Date.now(), refresh: query.refresh })
+      trace({ phase: 'browser-board-request', ...query })
+    })
+    page.on('requestfailed', (request) => {
+      const query = browserBoardRequest(request)
+      if (query !== undefined) trace({ phase: 'browser-board-failed', ...query, failure: request.failure() })
+    })
+    page.on('response', (response) => {
+      const query = browserBoardRequest(response.request())
+      if (query === undefined) return
+      responses.push((async () => {
+        const envelope = serverResponseSchema.parse(await response.json())
+        trace({ phase: 'host-board-response', ...query, status: response.status(),
+          result: envelope.result.ok ? sakiBoardResultSchema.parse(envelope.result.value) : envelope.result })
+      })().catch((error: unknown) => {
+        trace({ phase: 'host-board-response-unreadable', ...query, status: response.status(),
+          errorType: error instanceof Error ? error.name : typeof error })
+      }))
+    })
     page.setDefaultTimeout(20_000)
     const errors: string[] = []
     page.on('pageerror', (error) => { errors.push(error.message) })
+    trace({ phase: 'open-planning' })
     await page.goto(url)
     await page.getByRole('button', { name: '项目', exact: true }).click()
     await page.getByRole('button', { name: /^Snapshot project repository / }).click()
@@ -193,9 +242,44 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
     partialRemote.failAddInspection = true
     await writePlanningRemote(remotePath, partialRemote)
     const partialRequest = { ...createRequest, intentId: intentId(), title: 'Recover Project membership' }
-    const partial = sakiCreateWorkItemResultSchema.parse((await rpc(port, 'control/submit', partialRequest, credentials)).value)
-    expect(partial).toMatchObject({ ok: false, receipt: { state: 'partial-failure', stage: 'project-item-add' } })
-    await page.getByRole('button', { name: '刷新远端事实', exact: true }).click()
+    trace({ phase: 'partial-creation-refresh' })
+    const releaseCached = Promise.withResolvers<undefined>()
+    const queryUrl = `${new URL(url).origin}/saki/control/query`
+    let holdCached = false
+    let cachedStarted = false
+    await page.route(queryUrl, async (route) => {
+      const envelope = clientRequestSchema.parse(route.request().postDataJSON())
+      const query = sakiQueryRequestSchema.parse(envelope.payload)
+      if (query.type === 'board' && query.refresh === 'cached' && holdCached) {
+        holdCached = false
+        cachedStarted = true
+        await releaseCached.promise
+      }
+      await route.continue()
+    })
+    try {
+      const refreshButton = page.getByRole('button', { name: '刷新远端事实', exact: true })
+      await refreshButton.hover()
+      await page.mouse.down()
+      trace({ phase: 'refresh-pointer-down' })
+      holdCached = true
+      const partial = sakiCreateWorkItemResultSchema.parse((await rpc(port, 'control/submit', partialRequest, credentials)).value)
+      expect(partial).toMatchObject({ ok: false, receipt: { state: 'partial-failure', stage: 'project-item-add' } })
+      await expect.poll(() => cachedStarted, { timeout: stepMs }).toBe(true)
+      await page.getByText('正在读取…', { exact: true }).first().waitFor()
+      trace({ phase: 'cached-read-overlaps-refresh' })
+      const beforeClick = boardRequests.filter(request => request.refresh === 'interactive').length
+      await page.mouse.up()
+      trace({ phase: 'refresh-pointer-up' })
+      await expect.poll(() => boardRequests.filter(request => request.refresh === 'interactive').length).toBe(beforeClick + 1)
+    } finally {
+      releaseCached.resolve(undefined)
+      await page.unrouteAll({ behavior: 'wait' })
+      await board()
+    }
+    await expect.poll(async () => (await board()).confirmed?.items.find(item => item.issueNumber === 104)?.notInProject,
+      { timeout: stepMs }).toBe(true)
+    trace({ phase: 'partial-creation-published' })
     const partialCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: '#104 Recover Project membership', exact: true }) })
     await partialCard.getByText('尚未加入 GitHub Project', { exact: true }).waitFor()
     await page.getByRole('button', { name: '返回「工作」查看提交与恢复', exact: true }).waitFor()
@@ -207,6 +291,8 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
       { timeout: stepMs }).toBe(false)
     await writeFileAtomic(admission, 'transient-transport\n', { mode: 0o600 })
     await page.getByRole('button', { name: '刷新远端事实', exact: true }).click()
+    await expect.poll(async () => (await board()).failure?.failure, { timeout: stepMs })
+      .toMatchObject({ kind: 'provider', failure: { code: 'transient-transport' } })
     await page.getByText('本次扫描未发布：GitHub 读取失败', { exact: true }).waitFor()
     await page.getByRole('button', { name: '#30 Unplanned repository issue', exact: true }).waitFor()
     await page.screenshot({ path: join(frames, '03-retained.png') })
@@ -243,8 +329,14 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
     await page.getByLabel('GitHub 单选字段', { exact: true }).waitFor()
     await expect.poll(() => page!.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     expect(errors).toEqual([])
+    trace({ phase: 'completed' })
   } catch (error) {
+    trace({ phase: 'failed', errorType: error instanceof Error ? error.name : typeof error })
+    await writeFile(join(frames, 'last-board.json'), `${boardDiagnostics || 'null'}\n`, { mode: 0o600 })
+    await writeFile(join(frames, 'host-stderr.log'), serverDiagnostics, { mode: 0o600 })
     console.error(serverDiagnostics)
+    console.error('Planning Board at last observation', boardDiagnostics)
+    console.error('Planning browser Board requests', boardRequests)
     if (page !== undefined && !page.isClosed()) {
       await page.screenshot({ path: join(frames, 'failure.png'), timeout: 5_000 }).catch(() => undefined)
       console.error('Planning browser failure', await page.locator('body').innerText({ timeout: 5_000 }).catch(() => ''), frames)
@@ -252,6 +344,7 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
     throw error
   } finally {
     await browser?.close()
+    await Promise.all(responses)
     await server?.stop()
     await rm(scratch, { recursive: true, force: true })
   }

@@ -47,7 +47,7 @@ export function PlanningPage(props: PlanningPageProps) {
       </div>
       <div className={css.actions}>
         <Button variant="outline" onClick={() => { props.nav.clearProject() }}>{t('planning.selectProject')}</Button>
-        <Button variant="outline" disabled={project.board.loading} onClick={() => { void actions.refresh() }}>{t('planning.refresh')}</Button>
+        <Button variant="outline" onClick={() => { void actions.refresh() }}>{t('planning.refresh')}</Button>
       </div>
     </header>
     <nav className={css.tabs} aria-label={t('nav.project')}>

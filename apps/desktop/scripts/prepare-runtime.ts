@@ -7,9 +7,9 @@ import { chmod, readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
-import extractZip from 'extract-zip'
 import { extract } from 'tar'
 import { resolveDesktopTargetBuildPaths } from './desktop-build-paths.mjs'
+import { writeNodeZipExecutable } from './node-zip-executable.ts'
 
 const NODE_VERSION = '24.17.0'
 const BUILD_PATHS = resolveDesktopTargetBuildPaths()
@@ -55,9 +55,12 @@ async function prepareNode(platform: RuntimePlatform, arch: RuntimeArch): Promis
   const extraction = BUILD_PATHS.nodeExtract
   rmSync(extraction, { recursive: true, force: true })
   mkdirSync(extraction, { recursive: true })
-  if (platform === 'win') await extractZip(archive, { dir: extraction })
-  else await extract({ cwd: extraction, file: archive })
-  const source = join(extraction, folder, platform === 'win' ? 'node.exe' : 'bin/node')
+  if (platform === 'win') {
+    await writeNodeZipExecutable(await readFile(archive), `${folder}/node.exe`, join(extraction, 'node.exe'))
+  } else {
+    await extract({ cwd: extraction, file: archive })
+  }
+  const source = platform === 'win' ? join(extraction, 'node.exe') : join(extraction, folder, 'bin/node')
   const destinationRoot = join(RUNTIME_ROOT, 'node')
   const destination = join(destinationRoot, platform === 'win' ? 'node.exe' : 'node')
   rmSync(destinationRoot, { recursive: true, force: true })
