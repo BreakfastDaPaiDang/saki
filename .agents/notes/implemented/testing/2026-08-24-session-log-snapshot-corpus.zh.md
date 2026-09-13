@@ -22,7 +22,7 @@ Fixture 解码与比较只取决于选定 JSONL 内容；文件名标识 invento
 
 Headless stderr 重建会同时展开 `assistant/message` 与仅写入日志的 `assistant/attempt` settlement 中嵌入的 reasoning，因此失败或重试尝试的 reasoning 仍属于进程输出投影。
 
-每个 parent 或 child 角色都使用 `session[.<ordinal>][.vN].jsonl`；v0 省略版本，且每个文件名都与其 header 一致。回放、录制与刷新按角色选择数值最高的 generation。大多数 owner 省略 `sessionFormat` 并跟随当前 writer；受限的历史 owner 会声明精确版本与封闭 coverage 名称。v2 语料保留选定 v0 角色，覆盖多跳、打包行、重试／失败与随附 profile，并保留选定 v1 角色覆盖相邻结构 edge。录制与刷新绝不改写显式保留的历史 fixture、重命名已提交 generation 或通过自动清理删除 generation。保留 Session generation 不会冻结非 Session 预期输出：refresh 仍会根据当前 run 写入 owner 持有的 system-prompt 与 tool-schema sidecar。受审阅的源树整理只有在同角色存在已验证的当前后继后才移除前代。语料策略要求选定当前角色始终占多数，并将选定历史角色上限设为十个；更低的前代 generation 可以保留在选定当前后继旁。
+每个 parent 或 child 角色都使用 `session[.<ordinal>][.vN].jsonl`；v0 省略版本，且每个文件名都与其 header 一致。回放、录制与刷新按角色选择数值最高的 generation。大多数 owner 省略 `sessionFormat` 并跟随当前 writer；受限的历史 owner 会声明精确版本与封闭 coverage 名称。语料保留选定 v0 角色，覆盖多跳、打包行、重试／失败与随附 profile，并保留选定 v1 角色覆盖完整迁移链中的 v1→v2 结构 edge。录制与刷新绝不改写显式保留的历史 fixture、重命名已提交 generation 或通过自动清理删除 generation。保留 Session generation 不会冻结非 Session 预期输出：refresh 仍会根据当前 run 写入 owner 持有的 system-prompt 与 tool-schema sidecar。受审阅的源树整理只有在同角色存在已验证的当前后继后才移除前代。语料策略要求选定当前角色始终占多数，并将选定历史角色上限设为十个；更低的前代 generation 可以保留在选定当前后继旁。
 
 场景拥有的 HTTP fixture 将会话中录制的稳定 authority 与传输 listener 分离。每个 fixture 在回环地址上绑定端口 `0`，由操作系统以一次原子操作分配并绑定端口，再将录制的 URL 或 endpoint 通过真实 provider 映射到该 listener。任何进程全局传输拦截只匹配录制 endpoint，由 fixture fiber 拥有，并在关闭 listener 前恢复。
 
@@ -34,7 +34,7 @@ Workspace 输入继续归各场景本地所有。变更文件的场景比较完�
 
 SDK 回放诊断保留阶段与 RPC 完成状态元数据，以及各 Session 最近的事件、轮次、状态和子代理生命周期边沿，不含请求参数和事件正文。测试超时时，完成钩子先保存中断时的状态，再启动运行时关闭流程、等待场景清理结束，并追加结果。即使快照门禁失败，CI 也会保留这些文件；缺失清理记录就意味着尚未证明拆卸完成。
 
-当前 writer 的 request-header pin 与保留的迁移输入分离：`tool-call-turn` 固定 default 组合，`empty-response-retry-current` 固定 retry 组合。可读 sidecar 仍由 `text-turn` 持有。六份保留的历史输入保持字节冻结，并继续被选为回放输入；其固定历史版本的目录不含会取代它们的规范 V3 同角色文件。单独的 `writer.expected.jsonl` 与 `writer.<ordinal>.expected.jsonl` 文件固定精确的规范化原生 V3 父子会话输出，保留历史输入的 SDK 场景则通过 `notifications.current.expected.jsonl` 固定当前通知。这些输出比较基准不是 replay 代际。[快照工具包](../../../../packages/test-support/session-snapshot/README.zh.md)负责选择与刷新行为。结构迁移可以保留请求含义而不复现原生 writer 的事件布局，因此正式迁移拥有独立的正确性测试。反向投影为历史 header、剥除结构差异、跳过输出相等断言或替换冻结输入都会掩盖回归，而不是验证这些相互独立的约定。
+当前 writer 的 request-header pin 与保留的迁移输入分离：`tool-call-turn` 固定 default 组合，`empty-response-retry-current` 固定 retry 组合。可读 sidecar 仍由 `text-turn` 持有。六份保留的历史输入保持字节冻结，并继续被选为回放输入；其固定历史版本的目录不含会取代它们的更新的规范同角色文件。单独的 `writer.expected.jsonl` 与 `writer.<ordinal>.expected.jsonl` 文件固定精确的规范化原生当前格式的父子会话输出，保留历史输入的 SDK 场景则通过 `notifications.current.expected.jsonl` 固定当前通知。这些输出比较基准不是 replay 代际。[快照工具包](../../../../packages/test-support/session-snapshot/README.zh.md)负责选择与刷新行为。结构迁移可以保留请求含义而不复现原生 writer 的事件布局，因此正式迁移拥有独立的正确性测试。反向投影为历史 header、剥除结构差异、跳过输出相等断言或替换冻结输入都会掩盖回归，而不是验证这些相互独立的约定。
 
 ## Alternatives considered
 

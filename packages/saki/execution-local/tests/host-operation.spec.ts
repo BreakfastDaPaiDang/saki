@@ -10813,6 +10813,8 @@ describe('LocalSakiHostExecution Host Operation lifecycle', () => {
           'status', '--porcelain=v2', '-z', '--untracked-files=all', '--no-renames',
         ], {
           cwd: root,
+          // The observation must not replace the index through Git's optional stat refresh.
+          env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
           windowsHide: true,
           encoding: 'buffer',
         })

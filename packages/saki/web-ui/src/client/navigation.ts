@@ -4,10 +4,11 @@
  * apply and shared through the inject faces' hooks compartment, so sidebar
  * entries and the surface entry see the same snapshot; it persists so a
  * browser reload restores the exact surface and Project. The token handed to
- * the shell (`ctx.layout.requestSurface`) is derived from this state — never
+ * the shell (`ctx.layout.selectPanel`) is derived from this state — never
  * the other way around.
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
+import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SakiWireProjectId } from '@breakfastdapaidang/saki-host-api/wire'
 
 /** The two Saki top-level surfaces; null means the shell's Conversation fallback. */
@@ -64,6 +65,6 @@ export type SakiNavigationActionsFace = ReturnType<ReturnType<typeof createSakiN
  * @param state - current navigation snapshot.
  * @returns the `saki:<surface>` token, or null for the Conversation fallback.
  */
-export function surfaceTokenOf(state: SakiNavigationState): string | null {
-  return state.surface === null ? null : `saki:${state.surface}`
+export function surfaceTokenOf(state: SakiNavigationState): MainPanelId | null {
+  return state.surface === null ? null : `saki:${state.surface}` as MainPanelId
 }

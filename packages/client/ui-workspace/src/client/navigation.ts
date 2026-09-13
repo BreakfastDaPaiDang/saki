@@ -10,9 +10,23 @@ import type {
   IWorkspaces, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 
 /** Workspace archive and directory operations consumed by Client UI domains. */
 export interface UiWorkspace {
+  /**
+   * Connect a Workspace and open its Session unless a later navigation supersedes it.
+   * @param workspaceId - target Workspace.
+   * @param beforeOpen - optional synchronous preparation for the selected Session, skipped after supersession.
+   * @returns completion; a superseded request may create a Session but does not open it.
+   */
+  openWorkspace(workspaceId: WorkspaceId, beforeOpen?: (sessionId: SessionId) => void): Promise<void>
+  /**
+   * Fork a Session and open the child unless a later navigation supersedes it.
+   * @param sessionId - source Session.
+   * @returns completion; a superseded request leaves its child available without selecting it.
+   */
+  forkSession(sessionId: SessionId): Promise<void>
   /**
    * Resolve the reusable or newly created blank Session for a Workspace.
    * @param workspaceId - target Workspace.
@@ -37,7 +51,7 @@ export interface UiWorkspace {
   openSession(sessionId: SessionId): void
   /**
    * Subscribe to user-driven Session navigation ({@link UiWorkspace.startSession},
-   * {@link UiWorkspace.openSession}); the listener fires synchronously at the
+   * {@link UiWorkspace.openWorkspace}, {@link UiWorkspace.openSession}); the listener fires synchronously at the
    * gesture. The startup Workspace auto-connect and the persisted-selection
    * restore are navigation policy, not gestures, and never fire it.
    * @param listener - gesture callback.
@@ -92,6 +106,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   private readonly connecting = new Map<WorkspaceId, Promise<SessionId>>()
   /** Session-navigation gesture listeners (see {@link UiWorkspace.onSessionNavigation}). */
   private readonly navigationListeners = new Set<() => void>()
+  private readonly lifetime = new AbortController()
 
   /**
    * @param ctx - Client root Context.
@@ -139,10 +154,23 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     return attempt
   }
 
-  startSession(workspaceId?: WorkspaceId): void {
-    // The gesture IS the navigation: listeners hear it synchronously, ahead of
-    // the asynchronous connect and on the no-Workspace clear fallback alike.
+  async openWorkspace(workspaceId: WorkspaceId, beforeOpen?: (sessionId: SessionId) => void): Promise<void> {
     this.notifySessionNavigation()
+    const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal])
+    const isCurrent = (): boolean => !navigation.aborted
+    const sessionId = await this.connectWorkspace(workspaceId)
+    if (!isCurrent()) return
+    beforeOpen?.(sessionId)
+    if (isCurrent()) this.selectSession(sessionId)
+  }
+
+  async forkSession(sessionId: SessionId): Promise<void> {
+    const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal])
+    const childId = await this.sessions.fork({ sessionId, increaseTitle: true })
+    if (!navigation.aborted) this.openSession(childId)
+  }
+
+  startSession(workspaceId?: WorkspaceId): void {
     const workspace = this.workspaces.list.getSnapshot()
     const sessions = this.sessions.list.getSnapshot()
     const current = sessions.current
@@ -154,19 +182,24 @@ class UiWorkspaceService extends Service implements UiWorkspace {
       : undefined
     const target = workspaceId ?? currentWorkspaceId ?? recent
     if (target === undefined) {
+      this.notifySessionNavigation()
       this.sessions.clear()
+      this.ctx.layout.selectPanel(null)
       return
     }
-    void this.connectWorkspace(target).then(
-      (sessionId) => { this.sessions.open(sessionId) },
+    void this.openWorkspace(target).catch(
       (reason: unknown) => { console.warn('new session failed:', reason) },
     )
   }
 
   openSession(sessionId: SessionId): void {
-    // open() validates the id, so an unknown Session throws before any report.
-    this.sessions.open(sessionId)
+    this.selectSession(sessionId)
     this.notifySessionNavigation()
+  }
+
+  private selectSession(sessionId: SessionId): void {
+    this.sessions.open(sessionId)
+    this.ctx.layout.selectPanel(null)
   }
 
   onSessionNavigation(listener: () => void): () => void {
@@ -209,9 +242,8 @@ class UiWorkspaceService extends Service implements UiWorkspace {
 
   private watchNavigation(): () => void {
     let initial: 'waiting' | 'connecting' | 'done' = 'waiting'
-    let disposed = false
     const reconcile = (): void => {
-      if (disposed) return
+      if (this.lifetime.signal.aborted) return
       if (this.clearArchivedCurrent()) return
       if (initial !== 'waiting') return
       const workspace = this.workspaces.list.getSnapshot()
@@ -229,14 +261,14 @@ class UiWorkspaceService extends Service implements UiWorkspace {
       initial = 'connecting'
       void this.connectWorkspace(target).then(
         (sessionId) => {
-          if (disposed) return
+          if (this.lifetime.signal.aborted) return
           if (this.sessions.list.getSnapshot().current === undefined) {
             this.sessions.open(sessionId)
           }
           initial = 'done'
         },
         (reason: unknown) => {
-          if (disposed) return
+          if (this.lifetime.signal.aborted) return
           initial = 'waiting'
           console.warn('initial workspace selection failed:', reason)
         },
@@ -246,7 +278,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     const disposeSessions = this.sessions.list.subscribe(reconcile)
     reconcile()
     return () => {
-      disposed = true
+      this.lifetime.abort()
       disposeSessions()
       disposeWorkspaces()
     }

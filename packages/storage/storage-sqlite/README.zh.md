@@ -86,7 +86,7 @@ kind: "package-reference"
 | [`src/index.ts`](src/index.ts) | 插件入口：后端注册、`path`／`journalMode` 配置、单元表 |
 | [`src/schema.ts`](src/schema.ts) | 打开顺序、物理布局版本、元数据表、记录表命名 |
 | [`src/unit.ts`](src/unit.ts) | 一个已打开单元：预处理语句、JSON 值解析、关闭 |
-| — | 不发布运行时不变式伴生入口；版本是打开时检查。 |
+| — | 不发布运行时不变式伴生入口；schema 版本与单元版本的一致性在打开时检查，不一致时会在单元创建前拒绝打开；持久性需要由共享 KV 符合性测试套件中的后端往返测试验证；本包不暴露可持续观察的进程内关系。 |
 
 </details>
 
@@ -129,9 +129,9 @@ kind: "package-reference"
 这些限制说明本后端何时不合适，或何时需要特别的运维注意。它们是当前包约束，不是任务积压。
 
 - **同步驱动阻塞事件循环**——每次写入都是一次同步 `DatabaseSync` 调用；阻塞只持续一条语句，在领域数据规模下可以接受。
-- **没有忙等待或重试策略**——持有写锁的竞争连接会立即拒绝操作，而不是等待；领域层的写入链在单进程内串行化写入，跨进程协调属于范围外。
+- **没有忙等待或重试策略**——持有写锁的竞争连接会立即拒绝操作，而不是等待；领域层的写入链在单进程内串行化写入，跨进程协调不在范围内。
 - **只打开当前的物理布局版本**——任何其他已标记的 `user_version` 都会被拒绝而不是迁移（预发布立场）。
-- **打开顺序与 query provider 重复**——`openDatabase` 与 `session-query-sqlite` 都强制执行 SQLite 文件 ownership，但两个 package 分别拥有不同的 application identity 与 schema；没有共享 medium helper 将其耦合。
+- **打开顺序与查询提供方重复**——`openDatabase` 与 `session-query-sqlite` 都强制执行 SQLite 文件所有权约束，但两个包各自拥有不同的应用标识与 schema；没有共享介质辅助模块将二者耦合。
 
 <a id="dev-note"></a>
 ### 开发备注

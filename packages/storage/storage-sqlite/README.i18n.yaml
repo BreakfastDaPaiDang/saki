@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/storage/storage-sqlite/README.md
 README.md: 4a2164eea2728604710eba8e3b26f02178466770
-README.zh.md: ed75cd2df48be7ad20b05b2844490d3a35ef5843
+README.zh.md: f693b8c886ef975973305dba6701934cb1be5549

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * saki-web-ui apply wiring: dictionaries, the two sidebar entries, the
- * main.surface chain entry, the navigation→shell-token sync, the
+ * keyed main entries, persisted panel selection, the
  * gesture-driven Session-navigation hand-back, reload restore, and teardown
  * cleanup.
  */
@@ -37,7 +37,9 @@ async function bench() {
   const ctx = new Context()
   contexts.add(ctx)
   await ctx.plugin(SlotRegistry).await()
-  const layout = { requestSurface: vi.fn(), toggleSidebar: vi.fn(), openDetails: vi.fn(), closeDetails: vi.fn() }
+  const layout = { selectPanel: vi.fn((id: string | null) => {
+    if (id !== null && !ctx.slots.entries('main').some(entry => entry.options.key === id)) throw new Error('panel not registered')
+  }), toggleSidebar: vi.fn(), openDetails: vi.fn(), closeDetails: vi.fn() }
   const sessionsList = createSnapshotStore<{ current: string | undefined }>({ current: undefined })
   const sessions = { list: sessionsList }
   // The Workspace navigation face, reduced to its gesture signal; firing the
@@ -64,7 +66,7 @@ async function bench() {
       name: 'root',
       children: {
         'sidebar': { kind: 'single', scope: 'root' },
-        'main.surface': { kind: 'chain', scope: 'root' },
+        'main': { kind: 'keyed', scope: 'root' },
       },
     } as never,
     () => null,
@@ -82,30 +84,42 @@ describe('saki-web-ui apply', () => {
     expect(inject).toEqual(['slots', 'layout', 'uiWorkspace', 'locale', 'sakiHostClient'])
   })
 
-  it('registers both sidebar entries and the surface chain entry', async () => {
+  it('registers both sidebar entries and their main panels before restoring selection', async () => {
     const { ctx, slots } = await bench()
     await ctx.plugin({ inject: [...inject], apply }).await()
     const navEntries = slots.entries('sidebar.primary.action')
     expect(navEntries.map(entry => entry.options.id)).toEqual(['saki-work', 'saki-project'])
-    const surfaceEntries = slots.entries('main.surface')
-    expect(surfaceEntries).toHaveLength(1)
-    const select = surfaceEntries[0]!.select as (owner: { surfaceKey: string | null }) => unknown
-    expect(select({ surfaceKey: 'saki:work' })).toEqual({ page: 'work' })
-    expect(select({ surfaceKey: 'saki:project' })).toEqual({ page: 'project' })
-    expect(select({ surfaceKey: null })).toBeNull()
-    expect(select({ surfaceKey: 'other:thing' })).toBeNull()
+    const surfaceEntries = slots.entries('main')
+    expect(surfaceEntries.map(entry => entry.options.key)).toEqual(['saki:work', 'saki:project'])
+    expect(surfaceEntries.map(entry => (entry.inject as () => { page: string })().page)).toEqual(['work', 'project'])
+  })
+
+  it('reselects a Saki page after another plugin opens its panel', async () => {
+    const { ctx, slots, layout } = await bench()
+    await ctx.plugin({ inject: [...inject], apply }).await()
+    const face = (slots.entries('sidebar.primary.action')[0]!.inject as () => { open: () => void })()
+    face.open()
+    const disposeOther = slots.register({ name: 'main', key: 'other' }, () => null)
+    try {
+      layout.selectPanel('other')
+      layout.selectPanel.mockClear()
+      face.open()
+      expect(layout.selectPanel).toHaveBeenLastCalledWith('saki:work')
+    } finally {
+      disposeOther()
+    }
   })
 
   it('publishes the surface token from navigation state', async () => {
     const { ctx, slots, layout } = await bench()
     await ctx.plugin({ inject: [...inject], apply }).await()
-    expect(layout.requestSurface).toHaveBeenLastCalledWith(null)
+    expect(layout.selectPanel).toHaveBeenLastCalledWith(null)
 
     // Drive the shared navigation store through a sidebar entry's inject face.
     const workEntry = slots.entries('sidebar.primary.action')[0]!
     const face = (workEntry.inject as () => { open: () => void })()
     face.open()
-    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+    expect(layout.selectPanel).toHaveBeenLastCalledWith('saki:work')
   })
 
   it('clears the elected Saki surface on a user Session navigation gesture', async () => {
@@ -116,22 +130,22 @@ describe('saki-web-ui apply', () => {
       hooks: { navigation: { getSnapshot: () => NavigationSnapshot } }
     })()
     face.open()
-    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+    expect(layout.selectPanel).toHaveBeenLastCalledWith('saki:work')
 
     // The Workspace navigation face reports the gesture: the center column
     // returns to the Conversation fallback. The Project selection is kept, so
     // re-entering 项目 reopens where the user left off.
     emitSessionNavigation()
-    expect(face.hooks.navigation.getSnapshot().surface).toBeNull()
-    expect(layout.requestSurface).toHaveBeenLastCalledWith(null)
+    expect((slots.entries('main')[0]!.inject as () => { hooks: { navigation: { getSnapshot: () => NavigationSnapshot } } })().hooks.navigation.getSnapshot().surface).toBeNull()
+    expect(layout.selectPanel).toHaveBeenLastCalledWith(null)
   })
 
   it('keeps the Conversation fallback when a gesture arrives with no surface elected', async () => {
     const { ctx, layout, emitSessionNavigation } = await bench()
     await ctx.plugin({ inject: [...inject], apply }).await()
     emitSessionNavigation()
-    expect(layout.requestSurface).toHaveBeenLastCalledWith(null)
-    expect(layout.requestSurface).toHaveBeenCalledTimes(1)
+    expect(layout.selectPanel).toHaveBeenLastCalledWith(null)
+    expect(layout.selectPanel).toHaveBeenCalledTimes(1)
   })
 
   it('never moves the Saki surface on sessions-layer elections (startup auto-connect, selection restore)', async () => {
@@ -142,29 +156,26 @@ describe('saki-web-ui apply', () => {
       hooks: { navigation: { getSnapshot: () => NavigationSnapshot } }
     })()
     face.open()
-    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+    expect(layout.selectPanel).toHaveBeenLastCalledWith('saki:work')
 
     // The shell's startup Workspace auto-connect and the persisted-selection
     // restore present exactly like this at the sessions layer: `current`
     // appears with no user gesture behind it. The plugin subscribes to no
     // sessions-layer signal, so the elected page survives both.
     sessionsList.update((draft) => { draft.current = 'session-1' })
-    expect(face.hooks.navigation.getSnapshot().surface).toBe('work')
-    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+    expect((slots.entries('main')[0]!.inject as () => { hooks: { navigation: { getSnapshot: () => NavigationSnapshot } } })().hooks.navigation.getSnapshot().surface).toBe('work')
+    expect(layout.selectPanel).toHaveBeenLastCalledWith('saki:work')
     sessionsList.update((draft) => { draft.current = 'session-2' })
-    expect(face.hooks.navigation.getSnapshot().surface).toBe('work')
-    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+    expect((slots.entries('main')[0]!.inject as () => { hooks: { navigation: { getSnapshot: () => NavigationSnapshot } } })().hooks.navigation.getSnapshot().surface).toBe('work')
+    expect(layout.selectPanel).toHaveBeenLastCalledWith('saki:work')
   })
 
   it('leaves the Conversation fallback untouched when a session becomes current with no surface elected', async () => {
     const { ctx, slots, layout, sessionsList } = await bench()
     await ctx.plugin({ inject: [...inject], apply }).await()
-    const face = (slots.entries('sidebar.primary.action')[0]!.inject as () => {
-      hooks: { navigation: { getSnapshot: () => NavigationSnapshot } }
-    })()
     sessionsList.update((draft) => { draft.current = 'session-1' })
-    expect(layout.requestSurface).toHaveBeenLastCalledWith(null)
-    expect(face.hooks.navigation.getSnapshot().surface).toBeNull()
+    expect(layout.selectPanel).toHaveBeenLastCalledWith(null)
+    expect((slots.entries('main')[0]!.inject as () => { hooks: { navigation: { getSnapshot: () => NavigationSnapshot } } })().hooks.navigation.getSnapshot().surface).toBeNull()
   })
 
   it('restores the persisted Saki surface on a fresh apply (browser reload)', async () => {
@@ -172,34 +183,33 @@ describe('saki-web-ui apply', () => {
     await first.ctx.plugin({ inject: [...inject], apply }).await()
     const face = (first.slots.entries('sidebar.primary.action')[1]!.inject as () => { open: () => void })()
     face.open()
-    expect(first.layout.requestSurface).toHaveBeenLastCalledWith('saki:project')
+    expect(first.layout.selectPanel).toHaveBeenLastCalledWith('saki:project')
 
     // A reload is a fresh plugin apply over the same localStorage: the
     // persisted surface republishes before any gesture or election lands.
     const second = await bench()
     await second.ctx.plugin({ inject: [...inject], apply }).await()
-    expect(second.layout.requestSurface).toHaveBeenLastCalledWith('saki:project')
+    expect(second.layout.selectPanel).toHaveBeenLastCalledWith('saki:project')
     // The startup auto-connect landing on top of the restore leaves it in place.
     second.sessionsList.update((draft) => { draft.current = 'session-1' })
-    expect(second.layout.requestSurface).toHaveBeenLastCalledWith('saki:project')
+    expect(second.layout.selectPanel).toHaveBeenLastCalledWith('saki:project')
   })
 
-  it('removes the entries, the gesture listener, and clears the surface token on teardown', async () => {
+  it('removes the entries and stops navigation publication on teardown', async () => {
     const { ctx, slots, layout, navigationListeners, emitSessionNavigation } = await bench()
     const fiber = ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     const face = (slots.entries('sidebar.primary.action')[0]!.inject as () => { open: () => void })()
     face.open()
-    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+    expect(layout.selectPanel).toHaveBeenLastCalledWith('saki:work')
     expect(navigationListeners.size).toBe(1)
     await fiber.dispose()
     expect(slots.entries('sidebar.primary.action')).toHaveLength(0)
-    expect(slots.entries('main.surface')).toHaveLength(0)
-    expect(layout.requestSurface).toHaveBeenLastCalledWith(null)
+    expect(slots.entries('main')).toHaveLength(0)
     expect(navigationListeners.size).toBe(0)
-    const calls = layout.requestSurface.mock.calls.length
+    const calls = layout.selectPanel.mock.calls.length
     emitSessionNavigation()
-    expect(layout.requestSurface).toHaveBeenCalledTimes(calls)
+    expect(layout.selectPanel).toHaveBeenCalledTimes(calls)
   })
 
   it('opens the project surface from the project sidebar entry', async () => {
@@ -207,13 +217,13 @@ describe('saki-web-ui apply', () => {
     await ctx.plugin({ inject: [...inject], apply }).await()
     const face = (slots.entries('sidebar.primary.action')[1]!.inject as () => { open: () => void })()
     face.open()
-    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:project')
+    expect(layout.selectPanel).toHaveBeenLastCalledWith('saki:project')
   })
 
   it('delegates every surface-face read to the host client with the exact arguments', async () => {
     const { ctx, slots, layout, hostClient, uiWorkspace } = await bench()
     await ctx.plugin({ inject: [...inject], apply }).await()
-    const face = (slots.entries('main.surface')[0]!.inject as () => {
+    const face = (slots.entries('main')[0]!.inject as () => {
       readAccess: (signal?: AbortSignal) => unknown
       exchangeBootstrap: (secret: string, signal?: AbortSignal) => unknown
       queryProjectIndex: (signal?: AbortSignal) => unknown
@@ -244,7 +254,7 @@ describe('saki-web-ui apply', () => {
     expect(hostClient.readAccess).toHaveBeenCalledOnce()
     // The face's nav is the shared navigation instance wired to the shell sync.
     face.nav.showWork()
-    expect(layout.requestSurface).toHaveBeenLastCalledWith('saki:work')
+    expect(layout.selectPanel).toHaveBeenLastCalledWith('saki:work')
   })
 })
 

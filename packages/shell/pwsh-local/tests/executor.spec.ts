@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { afterAll, afterEach, describe, expect, it, onTestFinished } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { PwshLocalExecutor, ENCODING_PREAMBLE, candidatePwshPaths, resolvePwshPath } from '@deepseek-ai/dsh-pwsh-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
@@ -41,6 +41,24 @@ afterEach(async () => {
   if (failures.length > 0) throw new AggregateError(failures, 'PowerShell fixture cleanup failed')
 })
 
+function createContext(): Context {
+  const ctx = new Context()
+  contexts.push(ctx)
+  return ctx
+}
+
+/** A private file barrier keeps the command alive until the test releases it. */
+function commandBarrier() {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-pwsh-barrier-'))
+  tempDirs.push(dir)
+  const path = join(dir, 'release')
+  return {
+    command: 'while (-not (Test-Path -LiteralPath $env:DSH_TEST_RELEASE)) { Start-Sleep -Milliseconds 20 }',
+    env: { DSH_TEST_RELEASE: path },
+    release: () => { writeFileSync(path, '') },
+  }
+}
+
 // The probe follows the executor's own resolution (Program Files installs on
 // Windows are found even when bare `pwsh` is not on PATH).
 const hasPwsh = spawnSync(resolvePwshPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$true'], { encoding: 'utf8' }).status === 0
@@ -57,8 +75,7 @@ function samePath(actual: string, expected: string): boolean {
 }
 
 async function setup(config: ConstructorParameters<typeof PwshLocalExecutor>[1] = {}) {
-  const ctx = new Context()
-  contexts.push(ctx)
+  const ctx = createContext()
   await ctx.plugin(LocalSubprocessRuntime)
   ;(ctx.subprocess as LocalSubprocessRuntime).internals = { spillDir }
   // A short kill grace via the REAL config path, so escalation tests stay fast.
@@ -68,9 +85,8 @@ async function setup(config: ConstructorParameters<typeof PwshLocalExecutor>[1] 
 }
 
 /**
- * Poll a handle's consuming readOutput until the ACCUMULATED delta contains
- * `expected`; returns the accumulation (reads never re-deliver, so the caller
- * gets everything produced up to the match).
+ * Accumulate consuming reads until the marker arrives, using the current test's
+ * budget. Callers keep the child at a barrier when later output must remain unread.
  */
 async function readUntil(proc: ShellProcess, expected: string, timeoutMs: number): Promise<string> {
   let all = ''
@@ -203,7 +219,7 @@ describe('spawn construction (pure, every platform)', () => {
   }
 
   it('runs every command as ONE argv element under the UTF-8 encoding preamble', async () => {
-    const ctx = new Context()
+    const ctx = createContext()
     const subprocess = new CapturingSubprocessRuntime(ctx)
     await ctx.plugin(PwshLocalExecutor)
     await ctx.shell.run(ctx.shell.resolve({ command: 'Write-Output 你好' }))
@@ -216,7 +232,7 @@ describe('spawn construction (pure, every platform)', () => {
   })
 
   it('reports both unread stderr and an asynchronous provider rejection exactly once', async () => {
-    const ctx = new Context()
+    const ctx = createContext()
     const subprocess = new CapturingSubprocessRuntime(ctx)
     await ctx.plugin(PwshLocalExecutor)
     subprocess.stderrText = 'target stderr'
@@ -233,7 +249,7 @@ describe('spawn construction (pure, every platform)', () => {
   })
 
   it('settles an unprintable provider rejection instead of rejecting done', async () => {
-    const ctx = new Context()
+    const ctx = createContext()
     const subprocess = new CapturingSubprocessRuntime(ctx)
     await ctx.plugin(PwshLocalExecutor)
     const providerError = new Error('unprintable provider error')
@@ -250,7 +266,7 @@ describe('spawn construction (pure, every platform)', () => {
   })
 
   it('preserves an explicit kill stamp and maps an aborted direct outcome to killed', async () => {
-    const ctx = new Context()
+    const ctx = createContext()
     const subprocess = new CapturingSubprocessRuntime(ctx)
     await ctx.plugin(PwshLocalExecutor)
 
@@ -418,20 +434,25 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.run', () => {
 })
 
 describe.skipIf(!hasPwsh)('PwshLocalExecutor.start (background process handles)', () => {
-  it('start returns immediately with a running handle that settles as completed', async () => {
+  it('start returns immediately with a running handle that settles as completed', async ({ task }) => {
     const { bash } = await setup()
-    const before = Date.now()
-    // The sleep outlasts any realistic spawn latency, so returning while the
-    // child still sleeps proves start() does not wait for completion.
-    const proc = bash.start(bash.resolve({ command: 'Start-Sleep -Milliseconds 2000; Write-Output done' }))
-    expect(Date.now() - before).toBeLessThan(1000)
+    const barrier = commandBarrier()
+    const proc = bash.start(bash.resolve({
+      command: `Write-Output ready; [Console]::Out.Flush(); ${barrier.command}; Write-Output done`,
+      env: barrier.env,
+    }))
     expect(proc.status).toBe('running')
+    expect(await readUntil(proc, 'ready\n', task.timeout)).toBe('ready\n')
+    expect(proc.status).toBe('running')
+    barrier.release()
     await proc.done
     expect(proc.status).toBe('completed')
+    expect(proc.signal).toBeNull()
     expect(proc.exitCode).toBe(0)
+    expect(lf(proc.readOutput().delta)).toBe('done\n')
   })
 
-  it('threads stdin and extra env into a background process', async ({ task }) => {
+  it('threads stdin and extra env into a background process', async () => {
     const { bash } = await setup()
     const proc = bash.start(bash.resolve({
       command: '$s = ([Console]::In.ReadToEnd()).TrimEnd(); Write-Output $s; Write-Output "[$env:BG_VAR][$env:DSH_BG_VAR]"',
@@ -439,32 +460,25 @@ describe.skipIf(!hasPwsh)('PwshLocalExecutor.start (background process handles)'
       env: { BG_VAR: 'bg-env' },
       dshEnv: { DSH_BG_VAR: 'bg-dsh-env' },
     }))
-    const partialOutput = await readUntil(proc, '[bg-env][bg-dsh-env]', task.timeout)
     await proc.done
     expect(proc.status).toBe('completed')
-    const output = partialOutput + lf(proc.readOutput().delta)
-    expect(output).toBe('bg-stdin\n[bg-env][bg-dsh-env]\n')
+    expect(proc.signal).toBeNull()
     expect(proc.exitCode).toBe(0)
+    expect(lf(proc.readOutput().delta)).toBe('bg-stdin\n[bg-env][bg-dsh-env]\n')
   })
 
   it('readOutput is consuming: increments are never re-delivered, and reads stay valid after exit', async ({ task }) => {
-    const { ctx, bash } = await setup()
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-pwsh-read-'))
-    onTestFinished(async () => {
-      await ctx.fiber.dispose()
-      rmSync(dir, { recursive: true, force: true })
-    })
-    const releasePath = join(dir, 'release')
-    // The second write cannot race the host's first consuming read.
+    const { bash } = await setup()
+    const barrier = commandBarrier()
     const proc = bash.start(bash.resolve({
-      command: 'Write-Output first; [Console]::Out.Flush(); while (-not [System.IO.File]::Exists($env:DSH_PWSH_RELEASE)) { Start-Sleep -Milliseconds 20 }; Write-Output second',
-      env: { DSH_PWSH_RELEASE: releasePath },
+      command: `Write-Output first; [Console]::Out.Flush(); ${barrier.command}; Write-Output second`,
+      env: barrier.env,
     }))
     const first = await readUntil(proc, 'first\n', task.timeout)
-    expect(lf(first)).toBe('first\n')
+    expect(first).toBe('first\n')
     expect(proc.status).toBe('running')
     expect(proc.readOutput().delta).toBe('')
-    writeFileSync(releasePath, '')
+    barrier.release()
     await proc.done
     expect(proc.status).toBe('completed')
     expect(proc.exitCode).toBe(0)

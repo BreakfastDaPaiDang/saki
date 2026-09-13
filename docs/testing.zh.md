@@ -2,11 +2,11 @@
 
 [English](testing.md) | 中文
 
-本文说明本仓库的分层测试方式，以及保持绿色测试套件有意义的规则。命令见根目录 [AGENTS.md](../AGENTS.md)；相关 Agent Note 承载设计动机。
+测试层级与规则。命令见根目录 [AGENTS.md](../AGENTS.md)；相关 Agent Note 承载设计动机。
 
 ## 层级
 
-- **单元测试**（`pnpm run test`）：vitest 运行包和示例各自的 `tests/**` 目录下的测试，以及匹配 `scripts/**/*.spec.ts` 的仓库脚本测试；测试文件与其所覆盖的代码区域放在一起。每个注册表都有一个 HMR（热模块替换）安全测试（对向该注册表贡献内容的 fiber 执行 dispose（资源释放），并断言清理完成）。优先覆盖边界情况、错误路径、事件顺序、并发竞态，以及针对约定回归的永久测试（见 `packages/core/agent-loop/tests/contract-regressions.spec.ts`）。
+- **单元测试**（`pnpm run test`）：vitest 运行包和示例的 `tests/**` 以及仓库的 `scripts/**/*.spec.ts`。测试保留在其所属位置。每个注册表测试贡献 fiber 被 dispose（资源释放）后的清理。覆盖边界情况、失败、事件顺序、并发竞态和约定回归（`packages/core/agent-loop/tests/contract-regressions.spec.ts`）。
 - **覆盖率门禁**（`pnpm run test:coverage`）：门禁级运行，对 `packages/*/*/src` 按文件 100% 覆盖。未覆盖的行往往是门禁正确标记出的死代码（应删除），而非需要补写的测试。行覆盖率是必要条件，但永远不是充分条件：它证明行被执行过，不证明功能按交付预期工作。`packages/shell/pwsh-local/src` 的按文件 100% 覆盖需要真实的 `pwsh`：缺少它时其执行器套件会自动跳过，`vitest.config.ts` 会豁免该文件以使无 pwsh 的主机保持绿色，而 CI runner 自带 pwsh，仍按完整标准执行门禁。
 - **真实 API e2e**（`pnpm run test:e2e`）：带密钥测试调用真实提供方 API，包括 DeepSeek 模型以及各提供方特有的冒烟测试；这些测试各自由自己的密钥控制（`EXA_API_KEY`、`PERPLEXITY_API_KEY` 等），缺少密钥时套件会自动跳过，使 keyless CI 保持绿色（[真实 API e2e Agent Note](../.agents/notes/archived/testing/2026-06-19-real-api-e2e-ci.md)）。
 - **所属位置的预期输出**（`pnpm run test:expected`）：无录制会话往返的无密钥组装 CLI/进程预期。驱动使用 `*.expected.e2e.ts`，并与 `tests/expected/` 同属一处；CI 针对构建产物运行。包/脚本预期使用 `test`，浏览器预期使用 `test:web`。
@@ -16,7 +16,7 @@
 
 Web 快照固定使用 `Asia/Shanghai`；针对特定时区的场景覆盖它。
 
-Session fixture 保留 header 与 payload，但省略正文 seq/time envelope；replay 会合成这些 envelope。Replay、record 与 refresh 会选择每个 parent/child 角色的最高 generation。当前 V3 使用 `.v3`、每个事件一行，并嵌入紧凑 Assistant stream。历史 fixture 保留其已发布表示；显式 `sessionFormat` 所有者保留迁移覆盖。按照[格式版本实操手册](cookbook/adding-a-session-format-version.zh.md#snapshot-successors)添加后继代际，不改动前代。
+Session fixture 保留 header 与 payload，但省略正文 seq/time envelope；replay 会合成这些 envelope。Replay、record 与 refresh 会选择每个 parent/child 角色的最高 generation。当前 fixture 在文件名与 header 中使用[写入格式](session-format-status.zh.md)，每个事件一行，并嵌入紧凑 Assistant stream。历史 fixture 保留其已发布表示；显式 `sessionFormat` 所有者保留迁移覆盖。按照[格式版本实操手册](cookbook/adding-a-session-format-version.zh.md#snapshot-successors)添加后继代际，不改动前代。
 
 ## spec 如何被执行
 
@@ -40,7 +40,7 @@ e2e 断言应重新运行命令或从外部重新读取文件；对 agent 自身
 
 - 产品可见的插件必须有一个非单元的真实组合测试。手动构建的 `ctx.plugin(...)` 套件不够：通过 Loader 和 app/process 启动仅用于测试的 `cordis.yml`，只 mock 外部服务或非确定性输入，断言模型可见的请求/日志、持久状态或用户可见输出。不要把 opt-in 选项混入交付默认值。
 - 一个守卫只有在回归能让它失败时才有效。对于没有 `inject` 的插件（bundle/组合插件），Loader 冒烟测试在默认导出替换必需的具名导出时仍然绿着——需要添加显式的 `expect('default' in mod).toBe(false)` 加 `unwrapExports` 往返断言，并证明它有效：引入回归、观察变红、回退。
-- 「真实入口路径」指已发布的产物：包的 `bin` 所运行的是构建后的 `lib/bin.js`，并由普通 `node` 执行，从而暴露 tsx 会掩盖的失败（结算竞态、模块解析、被吞掉的加载失败）。同样的规则适用于非 index 运行时入口（worker-thread 的同级文件 `lib/worker.cjs`），也适用于多个 bundle 共享的单例模块（`packages/sdk/server/tests/built-scope-carrier.e2e.ts`）。保持构建产物冒烟测试绿色（`packages/examples/*/tests/built-bin.e2e.ts`、`packages/code-runtime/code-runtime-worker-thread/tests/built-lib.e2e.ts`），并断言真正缺失的配置以非零状态退出。
+- 产品冒烟测试通过 `dsh` 使用普通 Node 运行构建产物（[启动规则](architecture.zh.md#application-launch)），暴露 tsx 会掩盖的失败：结算竞态、模块解析和被吞掉的加载失败。非 index 运行时入口和共享单例模块也需要构建产物冒烟测试（`packages/code-runtime/code-runtime-worker-thread/tests/built-lib.e2e.ts`、`packages/sdk/server/tests/built-scope-carrier.e2e.ts`）。断言缺失的配置以非零状态退出。
 
 ## 测试解析：仅限源码
 

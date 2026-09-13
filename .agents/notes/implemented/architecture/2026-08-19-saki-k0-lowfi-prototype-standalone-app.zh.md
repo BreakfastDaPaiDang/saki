@@ -6,7 +6,7 @@ Status: implemented
 
 ## Problem
 
-K0（issue #42）要求一个可点击、可键盘操作的低保真 prototype，在 K1–K7 拆分生产前端实现前证明两个新增顶层页面可行。已交付的 DSH Web 客户端只能在 dsh host 内启动（host 注入的 boot 数据、cordis plugin tree、构建后的 `lib/` bundle），而 Saki 需要的两个壳层 slot（`main.surface`、`sidebar.primary.action`）尚不存在——把 prototype 嵌入真实客户端会把 K1 的壳层工作拖进 K0。同时，prototype 必须忠实地演示前端约定（带 revision 的完整 Projection、携带 expected revision 的 typed Intent、作为 Projection 事实的 Action Offer、文字优先的视图状态语义），而不是随意的 mockup。
+K0（issue #42）要求一个可点击、可键盘操作的低保真 prototype，在 K1–K7 拆分生产前端实现前证明两个新增顶层页面可行。已交付的 DSH Web 客户端只能在 dsh host 内启动（host 注入的 boot 数据、cordis plugin tree、构建后的 `lib/` bundle），而 Saki 需要的两个壳层 slot（`main`、`sidebar.primary.action`）尚不存在——把 prototype 嵌入真实客户端会把 K1 的壳层工作拖进 K0。同时，prototype 必须忠实地演示前端约定（带 revision 的完整 Projection、携带 expected revision 的 typed Intent、作为 Projection 事实的 Action Offer、文字优先的视图状态语义），而不是随意的 mockup。
 
 ## Decision
 
@@ -32,4 +32,4 @@ prototype 为 K1–K7 把门：K1（壳层、认证、Project 登记/rebind）�
 
 IA 评审附带键盘、无障碍与受限 viewport 证据进行。fixture 引擎强制约定的前置条件（expected revision、远端指纹、eligibility），因此若干生产 UI 决定（从已确认快照派生、向目标列插入的乐观 overlay；dialog 打开时的焦点延后；My Work 上按原因分组的 Attention；Project Settings 的 field-scoped 编辑与同步激活链）已经是经过测试的行为，而不是待定设计。
 
-代价是重复：token、基础组件与模拟壳层镜像 DSH 而不是复用它，且 K1 落地真实 `main.surface` 路径后 prototype 必须删除或废弃——包括仅属 prototype 的场景工具条，生产不继承。独立应用的质量围栏只有自身的 `npm run build` 与 `validation/validate.mjs` 加上仓库级暂存门控——对评审 artifact 可接受，对交付物不可接受。
+代价是重复：token、基础组件与模拟壳层镜像 DSH 而不是复用它，且 K1 落地真实 `main` 路径后 prototype 必须删除或废弃——包括仅属 prototype 的场景工具条，生产不继承。独立应用的质量围栏只有自身的 `npm run build` 与 `validation/validate.mjs` 加上仓库级暂存门控——对评审 artifact 可接受，对交付物不可接受。

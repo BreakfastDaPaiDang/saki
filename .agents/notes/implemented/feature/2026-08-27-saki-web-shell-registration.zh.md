@@ -10,11 +10,11 @@ Saki 0.1.0 需要真实 bundle 提供浏览器产品：完成本地 bootstrap �
 
 ## Decision
 
-两个通用的、与产品类型无关的壳层增量承载 Saki 页面。`packages/client/ui-layout` 声明 `main.surface`：根作用域 chain slot，渲染在中央列，以内置的 `conversation` 条目作为回退；回退保持挂载，使 conversation 状态在接管后存活。选举货币是纯字符串 token：`ctx.layout.requestSurface(key)` 写入 layout store；在框架挂载前发出的请求缓冲在 `LayoutController` 上，待面板 actions 挂载时冲刷；传入 `null` 则把中央列交还回退。`packages/client/ui-sidebar` 声明 `sidebar.primary.action`：根作用域 list slot，渲染在 New Session 正下方，条目接收列的展开状态。移除所有接管登记即可还原普通 conversation 回退与侧边栏，无残留状态；任何 DSH 包都不 import Saki 类型。
+[全局主面板机制](../architecture/2026-09-08-global-main-panels.zh.md)通过根作用域 `main` key `saki:work` 与 `saki:project` 承载 Saki 页面。Saki 等待 main 声明，注册两个 key，然后通过 `ctx.layout.selectPanel` 发布持久化选择；提前创建的 layout store 使选择在框架挂载前即可使用。保留的 Conversation 条目隐藏时保持挂载，使草稿与查看状态跨面板切换存活。`packages/client/ui-sidebar` 声明 `sidebar.primary.action`，这是直接位于 New Session 下方的根作用域 list，条目接收列的展开状态。Saki 自定义行读取 `usePanelInfo`，每次点击都执行选择，包括从其他插件的面板返回。移除已选中的 main 注册会返回 Conversation；任何 DSH 包都不导入 Saki 类型。
 
 Saki bundle 在 `cordis.patch.yml` 中组合浏览器栈：DSH 客户端服务注入所需的 Typert registry/loader、API gateway 与 commands；客户端模块系统（`modules`、`api-remotes`）；浏览器服务调用的 Host Remote（`session-controller`、`workspace-controller`、`settings-controller`）及其支撑 provider（`attachment-local`、关闭内容搜索的 `session-query-sqlite`，以及 `agent-default-model`——它命名一个刻意不提供服务的模型路由，使任何实际模型调用都在使用点立即报错）；启动期解析的 `directory-picker` 交互；双端 `file-upload`；壳层花名册（theme、locale、layout、renderer、session、sidebar、settings、conversation、workspace、official brand）；`saki-web-ui` 插件；以及 `saki-web-runtime` 胶水插件——通过 `dsh-host-frontend-static` 在 webserver fallback 座上提供构建好的 `@deepseek-ai/dsh-web-frontend` dist。动态 client/host runner 链被明确排除：动态插件包不属于 0.1.0 的表面范围。
 
-`@breakfastdapaidang/saki-web-ui` 按提案要求保持单一客户端插件。它拥有持久化在 `saki.navigation` localStorage 键下的导航 store（surface、选中与最近 Project id）；侧边栏入口选中 surface，用户驱动的会话导航将其清除，因此只有在没有选中任何 Saki surface 时才渲染 Conversation fallback。交还订阅的是手势通道而非 sessions 层：`UiWorkspace` face 携带 `openSession`（侧边栏行、搜索结果与 fork 子会话选举的唯一入口）与 `onSessionNavigation`，同步报告 `startSession`/`openSession` 手势——绝不覆盖壳层启动时的 Workspace 自动连接与持久化选中恢复；后两者在 `sessions.list.current` 上与用户点击呈现相同的选举而无法区分，因此已被选中的 Saki 页面（包括登记流程中恢复出的「项目」页）在两者之下都保持不动。启动器打印的 URL 携带 DSH 进程启动令牌，其一次性交换会签发绑定 authority 的浏览器会话 cookie，供 `/api` Remote 使用；Saki bootstrap secret 仍然守护每一项 Host 操作。Access 门在被选中的 Saki surface 内渲染，交换启动器打印的 bootstrap secret；登记使用键入的目录路径而非浏览对话框，因为登记要求规范路径加服务端证据确认，选择器集成属于后续打磨切片。workspace 视图渲染已确认 projection，并区分 loading、refreshing、stale、not-found、denied、unavailable 与 offline 状态。控制面的持久 Browser Session 能跨越 Host 重启：持有 cookie 的浏览器不经新交换直接回到持久化地址；无 cookie 的浏览器则必须用重启后新签发的 secret 完成 session-required 交换。
+`@breakfastdapaidang/saki-web-ui` 按提案要求保持单一客户端插件。它拥有持久化在 `saki.navigation` localStorage 键下的导航 store（surface、选中与最近 Project id）；侧边栏入口选中 surface，用户驱动的会话导航将其清除，因此只有在没有选中任何 Saki surface 时才渲染 Conversation fallback。交还订阅的是手势通道而非 sessions 层：`UiWorkspace` face 携带 `openSession`（侧边栏行、搜索结果与 fork 子会话选举的唯一入口）与 `onSessionNavigation`，同步报告 `startSession`/`openWorkspace`/`openSession` 手势——绝不覆盖壳层启动时的 Workspace 自动连接与持久化选中恢复；后两者在 `sessions.list.current` 上与用户点击呈现相同的选举而无法区分，因此已被选中的 Saki 页面（包括登记流程中恢复出的「项目」页）在两者之下都保持不动。启动器打印的 URL 携带 DSH 进程启动令牌，其一次性交换会签发绑定 authority 的浏览器会话 cookie，供 `/api` Remote 使用；Saki bootstrap secret 仍然守护每一项 Host 操作。Access 门在被选中的 Saki surface 内渲染，交换启动器打印的 bootstrap secret；登记使用键入的目录路径而非浏览对话框，因为登记要求规范路径加服务端证据确认，选择器集成属于后续打磨切片。workspace 视图渲染已确认 projection，并区分 loading、refreshing、stale、not-found、denied、unavailable 与 offline 状态。控制面的持久 Browser Session 能跨越 Host 重启：持有 cookie 的浏览器不经新交换直接回到持久化地址；无 cookie 的浏览器则必须用重启后新签发的 secret 完成 session-required 交换。
 
 按决策明确排除：binding 检测、rebind、退役与历史迁移（[#26](https://github.com/BreakfastDaPaiDang/saki/issues/26)）；Project Settings、自动化策略与 budget（K7）；生产模型 adapter（组合的 bundle 已携带 agent 栈，但没有 adapter 时 Conversation 回退的回合保持 idle）。
 
@@ -26,7 +26,7 @@ Web Server 先绑定监听端口，control plane 再从 `ctx.webServer.port` 解
 
 **按组件标识选举 surface。** 让登记项在激活时自行渲染会把壳层耦合到条目标识。纯字符串 token 使壳层不含产品类型，回退规则也只是一次比较。
 
-**对挂载前的 `requestSurface` 直接报错。** 插件 apply 顺序是正当组装细节，严格的 face 会迫使每个功能插件感知时序。缓冲单个请求既保住调用方意图，也不引入队列契约。
+**要求框架挂载后才能恢复导航。** 插件激活与 React 挂载有独立的生命周期。[全局面板所有者](../architecture/2026-09-08-global-main-panels.zh.md)共享提前创建的 store，并验证已注册的 key，因此恢复操作等待 slot 声明，而不是组件挂载。
 
 **从 sessions 层订阅清除 surface。** `sessions.list.current` 的边沿无法区分用户选举与策略：启动时的 Workspace 自动连接何时落地取决于 Host 何时应答其异步 connect，持久化选中恢复则在首个列表拉取时解除 `current` 的遮蔽——两者都没有手势，列表拉取变慢时会在登记流程中途落地。把手势发布在 Workspace 导航 face 上，交还才精确。
 

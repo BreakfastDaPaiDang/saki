@@ -149,6 +149,7 @@ export async function advanceLocalAgentRun(
     return { kind: 'retryable', reason: 'unavailable', record }
   }
   const { agent } = acquired.handle
+  // oxlint-disable-next-line typescript/no-deprecated -- Existing input reconciliation awaits a Session projection.
   evidence = classifyInput(agent.session.snapshotEvents(), record.request.run.input, record.request.run.agentRunId)
   if (evidence.kind === 'absent') {
     const verified = await verifyAgentRunWorld(dependencies, record, persist, signal)
@@ -329,6 +330,7 @@ export async function cancelLocalAgentRun(
       return await persistReconciledAgentRun(dependencies, initial, 'evidence-conflict', persist)
     }
     const { agent } = acquired.handle
+    // oxlint-disable-next-line typescript/no-deprecated -- Existing cancellation reconciliation awaits a Session projection.
     evidence = classifyInput(agent.session.snapshotEvents(), initial.request.run.input, initial.request.run.agentRunId)
     if (evidence.kind === 'pending') {
       await disposeOwnedAgentRun(dependencies, initial.request.run.sessionId)
@@ -566,6 +568,7 @@ export async function waitForInputRecord(
   signal: AbortSignal,
   wake: () => void,
 ): Promise<void> {
+  // oxlint-disable-next-line typescript/no-deprecated -- Existing recorded-input detection awaits a Session projection.
   if (agent.session.snapshotEvents().some(event => event.type === 'user/message'
     && event.data.id === expected.id && sameMessage(event.data, expected))) return
   const delivered = Promise.withResolvers<void>()
