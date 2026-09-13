@@ -80,9 +80,12 @@ async function expectHeadlessStream(normalized: string, expectedPath: string): P
   expect(parseJsonl(normalized)).toEqual(parseJsonl(expected))
 }
 
-/** Serve one deterministic DeepSeek-compatible response while retaining its request body. */
-async function deepseekDefaultsServer(options: { waitForTitleRequest?: boolean } = {}): Promise<DeepSeekDefaultsServer> {
+/** Serve DeepSeek responses at controlled comment intervals and retain request bodies. */
+async function deepseekDefaultsServer(
+  options: { waitForTitleRequest?: boolean; commentIntervalMs?: number } = {},
+): Promise<DeepSeekDefaultsServer> {
   const requests: JsonObject[] = []
+  const commentIntervalMs = options.commentIntervalMs ?? 60
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     let body = ''
     request.setEncoding('utf8')
@@ -96,7 +99,7 @@ async function deepseekDefaultsServer(options: { waitForTitleRequest?: boolean }
         if (keepAlives-- > 0
           || (options.waitForTitleRequest === true && !requests.some(request => request.max_tokens === 64))) {
           response.write(': keep-alive\n\n')
-          timer = setTimeout(write, 60)
+          timer = setTimeout(write, commentIntervalMs)
           return
         }
         response.end([
@@ -106,7 +109,7 @@ async function deepseekDefaultsServer(options: { waitForTitleRequest?: boolean }
           '',
         ].join('\n\n'))
       }
-      let timer = setTimeout(write, 60)
+      let timer = setTimeout(write, commentIntervalMs)
       response.once('close', () => { clearTimeout(timer) })
     })
   })
@@ -444,8 +447,8 @@ describe('headless stream-json snapshots', () => {
     `)
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
-  it('keeps provider comments alive and sends DeepSeek defaults through the one-shot app', async () => {
-    const server = await deepseekDefaultsServer()
+  it.each([60, 500])('sends DeepSeek defaults through the one-shot app with %i ms provider comment gaps', async (commentIntervalMs) => {
+    const server = await deepseekDefaultsServer({ waitForTitleRequest: true, commentIntervalMs })
     try {
       const result = await runLoaderSmoke({
         label: 'DeepSeek adapter defaults headless stream-json snapshot',
