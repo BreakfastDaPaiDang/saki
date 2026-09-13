@@ -28,7 +28,7 @@ Headless 的 `session-sandbox-root` 夹具声明 `workspace.parent: outside-temp
 
 已安装 wheel 的在线 SDK 测试在要求模型验证前，由外部将创建的文件替换为新的、仅主机知道的挑战值；验证提示不暴露该值。两个 turn 必须包含模型请求的工具调用，验证器同时比较返回值及真实文件字节。
 
-Reference-composer 夹具将已知的 home 缩写 workspace 显示映射到既有 cwd token，并在选择前等待当前精确建议集；主机路径或过时建议都不决定测试结果。共享浏览器时区、Inspector 订阅同步及 PowerShell 完成行为遵循[既有平台测试决策](2026-09-07-pwsh-ci-observable-completion.zh.md)。
+Reference-composer 夹具将已知的 home 缩写 workspace 显示映射到既有 cwd token，并在选择前等待当前精确建议集。待加载的触发器行暴露 `aria-disabled="true"`；目录操作等待可操作的行，因为当前查询完成前，模糊查询结果可能同时保留目录及其子项。暂停查询的浏览器用例验证这些可见行在释放查询前仍不可操作，随后 Tab 产生目录文本和面包屑。共享浏览器时区、Inspector 订阅同步及 PowerShell 完成行为遵循[既有平台测试决策](2026-09-07-pwsh-ci-observable-completion.zh.md)。
 
 高级 Python 快照仅暂停其匹配的 workflow 子进程首次 pre-step，直到观察到父 Session 的持久化 workflow 成员事件。夹具支持事件先到或等待先建立两种顺序，并在取消或销毁时结束未完成等待。这固定了场景的跨 Session 顺序，而不排序通知或改变生产调度。
 
