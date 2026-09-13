@@ -80,4 +80,9 @@ After `pnpm run build`, run `pnpm exec vitest run --config vitest.e2e.config.ts 
 
 The consumer CI job uploads these directories as `saki-planning-<run_id>-<run_attempt>` after successful or failed gates and retains them for seven days. Browser and Provider traces use separate files so independent processes do not share a writer. Successful traces provide the comparison for a failing run; they do not establish that an intermittent defect is fixed.
 
+<a id="changes-browser-diagnostics"></a>
+#### Changes browser diagnostics
+
+The Changes browser case, `packages/saki/bundle/tests/web-changes.e2e.ts`, records phase timestamps, screenshots, and `host-processes.log` in a private `.playwright-mcp/changes-<uuid>/` directory. The process log records anonymous sequence numbers, start times, and elapsed time until each command settles, without arguments or environment values. Consumer CI retains the directory as `saki-changes-<run_id>-<run_attempt>` for seven days. The Linux and Windows source paths start a managed TypeScript runner for each Git command; a complete Diff includes repeated repository observations, so its outer wait covers the complete operation rather than one command.
+
 </details>
