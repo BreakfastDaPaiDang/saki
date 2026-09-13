@@ -26,8 +26,8 @@ Register an existing directory as a Development Project, plan its GitHub Work It
 Mount this plugin in a composition that also carries the shell roster and the `/saki` Host API; the two sidebar entries then open the Saki pages.
 
 - `sidebar.primary.action`: entries `saki-work` and `saki-project` render the two primary destinations under New Session, rail-aware through the owner `wide` flag.
-- `main.surface`: one chain entry elects on the generic shell surface token (`saki:work` / `saki:project`); with no election the Conversation fallback renders, and it stays mounted under a takeover so in-progress conversation state survives.
-- The navigation store publishes the surface token through `ctx.layout.requestSurface`. The Saki sidebar entries elect their surface; the Conversation fallback renders exactly while no Saki surface is elected.
+- `main`: two root-scoped keyed entries (`saki:work` / `saki:project`) render the Saki pages. The reserved `conversation` entry stays mounted while hidden, preserving its unfinished draft and viewing state.
+- The navigation store publishes through `ctx.layout.selectPanel` after both main entries are registered. Saki sidebar entries select their panel on every click; their active state follows `usePanelInfo`. The persisted `saki.navigation` value restores the Saki page on reload.
 - A user-driven Session navigation reported by the Workspace navigation face (`uiWorkspace.onSessionNavigation`: a sidebar Session row, New Session, or fork open) clears the surface, handing the center column back to the Conversation; elections with no gesture behind them — the shell's startup Workspace auto-connect and the persisted-selection restore — never evict an elected page, so a restored 项目 page survives them, mid-registration included.
 
 Directory edits supersede pending inspections. Registration disables path edits until the submitted Intent settles; a conflict requires refreshed registry revision and inspection evidence before confirmation becomes available again.

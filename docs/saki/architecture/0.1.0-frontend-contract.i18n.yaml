@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/saki/architecture/0.1.0-frontend-contract.md
-0.1.0-frontend-contract.md: ddb4ead70e98cfc575ebbb5073038461c142e155
-0.1.0-frontend-contract.zh.md: 6e092882f2aa2cf68f2f519b1350ccd3be1f0c33
+0.1.0-frontend-contract.md: aad35b83666738839c7d62d63a17904d12f22792
+0.1.0-frontend-contract.zh.md: d95f55b667abc4b76315d7c8fd597a60f804af82

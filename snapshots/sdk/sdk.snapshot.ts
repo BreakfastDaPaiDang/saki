@@ -732,7 +732,7 @@ async function runScenario(scenario: CorpusScenario, test: TestContext): Promise
         if (scenario.manifest.environment?.DSH_SNAPSHOT_FEEDBACK === '1') {
           const feedback = result.events.filter(event => event.type.startsWith('feedback/'))
           expect(feedback.map(event => event.type)).toEqual([
-            'feedback/record', 'feedback/message-put', 'feedback/message-put', 'feedback/message-delete',
+            'feedback/record', 'feedback/record', 'feedback/message-put', 'feedback/message-put', 'feedback/message-delete',
           ])
         }
         phase = `wait for root turn/end ${action.turn}`

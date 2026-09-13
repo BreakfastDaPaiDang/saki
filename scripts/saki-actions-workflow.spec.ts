@@ -144,8 +144,7 @@ describe('Saki Actions cost policy', () => {
     expect(workflowJob(workflow, 'matrix').if)
       .toBe("github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false")
     expect(workflowJob(workflow, 'native').needs).toBe('matrix')
-    expect(workflowJob(workflow, 'compatibility').needs).toEqual(['matrix', 'native'])
-    expect(workflowJobNames(workflow)).toEqual(['matrix', 'native', 'compatibility'])
+    expect(workflowJobNames(workflow)).toEqual(['matrix', 'native'])
   })
 
   it('restricts the upstream reviewer policy to its owning repository', () => {
@@ -154,6 +153,25 @@ describe('Saki Actions cost policy', () => {
     expect(workflowJobNames(workflow)).toEqual(['request-review'])
     expect(workflowJob(workflow, 'request-review').if)
       .toBe("github.repository == 'deepseek-ai/deepseek-harness'")
+  })
+
+  it('keeps upstream weighted-review automation outside Saki', () => {
+    const publisher = loadWorkflow('.github/workflows/weighted-approval.yml')
+    const reviewEvent = loadWorkflow('.github/workflows/weighted-approval-review-event.yml')
+    expect(workflowJob(publisher, 'publish-status').if)
+      .toBe("github.repository == 'deepseek-ai/deepseek-harness' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')")
+    expect(workflowJob(reviewEvent, 'record-review-event').if)
+      .toBe("github.repository == 'deepseek-ai/deepseek-harness'")
+  })
+
+  it('keeps optional Blacksmith capacity limited to the filename check and bwrap', () => {
+    const filenames = workflowJob(loadWorkflow('.github/workflows/expected-filenames.yml'), 'expected-filenames')
+    const sandbox = workflowJob(loadWorkflow('.github/workflows/sandbox.yml'), 'sandbox-e2e')
+    expect(filenames['runs-on']).toContain("vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-4vcpu-ubuntu-2404'")
+    expect(filenames['runs-on']).toContain("|| 'ubuntu-latest'")
+    expect(sandbox['runs-on']).toContain("matrix.runner == 'bwrap' && vars.DSH_CI_FAILOVER_LINUX == 'blacksmith'")
+    expect(sandbox['runs-on']).toContain('|| matrix.os')
+    expect(JSON.stringify(loadWorkflow('.github/workflows/ci.yml'))).not.toContain('blacksmith-')
   })
 
   it('keeps the secret-bearing DeepSeek suite manual-only', () => {

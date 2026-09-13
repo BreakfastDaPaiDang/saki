@@ -4,7 +4,6 @@
  * renders its rail form from the shell's `wide` flag.
  */
 import type { PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SakiNavigationState } from '../navigation.ts'
 import type { NS } from '../locales.ts'
 import css from './SakiNavEntry.module.css'
 
@@ -21,10 +20,6 @@ export type SakiNavEntryProps =
   PropsRuntime<'sidebar.primary.action'>
   & SakiNavEntryInjected
   & PropsLocale<typeof NS>
-  & {
-    /** Bound from the inject hooks compartment by the renderer. */
-    useNavigation: <S>(select: (state: SakiNavigationState) => S) => S
-  }
 
 /**
  * Render one 「工作」/「项目」 entry row; the collapsed rail keeps the icon.
@@ -32,7 +27,7 @@ export type SakiNavEntryProps =
  * @returns the row element.
  */
 export function SakiNavEntry(props: SakiNavEntryProps & { t: TranslateNS<typeof NS> }) {
-  const active = props.useNavigation(state => state.surface === props.sakiSurface)
+  const active = props.usePanelInfo(info => info.activePanelId === `saki:${props.sakiSurface}`)
   const label = props.t(props.sakiSurface === 'work' ? 'nav.work' : 'nav.project')
   return (
     <button

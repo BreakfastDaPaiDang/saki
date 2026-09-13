@@ -117,11 +117,13 @@ dsh 族套用仓库的发布 payload 策略（拒绝源码与声明映射）。v
 
 每个 workflow 的 `pack` job 一趟遍历整个发布集，把每个成员打进同一个目录，写出上传顺序，整个目录作为一份 artifact 上传。发布 workflow 的 `publish` job 下载那一份 artifact，按顺序逐个发布。发布集是一个整体——绝不会出现一半的包已经上了 registry、另一半还在构建。
 
-根据 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.zh.md)，无凭据的 pack workflow 由发布族的版本 tag 或显式手动 dispatch 触发：dsh 使用 `dsh-v*`，vendor 使用 `vendor-*-v*`。发布位于仅支持 `workflow_dispatch` 的独立 `release-publish.yml` 与 `release-vendor-publish.yml` workflow。每个发布 workflow 会重新打包并验证当前树，随后其 `publish` job 在 `npm-publish` environment 后等待人工审批，并下载同一次运行产出的字节。pack 运行按 ref 分组；全局分组落在 publish 作业上，因为 dist-tag 是共享的 registry 状态。
+根据 [Saki Actions 策略](2026-08-18-saki-actions-cost-policy.zh.md)，无凭据的 pack workflow 由发布族的版本 tag 或显式手动 dispatch 触发：dsh 使用 `dsh-v*`，vendor 使用 `vendor-*-v*`。发布位于仅支持 `workflow_dispatch` 的独立 `release-publish.yml` 与 `release-vendor-publish.yml` workflow。每个发布 workflow 会重新打包并验证当前树，随后其 `publish` job 在 `npm-publish` environment 后等待人工审批，并下载同一次运行产出的字节。pack 运行按 ref 分组；全局分组落在 publish 作业上，因为 dist-tag 是共享的 registry 状态。 dsh 发布成功后，发布操作者按[发布记录](../../../../docs/session-format-status.zh.md#updating-the-record)核实其 Session 写入器；若交付了更高的 Session 格式，则更新该记录。
 
 dsh 的验证会一并安装 vendored 族的 pack 产物。harness 的包把 vendored 框架声明成 peer，而那些包属于另一条序列，无凭据的 job 无法从私有 registry 取到——所以两份 dsh workflow 都会为验证而打包 vendored 族，发布的仍只有 dsh 那一份。
 
 验证还会打一份 Landlock entry 的 tarball——`dsh-sandbox-local` 把它声明为普通 `dependencies`——同时略去可选依赖。那些可选项背后的平台包需要 musl 工具链且每个架构各构建一次，单台 runner 产不出来；而装不到它们的消费方也必须能起，这正是「可选」在这里的含义。因此验证按目录内容读取 tarball，而不是读发布顺序：一个目录可能只装着为满足跨序列依赖而打出来的包，任何发布顺序都不描述它。
+
+已安装消费方探针会捕获 npm 的 HTTP 诊断信息，并在安装失败时输出。即使 npm 将 peer manifest 获取失败报告为版本未定义的 `ERESOLVE`，日志中仍能看到 registry 响应码和缓存状态。
 
 ### 本次带出的仓库改动
 

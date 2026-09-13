@@ -26,8 +26,8 @@ kind: "package-reference"
 在同时携带壳层花名册与 `/saki` Host API 的组合中挂载本插件后，两个侧边栏入口即可打开 Saki 页面。
 
 - `sidebar.primary.action`：`saki-work` 与 `saki-project` 两个条目渲染 New Session 下方的主要入口，并通过 owner 的 `wide` 标志适配收起形态。
-- `main.surface`：一个 chain 条目根据壳层通用 surface token（`saki:work` / `saki:project`）选择接管；未选中时渲染 Conversation fallback，且接管期间 fallback 保持挂载，会话内未提交状态不丢失。
-- 导航 store 通过 `ctx.layout.requestSurface` 发布 surface token。Saki 侧边栏入口选中各自 surface；只有在没有选中任何 Saki surface 时才渲染 Conversation fallback。
+- `main`：两个根作用域 keyed 条目（`saki:work` / `saki:project`）渲染 Saki 页面。保留的 `conversation` 条目隐藏时仍保持挂载，保留未完成的草稿与查看状态。
+- 导航 store 在两个主面板条目均注册后通过 `ctx.layout.selectPanel` 发布选择。Saki 侧边栏入口每次点击都会选择自己的面板；其活动状态跟随 `usePanelInfo`。持久化的 `saki.navigation` 值在刷新后恢复 Saki 页面。
 - Workspace 导航 face 报告的用户驱动会话导航（`uiWorkspace.onSessionNavigation`：侧边栏 Session 行、New Session 或 fork 打开）会清除 surface，把中央列交还 Conversation；没有手势支撑的选举——壳层启动时的 Workspace 自动连接与持久化选中恢复——不会挤下已选中的页面，因此恢复出的「项目」页在登记流程中也保持不动。
 
 目录变更会使未完成的检查失效。登记 Intent 完成前路径不可编辑；发生冲突后，必须刷新登记表修订号与检查证据才能再次确认。

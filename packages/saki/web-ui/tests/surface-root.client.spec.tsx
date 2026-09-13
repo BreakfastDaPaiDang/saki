@@ -57,7 +57,7 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
   const work = workFixture().controller
   controllers.add(work)
   const props = {
-    matched,
+    page: matched.page,
     ...face,
     nav: navigation.actions,
     useNavigation,

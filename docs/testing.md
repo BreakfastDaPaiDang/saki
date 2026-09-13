@@ -2,11 +2,11 @@
 
 English | [中文](testing.zh.md)
 
-How this repo tests, tier by tier, and the rules that keep a green suite meaningful. Commands live in root [AGENTS.md](../AGENTS.md); linked Agent Notes carry the rationale.
+Test tiers and rules. Commands live in root [AGENTS.md](../AGENTS.md); linked Agent Notes carry the rationale.
 
 ## Tiers
 
-- **Unit** (`pnpm run test`): vitest over package and example specs under their `tests/**` directories plus repository script specs under `scripts/**/*.spec.ts`; tests stay with the code area they exercise. Every registry gets an HMR-safety test (dispose the contributing fiber, assert cleanup). Prefer edge cases, error paths, event ordering, concurrency races, and permanent tests for contract regressions (see `packages/core/agent-loop/tests/contract-regressions.spec.ts`).
+- **Unit** (`pnpm run test`): vitest runs package and example `tests/**` and repository `scripts/**/*.spec.ts`. Tests stay with their owner. Every registry tests cleanup after its contributing fiber is disposed. Cover edge cases, failures, event ordering, concurrency races, and contract regressions (`packages/core/agent-loop/tests/contract-regressions.spec.ts`).
 - **Coverage gate** (`pnpm run test:coverage`): the gating run, per-file 100% on `packages/*/*/src`. An uncovered line is often dead code the gate flags for deletion, not a missing test to bolt on. Line coverage is necessary, never sufficient — it proves lines ran, not that the feature works as shipped. Per-file 100% on `packages/shell/pwsh-local/src` needs a real `pwsh`: without one its executor suites self-skip and `vitest.config.ts` exempts the file so pwsh-less hosts stay green, while CI runners ship pwsh and enforce the full bar.
 - **Real-API e2e** (`pnpm run test:e2e`): with-key tests against live provider APIs — the DeepSeek model plus provider-specific smokes that gate on their own keys (`EXA_API_KEY`, `PERPLEXITY_API_KEY`, …); each suite self-skips without its key so keyless CI stays green ([real-API e2e Agent Note](../.agents/notes/archived/testing/2026-06-19-real-api-e2e-ci.md)).
 - **Owner-local expected output** (`pnpm run test:expected`): keyless assembled CLI/process expectations without a recorded-session round trip. Drivers use `*.expected.e2e.ts` beside `tests/expected/`; CI runs built exports. Package/script expectations use `test`, while browser expectations use `test:web`.
@@ -16,7 +16,7 @@ How this repo tests, tier by tier, and the rules that keep a green suite meaning
 
 Web snapshots pin `Asia/Shanghai`; timezone-specific scenarios override it.
 
-Session fixtures retain headers and payloads but omit body sequence/time envelopes; replay synthesizes them. Replay, record, and refresh select each parent/child role's highest generation. Current V3 uses `.v3`, one row per event, and embedded compact Assistant streams. Historical fixtures retain their released representation; explicit `sessionFormat` owners preserve migration coverage. Follow the [format-version cookbook](cookbook/adding-a-session-format-version.md#snapshot-successors) to add successors without changing predecessors.
+Session fixtures retain headers and payloads but omit body sequence/time envelopes; replay synthesizes them. Replay, record, and refresh select each parent/child role's highest generation. Current fixtures use the [writer format](session-format-status.md) in their filenames and headers, one row per event, and embedded compact Assistant streams. Historical fixtures retain their released representation; explicit `sessionFormat` owners preserve migration coverage. Follow the [format-version cookbook](cookbook/adding-a-session-format-version.md#snapshot-successors) to add successors without changing predecessors.
 
 ## How specs execute
 
@@ -40,7 +40,7 @@ An e2e assertion re-runs the command or re-reads the file externally; a keyword 
 
 - Product-visible plugins require a non-unit REAL-composition test. Hand-built `ctx.plugin(...)` suites are insufficient: boot test-only `cordis.yml` through Loader and app/process, mock only external services or nondeterministic inputs, and assert model-visible request/log, durable state, or user-visible output. Keep opt-ins out of shipped defaults.
 - A guard only guards if the regression fails it. For a plugin without `inject` (bundle/composition plugins), a Loader smoke stays green when a default export replaces the required named exports — add an explicit `expect('default' in mod).toBe(false)` plus an `unwrapExports` round-trip assertion, and prove it: introduce the regression, watch red, revert.
-- "Real entry path" means the published artifact: a package `bin` runs built `lib/bin.js` under plain `node`, exposing failures tsx masks (settle races, module resolution, swallowed load failures). The same applies to non-index runtime entries (the worker-thread sibling `lib/worker.cjs`) and singleton modules shared across bundles (`packages/sdk/server/tests/built-scope-carrier.e2e.ts`). Keep the built-artifact smokes green (`packages/examples/*/tests/built-bin.e2e.ts`, `packages/code-runtime/code-runtime-worker-thread/tests/built-lib.e2e.ts`), and assert a genuinely-missing config exits non-zero.
+- Product smokes launch through `dsh` using built artifacts under plain Node ([launch rule](architecture.md#application-launch)), exposing failures tsx masks: settle races, module resolution, and swallowed load failures. Non-index runtime entries and shared singleton modules also need built-artifact smokes (`packages/code-runtime/code-runtime-worker-thread/tests/built-lib.e2e.ts`, `packages/sdk/server/tests/built-scope-carrier.e2e.ts`). Assert missing configuration exits non-zero.
 
 ## Test resolution: source plane only
 

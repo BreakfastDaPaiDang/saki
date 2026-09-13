@@ -91,7 +91,7 @@ for (const [file, jobIds] of [['release.yml', ['dependencies', 'pack']], ['relea
         workflow_dispatch: null,
       })
       expect(release.permissions).toEqual({ contents: 'read' })
-      expect(release.concurrency).toEqual({ group: '${{ github.workflow }}-${{ github.ref }}', 'cancel-in-progress': false })
+      expect(release.concurrency).toEqual({ group: '${{ github.workflow }}-${{ github.ref }}', 'cancel-in-progress': true })
     })
     for (const jobId of jobIds) {
       describe(jobId, () => {

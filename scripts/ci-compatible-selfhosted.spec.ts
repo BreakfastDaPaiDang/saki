@@ -55,7 +55,7 @@ function route(options: { mode?: string; author?: string; repository?: string; f
 describe('Node compatibility hosted routing', () => {
   it('keeps repository-owned and fork PRs on the selected hosted runner', () => {
     expect(route()).toBe('ubuntu-latest')
-    for (const mode of ['', 'hosted', 'unexpected']) expect(route({ mode })).toBe('ubuntu-latest')
+    for (const mode of ['', 'hosted', 'blacksmith', 'unexpected']) expect(route({ mode })).toBe('ubuntu-latest')
     expect(route({ author: 'dependabot[bot]', actor: 'maintainer' })).toBe('ubuntu-latest')
     expect(route({ repository: 'outsider/fork', fork: true })).toBe('ubuntu-latest')
     expect(route({ repository: 'outsider/fork', fork: false })).toBe('ubuntu-latest')

@@ -1,6 +1,6 @@
 /**
  * The elected Saki main surface: owns the access read for both pages and
- * renders the page the chain selector matched. Authentication gates the
+ * renders its registered page. Authentication gates the
  * pages; nothing Projection-backed renders before it resolves.
  */
 import type { InjectFace, PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
@@ -13,14 +13,14 @@ import { ProjectPage } from './ProjectPage.tsx'
 
 /** Full composed props for the Saki surface root. */
 export type SurfaceRootProps =
-  PropsRuntime<'main.surface'>
-  & { matched: { page: 'work' | 'project' } }
+  PropsRuntime<'main'>
+  & { page: 'work' | 'project' }
   & InjectFace<SakiInjected>
   & PropsLocale<typeof NS>
 
 /**
  * Render the elected Saki page behind the access gate.
- * @param props - matched page, host face, navigation actions, and copy.
+ * @param props - registered page, host face, navigation actions, and copy.
  * @returns the surface element.
  */
 export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeof NS> }) {
@@ -32,7 +32,7 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
     return <AccessGate access={access} reload={() => { void props.planning.reloadAccess() }}
       t={props.t} exchange={props.exchangeBootstrap} />
   }
-  if (props.matched.page === 'work') {
+  if (props.page === 'work') {
     return <WorkPage state={work} actions={props.work} openProject={() => { props.nav.showProject() }}
       openBoard={(id) => { props.nav.selectProject(id); props.planning.navigate({ view: 'board' }) }}
       openItem={(projectId, id) => { props.nav.selectProject(projectId); props.planning.openItem(id) }} t={props.t} />

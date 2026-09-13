@@ -53,6 +53,7 @@ jobs:
     name: node 24 / static
     env:
       DSH_GATE_FAIL_FAST: '1'
+      DSH_COVERAGE_TEST_TIMEOUT_MS: '90000'
       # Saki uses GitHub-hosted standard runners, which have a much smaller
       # CPU/memory budget than upstream's dedicated 16-core pool.
       DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}

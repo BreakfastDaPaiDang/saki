@@ -1,7 +1,7 @@
 /**
  * Saki Web client plugin, browser half: registers the two top-level entries
  * (「工作」「项目」) into the shell's `sidebar.primary.action` list slot and
- * one takeover entry into the `main.surface` chain slot, owns the small
+ * two keyed entries into the `main` slot, owns the small
  * navigation store, hands the center column back to the Conversation on
  * user-driven Session navigation, and drives the Saki Host API client for
  * access, Project planning, and durable manual Work interactions.
@@ -68,8 +68,7 @@ export interface SakiInjected extends SakiHostFace {
 
 /**
  * Client plugin body: dictionaries, the shared navigation instance, the two
- * sidebar entries, the surface takeover entry, and the two-way sync between
- * Saki navigation and the shell's surface token.
+ * sidebar entries, keyed main entries, and persisted panel selection.
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
@@ -104,27 +103,8 @@ export function apply(ctx: ClientContext): void {
     hooks: { navigation: navigation.store, planning, work },
   }
 
-  // Nav state → shell surface token: the sidebar entries set the surface; the
-  // shell elects the Saki entry through the main.surface chain.
-  ctx.effect(() => {
-    const publish = () => { ctx.layout.requestSurface(surfaceTokenOf(navigation.store.getSnapshot())) }
-    const unsubscribe = navigation.store.subscribe(publish)
-    publish()
-    return () => {
-      unsubscribe()
-      // Leaving the bundle restores the conversation fallback.
-      ctx.layout.requestSurface(null)
-    }
-  }, 'saki-web-ui: surface sync')
-
-  // A user-driven Session navigation (sidebar Session row, New Session, fork
-  // open) hands the center column back to the Conversation fallback. The
-  // gesture signal lives on the Workspace navigation face, never the sessions
-  // layer: the shell's startup Workspace auto-connect and the
-  // persisted-selection restore move `sessions.list.current` through the same
-  // elections as a user click, so a list subscription could not tell them
-  // apart — and a restored 项目 page must survive both, mid-registration
-  // included.
+  // Startup Session restoration leaves the persisted Saki page intact;
+  // only a user navigation clears it.
   ctx.effect(
     () => ctx.uiWorkspace.onSessionNavigation(() => { navigation.actions.clearSurface() }),
     'saki-web-ui: session navigation hand-back',
@@ -138,24 +118,30 @@ export function apply(ctx: ClientContext): void {
         order,
         locale: NS,
         inject: () => ({
-          open: surface === 'work' ? navigation.actions.showWork : navigation.actions.showProject,
+          open: () => {
+            if (surface === 'work') navigation.actions.showWork()
+            else navigation.actions.showProject()
+            ctx.layout.selectPanel(surfaceTokenOf(navigation.store.getSnapshot()))
+          },
           sakiSurface: surface,
-          hooks: { navigation: navigation.store },
         }),
       }, SakiNavEntry))
 
   registerNavEntry('work', 'saki-work', 0)
   registerNavEntry('project', 'saki-project', 10)
 
-  ctx.slots.inject('main.surface', () =>
-    ctx.slots.register({
-      name: 'main.surface',
-      locale: NS,
-      inject: () => injected,
-      select: (owner) => {
-        if (owner.surfaceKey === 'saki:work') return { page: 'work' as const }
-        if (owner.surfaceKey === 'saki:project') return { page: 'project' as const }
-        return null
-      },
-    }, SakiSurfaceRoot))
+  ctx.slots.inject('main', function *() {
+    for (const page of ['work', 'project'] as const) {
+      yield ctx.slots.register({
+        name: 'main',
+        key: `saki:${page}`,
+        locale: NS,
+        inject: () => ({ ...injected, page }),
+      }, SakiSurfaceRoot)
+    }
+    const publish = () => { ctx.layout.selectPanel(surfaceTokenOf(navigation.store.getSnapshot())) }
+    const unsubscribe = navigation.store.subscribe(publish)
+    publish()
+    yield unsubscribe
+  })
 }
