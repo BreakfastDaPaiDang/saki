@@ -174,6 +174,7 @@ describe('CI workflow', () => {
     expect(node24Consumers.env.DSH_OXLINT_THREADS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(node24Consumers.env.DSH_PUBLINT_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(node24Consumers.env.DSH_WEB_SNAPSHOT_WORKERS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
+    expect(node24Consumers.env.DSH_E2E_MAX_WORKERS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(node24Consumers.env.DSH_SNAPSHOT_MAX_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(aggregate['runs-on']).toContain('DSH_CI_FAILOVER_LINUX')
     expect(aggregate['runs-on']).not.toContain('DSH_CI_FAILOVER_WINDOWS')
