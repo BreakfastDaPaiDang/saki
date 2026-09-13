@@ -53,7 +53,6 @@ jobs:
     name: node 24 / static
     env:
       DSH_GATE_FAIL_FAST: '1'
-      DSH_COVERAGE_TEST_TIMEOUT_MS: '90000'
       # Saki uses GitHub-hosted standard runners, which have a much smaller
       # CPU/memory budget than upstream's dedicated 16-core pool.
       DSH_GATE_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
@@ -121,6 +120,7 @@ jobs:
     name: node 24 / coverage
     env:
       DSH_GATE_FAIL_FAST: '1'
+      DSH_COVERAGE_TEST_TIMEOUT_MS: '90000'
       # Saki's standard hosted runner gets two workers and one gate at a time.
       # The upstream hosted 16-core runner uses six coverage workers. The failover pool
       # shares one 64-core VM across six always-on runner instances, so each

@@ -169,6 +169,8 @@ describe('CI workflow', () => {
     expect(node24.env.DSH_GATE_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(node24Coverage.env.DSH_COVERAGE_MAX_WORKERS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")
     expect(node24Coverage.env.DSH_COVERAGE_PARTITIONS).toBe('4')
+    expect(node24Coverage.env.DSH_COVERAGE_TEST_TIMEOUT_MS).toBe('90000')
+    expect(node24.env.DSH_COVERAGE_TEST_TIMEOUT_MS).toBeUndefined()
     expect(node24Coverage.env.DSH_GATE_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '1'")
     expect(node24Consumers.env.DSH_GATE_CONCURRENCY).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '1'")
     expect(node24Consumers.env.DSH_OXLINT_THREADS).toContain("vars.SAKI_CI_RUNNERS == 'standard' && '2'")

@@ -22,7 +22,9 @@ Status: implemented
 
 `packages/experimental/code-runtime-python/tests/stray-fragments.spec.ts` 的原生输出分块封存测试保留真实 Python 子进程，但把 stdout 读取拆成单字节事件。操作系统的管道合并无法保证达到封存一块所需的 1024 个片段：[run 34465259316](https://github.com/deepseek-harness/deepseek-harness/actions/runs/34465259316) 的全部断言通过，却未覆盖该分支。可控读取覆盖反复封存和末尾换行合并；精确输出与复制总量上限检测字节丢失和前缀反复复制。
 
-Linux coverage 通道授予 `DSH_COVERAGE_TEST_TIMEOUT_MS: '90000'`，与 Windows coverage 通道一致，因为当该通道的分区、worker 与同级门禁共用一个宿主时，`subprocess-local` 与 `bash-sandbox` 的处置用例会超过 5000ms 默认值。
+上游的 Linux 与 Windows coverage 通道均授予 `DSH_COVERAGE_TEST_TIMEOUT_MS: '90000'`，因为当该通道的分区、worker 与同级门禁共用一个宿主时，`subprocess-local` 与 `bash-sandbox` 的处置用例会超过 5000ms 默认值。
+
+Saki 将该预算配置在 `node-24-coverage.env`；静态检查任务既不运行 coverage，也不会把自身环境传给同级任务。覆盖率任务缺少该变量时，生成 Host schema 的依赖测试在 [run 34738985999](https://github.com/BreakfastDaPaiDang/saki/actions/runs/34738985999/job/103675323633) 中触发了 Vitest 的 5000ms 默认超时。[工作流回归测试](../../../../scripts/ci-workflow.spec.ts)检查预算所属任务，确保覆盖率协调器收到配套的测试、轮询和钩子预算。
 
 Windows 文件夹对话框冒烟测试改为通过 PowerShell 探测 `CoCreateInstance(CLSID_FileOpenDialog)`，而不再按 `process.platform` 分流。回答 `CLASS_E_CLASSNOTAVAILABLE`（0x80040111）的镜像会跑干净的拒绝用例并跳过真实对话框用例，因此 `win32-dialog.ts` 在没有可开对话框的宿主上仍保有文件覆盖率。该激活过程抛出的任何异常都按拒绝解读，因此因其它原因探测失败的宿主只会失去真实对话框用例；完全无法运行的探测则保留 win32 假设。
 
