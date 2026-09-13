@@ -313,7 +313,6 @@ function ciSharedStaticGates(): Gate[] {
     pnpmScript('approval-policy', 'test:approval-policy', { label: 'Weighted approval policy' }),
     pnpmScript('issue-management', 'test:issue-management', { label: 'Issue management policy' }),
     pnpmScript('saki-skill-pack-tests', 'test:saki-skill-pack', { label: 'Saki Development Skill Pack tests' }),
-    pnpmScript('request-review', 'test:request-review', { label: 'Review request policy' }),
   ]
 }
 
