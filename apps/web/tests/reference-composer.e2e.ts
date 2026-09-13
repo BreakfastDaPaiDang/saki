@@ -295,7 +295,7 @@ describe.skipIf(MODE === 'record')('web e2e: file and session references through
     // as an atomic chip — folder glyph, no trigger character, one unit.
     await writeComposerDraft(page, input, '@folderx')
     // First folder query on this page: allow the Host index a cold start.
-    await menu.getByRole('option', { name: /^folderx\// }).waitFor({ timeout: 60_000 })
+    await menu.getByRole('option', { name: /^folderx\//, disabled: false }).waitFor({ timeout: 60_000 })
     await page.keyboard.press('Enter')
     const chip = input.locator('[data-composer-chip]').last()
     await expect.poll(() => chip.textContent()).toBe('folderx/')
@@ -305,7 +305,7 @@ describe.skipIf(MODE === 'record')('web e2e: file and session references through
     // Tab drills: the literal descent text stays editable and the open menu
     // lists the folder's children.
     await writeComposerDraft(page, input, '@folderx')
-    await menu.getByRole('option', { name: /^folderx\// }).waitFor()
+    await menu.getByRole('option', { name: /^folderx\//, disabled: false }).waitFor()
     await page.keyboard.press('Tab')
     await expect.poll(() => input.textContent()).toBe('@folderx/')
     await menu.getByRole('option', { name: /child\.txt/ }).waitFor()
@@ -313,7 +313,7 @@ describe.skipIf(MODE === 'record')('web e2e: file and session references through
     // The row chevron drills the same way by pointer, header included: a
     // pointer descent reaches the same listing a Tab descent does.
     await writeComposerDraft(page, input, '@folderx')
-    const row = menu.getByRole('option', { name: /^folderx\// })
+    const row = menu.getByRole('option', { name: /^folderx\//, disabled: false })
     await row.waitFor()
     await row.getByRole('button', { name: 'Browse folder' }).click()
     await expect.poll(() => input.textContent()).toBe('@folderx/')
@@ -330,6 +330,48 @@ describe.skipIf(MODE === 'record')('web e2e: file and session references through
     expect(tripwire.warnings).toEqual([])
   })
 
+  it('waits for the refined folder to become available before drilling', async () => {
+    onTestFailed(() => saveFailureShot(page, 'web-e2e-reference-pending-folder'))
+    const input = page.locator('[data-composer-input]').first()
+    const menu = page.getByRole('listbox', { name: 'Trigger suggestions' })
+    const crumbs = page.getByRole('navigation', { name: 'Folder navigation' })
+    await writeComposerDraft(page, input, '@folder')
+    await menu.getByRole('option', { name: /^folderx\//, disabled: false }).waitFor()
+    let release = (): void => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let held = false
+    const pattern = '**/api/fileReferences/list'
+    await page.route(pattern, async (route) => {
+      const request = route.request().postDataJSON() as { payload?: { args?: { query?: string } } }
+      if (request.payload?.args?.query === 'folderx') {
+        held = true
+        await gate
+      }
+      await route.continue()
+    })
+    try {
+      await page.keyboard.type('x')
+      await expect.poll(() => held, { timeout: 15_000 }).toBe(true)
+      // Fuzzy results already contain both names checked by the drill path;
+      // their continued visibility does not establish pick readiness.
+      await menu.getByRole('option', { name: /^folderx\// }).waitFor()
+      await menu.getByRole('option', { name: /child\.txt/ }).waitFor()
+      const readyFolder = menu.getByRole('option', { name: /^folderx\//, disabled: false })
+      await expect.poll(() => readyFolder.count(), { timeout: 15_000 }).toBe(0)
+      release()
+      await readyFolder.waitFor()
+      await page.keyboard.press('Tab')
+      await expect.poll(() => input.textContent()).toBe('@folderx/')
+      await menu.getByRole('option', { name: /child\.txt/, disabled: false }).waitFor()
+      await expect.poll(() => crumbs.getByRole('button').allTextContents())
+        .toEqual(['Workspace', 'folderx'])
+      await page.keyboard.press('Escape')
+    } finally {
+      release()
+      await page.unrouteAll({ behavior: 'wait' })
+    }
+  })
+
   it('a drilled listing carries a breadcrumb back to the workspace root', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-reference-breadcrumb'))
     const input = page.locator('[data-composer-input]').first()
@@ -343,8 +385,9 @@ describe.skipIf(MODE === 'record')('web e2e: file and session references through
 
     // The same listing reached by drilling owes the user the way back.
     await writeComposerDraft(page, input, '@folderx')
-    await menu.getByRole('option', { name: /^folderx\// }).waitFor()
+    await menu.getByRole('option', { name: /^folderx\//, disabled: false }).waitFor()
     await page.keyboard.press('Tab')
+    await expect.poll(() => input.textContent()).toBe('@folderx/')
     await menu.getByRole('option', { name: /child\.txt/ }).waitFor()
     await crumbs.waitFor()
     await expect.poll(() => crumbs.getByRole('button').allTextContents())
@@ -359,7 +402,7 @@ describe.skipIf(MODE === 'record')('web e2e: file and session references through
     // header, which now names the step it returned to.
     await writeComposerDraft(page, input, '@folderx/nested')
     await expect.poll(() => menu.getByRole('option', { name: /child\.txt/ }).count()).toBe(0)
-    const nested = menu.getByRole('option', { name: /^nested\// })
+    const nested = menu.getByRole('option', { name: /^nested\//, disabled: false })
     await nested.waitFor()
     await nested.getByRole('button', { name: 'Browse folder' }).click()
     await expect.poll(() => input.textContent()).toBe('@folderx/nested/')
