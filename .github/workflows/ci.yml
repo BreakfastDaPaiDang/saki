@@ -250,6 +250,7 @@ jobs:
       DSH_OXLINT_THREADS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
       DSH_PUBLINT_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '8' }}
       DSH_WEB_SNAPSHOT_WORKERS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '6' }}
+      DSH_E2E_MAX_WORKERS: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || '4' }}
       # Saki uses two snapshot workers; upstream failover halves concurrency
       # for the shared 64-core VM while the dedicated pool retains 32.
       DSH_SNAPSHOT_MAX_CONCURRENCY: ${{ vars.SAKI_CI_RUNNERS == 'standard' && '2' || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted' && github.event.pull_request.user.login != 'dependabot[bot]' && '12' || '32' }}
@@ -338,6 +339,16 @@ jobs:
         with:
           name: saki-planning-${{ github.run_id }}-${{ github.run_attempt }}
           path: .playwright-mcp/planning-*/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Retain Saki Changes diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: saki-changes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .playwright-mcp/changes-*/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7

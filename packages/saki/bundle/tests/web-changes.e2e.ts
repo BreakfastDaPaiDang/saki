@@ -17,7 +17,7 @@ import { initialPlanningRemote, writePlanningRemote } from './fixtures/saki-plan
 
 const root = fileURLToPath(new URL('../../../../', import.meta.url))
 const driver = fileURLToPath(new URL('./fixtures/saki-board-snapshot-driver.ts', import.meta.url))
-const stepMs = process.platform === 'win32' ? 600_000 : 90_000
+const stepMs = 600_000
 
 it('reviews, stages, unstages, and recovers one local commit after its response is lost', async () => {
   const scratch = await mkdtemp(join(tmpdir(), 'saki-k4-changes-'))
@@ -81,8 +81,10 @@ it('reviews, stages, unstages, and recovers one local commit after its response 
     const inherited = page.getByRole('listitem').filter({ has: page.getByText('existing.txt', { exact: true }) })
     await inherited.getByText('与登记时已有变更一致', { exact: true }).waitFor()
     await recordStep('changes-observed')
+    await recordStep('diff-requested')
     await tracked.getByRole('button', { name: '未暂存 Diff', exact: true }).click()
     await page.getByText('+Reviewed implementation.', { exact: true }).waitFor()
+    await recordStep('diff-rendered')
     await page.screenshot({ path: join(frames, '00-review.png') })
     await tracked.getByRole('button', { name: '暂存文件', exact: true }).click()
     await page.getByText('操作已完成。', { exact: true }).waitFor()
@@ -158,7 +160,12 @@ it('reviews, stages, unstages, and recovers one local commit after its response 
     }
     throw error
   } finally {
-    await browser?.close(); await server?.stop(); await rm(scratch, { recursive: true, force: true })
+    await browser?.close(); await server?.stop()
+    try {
+      await writeFile(join(frames, 'host-processes.log'), diagnostics)
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
   }
-// The Windows budget covers native process startup across Diff reads and mutation observations.
-}, process.platform === 'win32' ? 3_600_000 : 600_000)
+// Complete source Host observations start hundreds of managed Git commands per gesture.
+}, 3_600_000)
