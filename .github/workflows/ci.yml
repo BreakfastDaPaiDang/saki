@@ -341,6 +341,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Retain Saki Changes diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: saki-changes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .playwright-mcp/changes-*/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Retain SDK snapshot diagnostics
         if: always()
         uses: actions/upload-artifact@v7

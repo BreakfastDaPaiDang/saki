@@ -232,6 +232,26 @@ try {
         { stdout: process.stdout, exit: requestStop },
         { exitAfterAnnounce: false },
       )
+      if (process.env.SAKI_CHANGES_BROWSER_FIXTURE === '1') {
+        const runtime = app.subprocess
+        // oxlint-disable-next-line typescript/unbound-method -- The original is called with its receiver and restored on disposal.
+        const spawn = runtime.spawn
+        let sequence = 0
+        app.effect(() => {
+          runtime.spawn = function (spec) {
+            const id = ++sequence
+            const started = performance.now()
+            const handle = spawn.call(this, spec)
+            process.stderr.write(`changes process ${id} started at ${new Date().toISOString()}\n`)
+            void handle.done.then(
+              () => { process.stderr.write(`changes process ${id} settled after ${Math.round(performance.now() - started)}ms\n`) },
+              () => { process.stderr.write(`changes process ${id} rejected after ${Math.round(performance.now() - started)}ms\n`) },
+            )
+            return handle
+          }
+          return () => { runtime.spawn = spawn }
+        }, 'Changes browser process timing diagnostics')
+      }
       if (agentRunSnapshot) reportAgentRunRecovery(app)
       const handoff = app.sakiControlPlane.bootstrap.take()
       if (handoff !== undefined) {
