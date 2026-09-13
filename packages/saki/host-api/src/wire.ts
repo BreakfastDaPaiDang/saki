@@ -2425,7 +2425,7 @@ const deliveryAvailabilitySchema = z.object({
 }).strict().refine(value => value.available === (value.reasons.length === 0), 'Availability must agree with its blockers')
 
 /** Browser-only delivery workspace without private GitHub or Host resource references. */
-export const sakiDeliveryWorkspaceResultSchema = z.discriminatedUnion('ok', [
+export const sakiDeliveryWorkspaceResultSchema: z.ZodType<SakiQueryResult<'delivery-workspace'>> = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), projection: z.object({
     type: z.literal('delivery-workspace'), projectId, workItemId: boardWorkItemId,
     selection: z.object({
@@ -2440,7 +2440,7 @@ export const sakiDeliveryWorkspaceResultSchema = z.discriminatedUnion('ok', [
     }).strict(),
   }).strict() }).strict(),
   z.object({ ok: z.literal(false), reason: z.enum(['denied', 'not-found']) }).strict(),
-]) satisfies z.ZodType<SakiQueryResult<'delivery-workspace'>>
+])
 
 const releaseEvidenceBlockageSchema = z.union([
   z.object({
@@ -2754,7 +2754,7 @@ export const sakiProjectMappingResultSchema: z.ZodType<SakiQueryResult<'project-
 ])
 
 /** Union schema retained for callers that intentionally handle every query kind. */
-export const sakiQueryResultSchema = z.union([
+export const sakiQueryResultSchema: z.ZodType<SakiQueryResult> = z.union([
   sakiMyWorkResultSchema,
   sakiAttentionResultSchema,
   sakiInspectProjectSelectionResultSchema,
