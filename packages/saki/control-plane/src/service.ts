@@ -108,6 +108,7 @@ import {
 } from './milestone-view.ts'
 import { readReleaseSnapshotV1 } from './release-snapshot-reader.ts'
 import { planningBody, planningMilestones, planningReferences, planningWorkItem } from './planning-views.ts'
+import { DeliveryWorkspaceReader } from './delivery-workspace.ts'
 import type { SakiWorkItemBodyProjection } from './planning-views.ts'
 import type {
   ReleaseEvidencePolicyV1Expectation,
@@ -475,6 +476,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private githubSynchronization!: GitHubProjectSynchronization
   private githubWorkItemOperations!: GitHubWorkItemOperations
   private branchDeliveryOperations!: BranchDeliveryOperations
+  private readonly deliveryWorkspaceReader = new DeliveryWorkspaceReader()
   private milestoneDeliveryOperations!: MilestoneDeliveryOperations
   private githubSynchronizationConsumer: GitHubSynchronizationConsumer | undefined
   private githubProvider: SakiGitHub | undefined
@@ -1177,6 +1179,24 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           ...references,
           branchDelivery: this.branchDeliveryOperations.project(branchDeliveryId(query.projectId, query.workItemId), Date.now()) ?? null,
         } }
+      }
+      case 'delivery-workspace': {
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        const board = this.planningBoard(authentication, query.projectId)
+        if (board === 'not-found' || planningWorkItem(board, query.workItemId) === undefined) return { ok: false, reason: 'not-found' }
+        const github = this.githubProvider
+        const consumer = this.githubSynchronizationConsumer
+        const projection = await this.deliveryWorkspaceReader.read(query, {
+          resolveContext: () => this.resolveBranchDeliveryContext(query.projectId, query.workItemId),
+          deliveries: this.branchDeliveryOperations,
+          // Cordis rewraps service reads; the plain consumer identifies this Provider lifetime.
+          provider: () => this.githubSynchronizationConsumer === consumer ? github : undefined,
+          authorized: action => this.authorized(authentication, action),
+          pushCredentialHelper: this.ctx.sakiHostExecution.pushCredentialHelper,
+        }, signal)
+        signal.throwIfAborted()
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        return { ok: true, projection }
       }
       case 'branch-delivery': {
         if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
@@ -2574,6 +2594,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         // Cordis drains the injected fiber before loading its replacement.
         this.githubSynchronizationConsumer = undefined
         this.githubProvider = undefined
+        this.deliveryWorkspaceReader.clear()
         this.notify(['project-settings', 'board'])
         await Promise.all([consumer.dispose(), pendingPolling, branchDeliveryRecovery])
       }, 'saki-control-plane.githubSynchronizationConsumer')

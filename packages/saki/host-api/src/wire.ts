@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import {
   canonicalDigest,
+  gitCredentialHelperIdSchema,
   commitHostOperationRequestSchema,
   commitHostOperationResultSchema,
   hostOperationIdSchema,
@@ -48,6 +49,7 @@ import {
   githubProjectBoardFingerprintSchema,
   githubProjectIdSchema,
   githubPullRequestFactSchema,
+  githubPullRequestAssociationFactSchema,
   githubPullRequestCreateMarkerIdSchema,
   githubPullRequestCreateTextPreparationSchema,
   githubPullRequestIdSchema,
@@ -290,6 +292,7 @@ export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
     workItemId: boardWorkItemId,
     refresh: z.enum(['cached', 'interactive']),
   }).strict(),
+  z.object({ type: z.literal('delivery-workspace'), projectId, workItemId: boardWorkItemId, refresh: z.enum(['cached', 'interactive']) }).strict(),
   z.object({
     type: z.literal('milestone-view'),
     projectId,
@@ -2416,6 +2419,29 @@ export const sakiBranchDeliveryProjectionSchema: z.ZodType<BranchDeliveryQueryPr
   branchDelivery: branchDeliveryViewSchema,
 }).strict()
 
+const deliveryAvailabilitySchema = z.object({
+  available: z.boolean(),
+  reasons: z.array(z.enum(['authority', 'context-unavailable', 'selection-required', 'busy', 'repair-required', 'accepted', 'credentials-unavailable', 'provider-unavailable', 'push-required', 'pull-request-required', 'association-required', 'evidence-unconfirmed', 'ci-not-successful', 'phase', 'already-pushed', 'already-associated'])),
+}).strict().refine(value => value.available === (value.reasons.length === 0), 'Availability must agree with its blockers')
+
+/** Browser-only delivery workspace without private GitHub or Host resource references. */
+export const sakiDeliveryWorkspaceResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: z.object({
+    type: z.literal('delivery-workspace'), projectId, workItemId: boardWorkItemId,
+    selection: z.object({
+      expected: branchDeliveryExpectationSchema, target: branchDeliveryBrowserRecordSchema.shape.target,
+    }).strict().nullable(),
+    pushCredentialHelper: gitCredentialHelperIdSchema.nullable(),
+    branchDelivery: branchDeliveryViewSchema.nullable(),
+    association: z.union([githubPullRequestAssociationFactSchema, z.object({ state: z.enum(['unobserved', 'unavailable']) }).strict()]),
+    actions: z.object({
+      save: deliveryAvailabilitySchema, push: deliveryAvailabilitySchema, create: deliveryAvailabilitySchema,
+      associate: deliveryAvailabilitySchema, review: deliveryAvailabilitySchema, accept: deliveryAvailabilitySchema,
+    }).strict(),
+  }).strict() }).strict(),
+  z.object({ ok: z.literal(false), reason: z.enum(['denied', 'not-found']) }).strict(),
+]) satisfies z.ZodType<SakiQueryResult<'delivery-workspace'>>
+
 const releaseEvidenceBlockageSchema = z.union([
   z.object({
     kind: z.enum(['source-unavailable', 'source-failed', 'source-stale', 'source-invalidated']),
@@ -2742,6 +2768,7 @@ export const sakiQueryResultSchema = z.union([
   sakiProjectMilestonesResultSchema,
   sakiProjectMappingResultSchema,
   sakiBranchDeliveryResultSchema,
+  sakiDeliveryWorkspaceResultSchema,
   sakiMilestoneViewResultSchema,
 ])
 
@@ -3121,7 +3148,7 @@ export const sakiBranchDeliveryIntentResultSchema = z.union([
   z.object({
     ok: z.literal(false),
     reason: z.literal('unavailable'),
-    receipt: branchDeliveryFailureReceiptSchema,
+    receipt: z.union([branchDeliveryPendingReceiptSchema, branchDeliveryFailureReceiptSchema]),
   }).strict(),
   z.object({ ok: z.literal(false), reason: z.literal('reconciliation-required') }).strict(),
   z.object({
@@ -3339,6 +3366,8 @@ export type SakiWireBoardResult = z.infer<typeof sakiBoardResultSchema>
 export type SakiWireBoardRefresh = Extract<SakiQuery, { readonly type: 'board' }>['refresh']
 /** Browser Branch Delivery result inferred from its exact safe projection schema. */
 export type SakiWireBranchDeliveryResult = z.infer<typeof sakiBranchDeliveryResultSchema>
+/** Delivery selection and evidence available to the authenticated browser. */
+export type SakiWireDeliveryWorkspaceResult = z.infer<typeof sakiDeliveryWorkspaceResultSchema>
 /** Explicit browser Branch Delivery refresh policy. */
 export type SakiWireBranchDeliveryRefresh = Extract<SakiQuery, { readonly type: 'branch-delivery' }>['refresh']
 /** Browser Milestone View result inferred from its exact safe projection schema. */

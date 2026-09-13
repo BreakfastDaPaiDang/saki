@@ -85,4 +85,6 @@ The consumer CI job uploads these directories as `saki-planning-<run_id>-<run_at
 
 The Changes browser case, `packages/saki/bundle/tests/web-changes.e2e.ts`, records phase timestamps, screenshots, and `host-processes.log` in a private `.playwright-mcp/changes-<uuid>/` directory. The process log records anonymous sequence numbers, start times, and elapsed time until each command settles, without arguments or environment values. Consumer CI retains the directory as `saki-changes-<run_id>-<run_attempt>` for seven days. The Linux and Windows source paths start a managed TypeScript runner for each Git command; a complete Diff includes repeated repository observations, so its outer wait covers the complete operation rather than one command.
 
+The Delivery browser case verifies explicit selection, Push and PR response-loss recovery, failed CI blocking acceptance, and attributed acceptance through the assembled Host and controlled GitHub evidence. It retains phase timestamps, screenshots, and effect counts under `.playwright-mcp/delivery-<uuid>/`; consumer CI uploads these diagnostics for seven days.
+
 </details>

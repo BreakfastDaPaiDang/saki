@@ -4692,6 +4692,7 @@ class TestAcceptance extends HostOperationAcceptance {
 }
 
 class FakeAgentExecution extends SakiHostExecution {
+  readonly pushCredentialHelper = undefined
   prepareMode: 'success' | 'unavailable' | 'source-conflict' | 'terminal-failed' = 'success'
   startMode: 'success' | 'mismatched-result' | 'reconciliation' | 'failed' | 'canceled-authority'
     | 'canceled-source' | 'unavailable' = 'success'

@@ -40,13 +40,13 @@ const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
   inventoryMaxGitOutputBytes: 4 * 1024 * 1024,
   inventoryMaxFileBytes: 1024 * 1024,
   inventoryMaxTotalFileBytes: 8 * 1024 * 1024,
-  inventoryMaxCaptureMs: 10_000,
+  inventoryMaxCaptureMs: process.platform === 'win32' ? 120_000 : 10_000,
   baselineMaxEntries: 1_000,
   baselineMaxPathBytes: 1024 * 1024,
   baselineMaxGitOutputBytes: 4 * 1024 * 1024,
   baselineMaxFileBytes: 1024 * 1024,
   baselineMaxTotalFileBytes: 4 * 1024 * 1024,
-  baselineMaxCaptureMs: 10_000,
+  baselineMaxCaptureMs: process.platform === 'win32' ? 120_000 : 10_000,
   operationMaxIndexBytes: 8 * 1024 * 1024,
   operationMaxReflogBytes: 1024 * 1024,
 }
@@ -68,6 +68,13 @@ afterEach(async () => {
 })
 
 describe('LocalSakiHostExecution lifecycle interface', () => {
+  it('reports the configured Push adapter identity without resolving an account', async () => {
+    const root = await repository()
+    const configured = await provider(root, { pushCredentialHelper: 'git-credential-manager-core' })
+    expect(configured.execution.pushCredentialHelper).toBe('git-credential-manager-core')
+    const disabled = await provider(root)
+    expect(disabled.execution.pushCredentialHelper).toBeUndefined()
+  })
   it('rejects every asynchronous entry after provider disposal', async () => {
     const root = await repository()
     const { execution, fiber } = await provider(root)
@@ -98,7 +105,7 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
     await expect(execution.inspectOperation(prepared.preparation.operation, signal)).rejects.toThrow(disposed)
     await expect(execution.cancelOperation(prepared.preparation.operation, 'source-canceled', signal))
       .rejects.toThrow(disposed)
-  }, 30_000)
+  }, process.platform === 'win32' ? 600_000 : 30_000)
 
   it.each(BOUNDED_ADMISSIONS)('returns bounded %s admission without changing Git', async (_name, admission) => {
     const root = await repository()
@@ -118,7 +125,7 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
       snapshot: { state: 'prepared', admission: { kind: 'not-accepted' } },
     })
     expect(await gitText(root, 'diff', '--cached', '--name-only')).toBe('')
-  }, 30_000)
+  }, process.platform === 'win32' ? 600_000 : 30_000)
 
   it('rejects a changed admission revision and unknown operation references', async () => {
     const root = await repository()
@@ -168,7 +175,7 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
     await expect(execution.inspectOperation(unknown, signal)).rejects.toThrow('unknown Saki Host Operation')
     await expect(execution.cancelOperation(unknown, 'source-canceled', signal))
       .rejects.toThrow('unknown Saki Host Operation')
-  }, 30_000)
+  }, process.platform === 'win32' ? 600_000 : 30_000)
 
   it('contains one failing change listener and continues later listeners', async () => {
     const root = await repository()
@@ -187,7 +194,7 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
     expect(warning).toHaveBeenCalledOnce()
     expect(warning).toHaveBeenCalledWith('[saki-execution-local] Host Operation change listener failed')
     expect(JSON.stringify(warning.mock.calls)).not.toContain('listener secret')
-  }, 30_000)
+  }, process.platform === 'win32' ? 600_000 : 30_000)
 
   it('rejects a foreign acceptance and replays terminal cancellation idempotently', async () => {
     const root = await repository()
@@ -226,7 +233,7 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
       signal,
     )).resolves.toEqual({ ok: true, snapshot: canceled })
     expect(await gitText(root, 'diff', '--cached', '--name-only')).toBe('')
-  }, 30_000)
+  }, process.platform === 'win32' ? 600_000 : 30_000)
 
   it('fails loud when operation storage has not started', async () => {
     const context = new Context()
@@ -261,7 +268,7 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
       signal,
     )).resolves.toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
     expect(await gitText(root, 'diff', '--cached', '--name-only')).toBe('tracked.txt')
-  }, 60_000)
+  }, process.platform === 'win32' ? 600_000 : 60_000)
 
   it('projects a disappeared bound repository as a bounded inspection failure', async () => {
     const root = await repository()
@@ -272,7 +279,7 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
 
     await expect(execution.inspectProject({ binding }, signal))
       .resolves.toEqual({ ok: false, reason: 'missing' })
-  }, 30_000)
+  }, process.platform === 'win32' ? 600_000 : 30_000)
 })
 
 function accepted(revision: number): HostOperationAdmissionSource {

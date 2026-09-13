@@ -127,6 +127,7 @@ it('keeps the Work Item and Run return addresses available while Git reads are u
   const state = f.controller.getSnapshot()
   const view = render(<ChangesPage {...props} state={state} />)
   await click(screen.getByRole('button', { name: '返回工作项' })); expect(navigate).toHaveBeenCalledWith({ view: 'detail' })
+  await click(screen.getByRole('button', { name: '交付' })); expect(navigate).toHaveBeenCalledWith({ view: 'delivery' })
   await click(screen.getByRole('button', { name: '打开 Session' })); expect(openSession).toHaveBeenCalledWith(run.sessionId)
   view.rerender(<ChangesPage {...props} project={CHANGES_PROJECT}
     state={{ ...state, read: { value: null, loading: true, failure: null } }} />)

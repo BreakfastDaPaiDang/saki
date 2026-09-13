@@ -358,11 +358,12 @@ async function context(
     gitTerminationGraceMs: 100,
     maxGitStdoutBytes: 1024 * 1024,
     maxGitStderrBytes: 64 * 1024,
+    inventoryMaxCaptureMs: process.platform === 'win32' ? 120_000 : 30_000,
     baselineMaxEntries: 1_000,
     baselineMaxPathBytes: 1024 * 1024,
     baselineMaxFileBytes,
     baselineMaxTotalFileBytes: 4 * 1024 * 1024,
-    baselineMaxCaptureMs: 10_000,
+    baselineMaxCaptureMs: process.platform === 'win32' ? 120_000 : 10_000,
   })
   return ctx
 }
@@ -1816,7 +1817,15 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       baseRef: 'refs/heads/master',
     } as const
     const missingWorkItemId = `work-item-${'f'.repeat(64)}` as typeof item.id
+    const workspaceQuery = { type: 'delivery-workspace', projectId: project.id, workItemId: item.id, refresh: 'cached' } as const
+    const workspace = await harness.control.query(harness.authentication, workspaceQuery, new AbortController().signal)
+    expect(workspace, JSON.stringify(workspace)).toMatchObject({ ok: true, projection: {
+      selection: { expected: saveIntent.expected }, branchDelivery: null, actions: { save: { available: true } },
+    } })
+    expect(JSON.stringify(workspace)).not.toContain(configuration.credentialRef)
+    expect(await harness.control.query(harness.authentication, { ...workspaceQuery, projectId: 'project-22292020-2020-4920-8920-202020202020' as SakiDevelopmentProjectId }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
     for (const refresh of ['cached', 'interactive'] as const) {
+      expect(await harness.control.query(harness.authentication, { ...workspaceQuery, workItemId: missingWorkItemId, refresh }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
       expect(await harness.control.query(harness.authentication, {
         type: 'branch-delivery', projectId: project.id, workItemId: missingWorkItemId, refresh,
       }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
@@ -1852,6 +1861,14 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     expect(changedKeys).toContainEqual(['branch-delivery', 'milestone-view'])
 
     const deliveryId = branchDeliveryId(project.id, item.id)
+    const revokeWorkspaceRead = vi.spyOn(BranchDeliveryOperations.prototype, 'refresh').mockImplementationOnce(async () => {
+      await setGrantActions(harness, [])
+      return { ok: false, reason: 'unavailable' }
+    })
+    try {
+      expect(await harness.control.query(harness.authentication, { ...workspaceQuery, refresh: 'interactive' }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+      expect(await harness.control.query(harness.authentication, workspaceQuery, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+    } finally { revokeWorkspaceRead.mockRestore(); await setGrantActions(harness, HOST_OPERATOR_ACTIONS) }
     const existing = { deliveryId, expectedDeliveryRevision: 99 }
     const routed = [
       {
@@ -1959,7 +1976,18 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     }
     read.mockRestore()
     diagnostic.mockRestore()
-    await providerFiber.dispose()
+    const detachWorkspaceProvider = vi.spyOn(BranchDeliveryOperations.prototype, 'refresh').mockImplementationOnce(async () => {
+      await providerFiber.dispose()
+      return { ok: false, reason: 'unavailable' }
+    })
+    try {
+      const detachedWorkspace = await harness.control.query<'delivery-workspace'>(harness.authentication,
+        { ...workspaceQuery, refresh: 'interactive' }, new AbortController().signal)
+      expect(detachedWorkspace.ok).toBe(true)
+      if (!detachedWorkspace.ok) throw new Error('Detached Delivery workspace is unavailable')
+      expect(detachedWorkspace.projection.actions.create.available).toBe(false)
+      expect(detachedWorkspace.projection.actions.create.reasons).toContain('provider-unavailable')
+    } finally { detachWorkspaceProvider.mockRestore() }
     expect(await harness.control.query(harness.authentication, {
       type: 'branch-delivery',
       projectId: project.id,
@@ -2135,7 +2163,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       ...saveIntent, intentId: 'intent-22264020-2020-4620-8620-202020202020' as SakiControlIntentId,
     }, new AbortController().signal)).toMatchObject({ ok: false, reason: 'unavailable' })
     await missingBinding.close()
-  }, 120_000)
+  }, process.platform === 'win32' ? 1_800_000 : 120_000)
 
   it('routes Milestone Delivery metadata, fresh View reads, and fail-closed finalization', async () => {
     const durable = await paths()

@@ -64,6 +64,8 @@ Automatic merge、automatic Done、复杂 Git history editing、任意 release t
 
 Cordis 服务访问返回带追踪的代理对象，因此重新读取服务属性不能证明 Provider 身份。控制面保留 injected fiber 捕获的 Provider，并在等待卸载前清除该引用；Cordis 会先排空该 fiber，再加载替代实例。
 
+[浏览器交付决策](2026-09-14-saki-explicit-browser-delivery.zh.md)负责 Web 客户端中的显式操作者确认、安全的首次选择查询和原请求保留。
+
 ## 考虑过的替代方案
 
 **使用可变 branch、PR 或 GitHub Release `target_commitish` 作为 delivery identity。**它们可以各自独立移动，并在较早 observation 之后指向不同 Commit。准确 Commit、ref、PR head、递归 peel 后 tag 与 Release relation 保留了 acceptance 和 release finalization 所需的 identity。

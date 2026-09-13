@@ -113,7 +113,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/host-api/src/index.ts:70`](../packages/saki/host-api/src/index.ts)
+Source: [`packages/saki/host-api/src/index.ts:71`](../packages/saki/host-api/src/index.ts)
 
 <a id="breakfastdapaidangsaki-tool-intervention"></a>
 

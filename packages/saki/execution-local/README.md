@@ -53,6 +53,8 @@ The private Local Host Service Provider implements [`ctx.sakiHostExecution`](../
 
 The application bootstrap environment is the authority for the Git executable and ordinary inherited process variables. The provider removes repository- and browser-controllable Git execution variables; it is not a child-process sandbox for a compromised parent environment. Filesystem metadata cancellation follows the FileSystem provider's cooperative pre/post-probe contract, while regular-file content streams are destroyed by cancellation and provider disposal waits for every call to settle.
 
+The read-only `pushCredentialHelper` property reports the resolved configuration's adapter id without invoking the manager. Account selection and credential resolution remain owned by the configured manager when Push executes.
+
 <a id="agent-run-operations"></a>
 ## Agent Run operations
 

@@ -13,7 +13,7 @@ export type BoardStatus = SakiWireMoveWorkItemIntent['targetStatus']
 type AgentRunId = Extract<SakiWireWorkItemViewResult, { ok: true }>['projection']['runs'][number]['id']
 
 const addressSchema = z.object({
-  view: z.enum(['board', 'workspace', 'detail', 'milestone', 'mapping', 'changes']),
+  view: z.enum(['board', 'workspace', 'detail', 'milestone', 'mapping', 'changes', 'delivery']),
   changesRunId: z.string().min(1).max(512).transform(value => value as AgentRunId).nullable().default(null),
   workItemId: sakiMoveWorkItemIntentSchema.shape.workItemId.nullable(),
   milestoneId: z.string().min(1).max(512).transform(value => value as MilestoneId).nullable(),

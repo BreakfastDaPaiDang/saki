@@ -58,6 +58,16 @@ type ProjectCache = Omit<PlanningProject, 'address' | 'moves' | 'detail' | 'mile
 const emptyRead = <T>(): PlanningRead<T> => ({ value: null, loading: false, failure: null })
 
 /**
+ * Replace cached facts with the outcome of an authoritative Host read.
+ * @param result - complete projection or typed rejection; transport exceptions remain owned by the request.
+ * @returns settled state, clearing prior facts when the Host rejects the read.
+ */
+export function completedPlanningRead<T>(result: ReadResult<T>): PlanningRead<T> {
+  return result.ok ? { value: result.projection, loading: false, failure: null }
+    : { value: null, loading: false, failure: result.reason }
+}
+
+/**
  * Resolve the latest server-confirmed item; optimistic gestures never become read authority.
  * @param board - retained complete Board and server overlays.
  * @param id - selected stable Work Item id.
@@ -383,7 +393,7 @@ export class PlanningController {
     const tasks: Promise<void>[] = []
     if (refresh || heartbeat || cache.board.value === null) tasks.push(this.readBoard(selected.id, 'cached'))
     if (refresh || cache.milestones.value === null) tasks.push(this.readMilestones(selected.id))
-    if ((selected.address.view === 'detail' || selected.address.view === 'changes') && selected.address.workItemId !== null) {
+    if ((selected.address.view === 'detail' || selected.address.view === 'changes' || selected.address.view === 'delivery') && selected.address.workItemId !== null) {
       const id = selected.address.workItemId
       if (refresh || !cache.details.has(id)) tasks.push(this.readDetail(selected.id, id))
     }

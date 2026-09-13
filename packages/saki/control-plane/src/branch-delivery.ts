@@ -707,7 +707,7 @@ export type BranchDeliveryIntentResult =
     readonly receipt?: {
       readonly intentId: SakiControlIntentId
       readonly deliveryId: SakiBranchDeliveryId
-      readonly state: 'conflict' | 'denied' | 'failure' | 'reconciliation-required'
+      readonly state: 'pending' | 'conflict' | 'denied' | 'failure' | 'reconciliation-required'
       readonly deliveryRevision?: number | undefined
     }
   }
@@ -3113,7 +3113,7 @@ function unavailableResult(record: BranchDeliveryIntentRecord): BranchDeliveryIn
     receipt: {
       intentId: record.id,
       deliveryId: record.deliveryId,
-      state: 'failure',
+      state: 'pending',
       ...(checkpointDeliveryRevision(record) === undefined
         ? {}
         : { deliveryRevision: checkpointDeliveryRevision(record) }),

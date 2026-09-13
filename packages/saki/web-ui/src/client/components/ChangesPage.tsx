@@ -43,6 +43,7 @@ export function ChangesPage(props: ChangesPageProps) {
       <div className={css.actions}>
         <Button variant="outline" onClick={() => { planning.navigate({ view: project.address.workItemId === null ? 'board' : 'detail' }) }}>{t(project.address.workItemId === null ? 'planning.back' : 'changes.backItem')}</Button>
         {selectedRun === undefined ? null : <Button onClick={() => { props.openSession(selectedRun.sessionId) }}>{t('planning.openSession')}</Button>}
+        {project.address.workItemId === null ? null : <Button variant="outline" disabled={operation !== null} onClick={() => { planning.navigate({ view: 'delivery' }) }}>{t('delivery.title')}</Button>}
         <Button variant="outline" disabled={state.read.loading} onClick={() => { void actions.refresh() }}>{t('changes.refresh')}</Button>
       </div>
     </header>

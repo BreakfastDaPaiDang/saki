@@ -78,6 +78,8 @@ A Browser Session authorizes only the initial structured Git submission. Durable
 
 Every privileged launcher startup issues a fresh challenge. Its purpose is `initial-bootstrap` until the first exchange completes and `local-reauthentication` thereafter. Older unexpired issued challenges remain usable until one exchange atomically consumes its selected challenge and revokes the rest. Initial completion never reopens; after cookie expiry, logout, or a lost `Set-Cookie` response, the operator signs in with a fresh challenge from a later launcher startup. Existing valid sessions remain active when local reauthentication creates another session, and logout revokes only the presented session.
 
+The `delivery-workspace` query combines safe current selection premises, retained Branch Delivery, configured credential-manager identity, and Host-derived action availability. Interactive reads refresh delivery sources and perform complete PR association discovery; cached reads retain that discovery only for the same target and delivery revision. A new interactive read discards prior discovery, and Provider detachment clears it. Context, Provider, or delivery-revision changes during a read remove its selection offer. Availability is advisory; every submitted Intent independently rechecks authority and exact evidence. An unavailable nonterminal Intent returns a pending receipt so the browser retains the original request.
+
 <a id="browser-session-security"></a>
 ## Browser-session security
 

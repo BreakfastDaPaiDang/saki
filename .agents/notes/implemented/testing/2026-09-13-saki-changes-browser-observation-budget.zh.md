@@ -20,6 +20,8 @@ consumer job 为 Saki 标准 runner 将 `DSH_E2E_MAX_WORKERS` 设为二，在其
 
 每次独立的 Changes 记录保留阶段时间戳、截图及命令启动和结束耗时。夹具仅包装自身的 subprocess service，以原 receiver 委派原调用，并通过 context effect 恢复方法。计时记录不包含命令参数或环境变量值。consumer job 在运行成功或失败后均保留目录，具体见 [bundle 诊断说明](../../../../packages/saki/bundle/README.zh.md#changes-browser-diagnostics)。
 
+Local Host 生命周期、control-plane Project 和 Host transport 夹具在 Windows 上为 inventory 与 baseline capture 提供 120 秒预算。完整 Windows 源码模式序列为生命周期用例提供十分钟，为反复注册、检查 Git 和重启控制面的 Branch Delivery 路由用例提供三十分钟；原生已绑定仓库消失用例在故意删除之前约需一分钟。这些预算保留真实托管 Git 路径，不改变生产默认值。
+
 ## 考虑过的方案
 
 - 重试浏览器用例：重试无法解释哪个操作超出预算，还会重复真实仓库写入。

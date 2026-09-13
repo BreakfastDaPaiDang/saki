@@ -1943,6 +1943,7 @@ describe('InheritedChangeBaseline schemas', () => {
 
   it('constructs a Host Execution provider through the service seam', async () => {
     class TestExecution extends SakiHostExecution {
+      readonly pushCredentialHelper = undefined
       async inspectProjectSelection(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
         return { ok: false, reason: 'unavailable' }
       }

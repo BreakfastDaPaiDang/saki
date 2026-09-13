@@ -21,6 +21,7 @@ import {
   sakiAttentionResultSchema,
   sakiBranchDeliveryIntentResultSchema,
   sakiBranchDeliveryResultSchema,
+  sakiDeliveryWorkspaceResultSchema,
   sakiBoardResultSchema,
   sakiWorkItemViewResultSchema,
   sakiProjectMilestonesResultSchema,
@@ -226,6 +227,7 @@ async function query(
     case 'project-mapping': return reply({ ok: true, value: sakiProjectMappingResultSchema.parse(result) })
     case 'work-item-view': return reply({ ok: true, value: sakiWorkItemViewResultSchema.parse(result) })
     case 'project-milestones': return reply({ ok: true, value: sakiProjectMilestonesResultSchema.parse(result) })
+    case 'delivery-workspace': return reply({ ok: true, value: sakiDeliveryWorkspaceResultSchema.parse(result) })
     case 'branch-delivery': {
       return reply({ ok: true, value: sakiBranchDeliveryResultSchema.parse(result) })
     }

@@ -64,6 +64,8 @@ Durable parsers validate operation families, exact identities, and checkpoint re
 
 Cordis service access returns traced proxies, so rereading a service property cannot establish Provider identity. The control plane retains the Provider captured by its injected fiber and clears that reference before awaiting disposal; Cordis drains the fiber before loading a replacement.
 
+The [browser delivery decision](2026-09-14-saki-explicit-browser-delivery.md) owns explicit operator confirmation, safe first-selection queries, and original-request retention in the Web client.
+
 ## Alternatives considered
 
 **Use a mutable branch, pull request, or GitHub Release `target_commitish` as delivery identity.** Each can move independently and can point at a different Commit after an earlier observation. Exact Commit, ref, pull-request head, recursively peeled tag, and Release relationships preserve the identity that acceptance and release finalization require.

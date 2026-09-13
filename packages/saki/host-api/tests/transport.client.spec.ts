@@ -46,6 +46,8 @@ describe('Saki browser Host client', () => {
       const signal = new AbortController().signal
       await expect(ctx.sakiHostClient.queryWorkItemView(PROJECT_ID, parsed.workItemId, signal)).resolves.toEqual({ ok: false, reason: 'not-found' })
       expect(call).toHaveBeenLastCalledWith('/saki', 'control/query', parsed, expect.objectContaining({ signal }))
+      await expect(ctx.sakiHostClient.queryDeliveryWorkspace(PROJECT_ID, parsed.workItemId, 'interactive', signal)).resolves.toEqual({ ok: false, reason: 'not-found' })
+      expect(call).toHaveBeenLastCalledWith('/saki', 'control/query', { type: 'delivery-workspace', projectId: PROJECT_ID, workItemId: parsed.workItemId, refresh: 'interactive' }, expect.objectContaining({ signal }))
       await expect(ctx.sakiHostClient.queryProjectMapping(PROJECT_ID, signal)).resolves.toEqual({ ok: false, reason: 'not-found' })
       expect(call).toHaveBeenLastCalledWith('/saki', 'control/query', { type: 'project-mapping', projectId: PROJECT_ID }, expect.objectContaining({ signal }))
       await expect(ctx.sakiHostClient.queryProjectMilestones(PROJECT_ID, null, signal)).resolves.toEqual({ ok: false, reason: 'not-found' })

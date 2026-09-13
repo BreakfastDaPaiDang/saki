@@ -64,6 +64,7 @@ import type {
 import type { MilestoneViewProjection } from './milestone-view.ts'
 import type { SakiGitHubFailureProjection } from './github-failure-projection.ts'
 import type { SakiProjectMilestonesProjection, SakiWorkItemViewProjection } from './planning-views.ts'
+import type { SakiDeliveryWorkspaceQuery, SakiDeliveryWorkspaceProjection } from './delivery-workspace.ts'
 
 export type {
   SakiAgentRunId,
@@ -1194,6 +1195,12 @@ export interface SakiQueryMap {
   readonly 'branch-delivery': {
     readonly request: SakiBranchDeliveryQuery
     readonly projection: SakiBranchDeliveryProjection
+    readonly failure: 'denied' | 'not-found'
+  }
+  /** Safe selection premises, targeted delivery evidence, and explicit operator gestures. */
+  readonly 'delivery-workspace': {
+    readonly request: SakiDeliveryWorkspaceQuery
+    readonly projection: SakiDeliveryWorkspaceProjection
     readonly failure: 'denied' | 'not-found'
   }
   /** One current Milestone Delivery joined to exact GitHub and Board facts. */

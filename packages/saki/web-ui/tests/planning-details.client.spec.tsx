@@ -74,6 +74,8 @@ it('keeps accepted delivery evidence and confirmed CI links when its current rea
   expect(screen.getByText(`${t('planning.state.successful')} · ${t('planning.state.failure')}`)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: t('planning.move') }))
   expect(props.actions.beginMove).toHaveBeenCalledWith(detail.workItem)
+  fireEvent.click(screen.getByRole('button', { name: t('delivery.title') }))
+  expect(props.actions.navigate).toHaveBeenCalledWith({ view: 'delivery' })
   view.rerender(<WorkItemView {...props} openSession={vi.fn()} openMilestone={vi.fn()} project={{ ...props.project,
     detail: { value: { ...value, branchDelivery: { ...BRANCH, delivery: { ...BRANCH.delivery, phase: 'draft', acceptance: undefined },
       ci: { current: { state: 'unobserved' } }, pullRequest: { current: { state: 'unobserved' } },

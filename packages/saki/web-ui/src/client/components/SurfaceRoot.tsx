@@ -11,6 +11,7 @@ import { WorkPage } from './WorkPage.tsx'
 import { PlanningPage } from './PlanningPage.tsx'
 import { ProjectPage } from './ProjectPage.tsx'
 import { ChangesPage } from './ChangesPage.tsx'
+import { DeliveryPage } from './DeliveryPage.tsx'
 
 /** Full composed props for the Saki surface root. */
 export type SurfaceRootProps =
@@ -28,6 +29,7 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
   const state = props.usePlanning(snapshot => snapshot)
   const work = props.useWork(snapshot => snapshot)
   const changes = props.useChanges(snapshot => snapshot)
+  const delivery = props.useDelivery(snapshot => snapshot)
   const access = state.access
   const projectId = props.useNavigation(snapshot => snapshot.projectId)
   if (access === null || access === 'unavailable' || access.kind !== 'authenticated') {
@@ -38,6 +40,10 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
     return <WorkPage state={work} actions={props.work} openProject={() => { props.nav.showProject() }}
       openBoard={(id) => { props.nav.selectProject(id); props.planning.navigate({ view: 'board' }) }}
       openItem={(projectId, id) => { props.nav.selectProject(projectId); props.planning.openItem(id) }} t={props.t} />
+  }
+  if (state.project?.address.view === 'delivery') {
+    return <DeliveryPage project={state.project} state={delivery} actions={props.delivery}
+      git={changes} gitActions={props.changes} planning={props.planning} principalName={access.principal.displayName} t={props.t} />
   }
   if (state.project?.address.view === 'changes') {
     return <ChangesPage project={state.project} state={changes} actions={props.changes}

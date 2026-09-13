@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-14-saki-explicit-browser-delivery.md
+2026-09-14-saki-explicit-browser-delivery.md: 11aa02ed71e9393aa3964d598d7f095e45273b7a
+2026-09-14-saki-explicit-browser-delivery.zh.md: 565fbcb16f91a32ad9387de627ca75a75843121d

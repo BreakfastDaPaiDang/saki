@@ -6,6 +6,7 @@ import type { SakiHostClient } from '@breakfastdapaidang/saki-host-api/client'
 import type { SakiWireAccessProjection, SakiWireProjectChangesResult, SakiWireProjectDiffResult, SakiWireProjectDiffRequest, SakiWireStageFilesResult, SakiWireUnstageFilesResult, SakiWireCreateCommitResult } from '@breakfastdapaidang/saki-host-api/wire'
 import type { PlanningController, PlanningRead } from './planning-controller.ts'
 import { changesIntentSchema, createChangesStore } from './changes-state.ts'
+import { completedPlanningRead } from './planning-controller.ts'
 import type { ChangesDraft, ChangesIntent } from './changes-state.ts'
 
 /** Complete Project-bound Git facts. */
@@ -88,7 +89,7 @@ export class ChangesController {
     const { access, project } = this.planning.getSnapshot()
     const auth = access !== null && access !== 'unavailable' && access.kind === 'authenticated' ? access : undefined
     const changed = auth?.principal.id !== this.auth?.principal.id || auth?.requestToken !== this.auth?.requestToken
-    const projectId = auth !== undefined && project?.address.view === 'changes' ? project.id : undefined
+    const projectId = auth !== undefined && (project?.address.view === 'changes' || project?.address.view === 'delivery') ? project.id : undefined
     if (!changed && projectId === this.projectId) return
     if (changed) { this.authority.abort(); this.authority = new AbortController(); this.operations.clear() }
     this.auth = auth; this.projectId = projectId
@@ -126,9 +127,7 @@ export class ChangesController {
       if (!index.ok) { this.publish({ read: { value: null, loading: false, failure: index.reason } }); return }
       const result = await this.api.queryProjectChanges(projectId, index.projection.revision, signal)
       signal.throwIfAborted()
-      this.publish({ read: result.ok
-        ? { value: result.projection, loading: false, failure: null }
-        : { value: null, loading: false, failure: result.reason } })
+      this.publish({ read: completedPlanningRead(result) })
     } catch { if (!signal.aborted) this.publish({ read: { ...this.snapshot.read, loading: false, failure: 'unavailable' } }) }
   }
   /**

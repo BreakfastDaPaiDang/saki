@@ -594,7 +594,9 @@ function assertPullRequestCreateRequest(
   const matches = request.headRef === 'saki/snapshot-delivery'
     && request.baseRef === 'main'
     && request.expectedHeadCommitId === state.pushedCommitId
-    && request.operationId === 'branch-delivery:intent-77777777-7777-4777-8777-777777777777:pull-request'
+    && (process.env.SAKI_DELIVERY_BROWSER_FIXTURE === '1'
+      ? /^branch-delivery:intent-[0-9a-f-]{36}:pull-request$/u.test(request.operationId)
+      : request.operationId === 'branch-delivery:intent-77777777-7777-4777-8777-777777777777:pull-request')
     && request.title === 'Deliver snapshot Work Item'
     && request.body === `Carries the selected Commit through human acceptance.\n<!-- saki-pull-request:${request.markerId} -->\n`
     && request.body.split('<!-- saki-pull-request:').length === 2
@@ -806,7 +808,16 @@ export class SakiBoardSnapshotGitHub extends SakiGitHub {
       if (request.commitId !== state.pushedCommitId) {
         throw new GitHubProviderError({ code: 'not-found', resource: 'saki-delivery-snapshot-ci' })
       }
-      return successfulCi(request.commitId, observedAt)
+      const ci = successfulCi(request.commitId, observedAt)
+      if (process.env.SAKI_DELIVERY_BROWSER_CI !== undefined) {
+        const result = (await readFile(process.env.SAKI_DELIVERY_BROWSER_CI, 'utf8')).trim()
+        if (result !== 'success' && result !== 'failure') throw new Error('Invalid browser CI fixture state')
+        return { ...ci,
+          workflowRuns: ci.workflowRuns.map(run => ({ ...run, conclusion: result })),
+          commitStatuses: ci.commitStatuses.map(status => ({ ...status, state: result })),
+        }
+      }
+      return ci
     }
     if (request.kind === 'milestone') {
       assertProductRepositoryRequest(request)

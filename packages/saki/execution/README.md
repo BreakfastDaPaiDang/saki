@@ -62,6 +62,8 @@ PushBranch binds one exact local Commit and active Resource Binding to one canon
 
 The Service Definition has no configuration. Each Service Provider owns its execution-world mechanism and required resource bounds.
 
+The Host exposes `pushCredentialHelper` as the configured adapter id or `undefined`, allowing an operator to review the Push adapter before submission. Reading this property does not select an account or resolve credentials.
+
 <a id="durable-agent-starts"></a>
 ## Durable Agent starts
 
