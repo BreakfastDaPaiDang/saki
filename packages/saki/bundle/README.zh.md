@@ -88,4 +88,6 @@ consumer CI 任务在检查成功或失败后，将这些目录上传为 `saki-p
 
 Changes 浏览器用例 `packages/saki/bundle/tests/web-changes.e2e.ts` 在独立的 `.playwright-mcp/changes-<uuid>/` 目录中记录阶段时间戳、截图及 `host-processes.log`。进程日志记录匿名序号、启动时间和命令结束耗时，不记录参数或环境变量值。consumer CI 将该目录保留为 `saki-changes-<run_id>-<run_attempt>`，保留七天。Linux 与 Windows 源码路径为每条 Git 命令启动托管 TypeScript runner；一次完整 Diff 包含多轮仓库观察，因此外层等待覆盖完整操作，而非单条命令。
 
+Delivery 浏览器用例通过完整 Host 和受控 GitHub 证据验证显式选择、Push 与 PR 响应丢失恢复、失败 CI 阻止验收以及可归因的人工验收。它在 `.playwright-mcp/delivery-<uuid>/` 下保留阶段时间戳、截图和副作用计数；consumer CI 上传这些诊断并保留七天。
+
 </details>

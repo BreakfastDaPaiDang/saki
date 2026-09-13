@@ -66,6 +66,8 @@ Branch Delivery CI carries a `confirmedSummary` derived from the last-confirmed 
 
 Branch Delivery reviews carry a complete exact-pull-request fact with independent current source health. The Host wire admits raw review state for display but no acceptance authority, credential material, or partial provider page.
 
+The `delivery-workspace` query accepts the same Project, Work Item, and refresh fields as `branch-delivery`. Its result adds safe selection revisions, a nullable configured credential-manager id, complete PR association evidence, and six Host-derived action offers. No helper credentials or private installation references cross the wire. An unavailable Branch Delivery result may carry a pending receipt; transport unavailability does not establish terminal failure.
+
 <a id="transport-responsibilities"></a>
 ## Transport responsibilities
 

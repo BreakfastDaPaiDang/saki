@@ -3,7 +3,8 @@ import { cloneLosslessJsonValue } from '@deepseek-ai/dsh-storage'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DeliveryWorkspaceReader, type DeliveryWorkspaceDependencies } from '../src/delivery-workspace.ts'
 import {
   canonicalDigest,
   computeProjectInspectionFingerprint,
@@ -1658,7 +1659,7 @@ describe('BranchDeliveryOperations', () => {
     const h = harness({ currentLocalHead: async () => ({ ok: false, reason }) })
     const intent = saveIntent()
     expect(await h.operations.submit(intent, ACTOR, new AbortController().signal))
-      .toMatchObject({ ok: false, reason: reason === 'unavailable' ? 'unavailable' : 'conflict' })
+      .toMatchObject({ ok: false, reason: reason === 'unavailable' ? 'unavailable' : 'conflict', receipt: { state: reason === 'unavailable' ? 'pending' : 'conflict' } })
     expect(h.deliveries.size).toBe(0)
     expect(h.intents.get(SAVE_INTENT_ID)?.checkpoint).toMatchObject(reason === 'unavailable'
       ? { state: 'prepared' } : { state: 'terminal', outcome: 'conflict', reason: 'expected-evidence' })
@@ -4182,5 +4183,196 @@ describe('Branch Delivery child cancellation prefix', () => {
     expect(moveWorkItem).toHaveBeenCalledTimes(2)
     expect(test.deliveries.get(canceled.id)).toEqual(canceled)
     expect(test.intents.get(REVIEW_INTENT_ID)?.checkpoint).toMatchObject({ state: 'child-pending' })
+  })
+})
+
+describe('delivery workspace choices', () => {
+  const owned: Harness[] = []
+  afterEach(async () => { await Promise.all(owned.splice(0).map(h => h.detachOperations())) })
+  function fixture() {
+    const h = harness(); owned.push(h); h.github.observedAt = Date.now()
+    const reader = new DeliveryWorkspaceReader()
+    const dependencies: DeliveryWorkspaceDependencies = {
+      resolveContext: () => ({ ok: true, context: structuredClone(h.context.current) }), deliveries: h.operations,
+      provider: () => h.github, authorized: () => h.authority.current, pushCredentialHelper: 'git-credential-manager',
+    }
+    const read = (refresh: 'cached' | 'interactive' = 'interactive', patch: Partial<DeliveryWorkspaceDependencies> = {}, signal = new AbortController().signal) => reader.read({
+      type: 'delivery-workspace', projectId: PROJECT_ID, workItemId: WORK_ITEM_ID, refresh,
+    }, { ...dependencies, ...patch }, signal)
+    const revision = () => h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))!.revision
+    return { h, read, dependencies, revision, reader }
+  }
+
+  it('offers the first exact selection without disclosing Host paths or credential references', async () => {
+    const { read, h } = fixture()
+    const view = await read()
+    expect(view.selection?.expected).toEqual(saveIntent().expected)
+    expect(view.actions.save.available).toBe(true)
+    expect(view.actions.push.reasons).toContain('selection-required')
+    expect(view.association.state).toBe('unobserved'); expect(h.github.reads).toEqual([])
+    const text = JSON.stringify(view)
+    expect(text).not.toContain('canonicalWorktreePath'); expect(text).not.toContain('privateKeyRef')
+    expect(text).not.toContain('SAKI_GITHUB_PRIVATE_KEY')
+    expect(view.pushCredentialHelper).toBe('git-credential-manager')
+    const blocked = await read('cached', { resolveContext: () => ({ ok: false, reason: 'unavailable' }), pushCredentialHelper: undefined, provider: () => undefined, authorized: () => false })
+    expect(blocked.selection).toBeNull(); expect(blocked.pushCredentialHelper).toBeNull()
+    expect(blocked.actions.save.reasons).toEqual(['authority', 'context-unavailable'])
+    expect(blocked.actions.push.reasons).toContain('credentials-unavailable')
+    expect(blocked.actions.create.reasons).toContain('provider-unavailable')
+  })
+
+  it('retains PR discovery across cached reads while authority, target, revision, and Provider changes remain fenced', async () => {
+    const { h, read, reader } = fixture(); const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal); await h.operations.submit(pushIntent(), ACTOR, signal)
+    expect((await read()).association.state).toBe('absent')
+    const reads = h.github.reads.length
+    const cached = await read('cached')
+    expect(cached.association.state).toBe('absent'); expect(cached.actions.create.available).toBe(true)
+    expect(h.github.reads).toHaveLength(reads)
+    expect((await read('cached', { authorized: () => false })).actions.create.reasons).toContain('authority')
+    expect((await read('cached', { provider: () => undefined })).association.state).toBe('unobserved')
+    expect((await read('cached', { resolveContext: () => ({ ok: true, context: {
+      ...h.context.current, registryRevision: h.context.current.registryRevision + 1,
+    } }) })).association.state).toBe('unobserved')
+    await h.operations.refresh(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID), signal)
+    expect((await read('cached')).association.state).toBe('unobserved')
+    await read(); reader.clear()
+    expect((await read('cached')).association.state).toBe('unobserved')
+    await read(); h.github.failures.set('pull-request-association', { code: 'transient-transport' })
+    expect((await read()).association.state).toBe('unavailable')
+    expect((await read('cached')).association.state).toBe('unobserved')
+  })
+
+  it('keeps a newer PR discovery when an older concurrent read settles after its delivery revision changed', async () => {
+    const { h, read } = fixture(); const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal); await h.operations.submit(pushIntent(), ACTOR, signal)
+    const entered = Promise.withResolvers<undefined>(); const held = Promise.withResolvers<undefined>()
+    const original = h.github.read.bind(h.github); let first = true
+    const intercepted = vi.spyOn(h.github, 'read').mockImplementation(async (request, lifetime) => {
+      const result = await original(request, lifetime)
+      if (request.kind === 'pull-request-association' && first) {
+        first = false; entered.resolve(undefined); await held.promise
+      }
+      return result
+    })
+    const pending = read(); await entered.promise
+    try {
+      h.github.pullRequestCreated = true
+      expect((await read()).association.state).toBe('unique')
+    } finally { held.resolve(undefined); intercepted.mockRestore() }
+    expect((await pending).association.state).toBe('unavailable')
+    expect((await read('cached')).association.state).toBe('unique')
+  })
+
+  it('derives manual delivery eligibility from exact current evidence through acceptance', async () => {
+    const { h, read, revision } = fixture(); const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    expect((await read()).actions.push.available).toBe(true)
+    await h.operations.submit(pushIntent(revision()), ACTOR, signal)
+    const pushed = await read()
+    expect(pushed.association.state).toBe('absent'); expect(pushed.actions.create.available).toBe(true)
+    expect(pushed.actions.push.reasons).toContain('already-pushed')
+    await h.operations.submit(createPullRequestIntent(revision()), ACTOR, signal)
+    expect((await read()).actions.review.available).toBe(true)
+    await h.operations.submit(inReviewIntent(revision()), ACTOR, signal)
+    h.github.ciSuccessful = false
+    expect((await read()).actions.accept.reasons).toContain('ci-not-successful')
+    h.github.ciSuccessful = true
+    expect((await read()).actions.accept.available).toBe(true)
+    h.github.failures.set('commit-ci', { code: 'transient-transport' })
+    const failedRead = await read()
+    expect(failedRead.branchDelivery?.ci.confirmedSummary?.state).toBe('successful')
+    expect(failedRead.actions.accept.reasons).toContain('ci-not-successful')
+    h.github.failures.clear()
+    await read()
+    expect(await h.operations.submit(acceptIntent(revision()), ACTOR, signal)).toMatchObject({ ok: true, receipt: { state: 'succeeded' } })
+    const accepted = await read()
+    expect(accepted.actions.save.reasons).toContain('accepted')
+    expect(accepted.actions.accept.available).toBe(false)
+    expect(accepted.branchDelivery?.delivery.acceptance?.actor.principalId).toBe(ACTOR.principalId)
+  })
+
+  it('offers a uniquely observed PR and keeps missing, ambiguous, or failed discovery separate', async () => {
+    const { h, read } = fixture(); const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal); await h.operations.submit(pushIntent(), ACTOR, signal)
+    h.github.pullRequestCreated = true
+    expect((await read()).actions.associate.available).toBe(true)
+    const withoutProvider = await read('interactive', { provider: () => undefined })
+    expect(withoutProvider.association.state).toBe('unavailable')
+    expect((await read('interactive', { resolveContext: () => ({ ok: false, reason: 'unavailable' }) })).association.state).toBe('unavailable')
+    h.github.failures.set('pull-request-association', { code: 'transient-transport' })
+    expect((await read()).association.state).toBe('unavailable')
+    h.github.failures.clear()
+    const originalRead = h.github.read.bind(h.github)
+    const duplicateRead = vi.spyOn(h.github, 'read').mockImplementation(async (request, lifetime) => {
+      if (request.kind !== 'pull-request-association') return await originalRead(request, lifetime)
+      return { state: 'duplicate-conflict', pullRequests: [pullRequestFact('feature/delivery', 'master', COMMIT_ID, Date.now())], observedAt: Date.now() }
+    })
+    try {
+      const duplicate = await read()
+      expect(duplicate.association.state).toBe('duplicate-conflict')
+      expect(duplicate.actions.associate.available).toBe(false); expect(duplicate.actions.create.available).toBe(false)
+    } finally { duplicateRead.mockRestore() }
+    expect((await read('cached')).association.state).toBe('duplicate-conflict')
+  })
+
+  it.each(['context', 'provider', 'revision', 'abort'] as const)('discards PR choices after %s changes while discovery is pending', async (change) => {
+    const { h, read, dependencies } = fixture(); const signal = new AbortController()
+    await h.operations.submit(saveIntent(), ACTOR, signal.signal)
+    const entered = Promise.withResolvers<undefined>(); const held = Promise.withResolvers<undefined>()
+    const original = h.github.read.bind(h.github)
+    const interception = vi.spyOn(h.github, 'read').mockImplementation(async (request, lifetime) => {
+      if (request.kind === 'pull-request-association') { entered.resolve(undefined); await held.promise }
+      return await original(request, lifetime)
+    })
+    let attached = true
+    const pending = read('interactive', { provider: () => attached ? h.github : undefined }, signal.signal)
+    try {
+      await entered.promise
+      if (change === 'context') h.context.current = { ...h.context.current, registryRevision: 99 }
+      if (change === 'provider') attached = false
+      if (change === 'revision') {
+        const current = h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))!
+        h.deliveries.values.set(current.id, { ...current, revision: current.revision + 1 })
+      }
+      if (change === 'abort') signal.abort()
+      held.resolve(undefined)
+      if (change === 'abort') await expect(pending).rejects.toThrow()
+      else {
+        const view = await pending
+        expect(view.selection).toBeNull(); expect(view.association.state).toBe('unavailable')
+        expect(view.actions.save.available).toBe(false)
+      }
+    } finally { held.resolve(undefined); await Promise.allSettled([pending]); interception.mockRestore() }
+    expect(dependencies.deliveries).toBe(h.operations)
+  })
+
+  it('propagates provider defects and cancellation during targeted refresh', async () => {
+    const { h, read } = fixture(); const signal = new AbortController()
+    await h.operations.submit(saveIntent(), ACTOR, signal.signal)
+    const original = h.github.read.bind(h.github)
+    const defect = new Error('provider defect')
+    const intercepted = vi.spyOn(h.github, 'read').mockImplementation(async (request, lifetime) => {
+      if (request.kind === 'pull-request-association') throw defect
+      return await original(request, lifetime)
+    })
+    try { await expect(read()).rejects.toBe(defect) } finally { intercepted.mockRestore() }
+    const refresh = vi.spyOn(h.operations, 'refresh').mockImplementationOnce(async () => { signal.abort(); return { ok: false, reason: 'unavailable' } })
+    try { await expect(read('interactive', {}, signal.signal)).rejects.toThrow() } finally { refresh.mockRestore() }
+  })
+
+  it('keeps busy and repair-bearing deliveries closed to new gestures while permitting inspection', async () => {
+    const { h, read } = fixture(); const signal = new AbortController().signal
+    await h.operations.submit(saveIntent(), ACTOR, signal)
+    const saved = h.deliveries.get(branchDeliveryId(PROJECT_ID, WORK_ITEM_ID))!
+    h.deliveries.values.set(saved.id, { ...saved, activeIntentId: SAVE_INTENT_ID })
+    expect((await read('cached')).actions.push.reasons).toContain('busy')
+    h.deliveries.values.set(saved.id, { ...saved, repair: { intentId: SAVE_INTENT_ID, reason: 'effect-unknown', recordedAt: Date.now() } })
+    expect((await read('cached')).actions.push.reasons).toContain('repair-required')
+    h.deliveries.values.set(saved.id, saved)
+    h.context.current = { ...h.context.current, registryRevision: 99 }
+    const changed = await read('cached')
+    expect(changed.actions.push.reasons).toContain('context-unavailable')
+    expect(changed.actions.save.available).toBe(true)
   })
 })

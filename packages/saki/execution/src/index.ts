@@ -2,6 +2,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type {
+  GitCredentialHelperId,
   InspectProjectRequest,
   InspectProjectResult,
   InspectProjectCommitRequest,
@@ -308,6 +309,9 @@ export abstract class SakiHostExecution extends Service {
   constructor(ctx: Context) {
     super(ctx, 'sakiHostExecution')
   }
+
+  /** Configured non-interactive Push adapter identity, or undefined when Push is disabled; never an account or credential. */
+  abstract readonly pushCredentialHelper: GitCredentialHelperId | undefined
 
   /**
    * Resolve and inspect one selected directory without creating a Workspace or

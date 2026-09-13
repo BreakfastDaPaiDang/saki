@@ -66,6 +66,8 @@ Branch Delivery CI 会携带根据 last-confirmed 准确 Commit fact 派生的 `
 
 Branch Delivery review 携带完整的精确 pull-request fact，并具有独立的当前 source health。Host wire 接纳用于展示的原始 review state，但不接纳验收权限、credential material 或部分 provider page。
 
+`delivery-workspace` 查询接受与 `branch-delivery` 相同的 Project、Work Item 和 refresh 字段。其结果补充安全的选择修订、可空的已配置凭据管理器 id、完整 PR 关联证据，以及六项由 Host 推导的操作建议。凭据内容与私有 Installation 引用不进入传输。不可用的 Branch Delivery 结果可以携带 pending 回执；传输不可用不代表终态失败。
+
 <a id="transport-responsibilities"></a>
 ## 传输职责
 

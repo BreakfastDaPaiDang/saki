@@ -78,6 +78,8 @@ Browser Session 只授权结构化 Git Intent 的首次提交。持久恢复与 
 
 每次启动具备权限的启动器都会签发新挑战。首次交换完成前，其用途为 `initial-bootstrap`；此后为 `local-reauthentication`。先前尚未过期且状态为 `issued` 的挑战继续有效，直到一次交换以原子方式消费选中的挑战并撤销其余挑战。首次 bootstrap 完成后不会重新开放；Cookie 过期、登出或 `Set-Cookie` 响应丢失后，操作员使用后续启动器提供的新挑战重新登录。本机重新认证建立新会话时不会撤销其他仍然有效的会话，登出也只撤销当前提交的会话。
 
+`delivery-workspace` 查询组合安全的当前选择前提、保留的 Branch Delivery、已配置的凭据管理器身份和 Host 推导的操作可用性。交互读取刷新交付来源并完整查找可关联的 PR；缓存读取仅为相同目标和交付修订保留该查询结果。新的交互读取丢弃此前查询结果，Provider 卸载也会清除它。读取期间的上下文、Provider 或交付修订变化会撤回选择建议。可用性仅供展示；每次提交的 Intent 都会独立重新检查权限与准确证据。不可用的非终态 Intent 返回 pending 回执，使浏览器保留原请求。
+
 <a id="browser-session-security"></a>
 ## 浏览器会话安全
 

@@ -139,6 +139,7 @@ interface FakeOperation {
 }
 
 class FakeExecution extends SakiHostExecution {
+  readonly pushCredentialHelper = undefined
   readonly operations = new Map<string, FakeOperation>()
   readonly listeners = new Set<(change: HostOperationChange) => void>()
   inspectResult: InspectProjectResult

@@ -1487,6 +1487,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Host Execution capability. Providers resolve untrusted locators in their own execution world; control-plane Consumers own product policy and state.',
     methods: [
       {
+        signature: 'abstract readonly pushCredentialHelper: GitCredentialHelperId | undefined',
+        description: 'Configured non-interactive Push adapter identity, or undefined when Push is disabled; never an account or credential.',
+        parameters: [],
+      },
+      {
         signature: 'abstract inspectProjectSelection( request: InspectProjectSelectionRequest, signal: AbortSignal, ): Promise<InspectProjectSelectionResult>',
         description: 'Resolve and inspect one selected directory without creating a Workspace or changing repository state.',
         parameters: [{ name: 'request', description: 'selected Host and untrusted directory locator.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],

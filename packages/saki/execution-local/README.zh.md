@@ -53,6 +53,8 @@ Saki 私有 Local Host Service Provider 基于 `ctx.fs`、`ctx.subprocess`、`ct
 
 应用 bootstrap 环境是 Git 可执行文件与普通继承进程变量的权威来源。Service Provider 会移除仓库或浏览器可控制的 Git 执行变量，但不会把已受损的父进程环境当作需要隔离的子进程沙箱。文件系统元数据取消遵循 FileSystem provider 在探测前后协作检查的约定；常规文件内容流会由取消信号销毁，Service Provider dispose 会等待全部调用收敛。
 
+只读属性 `pushCredentialHelper` 返回已解析配置中的适配器 id，不会调用管理器。Push 执行时的账户选择和凭据解析仍由配置的管理器负责。
+
 <a id="agent-run-operations"></a>
 ## Agent Run operation
 

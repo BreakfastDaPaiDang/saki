@@ -10,6 +10,7 @@ import {
   sakiAttentionResultSchema,
   sakiBranchDeliveryIntentResultSchema,
   sakiBranchDeliveryResultSchema,
+  sakiDeliveryWorkspaceResultSchema,
   sakiBoardResultSchema,
   sakiWorkItemViewResultSchema,
   sakiProjectMilestonesResultSchema,
@@ -47,6 +48,7 @@ import type {
   SakiWireBranchDeliveryIntentResult,
   SakiWireBranchDeliveryRefresh,
   SakiWireBranchDeliveryResult,
+  SakiWireDeliveryWorkspaceResult,
   SakiWireBoardRefresh,
   SakiWireBoardResult,
   SakiWireWorkItemViewResult,
@@ -256,6 +258,15 @@ export interface SakiHostClient {
     refresh: SakiWireBranchDeliveryRefresh,
     signal?: AbortSignal,
   ): Promise<SakiWireBranchDeliveryResult>
+  /**
+   * Read current delivery selection premises, PR discovery, and action eligibility.
+   * @param projectId - selected Development Project.
+   * @param workItemId - confirmed Work Item identity.
+   * @param refresh - cached facts or explicit targeted GitHub reads.
+   * @param signal - caller lifetime and cancellation.
+   * @returns protected browser-safe workspace or a closed denial.
+   */
+  queryDeliveryWorkspace(projectId: SakiWireProjectId, workItemId: SakiWireSaveBranchDeliveryIntent['workItemId'], refresh: SakiWireBranchDeliveryRefresh, signal?: AbortSignal): Promise<SakiWireDeliveryWorkspaceResult>
   /**
    * Read one Project Milestone joined to current Board and release sources.
    * @param projectId - stable Project id.
@@ -650,6 +661,13 @@ export class SakiHostClientService extends Service implements SakiHostClient {
       'control/query',
       { type: 'branch-delivery', projectId, workItemId, refresh },
       signal,
+    ))
+  }
+
+  /** @inheritdoc */
+  async queryDeliveryWorkspace(projectId: SakiWireProjectId, workItemId: SakiWireSaveBranchDeliveryIntent['workItemId'], refresh: SakiWireBranchDeliveryRefresh, signal?: AbortSignal): Promise<SakiWireDeliveryWorkspaceResult> {
+    return sakiDeliveryWorkspaceResultSchema.parse(await this.call(
+      'control/query', { type: 'delivery-workspace', projectId, workItemId, refresh }, signal,
     ))
   }
 

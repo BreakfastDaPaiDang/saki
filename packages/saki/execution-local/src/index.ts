@@ -135,6 +135,7 @@ const GIT_VERSION_DECODER = new TextDecoder('utf-8', { fatal: true })
 
 /** Local Host Execution provider with durable operations and disposal-bound calls. */
 export class LocalSakiHostExecution extends SakiHostExecution {
+  override get pushCredentialHelper(): GitCredentialHelperId | undefined { return this.config.pushCredentialHelper }
   static inject = [
     'agentPresets', 'agents', 'fs', 'sessionPersistence', 'sessions',
     'storageDomain', 'subprocess', 'workspaceRegistry',

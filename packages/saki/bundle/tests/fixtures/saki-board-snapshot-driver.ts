@@ -70,7 +70,10 @@ function deliveryExecutionPatch(bundlePatches: readonly PatchOptions[]): PatchOp
   return {
     id: execution.id,
     name: execution.name,
-    config: { ...config, pushCredentialHelper: 'git-credential-manager' },
+    config: { ...config, pushCredentialHelper: 'git-credential-manager',
+      ...(process.env.SAKI_CHANGES_BROWSER_FIXTURE === '1' && process.platform === 'win32'
+        ? { inventoryMaxCaptureMs: 120_000, baselineMaxCaptureMs: 120_000 } : {}),
+    },
   }
 }
 
@@ -208,7 +211,7 @@ try {
           },
         ] : []),
         ...(deliverySnapshot ? [deliveryExecutionPatch(bundlePatches)] : []),
-        ...(process.env.SAKI_CHANGES_BROWSER_FIXTURE === '1' && process.platform === 'win32' ? [{
+        ...(!deliverySnapshot && process.env.SAKI_CHANGES_BROWSER_FIXTURE === '1' && process.platform === 'win32' ? [{
           id: 'saki-execution-local',
           // Native Git startup consumes the observation budget on Windows test hosts.
           config: { inventoryMaxCaptureMs: 120_000, baselineMaxCaptureMs: 120_000 },
@@ -259,7 +262,7 @@ try {
           product: 'saki',
           bootstrapPurpose: handoff.purpose,
           bootstrapSecret: handoff.consume(),
-          url: process.env.SAKI_PLANNING_BROWSER_FIXTURE === '1'
+          url: process.env.SAKI_PLANNING_BROWSER_FIXTURE === '1' || process.env.SAKI_DELIVERY_BROWSER_FIXTURE === '1'
             ? app.connection.authenticatedUrl(`http://127.0.0.1:${String(app.webServer.port)}`)
             : `http://127.0.0.1:${String(app.webServer.port)}`,
         })}\n`)

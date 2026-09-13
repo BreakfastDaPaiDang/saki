@@ -13,6 +13,14 @@ afterEach(() => { for (const owner of owners) owner.dispose(); owners.clear() })
 function bench(interaction?: ReturnType<ReturnType<typeof createChangesStore>['create']>) { const f = changesFixture(interaction); owners.add(f.controller); return f }
 function row() { if (!CHANGES.ok || !CHANGES.projection.result.ok) throw new Error('status fixture unavailable'); return CHANGES.projection.result.observation.changes[0]! }
 
+it('retains local Git observations when entering delivery and clears them outside either destination', async () => {
+  const f = bench(); await f.start()
+  f.authority.set({ access: AUTH, offline: false, project: { ...CHANGES_PROJECT, address: { ...CHANGES_PROJECT.address, view: 'delivery' } } })
+  expect(f.controller.getSnapshot().read.value).not.toBeNull()
+  f.authority.set({ access: AUTH, offline: false, project: { ...CHANGES_PROJECT, address: { ...CHANGES_PROJECT.address, view: 'detail' } } })
+  expect(f.controller.getSnapshot().read.value).toBeNull()
+})
+
 it('requires explicit confirmation of the displayed index and preserves the commit message', async () => {
   const f = bench(); await f.start()
   await f.controller.confirmCommit(); expect(f.api.createCommit).not.toHaveBeenCalled()

@@ -16,7 +16,8 @@ import * as ProjectPageModule from '../src/client/components/ProjectPage.tsx'
 import * as PlanningPageModule from '../src/client/components/PlanningPage.tsx'
 import { workFixture } from './work-fixture.client.ts'
 import { changesFixture } from './changes-fixture.client.ts'
-import { planningFixture, PROJECT_ID } from './planning-fixture.client.ts'
+import { deliveryFixture } from './delivery-fixture.client.ts'
+import { planningFixture, PROJECT_ID, ITEM } from './planning-fixture.client.ts'
 import { zh, NS } from '../src/client/locales.ts'
 
 const controllers = new Set<{ dispose: () => void }>()
@@ -59,6 +60,8 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
   controllers.add(work)
   const changes = changesFixture().controller
   controllers.add(changes)
+  const delivery = deliveryFixture().controller
+  controllers.add(delivery)
   const props = {
     page: matched.page,
     ...face,
@@ -67,6 +70,9 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
     planning: controller,
     work,
     changes,
+    delivery,
+    useDelivery: (select: (state: ReturnType<typeof delivery.getSnapshot>) => unknown) =>
+      select(useSyncExternalStore(delivery.subscribe, delivery.getSnapshot)),
     useChanges: (select: (state: ReturnType<typeof changes.getSnapshot>) => unknown) =>
       select(useSyncExternalStore(changes.subscribe, changes.getSnapshot)),
     useWork: (select: (state: ReturnType<typeof work.getSnapshot>) => unknown) =>
@@ -82,6 +88,15 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
 }
 
 describe('SakiSurfaceRoot', () => {
+  it('opens delivery from its restored Work Item address', async () => {
+    const { props, controller, navigation } = bench(() => Promise.resolve(AUTHENTICATED), { page: 'project' })
+    render(<SakiSurfaceRoot {...props} />)
+    await act(async () => { await controller.reloadAccess(); navigation.actions.selectProject(PROJECT_ID) })
+    await act(async () => { controller.navigate({ view: 'delivery', workItemId: ITEM.id }) })
+    expect(screen.getByRole('heading', { name: '交付' })).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '返回工作项' })) })
+    expect(controller.getSnapshot().project?.address.view).toBe('detail')
+  })
   it('opens Changes as a Project destination and retains its Work Item return address', async () => {
     const { props, controller, navigation } = bench(() => Promise.resolve(AUTHENTICATED), { page: 'project' })
     render(<SakiSurfaceRoot {...props} />)

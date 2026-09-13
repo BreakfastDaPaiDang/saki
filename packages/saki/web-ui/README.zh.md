@@ -17,6 +17,7 @@ kind: "package-reference"
 - [管理我的工作](#manage-my-work)
 - [规划 Project](#plan-a-project)
 - [检查本地变更](#review-local-changes)
+- [交付工作项](#deliver-a-work-item)
 - [模型体验](#model-experience)
 - [已知限制与延期工作](#known-limitations-and-deferred-work)
 - [开发备注](#dev-note)
@@ -61,6 +62,15 @@ Status 映射无效时，看板写入不可用。授权用户可在状态映射�
 输入提交说明，检查完整的已暂存文件列表后，明确确认本地提交。确认会固定显示的索引与说明，包含继承的已暂存变更，并说明不会运行 Git hooks。Host 在写入前重新核对所有显示的修订围栏。成功 receipt 显示生成的 commit id；它不表示已 Push、创建 PR 或通过验收。
 
 提交草稿与已提交的原始请求按 Principal 和 Project 持久保存。待处理、尚未确认及需要对账的请求会阻止替代操作。「核对 / 重试原操作」使用当前请求权限重放原始 id 与 payload，浏览器重新加载后也保持不变。只有持久终态 receipt 才能被确认并清除；不含 receipt 的拒绝或冲突回复无法证明先前尝试没有副作用。操作返回结果、用户显式刷新或连接重置后会重新读取。Git 检查不会因每次规划通知而轮询。
+
+<a id="deliver-a-work-item"></a>
+## 交付工作项
+
+从工作项或其变更页打开交付。选择当前本地 Commit、发布分支和 PR 目标分支。在完整 Commit、仓库、分支、已配置的 Git 凭据管理器与 Saki 操作者均可见时确认 Push。凭据管理器选择 Git 账户；该身份与 Commit 作者、Saki 操作者及 GitHub App 分开。
+
+刷新交付证据，查找与准确 Commit 和分支匹配的已有开放 PR。关联唯一结果，或在检查标题与描述后通过显示的 GitHub App Installation 创建 PR。单独确认移到 In review。原始 workflow、check 与 commit status 链接保留最后确认的证据，并同时显示当前来源健康状态。人工验收重新读取准确交付与当前 CI 后，记录操作者、关闭 Issue 并将工作项移到 Done。
+
+每次确认固定一个请求。响应丢失、pending 回执与 reconciliation 状态会跨页面重载和工作项导航保留该请求；“恢复原请求”重放原始 id、修订与文本。每个 Project 同时只允许一个尚未确认的交付请求，变更页的待定操作也会阻止新的交付操作。成功的验收回执不会替代单独读取的工作项状态。
 
 <a id="model-experience"></a>
 ## 模型体验

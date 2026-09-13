@@ -31,6 +31,7 @@ export function WorkItemView(props: DetailProps & { openSession: SakiInjected['o
         <a href={detail.workItem.url} target="_blank" rel="noreferrer">{t('planning.openIssue')}</a>
         <Button variant="outline" disabled={!writable} onClick={() => { actions.beginMove(detail.workItem) }}>{t('planning.move')}</Button>
         <Button variant="outline" onClick={() => { actions.navigate({ view: 'changes', changesRunId: null }) }}>{t('changes.title')}</Button>
+        <Button variant="outline" onClick={() => { actions.navigate({ view: 'delivery' }) }}>{t('delivery.title')}</Button>
       </div>
       {detail.workItem.notInProject ? <p className={css.notice}>{t('planning.inboxMark')}</p> : null}
       <h3>{t('planning.body')}</h3>

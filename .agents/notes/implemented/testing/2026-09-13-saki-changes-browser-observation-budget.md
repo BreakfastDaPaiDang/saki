@@ -20,6 +20,8 @@ The [Changes browser case](../../../../packages/saki/bundle/tests/web-changes.e2
 
 Each private Changes recording retains phase timestamps, screenshots, and when each command starts and settles. The fixture wraps only its own subprocess service, delegates the original call with its receiver, and restores the method through the context effect. Timing records omit command arguments and environment values. The consumer job retains the directory after either a successful or failed run, as described in the [bundle diagnostics](../../../../packages/saki/bundle/README.md#changes-browser-diagnostics).
 
+The Local Host lifecycle, control-plane Project, and Host transport fixtures allow 120 seconds for Windows inventory and baseline capture. Complete Windows source-mode sequences allow ten minutes for lifecycle cases and thirty minutes for Branch Delivery routing with repeated registration, Git inspection, and control-plane restarts; a native bound-repository disappearance case takes about one minute before the deliberate deletion. These bounds preserve the real managed Git path and do not change production defaults.
+
 ## Alternatives considered
 
 - Retry the browser case: a retry does not explain which operation exceeded its budget and repeats real repository mutations.

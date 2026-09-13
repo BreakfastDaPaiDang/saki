@@ -1,0 +1,31 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`records the operator-facing delivery navigation, stages, and editable fields 1`] = `
+{
+  "actions": [
+    "返回工作项",
+    "变更",
+    "刷新交付证据",
+    "刷新本地提交",
+    "确认交付选择",
+    "确认并 push",
+    "关联已有 PR",
+    "创建 PR",
+    "移到 In review",
+    "人工验收并完成",
+  ],
+  "fields": [
+    "发布分支",
+    "PR 目标分支",
+    "PR 标题",
+    "PR 描述",
+  ],
+  "headings": [
+    "交付",
+    "1. 选择交付提交",
+    "2. 确认 push",
+    "3. Pull Request",
+    "4. CI 与人工验收",
+  ],
+}
+`;

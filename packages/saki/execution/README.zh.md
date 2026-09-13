@@ -62,6 +62,8 @@ PushBranch 将一个精确 local Commit 和 active Resource Binding 绑定到一
 
 Service Definition 没有配置。每个 Service Provider 拥有其执行环境机制与必需的资源限制。
 
+Host 通过 `pushCredentialHelper` 暴露已配置的适配器 id 或 `undefined`，使操作者能在提交前检查 Push 适配器。读取该属性不会选择账户或解析凭据。
+
 <a id="durable-agent-starts"></a>
 ## 持久 Agent 启动
 

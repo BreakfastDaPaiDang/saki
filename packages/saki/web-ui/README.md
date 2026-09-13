@@ -17,6 +17,7 @@ Register an existing directory as a Development Project, plan its GitHub Work It
 - [Manage My Work](#manage-my-work)
 - [Plan a Project](#plan-a-project)
 - [Review local changes](#review-local-changes)
+- [Deliver a Work Item](#deliver-a-work-item)
 - [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
@@ -61,6 +62,15 @@ Open Changes from the Project, a Work Item, or a Run. The page covers the entire
 Enter a commit message and review the complete staged-file list before confirming a local commit. The confirmation freezes the shown index and message, includes inherited staged changes, and states that Git hooks do not run. The Host rechecks all displayed revision fences before writing. Successful receipts display the resulting commit id; they do not imply Push, PR creation, or acceptance.
 
 Commit drafts and original submitted requests persist per Principal and Project. Pending, unacknowledged, and reconciliation requests block replacement gestures. Check / retry replays the original id and payload using current request authority, including after browser reload. Only a durable terminal receipt can be acknowledged and cleared; denied or conflicting replies without receipts cannot prove an earlier attempt had no effect. Reads refresh after a returned operation result, explicit refresh, or connection reset. Git inspection does not poll on every planning notification.
+
+<a id="deliver-a-work-item"></a>
+## Deliver a Work Item
+
+Open Delivery from a Work Item or its Changes page. Select the current local Commit, publication branch, and PR base branch. Confirm Push with the full Commit, repository, refs, configured Git credential manager, and Saki operator visible. The credential manager chooses the Git account; its identity is separate from the Commit author, Saki operator, and GitHub App.
+
+Refresh delivery evidence to discover an existing open PR matching the exact Commit and refs. Associate the unique result, or review the title and description before creating a PR through the displayed GitHub App installation. Confirm movement to In review separately. Raw workflow, check, and commit-status links retain the last confirmed evidence alongside current source health. Human acceptance rereads the exact delivery and current CI before recording the actor, closing the Issue, and moving the Work Item to Done.
+
+Each confirmation freezes one request. Response loss, pending receipts, and reconciliation retain that request across reloads and Work Item navigation; Recover original request replays its original id, revisions, and text. A Project permits one unacknowledged delivery request at a time, and a pending Changes operation also blocks new delivery gestures. A successful acceptance receipt does not replace the separately read Work Item status.
 
 <a id="model-experience"></a>
 ## Model Experience

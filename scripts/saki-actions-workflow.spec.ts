@@ -5,18 +5,18 @@ const readyPullRequestTypes = ['opened', 'synchronize', 'reopened', 'ready_for_r
 const readyPullRequestCondition = "github.event_name == 'pull_request' && github.event.pull_request.draft == false"
 
 describe('Saki Actions cost policy', () => {
-  it('retains planning diagnostics after successful or failed consumer gates', () => {
+  it.each([['planning', 'planning'], ['delivery', 'Delivery']])('retains %s diagnostics after successful or failed consumer gates', (directory, label) => {
     const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-24-consumers')
     if (!Array.isArray(job.steps)) throw new TypeError('Consumer job must define steps')
     const gates = job.steps.findIndex(step => isRecord(step) && step.run === 'pnpm run check:ci:consumers')
-    const upload = job.steps.findIndex(step => isRecord(step) && step.name === 'Retain Saki planning diagnostics')
+    const upload = job.steps.findIndex(step => isRecord(step) && step.name === `Retain Saki ${label} diagnostics`)
     expect(gates).toBeGreaterThanOrEqual(0)
     expect(upload).toBeGreaterThan(gates)
     expect(job.steps[upload]).toMatchObject({
       if: 'always()', uses: 'actions/upload-artifact@v7',
       with: {
-        name: 'saki-planning-${{ github.run_id }}-${{ github.run_attempt }}',
-        path: '.playwright-mcp/planning-*/',
+        name: `saki-${directory}-` + '${{ github.run_id }}-${{ github.run_attempt }}',
+        path: `.playwright-mcp/${directory}-*/`,
         'include-hidden-files': true, 'if-no-files-found': 'ignore', 'retention-days': 7,
       },
     })

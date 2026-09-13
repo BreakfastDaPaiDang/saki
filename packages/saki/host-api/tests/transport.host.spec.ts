@@ -103,7 +103,8 @@ async function start(): Promise<RunningHost> {
   await context.plugin(WorkspaceRegistry)
   await context.plugin(LocalFileSystem, { cwd: directory })
   await context.plugin(SakiGitFixtureSubprocess)
-  await context.plugin(LocalSakiHostExecution)
+  await context.plugin(LocalSakiHostExecution, process.platform === 'win32'
+    ? { inventoryMaxCaptureMs: 120_000, baselineMaxCaptureMs: 120_000 } : {})
   await context.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   const origin = `http://127.0.0.1:${String(context.webServer.port)}`
   await context.plugin(LocalCredentialProvider, { dshHome: join(directory, 'home'), watch: false })
@@ -205,7 +206,7 @@ describe('Saki /saki Host transport', () => {
     }
   })
 
-  it('routes all three planning destinations through authenticated query parsing', async () => {
+  it('routes planning and delivery destinations through authenticated query parsing', async () => {
     const host = await start()
     const secret = host.context.sakiControlPlane.bootstrap.take()!.consume()
     const exchange = await rpc(host, 'access/exchange', { secret })
@@ -216,6 +217,7 @@ describe('Saki /saki Host transport', () => {
       { type: 'project-mapping', projectId },
       { type: 'project-milestones', projectId, after: null },
       { type: 'work-item-view', projectId, workItemId: `work-item-${'5'.repeat(64)}` },
+      { type: 'delivery-workspace', projectId, workItemId: `work-item-${'5'.repeat(64)}`, refresh: 'cached' },
     ]) {
       query.mockResolvedValueOnce({ ok: false, reason: 'not-found' } as never)
       expect((await rpc(host, 'control/query', payload, { cookie })).message.result)

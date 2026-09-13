@@ -8,6 +8,7 @@ import {
   sakiAssociateBranchDeliveryPullRequestIntentSchema,
   sakiBranchDeliveryIntentResultSchema,
   sakiBranchDeliveryResultSchema,
+  sakiDeliveryWorkspaceResultSchema,
   sakiCreateBranchDeliveryPullRequestIntentSchema,
   sakiIntentRequestSchema,
   sakiMarkBranchDeliveryInReviewIntentSchema,
@@ -127,6 +128,25 @@ const CACHED_RESULT = {
 } as const
 
 describe('Saki Branch Delivery Host wire', () => {
+  it('validates delivery selection, credential identity, and availability without allowing private references', () => {
+    const allowed = { available: true, reasons: [] }
+    const workspace = { ok: true, projection: {
+      type: 'delivery-workspace', projectId: PROJECT_ID, workItemId: WORK_ITEM_ID,
+      selection: { expected: SAVE_INTENT.expected, target: CACHED_RESULT.projection.branchDelivery.delivery.target },
+      pushCredentialHelper: 'git-credential-manager', branchDelivery: CACHED_RESULT.projection.branchDelivery,
+      association: { state: 'unobserved' },
+      actions: { save: allowed, push: allowed, create: allowed, associate: allowed, review: allowed, accept: allowed },
+    } }
+    expect(sakiDeliveryWorkspaceResultSchema.parse(workspace)).toEqual(workspace)
+    for (const projection of [
+      { ...workspace.projection, privateKeyRef: 'secret' },
+      { ...workspace.projection, pushCredentialHelper: 'sh -c unsafe' },
+      { ...workspace.projection, actions: { ...workspace.projection.actions, accept: { available: true, reasons: ['ci-not-successful'] } } },
+      { ...workspace.projection, selection: { ...workspace.projection.selection, target: { ...workspace.projection.selection.target, privateKeyRef: 'secret' } } },
+    ]) expect(sakiDeliveryWorkspaceResultSchema.safeParse({ ok: true, projection }).success).toBe(false)
+    expect(sakiQueryRequestSchema.safeParse({ type: 'delivery-workspace', projectId: PROJECT_ID, workItemId: WORK_ITEM_ID, refresh: 'interactive', shellCommand: 'git push' }).success).toBe(false)
+    expect(sakiBranchDeliveryIntentResultSchema.parse({ ok: false, reason: 'unavailable', receipt: { intentId: SAVE_INTENT.intentId, deliveryId: DELIVERY_ID, state: 'pending' } })).toMatchObject({ receipt: { state: 'pending' } })
+  })
   it('parses one explicit Branch Delivery query and all six path-free Intents', () => {
     expect(sakiQueryRequestSchema.parse({
       type: 'branch-delivery',
