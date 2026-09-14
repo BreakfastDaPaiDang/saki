@@ -2946,7 +2946,41 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     const missingRun = { ...runQuery, agentRunId: 'agent-run-11111111-1111-4111-8111-111111111111' as typeof runIdentity.agentRunId }
     expect(await harness.control.query(harness.authentication, missingRun, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
     expect(observeRun).toHaveBeenCalledOnce()
-    observeRun.mockRestore()
+    const dispatchTable = liveSakiDomain(harness.ctx).table('execution_dispatches')
+    const dispatch = [...dispatchTable.entries()].find(([, value]) => value.agentRunId === runIdentity.agentRunId)?.[1]
+    if (dispatch === undefined) throw new Error('Run Dispatch fixture is absent')
+    try {
+      const unprepared = { ...dispatch, state: 'canceled' as const, terminalReason: 'authority-revoked' as const }
+      delete unprepared.preparation
+      delete unprepared.acceptedFencingToken
+      delete unprepared.admissionRevision
+      delete unprepared.operationSnapshot
+      await dispatchTable.put(dispatch.id, unprepared)
+      expect(await harness.control.query(harness.authentication, runQuery, new AbortController().signal))
+        .toMatchObject({ ok: true, projection: { observation: { session: { state: 'unavailable', reason: 'not-started' } } } })
+      expect(observeRun).toHaveBeenCalledOnce()
+    } finally {
+      await dispatchTable.put(dispatch.id, dispatch)
+    }
+    expect(await harness.control.query(harness.authentication, {
+      ...runQuery, afterDispatch: 'dispatch-11111111-1111-4111-8111-111111111111' as typeof dispatch.id,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    const registryTable = liveSakiDomain(harness.ctx).table('development_project_registry')
+    const originalRegistry = registryTable.get('development-project-registry')
+    if (originalRegistry === undefined) throw new Error('Project Registry fixture is absent')
+    try {
+      observeRun.mockImplementationOnce(async () => {
+        await registryTable.put('development-project-registry', { ...originalRegistry,
+          projects: [], agentProfiles: [], resourceBindings: [], canonicalWorktreeIndex: [], gitDirectoryIndex: [], intentMappings: [],
+        })
+        return runObservation
+      })
+      expect(await harness.control.query(harness.authentication, runQuery, new AbortController().signal))
+        .toEqual({ ok: false, reason: 'not-found' })
+    } finally {
+      await registryTable.put('development-project-registry', originalRegistry)
+      observeRun.mockRestore()
+    }
     expect(changedKeys).toContainEqual(['my-work', 'attention', 'project-changes', 'board'])
     disposeChanged()
 
