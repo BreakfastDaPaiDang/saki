@@ -30,6 +30,9 @@ const contexts: Context[] = []
 const HOST_ID = 'host-11111111-1111-4111-8111-111111111111' as SakiHostId
 const MAX_CONTROL_FILE_BYTES = 1024 * 1024
 const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
+  runTerminalMaxItems: 32,
+  runTerminalPageLines: 80,
+  runTerminalMaxChars: 32_768,
   gitCommandTimeoutMs: 10_000,
   gitTerminationGraceMs: 100,
   maxGitStdoutBytes: 1024 * 1024,

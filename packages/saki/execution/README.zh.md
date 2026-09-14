@@ -75,6 +75,8 @@ Intervention answer 使用新的 Dispatch 与稳定 MessageId，但保留所属 
 
 `resumeAgentRun` 是仅供启动恢复使用的 operation，目标是已经过控制面校验的 running Run，以及与其精确匹配的 succeeded `StartAgentRun` operation 和 request。只有物理 Session header 与原始输入匹配该 request 时，Provider 才会恢复 live Agent handle。它不会增加输入、wake 或模型请求；Host、Session 或 Agent evidence 缺失、不可用或冲突时，启动流程会失败。
 
+`observeAgentRun` 接受精确的 `start-agent-run` operation 引用及可选的不透明 Terminal 选择。它分别报告物理 Session 历史、最近已消费工作的执行结果、活跃 Agent 状态及有界的所属 Terminal 输出。读取不会创建 Agent、wake、模型请求或终端进程。不可用证据保持明确；Host 输入投递成功与模型完成相互独立。
+
 <a id="model-experience"></a>
 ## 模型体验
 

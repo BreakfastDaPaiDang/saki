@@ -40,6 +40,11 @@ class ControllableFakeLlm extends LlmAdapter {
 
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.probe.requests += 1
+    const latestUser = options.messages.findLast(message => message.role === 'user')
+    if (process.env.SAKI_WORK_BROWSER_FIXTURE === '1' && latestUser?.content.some(block =>
+      block.type === 'text' && block.text === 'Exercise the Run failure observation.')) {
+      throw new Error('Controlled Run provider failure')
+    }
     const input = options.messages.find(message => message.role === 'user'
       && message.source.kind === 'saki-agent-run')
     const interventionAnswer = options.messages.findLast(message => message.role === 'user'

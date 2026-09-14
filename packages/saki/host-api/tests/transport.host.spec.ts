@@ -214,6 +214,8 @@ describe('Saki /saki Host transport', () => {
     const projectId = 'project-22222222-2222-4222-8222-222222222222'
     const query = vi.spyOn(host.context.sakiControlPlane, 'query')
     for (const payload of [
+      { type: 'project-sessions', projectId, workItemId: null, after: null },
+      { type: 'agent-run-view', projectId, agentRunId: 'agent-run-33333333-3333-4333-8333-333333333333', afterDispatch: null, terminal: null },
       { type: 'project-mapping', projectId },
       { type: 'project-milestones', projectId, after: null },
       { type: 'work-item-view', projectId, workItemId: `work-item-${'5'.repeat(64)}` },

@@ -38,7 +38,8 @@ export const CHANGES = sakiProjectChangesResultSchema.parse({ ok: true, projecti
 const emptyRead = { value: null, loading: false, failure: null }
 export const CHANGES_PROJECT: PlanningProject = {
   id: PROJECT_ID, address: { ...initialPlanningAddress(), view: 'changes' }, board: { ...emptyRead, value: BOARD },
-  detail: emptyRead, milestone: emptyRead, milestones: emptyRead, mapping: emptyRead, mappingResult: null, moves: [], focusVersion: 0,
+  detail: emptyRead, sessions: emptyRead, run: emptyRead, milestone: emptyRead, milestones: emptyRead,
+  mapping: emptyRead, mappingResult: null, moves: [], focusVersion: 0,
 }
 export function gitSuccess(intent: ChangesIntent) {
   const identity = { id: `receipt-${intent.intentId.slice(7)}`, intentId: intent.intentId, type: intent.type, projectId: intent.expected.projectId, state: 'succeeded' }

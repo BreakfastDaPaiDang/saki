@@ -50,13 +50,13 @@ async function setup(
   return { ctx, controlPlane }
 }
 
-async function setupServices(): Promise<Context> {
+async function setupServices(controlPlane = true): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(Timer)
   await ctx.plugin(SessionStore)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
-  await ctx.plugin(ControlPlaneProbe)
+  if (controlPlane) await ctx.plugin(ControlPlaneProbe)
   return ctx
 }
 
@@ -65,6 +65,28 @@ function caller(session: Session): never {
 }
 
 describe('request_intervention tool', () => {
+  it('registers during control-plane restoration and resolves that provider only when invoked', async () => {
+    const ctx = await setupServices(false)
+    const session = ctx.sessions.create(SessionId('session-startup-intervention'))
+    const request = () => ctx.tools.execute({
+      signal: new AbortController().signal, callId: ToolCallId('call-startup-intervention'),
+      name: 'request_intervention', arguments: { question: 'Confirm the restored work scope.' }, agent: caller(session),
+    })
+    class RestoringControlPlane extends ControlPlaneProbe {
+      protected async [Service.init](): Promise<void> {
+        await this.ctx.plugin(toolIntervention)
+        expect(ctx.tools.schemas().some(tool => tool.name === 'request_intervention')).toBe(true)
+        const unavailable = await request()
+        expect(unavailable.isError).toBe(true)
+        expect(unavailable.content).toEqual([{ type: 'text', text: 'Error: request_intervention requires an available Saki control plane' }])
+        expect(unavailable).not.toHaveProperty('concludesTurn')
+      }
+    }
+    try {
+      await ctx.plugin(RestoringControlPlane)
+      expect(await request()).toMatchObject({ isError: false, concludesTurn: true, value: { interventionId: INTERVENTION_ID } })
+    } finally { await ctx.fiber.dispose() }
+  })
   it('supports direct plugin application with its documented default retry delay', async () => {
     const ctx = await setupServices()
     toolIntervention.apply(ctx)

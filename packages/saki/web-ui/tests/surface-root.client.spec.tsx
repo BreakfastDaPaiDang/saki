@@ -19,6 +19,7 @@ import { changesFixture } from './changes-fixture.client.ts'
 import { deliveryFixture } from './delivery-fixture.client.ts'
 import { planningFixture, PROJECT_ID, ITEM } from './planning-fixture.client.ts'
 import { zh, NS } from '../src/client/locales.ts'
+import { SAKI_AGENT_RUN_VIEW_PROJECTION_FIXTURE as run, SAKI_PROJECT_SESSIONS_PROJECTION_FIXTURE as sessions } from '@breakfastdapaidang/saki-control-plane/fixtures'
 
 const controllers = new Set<{ dispose: () => void }>()
 afterEach(() => { cleanup(); for (const controller of controllers) controller.dispose(); controllers.clear() })
@@ -88,6 +89,16 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
 }
 
 describe('SakiSurfaceRoot', () => {
+  it('routes a selected Project through Sessions and its Run details', async () => {
+    const { navigation, face, props, controller } = bench(() => Promise.resolve(AUTHENTICATED), { page: 'project' })
+    face.queryProjectSessions.mockResolvedValue({ ok: true, projection: sessions })
+    face.queryAgentRunView.mockResolvedValue({ ok: true, projection: run })
+    render(<SakiSurfaceRoot {...props} />)
+    await act(async () => { await controller.reloadAccess(); navigation.actions.selectProject(PROJECT_ID); controller.navigate({ view: 'sessions' }) })
+    await waitFor(() => { expect(screen.getByRole('button', { name: zh['runs.current'] })).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: zh['runs.current'] }))
+    await waitFor(() => { expect(screen.getByText(zh['runs.state.failed'])).toBeTruthy() })
+  })
   it('opens delivery from its restored Work Item address', async () => {
     const { props, controller, navigation } = bench(() => Promise.resolve(AUTHENTICATED), { page: 'project' })
     render(<SakiSurfaceRoot {...props} />)

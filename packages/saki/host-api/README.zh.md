@@ -44,6 +44,8 @@ Saki 私有双侧 Host API 把控制面适配到共享 Connection 载体。Host 
 | `control/query` | `{ type: 'work-item-view', projectId, workItemId }` | 当前经过定向确认的 Work Item、独立读取的 Issue 正文、执行与交付证据及近期活动引用 |
 | `control/query` | `{ type: 'project-milestones', projectId, after: null \| milestoneId }` | 最多 32 个已配置 Milestone 目的地及下一页游标 |
 | `control/query` | `{ type: 'project-mapping', projectId }` | GitHub 全部现有字段、配置修订号及当前映射编辑权限 |
+| `control/query` | `{ type: 'project-sessions', projectId, workItemId: null \| id, after: null \| id }` | 最多 32 个保留的 Work Session 及稳定的续页游标 |
+| `control/query` | `{ type: 'agent-run-view', projectId, agentRunId, afterDispatch: null \| id, terminal: null \| { id, offset } }` | 相互关联的 Run、Dispatch、Intervention、Session 及有界 Terminal 观察 |
 | `control/query` | `{ type: 'my-work' }` | 包含安全手动启动摘要的完整当前 Principal My Work Projection，或类型化 denied/unavailable 结果 |
 | `control/query` | `{ type: 'attention' }` | 完整的当前 Principal 派生 Attention Projection，或类型化 denied/unavailable 结果 |
 | `control/query` | `{ type: 'branch-delivery', projectId, workItemId, refresh: 'cached' \| 'interactive' }` | 适用于浏览器的准确 Commit 交付与定向来源证据，或类型化拒绝结果 |

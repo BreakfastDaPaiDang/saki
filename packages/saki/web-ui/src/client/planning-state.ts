@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import { sakiConfigureGitHubSynchronizationIntentSchema, sakiMoveWorkItemIntentSchema } from '@breakfastdapaidang/saki-host-api/wire'
-import type { SakiWireProjectId, SakiWireMoveWorkItemIntent, SakiWireSaveMilestoneDeliveryIntent, SakiWireWorkItemViewResult } from '@breakfastdapaidang/saki-host-api/wire'
+import type { SakiWireProjectId, SakiWireMoveWorkItemIntent, SakiWireSaveMilestoneDeliveryIntent, SakiWireWorkItemViewResult, SakiWireProjectSessionsQuery, SakiWireAgentRunViewQuery } from '@breakfastdapaidang/saki-host-api/wire'
 
 /** Stable selected Work Item id. */
 export type WorkItemId = SakiWireMoveWorkItemIntent['workItemId']
@@ -10,10 +10,28 @@ export type WorkItemId = SakiWireMoveWorkItemIntent['workItemId']
 export type MilestoneId = SakiWireSaveMilestoneDeliveryIntent['release']['milestoneId']
 /** Backend-mapped Work Item status. */
 export type BoardStatus = SakiWireMoveWorkItemIntent['targetStatus']
-type AgentRunId = Extract<SakiWireWorkItemViewResult, { ok: true }>['projection']['runs'][number]['id']
+/** Stable selected Agent Run id. */
+export type AgentRunId = Extract<SakiWireWorkItemViewResult, { ok: true }>['projection']['runs'][number]['id']
+
+const sessionsAfterSchema: z.ZodType<SakiWireProjectSessionsQuery['after']> = z.string().min(1).max(512).transform(value => value as NonNullable<SakiWireProjectSessionsQuery['after']>).nullable()
+const dispatchAfterSchema: z.ZodType<SakiWireAgentRunViewQuery['afterDispatch']> = z.string().min(1).max(512).transform(value => value as NonNullable<SakiWireAgentRunViewQuery['afterDispatch']>).nullable()
+const terminalSchema: z.ZodType<SakiWireAgentRunViewQuery['terminal']> = z.object({
+  id: z.string().min(1).max(512).regex(/^[^\s\p{Cc}]+$/u).transform(value => value as NonNullable<SakiWireAgentRunViewQuery['terminal']>['id']),
+  offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+}).strict().nullable()
 
 const addressSchema = z.object({
-  view: z.enum(['board', 'workspace', 'detail', 'milestone', 'mapping', 'changes', 'delivery']),
+  view: z.enum(['board', 'workspace', 'detail', 'milestone', 'mapping', 'changes', 'delivery', 'sessions', 'run']),
+  conversationSessionId: z.string().min(1).max(512).nullable().default(null),
+  agentRunId: z.string().min(1).max(512).transform(value => value as AgentRunId).nullable().default(null),
+  runTab: z.enum(['overview', 'trace', 'terminal']).default('overview'),
+  runReturnView: z.enum(['sessions', 'detail']).default('sessions'),
+  executionReturnView: z.enum(['detail', 'run']).default('detail'),
+  sessionsWorkItemId: sakiMoveWorkItemIntentSchema.shape.workItemId.nullable().default(null),
+  sessionsAfter: sessionsAfterSchema.default(null),
+  dispatchAfter: dispatchAfterSchema.default(null),
+  terminal: terminalSchema.default(null),
+  runReferencesOpen: z.boolean().default(false),
   changesRunId: z.string().min(1).max(512).transform(value => value as AgentRunId).nullable().default(null),
   workItemId: sakiMoveWorkItemIntentSchema.shape.workItemId.nullable(),
   milestoneId: z.string().min(1).max(512).transform(value => value as MilestoneId).nullable(),
@@ -82,5 +100,5 @@ export function createPlanningStore(): EngineStoreHandle<PlanningState, Planning
  * @returns Board address with archived Canceled items hidden.
  */
 export function initialPlanningAddress(): PlanningAddress {
-  return { view: 'board', workItemId: null, milestoneId: null, returnView: 'board', filter: '', includeCanceled: false, moveDraft: null, mappingDraft: null, changesRunId: null }
+  return { view: 'board', workItemId: null, milestoneId: null, returnView: 'board', filter: '', includeCanceled: false, moveDraft: null, mappingDraft: null, changesRunId: null, conversationSessionId: null, agentRunId: null, runTab: 'overview', runReturnView: 'sessions', executionReturnView: 'detail', sessionsWorkItemId: null, sessionsAfter: null, dispatchAfter: null, terminal: null, runReferencesOpen: false }
 }

@@ -21,6 +21,12 @@ type ResolvedConfig = Required<Omit<Config, 'pushCredentialHelper'>>
 
 /** Local Git observation, baseline, and operation resource limits. */
 export interface Config {
+  /** Maximum current Terminal summaries in a Run response (wire maximum 32). */
+  runTerminalMaxItems?: number
+  /** Maximum lines requested for one Terminal scrollback page. */
+  runTerminalPageLines?: number
+  /** Maximum complete Terminal page text length (wire maximum 65536 UTF-16 units). */
+  runTerminalMaxChars?: number
   /** Closed non-interactive system credential adapter available to Push operations. */
   pushCredentialHelper?: GitCredentialHelperId
   /** Wall-clock bound for each Git process. */
@@ -64,7 +70,7 @@ export interface Config {
 
 Depends on: [`GitCredentialHelperId`](../packages/saki/execution/src/index.ts)
 
-Source: [`packages/saki/execution-local/src/index.ts:130`](../packages/saki/execution-local/src/index.ts)
+Source: [`packages/saki/execution-local/src/index.ts:139`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 
@@ -113,13 +119,13 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/host-api/src/index.ts:71`](../packages/saki/host-api/src/index.ts)
+Source: [`packages/saki/host-api/src/index.ts:73`](../packages/saki/host-api/src/index.ts)
 
 <a id="breakfastdapaidangsaki-tool-intervention"></a>
 
 ## `@breakfastdapaidang/saki-tool-intervention`
 
-Requires: `tools` · `sessions` · `sakiControlPlane` · `timer`
+Requires: `tools` · `sessions` · `timer`
 
 ```ts config-catalog
 /** Local recovery scheduling for an Intervention opening. */

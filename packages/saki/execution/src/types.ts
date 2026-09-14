@@ -42,6 +42,69 @@ export type SakiExecutionDispatchId = Branded<'SakiExecutionDispatchId'>
 /** Stable identity of one Saki Agent Run. */
 export type SakiAgentRunId = Branded<'SakiAgentRunId'>
 
+/** Owner-scoped Terminal identity carried only by an authorized Run view. */
+export type SakiRunTerminalId = Branded<'SakiRunTerminalId'>
+
+/** One bounded Terminal scrollback selection; it grants no input or process control. */
+export interface AgentRunTerminalSelection {
+  readonly id: SakiRunTerminalId
+  readonly offset: number
+}
+
+/** Latest DSH work accounting, independent of Saki Dispatch and Work Item status. */
+export interface AgentRunSessionActivity {
+  readonly state: 'idle' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'interrupted' | 'blocked' | 'limited'
+  readonly turn: number | null
+  readonly endedAt: number | null
+}
+
+/** Readable durable Session history does not promise that a future model request can run. */
+export type AgentRunSessionObservation =
+  | {
+    readonly state: 'confirmed'
+    readonly runtime: 'running' | 'idle' | 'not-live'
+    readonly activity: AgentRunSessionActivity
+  }
+  | { readonly state: 'unavailable'; readonly reason: 'not-started' | 'missing' | 'evidence-conflict' | 'read-failed' }
+
+/** Current PTY facts; process exit and durable Session availability are independent. */
+export interface AgentRunTerminalSummary {
+  readonly id: SakiRunTerminalId
+  readonly name: string | null
+  readonly type: string
+  readonly process:
+    | { readonly state: 'running' }
+    | { readonly state: 'exited'; readonly exitCode: number | null; readonly signal: string | null }
+}
+
+/** Bounded read-only PTY evidence from the exact live Agent owner. */
+export type AgentRunTerminalObservation =
+  | { readonly state: 'unavailable'; readonly reason: 'provider-unavailable' | 'owner-not-live' | 'read-failed' }
+  | {
+    readonly state: 'confirmed'
+    readonly items: readonly AgentRunTerminalSummary[]
+    readonly more: boolean
+    readonly selected:
+      | null
+      | { readonly state: 'missing'; readonly id: SakiRunTerminalId }
+      | {
+        readonly state: 'confirmed'
+        readonly id: SakiRunTerminalId
+        readonly text: string
+        readonly totalLines: number
+        readonly lineBegin: number
+        readonly lineEnd: number
+        readonly truncated: boolean
+      }
+  }
+
+/** Safe local execution facts at one read; no transcript, filesystem path, or admission handle. */
+export interface AgentRunObservation {
+  readonly observedAt: number
+  readonly session: AgentRunSessionObservation
+  readonly terminals: AgentRunTerminalObservation
+}
+
 /** Stable user-visible identity of one Saki Work Session. */
 export type SakiWorkSessionId = Branded<'SakiWorkSessionId'>
 

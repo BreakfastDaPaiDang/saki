@@ -54,6 +54,25 @@ describe('Saki browser Host client', () => {
       expect(call).toHaveBeenLastCalledWith('/saki', 'control/query', { type: 'project-milestones', projectId: PROJECT_ID, after: null }, expect.objectContaining({ signal }))
     } finally { await fiber.dispose() }
   })
+  it('preserves Run, Dispatch, Terminal and Session pagination in protected reads', async () => {
+    const call = vi.fn(async () => ({ ok: true as const, value: { ok: false, reason: 'not-found' } }))
+    const ctx = new Context()
+    ctx.provide('connection', { rpc: { call } } as unknown as ConnectionHandle)
+    const fiber = await ctx.plugin(SakiHostClientService)
+    try {
+      const signal = new AbortController().signal
+      const sessions = sakiQueryRequestSchema.parse({ type: 'project-sessions', projectId: PROJECT_ID,
+        workItemId: `work-item-${'3'.repeat(64)}`, after: 'work-session-44444444-4444-4444-8444-444444444444' })
+      const run = sakiQueryRequestSchema.parse({ type: 'agent-run-view', projectId: PROJECT_ID,
+        agentRunId: 'agent-run-33333333-3333-4333-8333-333333333333',
+        afterDispatch: 'dispatch-55555555-5555-4555-8555-555555555555', terminal: { id: 'terminal-registry:pty-1', offset: 80 } })
+      if (sessions.type !== 'project-sessions' || run.type !== 'agent-run-view') throw new Error('Expected execution queries')
+      await expect(ctx.sakiHostClient.queryProjectSessions(sessions, signal)).resolves.toEqual({ ok: false, reason: 'not-found' })
+      expect(call).toHaveBeenLastCalledWith('/saki', 'control/query', sessions, expect.objectContaining({ signal }))
+      await expect(ctx.sakiHostClient.queryAgentRunView(run, signal)).resolves.toEqual({ ok: false, reason: 'not-found' })
+      expect(call).toHaveBeenLastCalledWith('/saki', 'control/query', run, expect.objectContaining({ signal }))
+    } finally { await fiber.dispose() }
+  })
   it('waits for authenticated projection invalidations through Connection', async () => {
     const cursor = '11111111-1111-4111-8111-111111111111'
     const call = vi.fn(async () => ({ ok: true as const, value: { ok: true, cursor } }))

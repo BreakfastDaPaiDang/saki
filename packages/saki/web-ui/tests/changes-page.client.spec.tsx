@@ -66,6 +66,18 @@ it('shows Project-wide attribution and replaces bounded Diff pages without accum
   await screen.findByText(zh['changes.chooseFile'])
 })
 
+it('returns to the exact retained Run only when its address is present', async () => {
+  const f = await bench(); cleanup()
+  const navigate = vi.spyOn(f.props.planning, 'navigate').mockImplementation(() => {})
+  const address = { ...f.props.project.address, executionReturnView: 'run' as const, agentRunId: SAKI_AGENT_RUN_PROJECTION_FIXTURES.running.id }
+  const view = render(<ChangesPage {...f.props} project={{ ...f.props.project, address }} state={f.controller.getSnapshot()} />)
+  await click(screen.getByRole('button', { name: zh['runs.back'] }))
+  expect(navigate).toHaveBeenCalledWith({ view: 'run' })
+  view.rerender(<ChangesPage {...f.props} project={{ ...f.props.project, address: { ...address, agentRunId: null } }}
+    state={f.controller.getSnapshot()} />)
+  expect(screen.queryByRole('button', { name: zh['runs.back'] })).toBeNull()
+})
+
 it('stages and unstages only the clicked file and requires acknowledgement between requests', async () => {
   const f = await bench()
   f.api.stageFiles.mockImplementation(async intent => sakiStageFilesResultSchema.parse(gitSuccess(intent)))

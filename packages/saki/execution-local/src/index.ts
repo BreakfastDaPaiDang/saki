@@ -20,6 +20,8 @@ import {
   SakiHostExecution,
 } from '@breakfastdapaidang/saki-execution'
 import type {
+  AgentRunObservation,
+  AgentRunTerminalSelection,
   ActiveHostProjectBinding,
   GitCredentialHelperId,
   HostOperationAdmissionSource,
@@ -75,6 +77,7 @@ import {
   resumeSucceededLocalAgentRun,
 } from './agent-run.ts'
 import { inspectLocalInterventionOpening } from './intervention-opening.ts'
+import { observeLocalAgentRun } from './agent-run-observation.ts'
 import { inspectLocalProjectCommit } from './commit-inspection.ts'
 import {
   advanceLocalGitPush,
@@ -87,6 +90,12 @@ import { localGitPushInternalsFor } from './git-push-internals.ts'
 
 /** Local Git observation, baseline, and operation resource limits. */
 export interface Config {
+  /** Maximum current Terminal summaries in a Run response (wire maximum 32). */
+  runTerminalMaxItems?: number
+  /** Maximum lines requested for one Terminal scrollback page. */
+  runTerminalPageLines?: number
+  /** Maximum complete Terminal page text length (wire maximum 65536 UTF-16 units). */
+  runTerminalMaxChars?: number
   /** Closed non-interactive system credential adapter available to Push operations. */
   pushCredentialHelper?: GitCredentialHelperId
   /** Wall-clock bound for each Git process. */
@@ -141,6 +150,9 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     'storageDomain', 'subprocess', 'workspaceRegistry',
   ]
   static Config: z<Config> = z.object({
+    runTerminalMaxItems: z.natural().min(1).max(32).default(32),
+    runTerminalPageLines: z.natural().min(1).max(1_000).default(80),
+    runTerminalMaxChars: z.natural().min(1).max(65_536).default(32_768),
     pushCredentialHelper: z.union([
       z.const('git-credential-manager'),
       z.const('git-credential-manager-core'),
@@ -175,6 +187,7 @@ export class LocalSakiHostExecution extends SakiHostExecution {
   private readonly active = new Set<Promise<unknown>>()
   private readonly liveOperations = new Map<HostOperationReference['id'], LiveHostOperation>()
   private readonly liveAgentRuns = new Map<SessionId, AgentHandle>()
+  private readonly terminalGenerations = new WeakMap<object, string>()
   private readonly changedListeners = new Set<(change: HostOperationChange) => void>()
   private operationTail: Promise<void> = Promise.resolve()
 
@@ -276,6 +289,20 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     if (this.lifetime.signal.aborted) throw this.lifetime.signal.reason
     const fused = AbortSignal.any([signal, this.lifetime.signal])
     return await this.track(inspectLocalInterventionOpening(this.ctx.sessionPersistence, request, fused))
+  }
+
+  override async observeAgentRun(
+    operation: HostOperationReference<'start-agent-run'>,
+    terminal: AgentRunTerminalSelection | null,
+    signal: AbortSignal,
+  ): Promise<AgentRunObservation> {
+    const fused = AbortSignal.any([signal, this.lifetime.signal])
+    fused.throwIfAborted()
+    const record = this.requireOperation(operation)
+    return await this.track(observeLocalAgentRun(
+      { ...this.agentRunDependencies(), terminalGenerations: this.terminalGenerations },
+      record as LocalHostAgentRunOperationRecord, terminal, this.config, fused,
+    ))
   }
 
   override async prepareOperation<K extends HostOperationKind>(

@@ -43,6 +43,9 @@
     },
     {
       "path": "../../util/values"
+    },
+    {
+      "path": "../../client/ui-conversation"
     }
   ]
 }

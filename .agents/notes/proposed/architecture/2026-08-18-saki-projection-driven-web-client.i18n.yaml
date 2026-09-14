@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-18-saki-projection-driven-web-client.md
-2026-08-18-saki-projection-driven-web-client.md: ee29e102dd41a60bdb3bc6220fb2599929b38880
-2026-08-18-saki-projection-driven-web-client.zh.md: 1a0c81920833ef253abccae9fa87880c369e5000
+2026-08-18-saki-projection-driven-web-client.md: 1be73b354b81453c73be951db16dc013d1fe7358
+2026-08-18-saki-projection-driven-web-client.zh.md: 43995e07439750edfefafdbafbcd10b15f8bcfd8

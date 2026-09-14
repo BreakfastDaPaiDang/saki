@@ -52,6 +52,9 @@
     },
     {
       "path": "../execution"
+    },
+    {
+      "path": "../../terminal/terminal"
     }
   ]
 }

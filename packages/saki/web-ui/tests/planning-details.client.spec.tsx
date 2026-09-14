@@ -75,7 +75,7 @@ it('keeps accepted delivery evidence and confirmed CI links when its current rea
   fireEvent.click(screen.getByRole('button', { name: t('planning.move') }))
   expect(props.actions.beginMove).toHaveBeenCalledWith(detail.workItem)
   fireEvent.click(screen.getByRole('button', { name: t('delivery.title') }))
-  expect(props.actions.navigate).toHaveBeenCalledWith({ view: 'delivery' })
+  expect(props.actions.navigate).toHaveBeenCalledWith({ view: 'delivery', executionReturnView: 'detail' })
   view.rerender(<WorkItemView {...props} openSession={vi.fn()} openMilestone={vi.fn()} project={{ ...props.project,
     detail: { value: { ...value, branchDelivery: { ...BRANCH, delivery: { ...BRANCH.delivery, phase: 'draft', acceptance: undefined },
       ci: { current: { state: 'unobserved' } }, pullRequest: { current: { state: 'unobserved' } },
@@ -164,11 +164,15 @@ it('links recorded Runs and Blockages to their Session and preserves Milestone a
   expect(screen.getByText(/Confirm the release scope/)).toBeTruthy()
   for (const button of screen.getAllByRole('button', { name: t('planning.openSession') })) fireEvent.click(button)
   expect(openSession.mock.calls).toEqual([[run.sessionId], [run.sessionId]])
+  fireEvent.click(screen.getByRole('button', { name: t('sessions.title') }))
+  expect(props.actions.navigate).toHaveBeenLastCalledWith({ view: 'sessions', sessionsWorkItemId: detail.workItem.id, sessionsAfter: null })
+  fireEvent.click(screen.getByRole('button', { name: t('runs.open') }))
+  expect(props.actions.navigate).toHaveBeenLastCalledWith({ view: 'run', agentRunId: run.id, runReturnView: 'detail', runTab: 'overview', dispatchAfter: null, terminal: null, runReferencesOpen: false })
   const changes = screen.getAllByRole('button', { name: t('changes.title') })
   fireEvent.click(changes[0]!)
-  expect(props.actions.navigate).toHaveBeenLastCalledWith({ view: 'changes', changesRunId: null })
+  expect(props.actions.navigate).toHaveBeenLastCalledWith({ view: 'changes', executionReturnView: 'detail', changesRunId: null })
   fireEvent.click(changes[1]!)
-  expect(props.actions.navigate).toHaveBeenLastCalledWith({ view: 'changes', changesRunId: run.id })
+  expect(props.actions.navigate).toHaveBeenLastCalledWith({ view: 'changes', executionReturnView: 'detail', changesRunId: run.id })
   fireEvent.click(screen.getByRole('button', { name: 'saki-v0.1.0' }))
   expect(openMilestone).toHaveBeenCalledWith(MILESTONE_SUMMARY.id)
   expect(screen.getByText(run.source.intentId)).toBeTruthy()

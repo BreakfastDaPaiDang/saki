@@ -27,6 +27,8 @@ Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.pa
 
 在 Windows 上，该组合还挂载当前用户 DPAPI 凭据 Provider 与 Saki Product GitHub App Provider；不支持的平台会禁用这两个配置项，而不会把更弱的凭据来源报告成 `local-user-trust`。启动流程会先根据精确的 succeeded Host Operation 与物理 Session evidence 恢复每个已经过控制面校验的 running Agent，随后启动器才会发布就绪记录或 bootstrap handoff。就绪配置项提供稳定的 `{"product":"saki","status":"ready"}` 记录。启动器只在 `boot()` 完成配置项激活审计后将其写入 stdout；报告失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。
 
+Connection 激活会等待控制面完成恢复。因此浏览器重连不能在 Local Host 建立 Agent 所有权前，通过通用 Conversation API 恢复保留的 Session。Development Agent 的 Intervention 工具可在恢复期间注册，只在请求或 opening 最终确认时解析控制面。
+
 在 POSIX 上，Connection 通过 `dsh-credentials-local` 将浏览器会话签名记录存储在 harness home 中，保护等级为 `plaintext`。Product GitHub App 在该平台保持禁用；它要求的 `local-user-trust` 由 Windows DPAPI 组合提供。
 
 在仓库根目录运行：

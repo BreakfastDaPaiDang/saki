@@ -109,6 +109,8 @@ import {
 import { readReleaseSnapshotV1 } from './release-snapshot-reader.ts'
 import { planningBody, planningMilestones, planningReferences, planningWorkItem } from './planning-views.ts'
 import { DeliveryWorkspaceReader } from './delivery-workspace.ts'
+import { agentRunView, projectSessions, type SessionViewRecords } from './session-views.ts'
+import type { AgentRunObservation } from '@breakfastdapaidang/saki-execution'
 import type { SakiWorkItemBodyProjection } from './planning-views.ts'
 import type {
   ReleaseEvidencePolicyV1Expectation,
@@ -1157,6 +1159,39 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         if (this.githubSynchronization.board(query.projectId) === 'not-found') return { ok: false, reason: 'not-found' }
         return { ok: true, projection: planningMilestones(this.milestoneDeliveryTable.entries(), query.projectId, query.after) }
       }
+      case 'project-sessions': {
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        const board = this.planningBoard(authentication, query.projectId)
+        if (board === 'not-found') return { ok: false, reason: 'not-found' }
+        return { ok: true, projection: projectSessions(query, this.sessionViewRecords(), board) }
+      }
+      case 'agent-run-view': {
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        const run = this.agentRunTable.get(query.agentRunId)
+        if (run === undefined || run.projectId !== query.projectId
+          || this.planningBoard(authentication, query.projectId) === 'not-found') return { ok: false, reason: 'not-found' }
+        const dispatch = run.dispatchIds.map(id => this.executionDispatchTable.get(id))
+          .find(value => value?.preparation !== undefined)
+        let observation: AgentRunObservation = {
+          observedAt: Date.now(), session: { state: 'unavailable', reason: 'not-started' },
+          terminals: { state: 'unavailable', reason: 'owner-not-live' },
+        }
+        if (dispatch?.preparation !== undefined) {
+          try {
+            observation = await this.ctx.sakiHostExecution.observeAgentRun({ ...dispatch.preparation.operation, type: 'start-agent-run' }, query.terminal, signal)
+          } catch {
+            signal.throwIfAborted()
+            observation = { observedAt: Date.now(), session: { state: 'unavailable', reason: 'read-failed' },
+              terminals: { state: 'unavailable', reason: 'read-failed' } }
+          }
+        }
+        signal.throwIfAborted()
+        if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
+        const board = this.planningBoard(authentication, query.projectId)
+        if (board === 'not-found') return { ok: false, reason: 'not-found' }
+        const projection = agentRunView(query, this.sessionViewRecords(), board, observation)
+        return projection === null ? { ok: false, reason: 'not-found' } : { ok: true, projection }
+      }
       case 'work-item-view': {
         if (!this.authorized(authentication, 'board:read')) return { ok: false, reason: 'denied' }
         const initial = this.planningBoard(authentication, query.projectId)
@@ -1293,6 +1328,11 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         'work-item:move': this.authorized(authentication, 'work-item:move'),
       }, projection.checkpoint?.observedAt,
     ) }
+  }
+
+  private sessionViewRecords(): SessionViewRecords {
+    return { sessions: this.workSessionTable, assignments: this.workAssignmentTable, runs: this.agentRunTable,
+      intents: this.agentOperationIntentTable, dispatches: this.executionDispatchTable, interventions: this.interventionRequestTable }
   }
 
   private async readPlanningBody(

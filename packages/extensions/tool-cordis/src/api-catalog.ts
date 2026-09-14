@@ -1522,6 +1522,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'whether the opening is absent, incomplete, exactly confirmed, or conflicting.',
       },
       {
+        signature: 'abstract observeAgentRun( operation: HostOperationReference<\'start-agent-run\'>, terminal: AgentRunTerminalSelection | null, signal: AbortSignal, ): Promise<AgentRunObservation>',
+        description: 'Read durable Session accounting and current Terminal facts for an already-owned Run. This does not restore, wake, cancel, or submit input to its Agent.',
+        parameters: [{ name: 'operation', description: 'exact StartAgentRun operation retained by the control plane.' }, { name: 'terminal', description: 'optional owner-scoped bounded scrollback selection.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
+        returns: 'independent Session and Terminal observations without Host authority material.',
+      },
+      {
         signature: 'abstract prepareOperation<K extends HostOperationKind>( request: HostOperationRequest<K>, admissionSource: HostOperationAdmissionSource, signal: AbortSignal, ): Promise<HostOperationReceipt<K>>',
         description: 'Durably create or replay one inert Host Operation before any external effect and bind an ephemeral current-admission callback to its receipt.',
         parameters: [{ name: 'request', description: 'complete immutable operation request and trusted Git preconditions.' }, { name: 'admissionSource', description: 'same-process callback used only at the effect boundary.' }, { name: 'signal', description: 'caller lifetime for preparation; aborting it is not durable cancellation.' }],
@@ -3844,6 +3850,30 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'AgentResolver',
     declaration: 'export type AgentResolver = (sessionId: SessionId) => Promise<Agent>;',
+  },
+  {
+    name: 'AgentRunObservation',
+    declaration: 'export interface AgentRunObservation {\n    readonly observedAt: number;\n    readonly session: AgentRunSessionObservation;\n    readonly terminals: AgentRunTerminalObservation;\n}',
+  },
+  {
+    name: 'AgentRunSessionActivity',
+    declaration: 'export interface AgentRunSessionActivity {\n    readonly state: \'idle\' | \'running\' | \'succeeded\' | \'failed\' | \'canceled\' | \'interrupted\' | \'blocked\' | \'limited\';\n    readonly turn: number | null;\n    readonly endedAt: number | null;\n}',
+  },
+  {
+    name: 'AgentRunSessionObservation',
+    declaration: 'export type AgentRunSessionObservation = {\n    readonly state: \'confirmed\';\n    readonly runtime: \'running\' | \'idle\' | \'not-live\';\n    readonly activity: AgentRunSessionActivity;\n} | {\n    readonly state: \'unavailable\';\n    readonly reason: \'not-started\' | \'missing\' | \'evidence-conflict\' | \'read-failed\';\n};',
+  },
+  {
+    name: 'AgentRunTerminalObservation',
+    declaration: 'export type AgentRunTerminalObservation = {\n    readonly state: \'unavailable\';\n    readonly reason: \'provider-unavailable\' | \'owner-not-live\' | \'read-failed\';\n} | {\n    readonly state: \'confirmed\';\n    readonly items: readonly AgentRunTerminalSummary[];\n    readonly more: boolean;\n    readonly selected: null | {\n        readonly state: \'missing\';\n        readonly id: SakiRunTerminalId;\n    } | {\n        readonly state: \'confirmed\';\n        readonly id: SakiRunTerminalId;\n        readonly text: string;\n        readonly totalLines: number;\n        readonly lineBegin: number;\n        readonly lineEnd: number;\n        readonly truncated: boolean;\n    };\n};',
+  },
+  {
+    name: 'AgentRunTerminalSelection',
+    declaration: 'export interface AgentRunTerminalSelection {\n    readonly id: SakiRunTerminalId;\n    readonly offset: number;\n}',
+  },
+  {
+    name: 'AgentRunTerminalSummary',
+    declaration: 'export interface AgentRunTerminalSummary {\n    readonly id: SakiRunTerminalId;\n    readonly name: string | null;\n    readonly type: string;\n    readonly process: {\n        readonly state: \'running\';\n    } | {\n        readonly state: \'exited\';\n        readonly exitCode: number | null;\n        readonly signal: string | null;\n    };\n}',
   },
   {
     name: 'AgentSetup',
@@ -6192,6 +6222,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SakiReturnAddress',
     declaration: 'export type SakiReturnAddress = {\n    readonly kind: \'work-item\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly workItemId: SakiBoardWorkItemId;\n} | {\n    readonly kind: \'work-session\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly workItemId: SakiBoardWorkItemId;\n    readonly workSessionId: SakiWorkSessionId;\n} | {\n    readonly kind: \'agent-run\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly workItemId: SakiBoardWorkItemId;\n    readonly workSessionId: SakiWorkSessionId;\n    readonly agentRunId: SakiAgentRunId;\n};',
+  },
+  {
+    name: 'SakiRunTerminalId',
+    declaration: 'export type SakiRunTerminalId = Branded<\'SakiRunTerminalId\'>;',
   },
   {
     name: 'SakiUnauthenticatedAccessProjection',

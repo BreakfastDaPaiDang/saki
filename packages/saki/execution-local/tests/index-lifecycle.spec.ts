@@ -31,6 +31,9 @@ const HOST_ID = 'host-11111111-1111-4111-8111-111111111111' as SakiHostId
 const BINDING_ID = 'binding-11111111-1111-4111-8111-111111111111' as SakiResourceBindingId
 const WORKSPACE_ID = WorkspaceId('workspace-index-lifecycle')
 const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
+  runTerminalMaxItems: 32,
+  runTerminalPageLines: 80,
+  runTerminalMaxChars: 32_768,
   gitCommandTimeoutMs: 10_000,
   gitTerminationGraceMs: 100,
   maxGitStdoutBytes: 1024 * 1024,
@@ -68,6 +71,15 @@ afterEach(async () => {
 })
 
 describe('LocalSakiHostExecution lifecycle interface', () => {
+  it.each([
+    ['runTerminalMaxItems', 32], ['runTerminalPageLines', 1_000], ['runTerminalMaxChars', 65_536],
+  ] as const)('bounds %s at the configuration parser', (key, maximum) => {
+    for (const value of [0, -1, 1.5, maximum + 1]) {
+      expect(() => LocalSakiHostExecution.Config({ [key]: value })).toThrow()
+    }
+    expect(LocalSakiHostExecution.Config({ [key]: maximum })).toHaveProperty(key, maximum)
+    expect(LocalSakiHostExecution.Config({ [key]: 1 })).toHaveProperty(key, 1)
+  })
   it('reports the configured Push adapter identity without resolving an account', async () => {
     const root = await repository()
     const configured = await provider(root, { pushCredentialHelper: 'git-credential-manager-core' })
@@ -102,6 +114,7 @@ describe('LocalSakiHostExecution lifecycle interface', () => {
     await expect(execution.prepareOperation(request, accepted(1), signal)).rejects.toThrow(disposed)
     await expect(execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal))
       .rejects.toThrow(disposed)
+    await expect(execution.observeAgentRun({ ...prepared.preparation.operation, type: 'start-agent-run' }, null, signal)).rejects.toThrow(disposed)
     await expect(execution.inspectOperation(prepared.preparation.operation, signal)).rejects.toThrow(disposed)
     await expect(execution.cancelOperation(prepared.preparation.operation, 'source-canceled', signal))
       .rejects.toThrow(disposed)

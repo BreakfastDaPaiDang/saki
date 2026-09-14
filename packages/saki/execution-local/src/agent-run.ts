@@ -442,8 +442,15 @@ async function inspectDurableInput(
   return classifyInput(inspected.events, record.request.run.input, record.request.run.agentRunId)
 }
 
-async function inspectDurableSession(
-  dependencies: LocalAgentRunDependencies,
+/**
+ * Read durable events only for a Session whose live Agent belongs to this Host provider.
+ * @param dependencies - provider-owned handles and physical Session capabilities.
+ * @param sessionId - exact Session retained by a Host operation.
+ * @param signal - caller lifetime and cancellation.
+ * @returns physical history, absence, or an independently owned live-Agent conflict.
+ */
+export async function inspectDurableSession(
+  dependencies: Pick<LocalAgentRunDependencies, 'agents' | 'handles' | 'sessions' | 'sessionPersistence'>,
   sessionId: SessionId,
   signal: AbortSignal,
 ): Promise<SessionEvidence> {

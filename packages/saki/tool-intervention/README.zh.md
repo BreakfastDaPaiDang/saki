@@ -37,6 +37,8 @@ Saki Development Agent 私有的模型侧 `request_intervention` 工具。它通
 
 此包是 Saki Intervention Request 的 Development Agent 消费方。产品 Host 会在系统自有的 Development Agent Preset 中组合它。通用 DSH question 与 approval 工具仍是 live interaction，不会被替换。
 
+工具注册需要 Tools、Sessions 和 Timer，因此控制面在发布就绪状态前恢复保留的 Agent 时，preset 仍可挂载。每次请求及 opening 最终确认都会解析当前控制面。Provider 不可用时会明确报错，不创建问题或结束轮次；待处理的最终确认保留现有重试行为。
+
 <a id="model-experience"></a>
 ## 模型体验
 

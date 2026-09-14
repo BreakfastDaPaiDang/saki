@@ -1943,6 +1943,8 @@ describe('InheritedChangeBaseline schemas', () => {
 
   it('constructs a Host Execution provider through the service seam', async () => {
     class TestExecution extends SakiHostExecution {
+      async observeAgentRun(): Promise<never> { throw new Error('Run observation is not configured in this fixture') }
+
       readonly pushCredentialHelper = undefined
       async inspectProjectSelection(): Promise<{ readonly ok: false; readonly reason: 'unavailable' }> {
         return { ok: false, reason: 'unavailable' }

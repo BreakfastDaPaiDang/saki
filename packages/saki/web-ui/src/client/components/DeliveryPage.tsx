@@ -42,6 +42,7 @@ export function DeliveryPage({ project, state, actions, git, gitActions, plannin
     <header className={css.header}>
       <div><h1>{t('delivery.title')}</h1><p>{item === undefined ? project.board.value?.confirmed?.project.title : `#${item.issueNumber} ${item.title}`}</p></div>
       <div className={css.actions}>
+        {project.address.executionReturnView === 'run' && project.address.agentRunId !== null ? <Button variant="outline" onClick={() => { planning.navigate({ view: 'run' }) }}>{t('runs.back')}</Button> : null}
         <Button variant="outline" onClick={() => { planning.navigate({ view: 'detail' }) }}>{t('changes.backItem')}</Button>
         <Button variant="outline" onClick={() => { planning.navigate({ view: 'changes' }) }}>{t('changes.title')}</Button>
         <Button variant="outline" disabled={state.read.loading} onClick={() => { void actions.refresh() }}>{t('delivery.refresh')}</Button>
