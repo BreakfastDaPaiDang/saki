@@ -44,7 +44,7 @@ it('records failed execution separately from delivered input and readable histor
     terminal: screen.getByText(zh['runs.terminal.owner-not-live']).textContent,
   }).toMatchSnapshot()
   await click(zh['runs.tab.trace'])
-  expect(screen.getByText((_text, element) => element?.tagName === 'P' && element.textContent?.endsWith(` · ${zh['runs.dispatch.accepted']}`) === true)).toBeTruthy()
+  expect(screen.getByText((_text, element) => element?.tagName === 'P' && element.textContent.endsWith(` · ${zh['runs.dispatch.accepted']}`))).toBeTruthy()
   expect(screen.getByText(`${zh['runs.operation']} · ${zh['runs.inputDelivered']}`)).toBeTruthy()
   await click(zh['planning.openSession'])
   expect(f.openSession).toHaveBeenCalledWith(run.run.sessionId)
