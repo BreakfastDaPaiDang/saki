@@ -75,6 +75,8 @@ An Intervention answer uses a new Dispatch and stable MessageId but retains the 
 
 `resumeAgentRun` is a startup-only recovery operation for a control-plane-validated running Run and its exact succeeded `StartAgentRun` operation and request. A Provider restores the live Agent handle only when the physical Session header and original input match that request. It adds no input, wake, or model request; missing, unavailable, or conflicting Host, Session, or Agent evidence rejects startup.
 
+`observeAgentRun` accepts an exact `start-agent-run` operation reference and an optional opaque Terminal selection. It separately reports physical Session history, recent consumed-work outcome, live Agent state, and bounded owner-scoped Terminal output. It creates no Agent, wake, model request, or terminal process. Unavailable evidence remains explicit; Host input-delivery success is independent of model completion.
+
 ## Model Experience
 
 ### Host execution values and Agent Run input

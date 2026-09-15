@@ -2,6 +2,8 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type {
+  AgentRunObservation,
+  AgentRunTerminalSelection,
   GitCredentialHelperId,
   InspectProjectRequest,
   InspectProjectResult,
@@ -154,6 +156,13 @@ export {
 } from './schemas.ts'
 
 export type {
+  AgentRunObservation,
+  AgentRunSessionActivity,
+  AgentRunSessionObservation,
+  AgentRunTerminalObservation,
+  AgentRunTerminalSelection,
+  AgentRunTerminalSummary,
+  SakiRunTerminalId,
   ActiveHostProjectBinding,
   AppliedProjectGitChange,
   CommitHostOperationRequest,
@@ -373,6 +382,20 @@ export abstract class SakiHostExecution extends Service {
     request: InspectInterventionOpeningRequest,
     signal: AbortSignal,
   ): Promise<InterventionOpeningEvidence>
+
+  /**
+   * Read durable Session accounting and current Terminal facts for an already-owned Run.
+   * This does not restore, wake, cancel, or submit input to its Agent.
+   * @param operation - exact StartAgentRun operation retained by the control plane.
+   * @param terminal - optional owner-scoped bounded scrollback selection.
+   * @param signal - required caller lifetime and cancellation.
+   * @returns independent Session and Terminal observations without Host authority material.
+   */
+  abstract observeAgentRun(
+    operation: HostOperationReference<'start-agent-run'>,
+    terminal: AgentRunTerminalSelection | null,
+    signal: AbortSignal,
+  ): Promise<AgentRunObservation>
 
   /**
    * Durably create or replay one inert Host Operation before any external

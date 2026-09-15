@@ -97,6 +97,8 @@ Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机
 | `milestoneDeliveryObservationFreshForMs` | 300000 ms（5 分钟） | Milestone View 与不可变 Release Evidence 的新鲜度窗口 |
 | `targetedPendingPollIntervalMs` | 300000 ms（5 分钟） | 限定在 Provider 生命周期内的 targeted pending pass 间隔 |
 
+`project-sessions` 对保留的 Work Session 分页，不依赖当前 Board 成员关系。`agent-run-view` 组合所选 Run 固定的来源与 Profile、有界 Dispatch 和 Intervention 历史及只读 Host 观察。查询在等待 Host 工作前后均要求当前 `board:read` 权限。准入状态与最近 DSH 执行结果分别保留；模型轮次失败不会修改 Work Item 状态。当前阻塞 Intervention 与有界近期历史一起保持可见。
+
 <a id="model-experience"></a>
 ## 模型体验
 
@@ -112,7 +114,7 @@ Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机
 - **只支持一个本地 Host Operator**：尚未实现 GitHub 登录、组织成员关系、多用户、远程 Host 或非回环部署。
 - **只支持显式 operation**：尚未实现 Resource Binding 重绑定与退役、自动领取、仓库或 Board 自动变更、mapping repair、reconciliation repair 与 inherited-change 人工接管。StageFiles、UnstageFiles、CreateCommit、`CreateWorkItem`、`MoveWorkItem` 与 Give-to-Agent 都是显式操作员 Intent；repair overlay 不会自动执行它们，浏览器输入也不能指定仓库路径或 Provider 拥有的 GitHub target id。预期 revision CAS 的失败方会保留已创建或接纳的可复用 DSH Workspace，而不创建 Saki Project 或 Resource Binding；控制面不会删除本次登记可能并非独占的 Workspace。
 - **只支持启动器恢复**：本地访问恢复需要重新启动具备权限的启动器，不提供只依赖浏览器的凭据恢复流程。
-- **Detail Projection 仍只提供 fixture**：My Work 与 Attention 可以查询，但 Work Item detail 与当前/最近 Agent Run contract 仍只有面向浏览器的 fixture，没有控制面 query 或 view builder。
+- **有界执行视图**：Session 和 Dispatch 每页最多 32 条。Intervention 历史最多保留 32 条并包含当前阻塞项，明确提示更早记录。Terminal 读取要求当前 Agent 的现有注册表，不能恢复丢失的进程。
 - **只解析精确 route**：手动 Give-to-Agent 会验证当前 LLM runtime、已登记的 provider adapter 与精确 model metadata，但不会启动生成。它不会建立生产 provider authorization，也不会验证 credential availability、quota 或 account health。
 
 <a id="dev-note"></a>

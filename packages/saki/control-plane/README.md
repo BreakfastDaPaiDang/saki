@@ -97,6 +97,8 @@ The bootstrap exchange requires the exact configured loopback Origin. Configurat
 | `milestoneDeliveryObservationFreshForMs` | 300000 ms (5 minutes) | Freshness window for Milestone View and immutable Release Evidence |
 | `targetedPendingPollIntervalMs` | 300000 ms (5 minutes) | Interval between provider-scoped targeted pending passes |
 
+`project-sessions` pages retained Work Sessions independently of current Board membership. `agent-run-view` joins the selected Run’s frozen source and Profile, bounded Dispatch and Intervention history, and read-only Host observations. The query requires current `board:read` authority before and after awaited Host work. Admission state and latest DSH execution outcome remain separate; a failed model turn does not mutate Work Item status. Current blocking Interventions remain visible alongside bounded recent history.
+
 ## Model Experience
 
 None, as this module freezes Host-owned payloads but registers no model-facing tool, prompt section, or Session event.
@@ -110,7 +112,7 @@ The control plane does not assemble a provider request or reusable prefix; it fr
 - **One local Host Operator only** — GitHub login, organization membership, multiple users, remote Hosts, and non-loopback deployment are not implemented.
 - **Explicit operations only** — Resource Binding rebind, retirement, automatic claiming, automatic repository or Board mutation, mapping repair, reconciliation repair, and manual inherited-change takeover are not implemented. StageFiles, UnstageFiles, CreateCommit, `CreateWorkItem`, `MoveWorkItem`, and Give-to-Agent are explicit operator Intents; repair overlays do not run them automatically, and browser input cannot name a repository path or Provider-owned GitHub target id. An expected-revision CAS loser leaves any created or adopted DSH Workspace available for reuse without a Saki Project or Resource Binding; the control plane does not delete a Workspace that the registration may not exclusively own.
 - **Launcher recovery only** — Local access recovery requires a newly started privileged launcher; there is no browser-only credential recovery flow.
-- **Detail projections remain fixture-only** — My Work and Attention are queryable, but Work Item detail and current/recent Agent Run contracts still have only browser-safe fixtures and no control-plane query or view builder.
+- **Bounded execution views** — Session and Dispatch pages contain at most 32 entries. Intervention history keeps at most 32 entries, including the current blocker; older entries are explicitly indicated. Terminal reads require the current Agent’s existing registry and cannot restore a lost process.
 - **Exact route resolution only** — manual Give-to-Agent validates the current LLM runtime, registered provider adapter, and exact model metadata without starting generation. It does not establish production provider authorization, credential availability, quota, or account health.
 
 ### Dev Note

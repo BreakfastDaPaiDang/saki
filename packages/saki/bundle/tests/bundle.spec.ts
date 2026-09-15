@@ -35,6 +35,7 @@ describe('Saki bundle package', () => {
         disabled?: unknown
       }>
     }>)[0]!.insert
+    expect(insert.find(entry => entry.id === 'saki-connection')?.inject).toEqual(['sakiControlPlane'])
     expect(insert.map(entry => [entry.id, entry.name])).toEqual([
       ['timer', '@deepseek-ai/cordis-plugin-timer'],
       ['storage', '@deepseek-ai/dsh-storage'],

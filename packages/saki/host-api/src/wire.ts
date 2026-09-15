@@ -2,6 +2,7 @@
 
 import { z } from 'zod'
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { SakiRunTerminalId } from '@breakfastdapaidang/saki-execution'
 import {
   canonicalDigest,
   gitCredentialHelperIdSchema,
@@ -249,6 +250,10 @@ export const sakiBootstrapExchangeRequestSchema = z.object({
 }).strict()
 
 /** Closed project-query body schema with branded cross-boundary ids. */
+const runTerminalIdSchema = z.string().min(1).max(512).regex(/^[^\u0000-\u0020\u007f]+$/u).transform(value => value as SakiRunTerminalId)
+const runTerminalSelectionSchema = z.object({ id: runTerminalIdSchema, offset: safeInteger }).strict()
+
+/** Closed Project reads with only opaque Run and Terminal selectors. */
 export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('my-work') }).strict(),
   z.object({ type: z.literal('attention') }).strict(),
@@ -285,6 +290,8 @@ export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
   }).strict(),
   z.object({ type: z.literal('project-mapping'), projectId }).strict(),
   z.object({ type: z.literal('work-item-view'), projectId, workItemId: boardWorkItemId }).strict(),
+  z.object({ type: z.literal('project-sessions'), projectId, workItemId: boardWorkItemId.nullable(), after: sakiWorkSessionIdSchema.nullable() }).strict(),
+  z.object({ type: z.literal('agent-run-view'), projectId, agentRunId: sakiAgentRunIdSchema, afterDispatch: sakiExecutionDispatchIdSchema.nullable(), terminal: runTerminalSelectionSchema.nullable() }).strict(),
   z.object({ type: z.literal('project-milestones'), projectId, after: githubMilestoneIdSchema.nullable() }).strict(),
   z.object({
     type: z.literal('branch-delivery'),
@@ -2743,6 +2750,105 @@ export const sakiProjectMilestonesResultSchema: z.ZodType<SakiQueryResult<'proje
   z.object({ ok: z.literal(true), projection: z.object({ type: z.literal('project-milestones'), projectId, items: z.array(planningMilestoneSchema).max(32), next: githubMilestoneIdSchema.nullable() }).strict() }).strict(), boardFailureSchema,
 ]) satisfies z.ZodType<SakiQueryResult<'project-milestones'>>
 
+/** Durable admission state, independent of the latest DSH execution outcome. */
+const runAdmissionStateSchema = z.enum(['allocated', 'starting', 'running', 'waiting', 'resume-pending', 'canceled', 'reconciliation-required'])
+const workSessionSummarySchema = z.object({
+  id: sakiWorkSessionIdSchema, revision, state: z.enum(['open', 'canceled', 'reconciliation-required']), primary: z.literal(true),
+  workItem: z.object({
+    id: boardWorkItemId, title: safeText, issueNumber: positiveInteger, status: sakiBoardStatusSchema.nullable(),
+  }).strict(),
+  assignment: z.object({ id: assignmentId, state: z.enum(['assigned', 'active', 'canceled', 'reconciliation-required']), ownerPrincipalId: principalId, currentAgentRunId: sakiAgentRunIdSchema }).strict(),
+  runs: z.array(z.object({ id: sakiAgentRunIdSchema, sessionId: sakiAgentRunSessionId,
+    state: runAdmissionStateSchema, createdAt: safeInteger, updatedAt: safeInteger,
+  }).strict()
+    .refine(value => value.updatedAt >= value.createdAt, 'Run timestamps are not monotonic')).min(1).max(32),
+  createdAt: safeInteger, updatedAt: safeInteger,
+}).strict().refine(value => value.updatedAt >= value.createdAt && new Set(value.runs.map(run => run.id)).size === value.runs.length
+  && value.runs.some(run => run.id === value.assignment.currentAgentRunId), 'Work Session relationships or timestamps are inconsistent')
+
+/** Strict bounded Session destinations without private Dispatch or Host authority. */
+export const sakiProjectSessionsResultSchema: z.ZodType<SakiQueryResult<'project-sessions'>> = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: z.object({
+    type: z.literal('project-sessions'), projectId, workItemId: boardWorkItemId.nullable(),
+    items: z.array(workSessionSummarySchema).max(32), next: sakiWorkSessionIdSchema.nullable(),
+  }).strict().refine(value => new Set(value.items.map(item => item.id)).size === value.items.length
+    && (value.workItemId === null || value.items.every(item => item.workItem.id === value.workItemId))
+    && (value.next === null || value.next === value.items.at(-1)?.id), 'Session page scope, identities, or cursor are inconsistent') }).strict(),
+  boardFailureSchema,
+])
+
+const runActivitySchema = z.object({
+  state: z.enum(['idle', 'running', 'succeeded', 'failed', 'canceled', 'interrupted', 'blocked', 'limited']),
+  turn: safeInteger.nullable(), endedAt: safeInteger.nullable(),
+}).strict()
+const runSessionObservationSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('confirmed'), runtime: z.enum(['running', 'idle', 'not-live']), activity: runActivitySchema }).strict(),
+  z.object({ state: z.literal('unavailable'), reason: z.enum(['not-started', 'missing', 'evidence-conflict', 'read-failed']) }).strict(),
+])
+const runTerminalSummarySchema = z.object({
+  id: runTerminalIdSchema, name: z.string().max(256).nullable(), type: z.string().max(256),
+  process: z.discriminatedUnion('state', [
+    z.object({ state: z.literal('running') }).strict(),
+    z.object({ state: z.literal('exited'), exitCode: z.number().int().min(-2_147_483_648).max(4_294_967_295).nullable(), signal: z.string().max(32).nullable() }).strict(),
+  ]),
+}).strict()
+const runTerminalObservationSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('unavailable'), reason: z.enum(['provider-unavailable', 'owner-not-live', 'read-failed']) }).strict(),
+  z.object({ state: z.literal('confirmed'), items: z.array(runTerminalSummarySchema).max(32), more: z.boolean(),
+    selected: z.discriminatedUnion('state', [
+      z.object({ state: z.literal('missing'), id: runTerminalIdSchema }).strict(),
+      z.object({ state: z.literal('confirmed'), id: runTerminalIdSchema, text: z.string().max(65_536), totalLines: safeInteger,
+        lineBegin: safeInteger, lineEnd: safeInteger, truncated: z.boolean(),
+      }).strict().refine(value => value.lineBegin <= value.lineEnd && value.lineEnd <= value.totalLines, 'Terminal page range is inconsistent'),
+    ]).nullable(),
+  }).strict().refine(value => new Set(value.items.map(item => item.id)).size === value.items.length
+    && (value.selected?.state !== 'confirmed' || value.items.some(item => item.id === value.selected?.id)), 'Terminal selection or identities are inconsistent'),
+])
+const runDispatchSummarySchema = z.object({
+  id: sakiExecutionDispatchIdSchema, revision, intentId,
+  state: z.enum(['pending', 'claimed', 'accepted', 'canceled', 'reconciliation-required']),
+  reason: z.enum(['authority-revoked', 'effect-unknown', 'evidence-conflict', 'protocol']).nullable(),
+  operation: z.object({ id: hostOperationIdSchema, revision, state: z.enum(['prepared', 'accepted', 'planning', 'publishing', 'succeeded', 'failed', 'canceled', 'reconciliation-required']) }).strict().nullable(),
+  createdAt: safeInteger, updatedAt: safeInteger,
+}).strict().refine(value => value.updatedAt >= value.createdAt, 'Dispatch timestamps are not monotonic')
+
+/** Strict safe Run evidence with independent DSH and PTY observations. */
+export const sakiAgentRunViewResultSchema: z.ZodType<SakiQueryResult<'agent-run-view'>> = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), projection: z.object({
+    type: z.literal('agent-run-view'), projectId, workSession: workSessionSummarySchema,
+    run: z.object({ id: sakiAgentRunIdSchema, revision, sessionId: sakiAgentRunSessionId, state: runAdmissionStateSchema,
+      source: z.object({ kind: z.literal('manual-give-to-agent'), intentId, principalId }).strict(),
+      profile: z.object({ id: sakiAgentProfileIdSchema, version: positiveRevision, agentPresetId,
+        modelRoute: z.object({ provider: safeAgentDisplayText(200), model: safeAgentDisplayText(200) }).strict(),
+      }).strict(), createdAt: safeInteger, updatedAt: safeInteger,
+    }).strict(),
+    observation: z.object({
+      observedAt: safeInteger, session: runSessionObservationSchema, terminals: runTerminalObservationSchema,
+    }).strict(),
+    dispatches: z.array(runDispatchSummarySchema).max(32), nextDispatch: sakiExecutionDispatchIdSchema.nullable(),
+    interventions: z.array(planningInterventionProjectionSchema).max(32), earlierInterventions: z.boolean(),
+    status: z.enum(['allocated', 'starting', 'running', 'waiting', 'resume-pending', 'canceled', 'reconciliation-required', 'succeeded', 'failed', 'interrupted', 'blocked', 'limited', 'idle', 'unavailable']),
+  }).strict().superRefine((value, context) => {
+    const run = value.workSession.runs.find(run => run.id === value.run.id)
+    if (run?.sessionId !== value.run.sessionId || run.state !== value.run.state || value.run.updatedAt < value.run.createdAt) {
+      context.addIssue({ code: 'custom', message: 'Run disagrees with its Work Session or timestamps', path: ['run'] })
+    }
+    if (new Set(value.dispatches.map(dispatch => dispatch.id)).size !== value.dispatches.length
+      || value.nextDispatch !== null && value.nextDispatch !== value.dispatches.at(-1)?.id) {
+      context.addIssue({ code: 'custom', message: 'Run Dispatch identities or cursor are inconsistent', path: ['dispatches'] })
+    }
+    if (value.interventions.some(item => item.returnAddress.projectId !== value.projectId
+      || item.returnAddress.workItemId !== value.workSession.workItem.id
+      || item.returnAddress.workSessionId !== value.workSession.id || item.returnAddress.agentRunId !== value.run.id)) {
+      context.addIssue({ code: 'custom', message: 'Run contains a foreign Intervention', path: ['interventions'] })
+    }
+    const expected = value.run.state !== 'running' ? value.run.state
+      : value.observation.session.state === 'confirmed' ? value.observation.session.activity.state : 'unavailable'
+    if (value.status !== expected) context.addIssue({ code: 'custom', message: 'Run status lacks matching observed evidence', path: ['status'] })
+  }) }).strict(),
+  boardFailureSchema,
+])
+
 /** Complete mapping choices, fenced by the saved synchronization revision. */
 export const sakiProjectMappingResultSchema: z.ZodType<SakiQueryResult<'project-mapping'>> = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), projection: z.object({
@@ -2765,6 +2871,8 @@ export const sakiQueryResultSchema: z.ZodType<SakiQueryResult> = z.union([
   sakiProjectSettingsResultSchema,
   sakiBoardResultSchema,
   sakiWorkItemViewResultSchema,
+  sakiProjectSessionsResultSchema,
+  sakiAgentRunViewResultSchema,
   sakiProjectMilestonesResultSchema,
   sakiProjectMappingResultSchema,
   sakiBranchDeliveryResultSchema,
@@ -3460,6 +3568,14 @@ export type SakiWireProjectId = SakiDevelopmentProjectId
 
 /** Browser Work Item detail result. */
 export type SakiWireWorkItemViewResult = z.infer<typeof sakiWorkItemViewResultSchema>
+/** Complete browser-safe Session page result. */
+export type SakiWireProjectSessionsResult = z.infer<typeof sakiProjectSessionsResultSchema>
+/** Complete browser-safe Run observation result. */
+export type SakiWireAgentRunViewResult = z.infer<typeof sakiAgentRunViewResultSchema>
+/** Exact bounded Session-page selection. */
+export type SakiWireProjectSessionsQuery = Extract<SakiQuery, { readonly type: 'project-sessions' }>
+/** Exact Run, Dispatch-page, and owner-scoped Terminal selection. */
+export type SakiWireAgentRunViewQuery = Extract<SakiQuery, { readonly type: 'agent-run-view' }>
 /** Browser Milestone destination page. */
 export type SakiWireProjectMilestonesResult = z.infer<typeof sakiProjectMilestonesResultSchema>
 

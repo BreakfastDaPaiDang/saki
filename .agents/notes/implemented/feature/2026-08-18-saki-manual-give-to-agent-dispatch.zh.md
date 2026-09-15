@@ -26,7 +26,7 @@ Host Operation 成功表示预期 Agent Run、Session 与精确输入已经获�
 
 Dispatch 接受前取消会记录 canceled Dispatch；接受后取消保留已接受回执和终态 Host 快照。Host 会先停止并排空所属 live Agent，再由控制面持久化子记录与 Intent 取消。释放失败时操作保持可重试，句柄仍受跟踪。有效的多记录终态前缀保持单调，重启以幂等方式补全。
 
-`SakiWorkItemDetailProjection` 与 `SakiAgentRunProjection` 固定前端交接，但本切片不增加 query。它们的严格 wire schema 只公开有界且经过解析的 Issue definition、Assignment 与主要 Work Session reference、不透明 Run source、可安全显示的 Profile 与 Model fact、时间戳，以及明确的 resumable、terminal 或 reconciliation recovery state；其中不包含规范路径、凭据或 Host snapshot。
+`SakiWorkItemDetailProjection` 与 `SakiAgentRunProjection` 提供安全的 fixture contract。可查询的 Work Item 视图组合当前 Issue 与执行证据；[Run 观察](2026-09-14-saki-read-only-run-observation.zh.md) 独立投影保留的 Session、Dispatch 投递与物理 DSH 结果，不授予执行权限。
 
 当前状态版本 10 使用 `saki_control_plane@10`、`saki_host_execution@5` 和 `saki_storage_generation@8`。冻结的源 schema 保留各历史格式。v9-to-v10 迁移会校验历史 Agent 归属，把准入修订号保留到各自 Dispatch，清除 Agent 持有的 Binding 预留，并移除 Agent 的 Git 前置条件和从模板派生的 Issue 字段。迁移重新计算上下文及 Host 请求指纹，不改变 Session 历史、输入消息、身份或已接受凭据。手动 Git 预留保留各操作所需的证据。
 

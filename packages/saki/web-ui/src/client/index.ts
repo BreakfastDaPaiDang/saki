@@ -27,6 +27,7 @@ import type { WorkActions } from './work-controller.ts'
 import { ChangesController, type ChangesActions } from './changes-controller.ts'
 import { DeliveryController, type DeliveryActions } from './delivery-controller.ts'
 import type { SakiWireWorkItemViewResult } from '@breakfastdapaidang/saki-host-api/wire'
+import { SessionReturn } from './components/SessionReturn.tsx'
 import { SakiNavEntry } from './components/SakiNavEntry.tsx'
 import { SakiSurfaceRoot } from './components/SurfaceRoot.tsx'
 
@@ -118,7 +119,7 @@ export function apply(ctx: ClientContext): void {
       confirmCommit: changes.confirmCommit, retry: changes.retry, dismiss: changes.dismiss },
     delivery: { refresh: delivery.refresh, editDraft: delivery.editDraft, prepare: delivery.prepare,
       cancel: delivery.cancel, confirm: delivery.confirm, retry: delivery.retry, dismiss: delivery.dismiss },
-    openSession: (id) => { ctx.uiWorkspace.openSession(id) },
+    openSession: (id) => { planning.navigate({ conversationSessionId: id }); ctx.uiWorkspace.openSession(id) },
     hooks: { navigation: navigation.store, planning, work, changes, delivery },
   }
 
@@ -145,6 +146,11 @@ export function apply(ctx: ClientContext): void {
           sakiSurface: surface,
         }),
       }, SakiNavEntry))
+
+  ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+    name: 'conversation.session.header.actions', id: 'saki-project-return', order: -20, locale: NS,
+    inject: () => ({ openProject: navigation.actions.showProject, hooks: { planning } }),
+  }, SessionReturn))
 
   registerNavEntry('work', 'saki-work', 0)
   registerNavEntry('project', 'saki-project', 10)

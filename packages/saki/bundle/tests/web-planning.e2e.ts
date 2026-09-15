@@ -251,8 +251,8 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
       const envelope = clientRequestSchema.parse(route.request().postDataJSON())
       const query = sakiQueryRequestSchema.parse(envelope.payload)
       if (query.type === 'board' && query.refresh === 'cached' && holdCached) {
-        holdCached = false
         cachedStarted = true
+        // Later cached reads can supersede an earlier pending read.
         await releaseCached.promise
       }
       await route.continue()
@@ -273,6 +273,7 @@ it('plans K2-created Issues through confirmed remote moves, conflict, failure, a
       trace({ phase: 'refresh-pointer-up' })
       await expect.poll(() => boardRequests.filter(request => request.refresh === 'interactive').length).toBe(beforeClick + 1)
     } finally {
+      holdCached = false
       releaseCached.resolve(undefined)
       await page.unrouteAll({ behavior: 'wait' })
       await board()

@@ -54,6 +54,8 @@ Invalid Status mapping disables Board writes. Authorized users can select an exi
 
 One planning controller owns protected query caches and cancellable invalidation polling. Notifications trigger complete reads; they never patch a Board. Refresh remains available while reads are pending, so a background read cannot interrupt a pointer gesture. An explicit refresh supersedes the previous Board request; cached reads cannot cancel that interactive request. Principal changes clear cached business facts. Persisted state contains Principal-scoped addresses, drafts, and exact unacknowledged Intents, without request tokens or GitHub credentials. A transport failure requires refresh or a connection-reset notification before polling resumes.
 
+Open Sessions & Runs from the Project or filter them from a Work Item. A Run separates its request state from the latest DSH execution outcome, retains its source and initial model route, and displays Dispatch delivery and Intervention history in Trace. Open Session uses the inherited Conversation; Return to Run preserves the selected tab and unfinished Conversation draft. Changes and Delivery return to that Run. Principal-scoped navigation survives reload, and Run observations refresh on watch heartbeats even when no control-plane record changes. Terminal displays bounded read-only output from the current Agent’s existing terminals; process exit is independent of the model result, and unavailable terminals remain explicit.
+
 <a id="review-local-changes"></a>
 ## Review local changes
 

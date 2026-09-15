@@ -65,6 +65,7 @@ import type { MilestoneViewProjection } from './milestone-view.ts'
 import type { SakiGitHubFailureProjection } from './github-failure-projection.ts'
 import type { SakiProjectMilestonesProjection, SakiWorkItemViewProjection } from './planning-views.ts'
 import type { SakiDeliveryWorkspaceQuery, SakiDeliveryWorkspaceProjection } from './delivery-workspace.ts'
+import type { SakiProjectSessionsQuery, SakiProjectSessionsProjection, SakiAgentRunViewQuery, SakiAgentRunViewProjection } from './session-views.ts'
 
 export type {
   SakiAgentRunId,
@@ -1183,6 +1184,18 @@ export interface SakiQueryMap {
   readonly 'work-item-view': {
     readonly request: SakiWorkItemViewQuery
     readonly projection: SakiWorkItemViewProjection
+    readonly failure: 'denied' | 'unavailable' | 'not-found'
+  }
+  /** One bounded page of retained Work Sessions and their Run destinations. */
+  readonly 'project-sessions': {
+    readonly request: SakiProjectSessionsQuery
+    readonly projection: SakiProjectSessionsProjection
+    readonly failure: 'denied' | 'unavailable' | 'not-found'
+  }
+  /** One retained Run joined to read-only local execution observations. */
+  readonly 'agent-run-view': {
+    readonly request: SakiAgentRunViewQuery
+    readonly projection: SakiAgentRunViewProjection
     readonly failure: 'denied' | 'unavailable' | 'not-found'
   }
   /** One bounded page of Milestone destinations already tracked by this Project. */

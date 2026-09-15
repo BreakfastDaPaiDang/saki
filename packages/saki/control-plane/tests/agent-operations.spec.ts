@@ -29,6 +29,8 @@ import type {
   InterventionOpeningEvidence,
   StartAgentRunHostOperationRequest,
 } from '@breakfastdapaidang/saki-execution'
+import { agentRunView, projectSessions, type SessionViewRecords } from '../src/session-views.ts'
+import type { AgentRunObservation } from '@breakfastdapaidang/saki-execution'
 import { AgentOperations } from '../src/agent-operations.ts'
 import { SAKI_BOARD_MUTATION_OVERLAY_FIXTURES, SAKI_BOARD_PROJECTION_FIXTURES, SAKI_GIT_CHANGES_PROJECTION_FIXTURES, SAKI_PROJECT_PROJECTION_FIXTURES, SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES } from '../src/fixtures.ts'
 import type { GitHubWorkItemMutationContextResult } from '../src/github-sync.ts'
@@ -63,6 +65,7 @@ import type {
   AnswerInterventionIntent,
   GiveWorkItemToAgentIntent,
   SakiAgentRunId,
+  SakiBoardWorkItemId,
   SakiBoardWorkItemProjection,
   SakiControlIntentId,
   SakiDevelopmentProjectId,
@@ -4616,6 +4619,94 @@ describe('manual Give-to-Agent operations', () => {
   })
 })
 
+describe('retained Session and Run views', () => {
+  const board = SAKI_BOARD_PROJECTION_FIXTURES.confirmedStaleFailure
+  const observation: AgentRunObservation = { observedAt: 100,
+    session: { state: 'confirmed', runtime: 'not-live', activity: { state: 'failed', turn: 1, endedAt: 90 } },
+    terminals: { state: 'unavailable', reason: 'owner-not-live' },
+  }
+  const records = (test: Harness): SessionViewRecords => ({ sessions: test.sessions.records, assignments: test.assignments.records,
+    runs: test.runs.records, intents: test.intents.records, dispatches: test.dispatches.records,
+    interventions: test.interventions.records,
+  })
+  it('pages retained Sessions by stable identity without requiring their Work Item to remain on the Board', async () => {
+    const test = harness()
+    for (let index = 0; index < 34; index += 1) {
+      if (index > 0) test.execution.beginNextOperation()
+      expect(await test.operations.submit(intent(`intent-00000000-0000-4000-8000-${String(index).padStart(12, '0')}` as SakiControlIntentId), actor(), new AbortController().signal)).toMatchObject({ ok: true })
+    }
+    const query = { type: 'project-sessions' as const, projectId: board.projectId, workItemId: null, after: null }
+    const first = projectSessions(query, records(test), board)
+    expect(first.items).toHaveLength(32)
+    expect(first.next).toBe(first.items.at(-1)!.id)
+    const second = projectSessions({ ...query, after: first.next }, records(test), board)
+    expect(second.items).toHaveLength(2)
+    expect(second.next).toBeNull()
+    expect([...first.items, ...second.items].map(item => item.id)).toEqual([...test.sessions.records.keys()].sort())
+    expect(projectSessions({ ...query, workItemId: first.items[0]!.workItem.id }, records(test), board))
+      .toEqual({ ...first, workItemId: first.items[0]!.workItem.id })
+    expect(projectSessions({ ...query, projectId: 'project-11111111-1111-4111-8111-111111111111' as SakiDevelopmentProjectId }, records(test), board).items).toEqual([])
+    expect(projectSessions({ ...query, workItemId: `work-item-${'9'.repeat(64)}` as SakiBoardWorkItemId }, records(test), board).items).toEqual([])
+    const removed = projectSessions(query, records(test), { ...board, confirmed: undefined })
+    expect(removed.items[0]!.workItem).toMatchObject({
+      status: null, title: [...test.intents.records.values()][0]!.workItemDefinition.title,
+    })
+  })
+  it('keeps delivered input separate from failed or unavailable execution and preserves durable waiting', async () => {
+    const test = harness()
+    const { open } = await createOpenIntervention(test, 'run-view-question')
+    const retained = only(test.runs)
+    const query = { type: 'agent-run-view' as const, projectId: board.projectId, agentRunId: retained.id, afterDispatch: null, terminal: null }
+    const waiting = agentRunView(query, records(test), board, observation)!
+    expect(waiting).toMatchObject({ status: 'waiting', run: { state: 'waiting', source: { principalId: actor().principalId } },
+      observation, dispatches: [{ operation: { state: 'succeeded' } }], interventions: [{ id: open.id }] })
+    expect(waiting.dispatches[0]).not.toHaveProperty('preparation')
+    expect(waiting.dispatches[0]).not.toHaveProperty('claim')
+    expect(waiting.workSession.workItem.status).toBe(board.confirmed.items[0].status)
+    const running = { ...retained, state: 'running' as const, blockingInterventionId: undefined }
+    test.runs.records.set(running.id, agentRunRecordSchema.parse(running))
+    expect(agentRunView(query, records(test), board, observation)?.status).toBe('failed')
+    expect(agentRunView(query, records(test), board, { ...observation, session: { state: 'unavailable', reason: 'read-failed' } })?.status).toBe('unavailable')
+    expect(agentRunView({ ...query, projectId: 'project-11111111-1111-4111-8111-111111111111' as SakiDevelopmentProjectId }, records(test), board, observation)).toBeNull()
+    expect(agentRunView({ ...query, agentRunId: 'agent-run-11111111-1111-4111-8111-111111111111' as SakiAgentRunId }, records(test), board, observation)).toBeNull()
+    expect(agentRunView({ ...query, afterDispatch: 'dispatch-11111111-1111-4111-8111-111111111111' as SakiExecutionDispatchId }, records(test), board, observation)).toBeNull()
+    test.assignments.records.clear()
+    expect(() => agentRunView(query, records(test), board, observation)).toThrow('missing a validated durable relationship')
+  })
+  it('retains a Run whose Host preparation is unavailable without inventing an operation', async () => {
+    const test = harness()
+    test.execution.prepareMode = 'unavailable'
+    await test.operations.submit(intent(), actor(), new AbortController().signal)
+    const retained = only(test.runs)
+    const query = { type: 'agent-run-view' as const, projectId: board.projectId,
+      agentRunId: retained.id, afterDispatch: null, terminal: null }
+    expect(agentRunView(query, records(test), board, observation)?.dispatches).toMatchObject([{ operation: null }])
+  })
+  it('bounds Dispatch and Intervention evidence while retaining the current blocker', async () => {
+    const test = harness()
+    let { open } = await createOpenIntervention(test, 'run-view-bounded-question-0')
+    for (let index = 0; index < 34; index += 1) {
+      test.execution.beginNextOperation()
+      expect(await test.operations.answerIntervention(interventionAnswer(open,
+        `intent-00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, 'Proceed with this step.'), actor(), new AbortController().signal)).toMatchObject({ ok: true })
+      open = (await createOpenIntervention(test, `run-view-bounded-question-${index + 1}`)).open
+    }
+    for (const [id, intervention] of test.interventions.records) {
+      test.interventions.records.set(id, { ...intervention, createdAt: id === open.id ? 0 : 1 })
+    }
+    const retained = only(test.runs)
+    const query = { type: 'agent-run-view' as const, projectId: board.projectId, agentRunId: retained.id, afterDispatch: null, terminal: null }
+    const first = agentRunView(query, records(test), board, observation)!
+    expect(first.dispatches).toHaveLength(32)
+    expect(first.interventions).toHaveLength(32)
+    expect(first.interventions[0]!.id).toBe(open.id)
+    expect(first.earlierInterventions).toBe(true)
+    const second = agentRunView({ ...query, afterDispatch: first.nextDispatch }, records(test), board, observation)!
+    expect(second.dispatches.map(dispatch => dispatch.id)).toEqual(retained.dispatchIds.slice(32))
+    expect(second.nextDispatch).toBeNull()
+  })
+})
+
 class SimulatedProcessCrash extends Error {}
 
 class MemoryTable<K extends string, V> implements KvTable<K, V> {
@@ -4692,6 +4783,8 @@ class TestAcceptance extends HostOperationAcceptance {
 }
 
 class FakeAgentExecution extends SakiHostExecution {
+  async observeAgentRun(): Promise<never> { throw new Error('Run observation is not configured in this fixture') }
+
   readonly pushCredentialHelper = undefined
   prepareMode: 'success' | 'unavailable' | 'source-conflict' | 'terminal-failed' = 'success'
   startMode: 'success' | 'mismatched-result' | 'reconciliation' | 'failed' | 'canceled-authority'

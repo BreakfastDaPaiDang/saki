@@ -37,6 +37,8 @@ After the canonical tool result and balanced turn are present, the plugin flushe
 
 This package is the Development Agent Consumer for Saki Intervention Requests. The product Host composes it inside the system-owned Development Agent Preset. Generic DSH question and approval tools remain live interactions and are not replaced.
 
+Tool registration requires Tools, Sessions and Timer, so the preset can mount while the control plane restores retained Agents before publishing readiness. Each request and opening finalization resolves the current control plane. An unavailable provider produces an explicit error without creating a question or concluding the turn; pending finalization retains its existing retry behavior.
+
 ## Model Experience
 
 ### Tool schema

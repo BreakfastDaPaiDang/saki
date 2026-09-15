@@ -11,6 +11,7 @@ import { WorkPage } from './WorkPage.tsx'
 import { PlanningPage } from './PlanningPage.tsx'
 import { ProjectPage } from './ProjectPage.tsx'
 import { ChangesPage } from './ChangesPage.tsx'
+import { SessionPage } from './SessionPage.tsx'
 import { DeliveryPage } from './DeliveryPage.tsx'
 
 /** Full composed props for the Saki surface root. */
@@ -40,6 +41,10 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
     return <WorkPage state={work} actions={props.work} openProject={() => { props.nav.showProject() }}
       openBoard={(id) => { props.nav.selectProject(id); props.planning.navigate({ view: 'board' }) }}
       openItem={(projectId, id) => { props.nav.selectProject(projectId); props.planning.openItem(id) }} t={props.t} />
+  }
+  if (state.project?.address.view === 'sessions' || state.project?.address.view === 'run') {
+    return <SessionPage project={state.project} actions={props.planning} openSession={props.openSession}
+      openWork={props.nav.showWork} offline={state.offline} t={props.t} />
   }
   if (state.project?.address.view === 'delivery') {
     return <DeliveryPage project={state.project} state={delivery} actions={props.delivery}

@@ -54,6 +54,8 @@ Status 映射无效时，看板写入不可用。授权用户可在状态映射�
 
 一个规划控制器拥有受保护查询缓存及可取消的失效轮询。通知触发完整读取，不会局部修改看板。读取期间刷新操作保持可用，后台读取不会打断指针手势。显式刷新替代前一个 Board 请求；缓存读取不能取消该交互式请求。Principal 变化会清除业务事实缓存。持久状态仅包含按 Principal 隔离的地址、草稿和未确认原始 Intent，不包含 request token 或 GitHub 凭据。传输失败后，用户刷新或连接重置通知会恢复轮询。
 
+从项目打开“会话与运行”，或从 Work Item 筛选所属会话。Run 分别显示请求状态与最近 DSH 执行结果，保留来源和初始模型路由，并在执行记录中展示 Dispatch 投递与 Intervention 历史。“打开 Session”使用继承的 Conversation；“返回 Run”保留所选标签和未提交的 Conversation 草稿。Changes 与 Delivery 可返回该 Run。按 Principal 保存的导航在重载后保留；即使控制面记录未变，Run 观察也会随 watch 心跳刷新。Terminal 展示当前 Agent 现有终端的有界只读输出；进程退出与模型结果相互独立，终端不可用会明确显示。
+
 <a id="review-local-changes"></a>
 ## 检查本地变更
 

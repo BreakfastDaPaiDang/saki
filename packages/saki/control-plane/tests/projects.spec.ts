@@ -52,6 +52,7 @@ import {
   startAgentRunHostOperationRequestSchema,
 } from '@breakfastdapaidang/saki-execution'
 import type {
+  AgentRunObservation,
   HostOperationAdmissionSource,
   HostOperationChange,
   HostOperationPreparation,
@@ -1545,6 +1546,8 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
       { type: 'board', projectId: absentProject, refresh: 'interactive' },
       { type: 'project-mapping', projectId: absentProject },
       { type: 'project-milestones', projectId: absentProject, after: null },
+      { type: 'project-sessions', projectId: absentProject, workItemId: null, after: null },
+      { type: 'agent-run-view', projectId: absentProject, agentRunId: 'agent-run-11111111-1111-4111-8111-111111111111' as StartAgentRunHostOperationRequest['run']['agentRunId'], afterDispatch: null, terminal: null },
       { type: 'work-item-view', projectId: absentProject, workItemId: `work-item-${'9'.repeat(64)}` as SakiBoardWorkItemId },
     ] as const) {
       expect(await harness.control.query(harness.authentication, query, new AbortController().signal))
@@ -2703,7 +2706,7 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
 
   it.each([
     ['unchanged Work Item status and stale Actor restart rejection', 'success'],
-  ] as const)('routes the assembled Agent work lifecycle: %s', async (_case, mode) => {
+  ] as const)('routes the assembled Agent work lifecycle: %s', { timeout: process.platform === 'win32' ? 300_000 : 60_000 }, async (_case, mode) => {
     const durable = await paths()
     const repo = await repository(durable.root, `agent-control-route-${mode}`)
     const configuration = githubSynchronizationConfiguration()
@@ -2923,6 +2926,61 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
     expect(host.requests).toHaveLength(2)
     expect(host.requests[1]).toEqual(host.requests[0])
     expect(host.startCount).toBe(1)
+    const runIdentity = host.requests[0]!.run
+    const runQuery = { type: 'agent-run-view' as const, projectId: registered.receipt.projectId, agentRunId: runIdentity.agentRunId, afterDispatch: null, terminal: null }
+    const runObservation: AgentRunObservation = { observedAt: Date.now(),
+      session: { state: 'confirmed', runtime: 'not-live', activity: { state: 'failed', turn: 1, endedAt: Date.now() } },
+      terminals: { state: 'unavailable', reason: 'owner-not-live' },
+    }
+    expect(await harness.control.query(harness.authentication, { type: 'project-sessions', projectId: registered.receipt.projectId, workItemId: item.id, after: null }, new AbortController().signal))
+      .toMatchObject({ ok: true, projection: { items: [{ id: runIdentity.workSessionId,
+        runs: [{ id: runIdentity.agentRunId, sessionId: runIdentity.sessionId }],
+      }], next: null } })
+    expect(await harness.control.query(harness.authentication, runQuery, new AbortController().signal))
+      .toMatchObject({ ok: true, projection: { status: 'unavailable', observation: { session: { state: 'unavailable', reason: 'read-failed' } } } })
+    const observeRun = vi.spyOn(harness.ctx.sakiHostExecution, 'observeAgentRun').mockResolvedValue(runObservation)
+    expect(await harness.control.query(harness.authentication, runQuery, new AbortController().signal))
+      .toMatchObject({ ok: true, projection: { status: 'failed', workSession: { workItem: { status: 'ready' } }, run: { sessionId: runIdentity.sessionId }, observation: runObservation } })
+    expect(observeRun).toHaveBeenCalledOnce()
+    expect(host.startCount).toBe(1)
+    const missingRun = { ...runQuery, agentRunId: 'agent-run-11111111-1111-4111-8111-111111111111' as typeof runIdentity.agentRunId }
+    expect(await harness.control.query(harness.authentication, missingRun, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    expect(observeRun).toHaveBeenCalledOnce()
+    const dispatchTable = liveSakiDomain(harness.ctx).table('execution_dispatches')
+    const dispatch = [...dispatchTable.entries()].find(([, value]) => value.agentRunId === runIdentity.agentRunId)?.[1]
+    if (dispatch === undefined) throw new Error('Run Dispatch fixture is absent')
+    try {
+      const unprepared = { ...dispatch, state: 'canceled' as const, terminalReason: 'authority-revoked' as const }
+      delete unprepared.preparation
+      delete unprepared.acceptedFencingToken
+      delete unprepared.admissionRevision
+      delete unprepared.operationSnapshot
+      await dispatchTable.put(dispatch.id, unprepared)
+      expect(await harness.control.query(harness.authentication, runQuery, new AbortController().signal))
+        .toMatchObject({ ok: true, projection: { observation: { session: { state: 'unavailable', reason: 'not-started' } } } })
+      expect(observeRun).toHaveBeenCalledOnce()
+    } finally {
+      await dispatchTable.put(dispatch.id, dispatch)
+    }
+    expect(await harness.control.query(harness.authentication, {
+      ...runQuery, afterDispatch: 'dispatch-11111111-1111-4111-8111-111111111111' as typeof dispatch.id,
+    }, new AbortController().signal)).toEqual({ ok: false, reason: 'not-found' })
+    const registryTable = liveSakiDomain(harness.ctx).table('development_project_registry')
+    const originalRegistry = registryTable.get('development-project-registry')
+    if (originalRegistry === undefined) throw new Error('Project Registry fixture is absent')
+    try {
+      observeRun.mockImplementationOnce(async () => {
+        await registryTable.put('development-project-registry', { ...originalRegistry,
+          projects: [], agentProfiles: [], resourceBindings: [], canonicalWorktreeIndex: [], gitDirectoryIndex: [], intentMappings: [],
+        })
+        return runObservation
+      })
+      expect(await harness.control.query(harness.authentication, runQuery, new AbortController().signal))
+        .toEqual({ ok: false, reason: 'not-found' })
+    } finally {
+      await registryTable.put('development-project-registry', originalRegistry)
+      observeRun.mockRestore()
+    }
     expect(changedKeys).toContainEqual(['my-work', 'attention', 'project-changes', 'board'])
     disposeChanged()
 
@@ -3065,13 +3123,28 @@ describe('Development Project registration', { timeout: 60_000 }, () => {
         state: 'running',
       })
       expect(recoveredRun).not.toHaveProperty('blockingInterventionId')
+      const readEntered = Promise.withResolvers<undefined>()
+      const readRelease = Promise.withResolvers<undefined>()
+      const readObservation = vi.spyOn(recovered.ctx.sakiHostExecution, 'observeAgentRun').mockImplementationOnce(async () => {
+        readEntered.resolve(undefined); await readRelease.promise; return runObservation
+      })
+      const pendingRun = recovered.control.query(recovered.authentication, runQuery, new AbortController().signal)
+      try {
+        await Promise.race([readEntered.promise, pendingRun.then((result) => { throw new Error(`Run read settled before Host observation: ${JSON.stringify(result)}`) })])
+        await setGrantActions(recovered, [])
+      } finally { readRelease.resolve(undefined) }
+      expect(await pendingRun).toEqual({ ok: false, reason: 'denied' })
+      expect(await recovered.control.query(recovered.authentication, runQuery, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+      expect(await recovered.control.query(recovered.authentication, { type: 'project-sessions', projectId: runQuery.projectId, workItemId: null, after: null }, new AbortController().signal)).toEqual({ ok: false, reason: 'denied' })
+      expect(readObservation).toHaveBeenCalledOnce()
+      readObservation.mockRestore()
       await recovered.close()
       await editSaki(durable, async (domain) => {
         const table = domain.table('agent_operation_intents')
         await table.update(agentIntent.intentId, (current) => {
           const payload = {
             ...current.payload,
-            actor: { ...current.payload.actor, grantRevision: current.payload.actor.grantRevision + 1 },
+            actor: { ...current.payload.actor, grantRevision: domain.table('grants').get(current.payload.actor.grantId)!.revision + 1 },
           }
           return {
             ...current,

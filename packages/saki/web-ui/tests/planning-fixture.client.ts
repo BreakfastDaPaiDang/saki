@@ -41,6 +41,8 @@ export function planningFixture() {
   const api = {
     readAccess: vi.fn<Api['readAccess']>().mockResolvedValue(AUTH),
     exchangeBootstrap: vi.fn<Api['exchangeBootstrap']>().mockResolvedValue({ ok: true, access: AUTH }),
+    queryProjectSessions: vi.fn<Api['queryProjectSessions']>().mockImplementation(async query => ({ ok: true, projection: { type: 'project-sessions', projectId: query.projectId, workItemId: query.workItemId, items: [], next: null } })),
+    queryAgentRunView: vi.fn<Api['queryAgentRunView']>().mockResolvedValue({ ok: false, reason: 'not-found' }),
     queryBoard: vi.fn<Api['queryBoard']>().mockImplementation(async projectId => ({ ok: true, projection: { ...currentBoard, projectId } })),
     queryProjectMilestones: vi.fn<Api['queryProjectMilestones']>().mockImplementation(async projectId => ({ ok: true, projection: { type: 'project-milestones', projectId, items: [], next: null } })),
     queryWorkItemView: vi.fn<Api['queryWorkItemView']>().mockImplementation(async projectId => ({ ok: true, projection: { type: 'work-item-view', projectId, workItem: ITEM, body: { state: 'confirmed', markdown: '## Acceptance criteria\n- Keep confirmed facts.', issueUpdatedAt: ITEM.updatedAt, observedAt: 10, matchesBoard: true }, assignments: [], runs: [], interventions: [], branchDelivery: null, milestones: [], activity: [], earlierActivity: false } })),

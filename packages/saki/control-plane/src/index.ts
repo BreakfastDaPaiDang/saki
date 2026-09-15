@@ -2,6 +2,10 @@
 
 export { SakiControlPlaneService } from './service.ts'
 export type {
+  SakiProjectSessionsQuery, SakiProjectSessionsProjection, SakiAgentRunViewQuery, SakiAgentRunViewProjection,
+  SakiWorkSessionSummary, SakiSessionWorkItem, SakiRunDispatchSummary,
+} from './session-views.ts'
+export type {
   SakiMilestoneSummary,
   SakiPlanningRunProjection,
   SakiProjectMilestonesProjection,

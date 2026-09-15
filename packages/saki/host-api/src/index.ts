@@ -25,6 +25,8 @@ import {
   sakiBoardResultSchema,
   sakiWorkItemViewResultSchema,
   sakiProjectMilestonesResultSchema,
+  sakiProjectSessionsResultSchema,
+  sakiAgentRunViewResultSchema,
   sakiProjectMappingResultSchema,
   sakiBootstrapExchangeRequestSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
@@ -226,6 +228,8 @@ async function query(
     }
     case 'project-mapping': return reply({ ok: true, value: sakiProjectMappingResultSchema.parse(result) })
     case 'work-item-view': return reply({ ok: true, value: sakiWorkItemViewResultSchema.parse(result) })
+    case 'project-sessions': return reply({ ok: true, value: sakiProjectSessionsResultSchema.parse(result) })
+    case 'agent-run-view': return reply({ ok: true, value: sakiAgentRunViewResultSchema.parse(result) })
     case 'project-milestones': return reply({ ok: true, value: sakiProjectMilestonesResultSchema.parse(result) })
     case 'delivery-workspace': return reply({ ok: true, value: sakiDeliveryWorkspaceResultSchema.parse(result) })
     case 'branch-delivery': {

@@ -13,6 +13,8 @@ import {
   sakiDeliveryWorkspaceResultSchema,
   sakiBoardResultSchema,
   sakiWorkItemViewResultSchema,
+  sakiProjectSessionsResultSchema,
+  sakiAgentRunViewResultSchema,
   sakiProjectMilestonesResultSchema,
   sakiProjectMappingResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
@@ -52,6 +54,10 @@ import type {
   SakiWireBoardRefresh,
   SakiWireBoardResult,
   SakiWireWorkItemViewResult,
+  SakiWireProjectSessionsQuery,
+  SakiWireProjectSessionsResult,
+  SakiWireAgentRunViewQuery,
+  SakiWireAgentRunViewResult,
   SakiWireProjectMilestonesResult,
   SakiWireProjectMappingResult,
   SakiWireConfigureGitHubSynchronizationIntent,
@@ -236,6 +242,20 @@ export interface SakiHostClient {
    * @returns detail or an explicit failure.
    */
   queryWorkItemView(projectId: SakiWireProjectId, workItemId: SakiWireMoveWorkItemIntent['workItemId'], signal?: AbortSignal): Promise<SakiWireWorkItemViewResult>
+  /**
+   * Read a bounded page of retained Work Sessions.
+   * @param query - Project, optional Work Item, and explicit continuation.
+   * @param signal - optional cancellation.
+   * @returns scoped Session summaries or an explicit failure.
+   */
+  queryProjectSessions(query: SakiWireProjectSessionsQuery, signal?: AbortSignal): Promise<SakiWireProjectSessionsResult>
+  /**
+   * Read one Run without waking its Agent or controlling its Terminals.
+   * @param query - exact Run, Dispatch page, and optional owner-scoped scrollback selection.
+   * @param signal - optional cancellation.
+   * @returns independent durable and live evidence or an explicit failure.
+   */
+  queryAgentRunView(query: SakiWireAgentRunViewQuery, signal?: AbortSignal): Promise<SakiWireAgentRunViewResult>
   /**
    * List a page of Milestones already tracked by this Project.
    * @param projectId - selected Project.
@@ -643,6 +663,16 @@ export class SakiHostClientService extends Service implements SakiHostClient {
   /** @inheritdoc */
   async queryWorkItemView(projectId: SakiWireProjectId, workItemId: SakiWireMoveWorkItemIntent['workItemId'], signal?: AbortSignal): Promise<SakiWireWorkItemViewResult> {
     return sakiWorkItemViewResultSchema.parse(await this.call('control/query', { type: 'work-item-view', projectId, workItemId }, signal))
+  }
+
+  /** @inheritdoc */
+  async queryProjectSessions(query: SakiWireProjectSessionsQuery, signal?: AbortSignal): Promise<SakiWireProjectSessionsResult> {
+    return sakiProjectSessionsResultSchema.parse(await this.call('control/query', query, signal))
+  }
+
+  /** @inheritdoc */
+  async queryAgentRunView(query: SakiWireAgentRunViewQuery, signal?: AbortSignal): Promise<SakiWireAgentRunViewResult> {
+    return sakiAgentRunViewResultSchema.parse(await this.call('control/query', query, signal))
   }
 
   /** @inheritdoc */

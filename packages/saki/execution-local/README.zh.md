@@ -64,6 +64,8 @@ Provider 为物理 Session persistence 打开读取句柄，读取 header 与完
 
 Inspection 绝不创建、恢复或唤醒 Agent。`inspectInterventionOpening` 会读取分离的物理 Session history；只有一条精确 `request_intervention` call 的非 error 模型可见 result 后跟随匹配的最终 step end 与 completed turn end 时，它才返回确认，并且只返回闭合 evidence，不暴露 Session。启动 resume 是一项独立 operation，它要求精确的 succeeded Host result、匹配的物理 Session header 与输入，以及匹配且可用的 live Agent；Host 会在对外服务前恢复该 Agent，并使其保持 model-idle。因此，持久 `not-started` plan 可以在不归因无关 Session 的情况下证明取消；publishing 或终态 replay 会重新检查精确持久输入与 id。取消会在终态持久化前停止并排空所拥有的 live Agent。disposal 失败时，Host 会继续跟踪 handle，并让 operation 保持可重试。Host 成功只报告 Run 与输入已经持久存在，并不表示模型执行完成。
 
+`observeAgentRun` 读取匹配的物理 Session 并折叠已消费工作，使空的已完成轮次不会替换之前的模型结果。它独立采样当前 Provider 拥有的 Agent。Terminal 输出来自该 Agent 的现有 Terminal 注册表；缺少所有权、服务不存在及读取失败分别报告。不透明 Terminal id 包含注册表生命周期，使旧选择无法指向复用的 PTY id。读取不会恢复 Session 或启动 PTY；Agent 恢复由启动恢复流程单独负责。
+
 <a id="configuration"></a>
 ## 配置
 
@@ -71,6 +73,9 @@ Inspection 绝不创建、恢复或唤醒 Agent。`inspectInterventionOpening` �
 
 | 字段 | 默认值 | 用途 |
 | --- | --- | --- |
+| `runTerminalMaxItems` | `32` | 所属终端的最大显示数量，不超过 32 |
+| `runTerminalPageLines` | `80` | 每次读取的 scrollback 行数，不超过 1000 |
+| `runTerminalMaxChars` | `32768` | 每次读取的输出字符数，不超过 65536 |
 | `pushCredentialHelper` | 未设置 | 封闭的非交互适配器：`git-credential-manager` 或 `git-credential-manager-core`；未设置时 Push 不可用 |
 | `gitCommandTimeoutMs` | `10000` | 每个 Git 进程的墙钟时间限制 |
 | `gitTerminationGraceMs` | `250` | 终止进程树与强制结束之间的宽限期 |

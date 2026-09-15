@@ -64,6 +64,8 @@ The Provider opens a read handle for physical Session persistence, reads its hea
 
 Inspection never creates, resumes, or wakes an Agent. `inspectInterventionOpening` reads detached physical Session history and confirms only one exact `request_intervention` call whose non-error model-facing result is followed by the matching final step end and a completed turn end; it returns closed evidence without exposing the Session. Startup resume is a separate operation that requires an exact succeeded Host result, matching physical Session header and input, and a matching available live Agent; it restores that Agent model-idle before the Host serves requests. A durable `not-started` plan can prove cancellation without attributing an unrelated Session; a publishing or terminal replay rechecks the exact durable input and ids. Cancellation stops and drains any owned live Agent before terminal persistence. If disposal fails, the Host keeps the handle tracked and the operation retryable. Host success reports only durable Run and input existence, not model completion.
 
+`observeAgentRun` reads the matching physical Session and folds consumed work so an empty completed turn cannot replace the preceding model result. It samples the current Provider-owned Agent independently. Terminal output comes from that Agent’s existing Terminal registry; missing ownership, an absent service, and read failure remain distinct. Opaque Terminal ids include the registry lifetime, so an old selection cannot address a recycled PTY id. The read never resumes a Session or starts a PTY; startup recovery separately owns Agent restoration.
+
 <a id="configuration"></a>
 ## Configuration
 
@@ -71,6 +73,9 @@ Numeric fields resolve to positive integers. The optional credential adapter ena
 
 | Field | Default | Purpose |
 | --- | --- | --- |
+| `runTerminalMaxItems` | `32` | Maximum visible owner-scoped terminals, at most 32 |
+| `runTerminalPageLines` | `80` | Scrollback lines per read, at most 1000 |
+| `runTerminalMaxChars` | `32768` | Output characters per read, at most 65536 |
 | `pushCredentialHelper` | unset | Closed non-interactive adapter: `git-credential-manager` or `git-credential-manager-core`; Push is unavailable when unset |
 | `gitCommandTimeoutMs` | `10000` | Wall-clock limit for each Git process |
 | `gitTerminationGraceMs` | `250` | Grace between process-tree termination and forced kill |

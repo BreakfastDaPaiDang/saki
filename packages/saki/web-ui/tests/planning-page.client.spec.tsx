@@ -117,6 +117,8 @@ it('routes navigation and filters through the planning actions', async () => {
   expect(initial.actions.refresh).toHaveBeenCalledOnce()
   fireEvent.click(screen.getByRole('button', { name: t('planning.board') }))
   expect(initial.actions.backToBoard).toHaveBeenCalledOnce()
+  fireEvent.click(screen.getByRole('button', { name: t('sessions.title') }))
+  expect(initial.actions.navigate).toHaveBeenLastCalledWith({ view: 'sessions', sessionsWorkItemId: null, sessionsAfter: null })
   for (const [key, destination] of [['milestones', 'milestone'], ['workspace', 'workspace'], ['mapping', 'mapping']] as const) {
     fireEvent.click(screen.getByRole('button', { name: t(`planning.${key}`) }))
     expect(initial.actions.navigate).toHaveBeenLastCalledWith({ view: destination })
@@ -294,7 +296,7 @@ it('opens each planning destination and restores focus only to a retained Board 
   const view = render(<PlanningPage {...initial} project={project} />)
   expect(document.activeElement).toBe(screen.getByRole('button', { name: `#${ITEM.issueNumber} ${ITEM.title}` }))
   fireEvent.click(screen.getByRole('button', { name: t('changes.title') }))
-  expect(initial.actions.navigate).toHaveBeenLastCalledWith({ view: 'changes', workItemId: null, changesRunId: null })
+  expect(initial.actions.navigate).toHaveBeenLastCalledWith({ view: 'changes', executionReturnView: 'detail', workItemId: null, changesRunId: null })
   for (const destination of ['mapping', 'detail', 'milestone'] as const) {
     view.rerender(<PlanningPage {...initial} project={{ ...project, address: { ...project.address, view: destination } }} />)
     expect(screen.queryByRole('article')).toBeNull()

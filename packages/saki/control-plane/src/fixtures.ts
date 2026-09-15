@@ -25,6 +25,7 @@ import type {
   TrustedProjectSelectionObservation,
   WorkspaceId,
 } from '@breakfastdapaidang/saki-execution'
+import type { SakiAgentRunViewProjection, SakiProjectSessionsProjection } from './session-views.ts'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 
 import type {
@@ -1035,6 +1036,39 @@ export const SAKI_AGENT_RUN_PROJECTION_FIXTURES = Object.freeze({
     updatedAt: BOARD_CONFIRMED_AT - 20_000,
   } as const satisfies SakiAgentRunProjection,
 })
+
+/** Failed DSH work with confirmed input delivery and readable history after the Agent stops. */
+export const SAKI_AGENT_RUN_VIEW_PROJECTION_FIXTURE: SakiAgentRunViewProjection = {
+  type: 'agent-run-view', projectId: PROJECT_ID,
+  workSession: {
+    id: CURRENT_WORK_SESSION_ID, revision: 1, state: 'open', primary: true,
+    workItem: { id: BOARD_WORK_ITEM_ID, title: 'Ship the read-only GitHub Board projection', issueNumber: 27, status: 'in-progress' },
+    assignment: { id: CURRENT_ASSIGNMENT_ID, state: 'active', ownerPrincipalId: PRINCIPAL_ID, currentAgentRunId: CURRENT_AGENT_RUN_ID },
+    runs: [{ id: CURRENT_AGENT_RUN_ID, sessionId: CURRENT_DSH_SESSION_ID, state: 'running', createdAt: BOARD_CONFIRMED_AT + 20_000, updatedAt: BOARD_CONFIRMED_AT + 40_000 }],
+    createdAt: BOARD_CONFIRMED_AT + 20_000, updatedAt: BOARD_CONFIRMED_AT + 40_000,
+  },
+  run: { id: CURRENT_AGENT_RUN_ID, revision: 2, sessionId: CURRENT_DSH_SESSION_ID, state: 'running',
+    source: { kind: 'manual-give-to-agent', intentId: CURRENT_AGENT_INTENT_ID, principalId: PRINCIPAL_ID },
+    profile: { ...AGENT_PROFILE_PROJECTION, modelRoute: AGENT_MODEL_PROJECTION },
+    createdAt: BOARD_CONFIRMED_AT + 20_000, updatedAt: BOARD_CONFIRMED_AT + 40_000,
+  },
+  observation: { observedAt: BOARD_CONFIRMED_AT + 60_000,
+    session: { state: 'confirmed', runtime: 'not-live', activity: { state: 'failed', turn: 1, endedAt: BOARD_CONFIRMED_AT + 50_000 } },
+    terminals: { state: 'unavailable', reason: 'owner-not-live' },
+  },
+  dispatches: [{ id: 'dispatch-00000000-0000-4000-8000-000000000020' as import('./types.ts').SakiExecutionDispatchId,
+    revision: 2, intentId: CURRENT_AGENT_INTENT_ID, state: 'accepted', reason: null,
+    operation: { id: 'host-operation-00000000-0000-4000-8000-000000000020' as HostOperationId, revision: 4, state: 'succeeded' },
+    createdAt: BOARD_CONFIRMED_AT + 20_000, updatedAt: BOARD_CONFIRMED_AT + 40_000,
+  }],
+  nextDispatch: null, interventions: [], earlierInterventions: false, status: 'failed',
+}
+
+/** A bounded Project Session page sharing the failed Run's retained identities. */
+export const SAKI_PROJECT_SESSIONS_PROJECTION_FIXTURE: SakiProjectSessionsProjection = {
+  type: 'project-sessions', projectId: PROJECT_ID, workItemId: null,
+  items: [SAKI_AGENT_RUN_VIEW_PROJECTION_FIXTURE.workSession], next: null,
+}
 
 /** Assigned Work Item detail with one current Run and bounded recent execution history. */
 export const SAKI_WORK_ITEM_DETAIL_PROJECTION_FIXTURE = Object.freeze({

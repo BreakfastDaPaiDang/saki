@@ -41,6 +41,7 @@ export function ChangesPage(props: ChangesPageProps) {
     <header className={css.header}>
       <div><h1>{t('changes.title')}</h1><p>{project.board.value?.confirmed?.project.title}</p></div>
       <div className={css.actions}>
+        {project.address.executionReturnView === 'run' && project.address.agentRunId !== null ? <Button variant="outline" onClick={() => { planning.navigate({ view: 'run' }) }}>{t('runs.back')}</Button> : null}
         <Button variant="outline" onClick={() => { planning.navigate({ view: project.address.workItemId === null ? 'board' : 'detail' }) }}>{t(project.address.workItemId === null ? 'planning.back' : 'changes.backItem')}</Button>
         {selectedRun === undefined ? null : <Button onClick={() => { props.openSession(selectedRun.sessionId) }}>{t('planning.openSession')}</Button>}
         {project.address.workItemId === null ? null : <Button variant="outline" disabled={operation !== null} onClick={() => { planning.navigate({ view: 'delivery' }) }}>{t('delivery.title')}</Button>}

@@ -30,8 +30,8 @@ export function WorkItemView(props: DetailProps & { openSession: SakiInjected['o
       <div className={css.actions}><span className={css.badge}>{t(`planning.status.${detail.workItem.status}`)}</span>
         <a href={detail.workItem.url} target="_blank" rel="noreferrer">{t('planning.openIssue')}</a>
         <Button variant="outline" disabled={!writable} onClick={() => { actions.beginMove(detail.workItem) }}>{t('planning.move')}</Button>
-        <Button variant="outline" onClick={() => { actions.navigate({ view: 'changes', changesRunId: null }) }}>{t('changes.title')}</Button>
-        <Button variant="outline" onClick={() => { actions.navigate({ view: 'delivery' }) }}>{t('delivery.title')}</Button>
+        <Button variant="outline" onClick={() => { actions.navigate({ view: 'changes', executionReturnView: 'detail', changesRunId: null }) }}>{t('changes.title')}</Button>
+        <Button variant="outline" onClick={() => { actions.navigate({ view: 'delivery', executionReturnView: 'detail' }) }}>{t('delivery.title')}</Button>
       </div>
       {detail.workItem.notInProject ? <p className={css.notice}>{t('planning.inboxMark')}</p> : null}
       <h3>{t('planning.body')}</h3>
@@ -45,9 +45,11 @@ export function WorkItemView(props: DetailProps & { openSession: SakiInjected['o
         {run === undefined ? null : <Button onClick={() => { props.openSession(run.sessionId) }}>{t('planning.openSession')}</Button>}
       </li> })}</ul>}
       <h3>{t('planning.execution')}</h3>
+      <Button variant="outline" onClick={() => { actions.navigate({ view: 'sessions', sessionsWorkItemId: detail.workItem.id, sessionsAfter: null }) }}>{t('sessions.title')}</Button>
       {detail.runs.length === 0 ? <p className={css.hint}>{t('planning.noExecution')}</p> : <ul className={css.rows}>{detail.runs.map(run => <li key={run.id}>
+        <Button onClick={() => { actions.navigate({ view: 'run', agentRunId: run.id, runReturnView: 'detail', runTab: 'overview', dispatchAfter: null, terminal: null, runReferencesOpen: false }) }}>{t('runs.open')}</Button>
         <Button onClick={() => { props.openSession(run.sessionId) }}>{t('planning.openSession')}</Button>
-        <Button variant="outline" onClick={() => { actions.navigate({ view: 'changes', changesRunId: run.id }) }}>{t('changes.title')}</Button>
+        <Button variant="outline" onClick={() => { actions.navigate({ view: 'changes', executionReturnView: 'detail', changesRunId: run.id }) }}>{t('changes.title')}</Button>
         <span>{t(`planning.state.${run.state}`)} · {time(run.updatedAt)}</span><code>{run.id}</code>
       </li>)}</ul>}
       <h3>{t('planning.delivery')}</h3>

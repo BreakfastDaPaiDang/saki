@@ -67,6 +67,7 @@ async function bench() {
       children: {
         'sidebar': { kind: 'single', scope: 'root' },
         'main': { kind: 'keyed', scope: 'root' },
+        'conversation.session.header.actions': { kind: 'list', scope: 'session' },
       },
     } as never,
     () => null,
@@ -91,6 +92,10 @@ describe('saki-web-ui apply', () => {
     expect(navEntries.map(entry => entry.options.id)).toEqual(['saki-work', 'saki-project'])
     const surfaceEntries = slots.entries('main')
     expect(surfaceEntries.map(entry => entry.options.key)).toEqual(['saki:work', 'saki:project'])
+    expect(slots.entries('conversation.session.header.actions').map(entry => entry.options.id)).toEqual(['saki-project-return'])
+    const returnFace = (slots.entries('conversation.session.header.actions')[0]!.inject as () => { openProject: () => void; hooks: { planning: unknown } })()
+    expect(returnFace.hooks.planning).toBeDefined()
+    returnFace.openProject()
     expect(surfaceEntries.map(entry => (entry.inject as () => { page: string })().page)).toEqual(['work', 'project'])
   })
 
@@ -206,6 +211,7 @@ describe('saki-web-ui apply', () => {
     await fiber.dispose()
     expect(slots.entries('sidebar.primary.action')).toHaveLength(0)
     expect(slots.entries('main')).toHaveLength(0)
+    expect(slots.entries('conversation.session.header.actions')).toHaveLength(0)
     expect(navigationListeners.size).toBe(0)
     const calls = layout.selectPanel.mock.calls.length
     emitSessionNavigation()

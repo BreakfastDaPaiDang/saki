@@ -12,6 +12,7 @@ import { changesFixture } from './changes-fixture.client.ts'
 import type { DeliverySnapshot } from '../src/client/delivery-controller.ts'
 import { planningFixture } from './planning-fixture.client.ts'
 import { BRANCH } from './planning-evidence.client.ts'
+import { SAKI_AGENT_RUN_VIEW_PROJECTION_FIXTURE as run } from '@breakfastdapaidang/saki-control-plane/fixtures'
 
 const owners = new Set<{ dispose: () => void }>()
 const showModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
@@ -47,6 +48,18 @@ it('records the operator-facing delivery navigation, stages, and editable fields
     actions: screen.getAllByRole('button').map(element => element.textContent),
     fields: screen.getAllByRole('textbox').map(element => element.closest('label')?.textContent),
   }).toMatchSnapshot()
+})
+
+it('returns from Delivery to the retained Run without submitting a delivery command', async () => {
+  const f = await bench()
+  const navigate = vi.spyOn(f.props.planning, 'navigate').mockImplementation(() => {})
+  const address = { ...f.props.project.address, executionReturnView: 'run' as const, agentRunId: run.run.id }
+  f.view.rerender(<DeliveryPage {...f.props} project={{ ...f.props.project, address }} state={f.controller.getSnapshot()} />)
+  await click(screen.getByRole('button', { name: zh['runs.back'] }))
+  expect(navigate).toHaveBeenCalledWith({ view: 'run' })
+  f.view.rerender(<DeliveryPage {...f.props} project={{ ...f.props.project, address: { ...address, agentRunId: null } }}
+    state={f.controller.getSnapshot()} />)
+  expect(screen.queryByRole('button', { name: zh['runs.back'] })).toBeNull()
 })
 
 it('requires an explicit confirmation for every delivery gesture and shows its exact target', async () => {

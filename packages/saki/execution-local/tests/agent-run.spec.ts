@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, symbols } from '@deepseek-ai/cordis'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
@@ -13,6 +13,8 @@ import AgentPresets from '@deepseek-ai/dsh-agent-presets'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import LlmRuntime, { freezeMessage, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
+import TerminalSessionService, { type TerminalBackendSession, type TerminalSessionStatus } from '@deepseek-ai/dsh-terminal'
+import type { TurnEndReason } from '@deepseek-ai/dsh-session'
 import SessionStore, { SESSION_FORMAT_VERSION, Session } from '@deepseek-ai/dsh-session'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -83,6 +85,9 @@ const PRINCIPAL_ID = 'principal-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' as SakiPri
 const GRANT_ID = 'grant-ffffffff-ffff-4fff-8fff-ffffffffffff' as SakiGrantId
 
 const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
+  runTerminalMaxItems: 32,
+  runTerminalPageLines: 80,
+  runTerminalMaxChars: 32_768,
   gitCommandTimeoutMs: 10_000,
   gitTerminationGraceMs: 100,
   maxGitStdoutBytes: 1024 * 1024,
@@ -92,13 +97,13 @@ const CONFIG: Omit<Required<Config>, 'pushCredentialHelper'> = {
   inventoryMaxGitOutputBytes: 4 * 1024 * 1024,
   inventoryMaxFileBytes: 1024 * 1024,
   inventoryMaxTotalFileBytes: 8 * 1024 * 1024,
-  inventoryMaxCaptureMs: 30_000,
+  inventoryMaxCaptureMs: process.platform === 'win32' ? 120_000 : 30_000,
   baselineMaxEntries: 1_000,
   baselineMaxPathBytes: 1024 * 1024,
   baselineMaxGitOutputBytes: 4 * 1024 * 1024,
   baselineMaxFileBytes: 1024 * 1024,
   baselineMaxTotalFileBytes: 4 * 1024 * 1024,
-  baselineMaxCaptureMs: 30_000,
+  baselineMaxCaptureMs: process.platform === 'win32' ? 120_000 : 30_000,
   operationMaxIndexBytes: 8 * 1024 * 1024,
   operationMaxReflogBytes: 1024 * 1024,
 }
@@ -2309,6 +2314,171 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
   }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 })
 
+describe('LocalSakiHostExecution Run observation', () => {
+  async function preparedRun(responses: StreamChunk[][] = [], config: Partial<Config> = {}) {
+    const harness = await mountAgentRunHarness(await createAgentRunWorld(), responses, config)
+    const signal = new AbortController().signal
+    const binding = await activeBinding(harness.execution, harness.repository, signal)
+    const request = await startAgentRunRequest(harness.execution, binding, signal)
+    const receipt = await harness.execution.prepareOperation<'start-agent-run'>(request, accepted(7), signal)
+    if (!receipt.ok) throw new Error('Run observation fixture was not prepared')
+    return { harness, signal, binding, request, receipt,
+      observe: () => harness.execution.observeAgentRun(receipt.preparation.operation, null, signal) }
+  }
+  it('reads a completed Session after restart without restoring its Agent or Terminal', async () => {
+    const { operation, restarted, signal } = await restartedSucceededAgentRun()
+    const resume = vi.spyOn(restarted.context.agents, 'resume')
+    expect(await restarted.execution.observeAgentRun(operation, null, signal)).toMatchObject({
+      session: { state: 'confirmed', runtime: 'not-live', activity: { state: 'succeeded', turn: 1 } },
+      terminals: { state: 'unavailable', reason: 'owner-not-live' },
+    })
+    expect(resume).not.toHaveBeenCalled()
+    expect(restarted.adapter.requests).toHaveLength(0)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+  it('reports failed model work even when its StartAgentRun operation delivered the input successfully', async () => {
+    const f = await preparedRun()
+    const started = await f.harness.execution.startOperation(f.receipt.preparation.operation, f.receipt.acceptance, f.signal)
+    expect(started).toMatchObject({ ok: true, snapshot: { state: 'succeeded' } })
+    await f.harness.context.agents.get(SESSION_ID)!.whenIdle()
+    expect(await f.observe()).toMatchObject({ session: { state: 'confirmed', runtime: 'idle', activity: { state: 'failed' } },
+      terminals: { state: 'unavailable', reason: 'provider-unavailable' } })
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+  it.each([
+    ['succeeded', { kind: 'completed' }], ['failed', { kind: 'error', error: { code: 'UNKNOWN', message: 'Provider rejected the request.' } }],
+    ['canceled', { kind: 'aborted', reason: { kind: 'user' } }], ['interrupted', { kind: 'interrupted' }],
+    ['blocked', { kind: 'blocked' }], ['limited', { kind: 'max-tokens' }],
+  ] satisfies readonly (readonly [string, TurnEndReason])[])('projects recorded %s work from physical Session history', async (state, reason) => {
+    const f = await preparedRun()
+    await persistInputHistory(f.harness, f.binding, f.request, (session) => {
+      session.append('turn/start', { turn: 1 })
+      session.append('step/start', { turn: 1, step: 1 })
+      session.append('turn/end', { turn: 1, reason })
+      session.append('turn/start', { turn: 2 })
+      session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
+    })
+    const observation = await f.observe()
+    expect(observation).toMatchObject({ session: { state: 'confirmed', runtime: 'not-live', activity: { state, turn: 1 } } })
+    if (observation.session.state !== 'confirmed') throw new Error('Recorded Session observation missing')
+    expect(observation.session.activity.endedAt).toBeGreaterThan(0)
+    expect(f.harness.context.agents.get(SESSION_ID)).toBeUndefined()
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+  it.each(['idle', 'dropped', 'open'] as const)('distinguishes %s work from a completed model turn', async (kind) => {
+    const f = await preparedRun()
+    await persistInputHistory(f.harness, f.binding, f.request, (session) => {
+      if (kind === 'open') session.append('turn/start', { turn: 1 })
+      else if (kind === 'dropped') {
+        session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [agentRunInput('pending')] })
+        session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, outcome: 'canceled', inserted: [] })
+      }
+    })
+    expect(await f.observe()).toMatchObject({ session: { state: 'confirmed', activity: {
+      state: kind === 'open' ? 'interrupted' : kind === 'dropped' ? 'canceled' : 'idle', endedAt: null,
+    } } })
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+  it('keeps missing, unreadable and conflicting Session evidence unavailable and propagates cancellation', async () => {
+    const f = await preparedRun()
+    expect(await f.observe()).toMatchObject({ session: { state: 'unavailable', reason: 'missing' } })
+    vi.spyOn(f.harness.context.sessionPersistence, 'stat').mockRejectedValueOnce(new Error('disk unavailable'))
+    expect(await f.observe()).toMatchObject({ session: { state: 'unavailable', reason: 'read-failed' } })
+    await persistInputHistory(f.harness, f.binding, f.request, () => {}, { cwd: '/another-project' })
+    expect(await f.observe()).toMatchObject({ session: { state: 'unavailable', reason: 'evidence-conflict' } })
+    const cancel = new AbortController()
+    vi.spyOn(f.harness.context.sessionPersistence, 'stat').mockImplementationOnce(async () => { cancel.abort(new Error('read canceled')); throw cancel.signal.reason })
+    await expect(f.harness.execution.observeAgentRun(f.receipt.preparation.operation, null, cancel.signal)).rejects.toThrow('read canceled')
+    await expect(f.harness.execution.observeAgentRun(f.receipt.preparation.operation, null, cancel.signal)).rejects.toThrow('read canceled')
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+  it('refuses a live Agent with the same Session id but a different provider owner', async () => {
+    const f = await preparedRun()
+    const foreign = await createAgentHandle(f.harness, f.binding, f.request, f.signal)
+    try {
+      const read = vi.spyOn(f.harness.context.sessionPersistence, 'open')
+      expect(await f.observe()).toMatchObject({ session: { state: 'unavailable', reason: 'evidence-conflict' }, terminals: { state: 'unavailable', reason: 'owner-not-live' } })
+      expect(read).not.toHaveBeenCalled()
+    } finally { await foreign.dispose() }
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+  it('reads bounded owner-only Terminal pages independently of Run state and refuses recycled registry ids', async () => {
+    const f = await preparedRun([stopResponse('done')], { runTerminalMaxItems: 2, runTerminalPageLines: 3, runTerminalMaxChars: 5 })
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const stream = f.harness.adapter.stream.bind(f.harness.adapter)
+    vi.spyOn(f.harness.adapter, 'stream').mockImplementation(async function * (options) { entered.resolve(undefined); await release.promise; yield * stream(options) })
+    try {
+      await f.harness.execution.startOperation(f.receipt.preparation.operation, f.receipt.acceptance, f.signal)
+      await entered.promise
+      expect(await f.observe()).toMatchObject({ session: { state: 'confirmed', runtime: 'running', activity: { state: 'running' } } })
+      const persistence = f.harness.context.sessionPersistence
+      const open = persistence.open.bind(persistence)
+      const opening = vi.spyOn(persistence, 'open').mockImplementationOnce(async (...args) => {
+        const handle = await open(...args)
+        const read = handle.read.bind(handle)
+        vi.spyOn(handle, 'read').mockImplementationOnce(async (...readArgs) => ({ ...await read(...readArgs), events: [] }))
+        return handle
+      })
+      expect(await f.observe()).toMatchObject({ session: { state: 'confirmed', runtime: 'running', activity: { state: 'running', turn: null } } })
+      opening.mockRestore()
+    } finally { release.resolve(undefined) }
+    const owner = f.harness.context.agents.get(SESSION_ID)!
+    await owner.whenIdle()
+    let fiber = await f.harness.context.plugin(TerminalSessionService)
+    let process: TerminalSessionStatus = { kind: 'running' }
+    const read = vi.fn<TerminalBackendSession['read']>(request => ({ text: '123456🌍', totalLines: 20,
+      lineBegin: request.offset ?? 0, lineEnd: (request.offset ?? 0) + 3, truncated: false }))
+    const backend: TerminalBackendSession = { motd: '', read, status: () => process, close: async () => {},
+      signal: async () => ({ delivered: true, targetPgid: 1 }), startSend: () => { throw new Error('Run observation cannot send input') } }
+    const install = () => f.harness.context.terminals.registerBackend({ type: 'test-pty', spawn: async () => backend })
+    install()
+    const foreign = await f.harness.context.agents.create({
+      sessionId: 'session-77777777-7777-4777-8777-777777777777' as typeof SESSION_ID,
+      meta: { cwd: f.harness.repository, agentPreset: f.request.run.profile.agentPresetId },
+      agentOptions: f.request.run.profile.modelRoute,
+    })
+    const foreignTerminal = await f.harness.context.terminals.spawn(foreign.agent, { type: 'test-pty', name: 'foreign owner' })
+    await f.harness.context.terminals.spawn(owner, { type: 'test-pty' })
+    await f.harness.context.terminals.spawn(owner, { type: 'test-pty', name: 'second' })
+    const third = await f.harness.context.terminals.spawn(owner, { type: 'test-pty', name: `third\u0000${'x'.repeat(300)}` })
+    const listed = await f.observe()
+    if (listed.terminals.state !== 'confirmed') throw new Error('Terminal list missing')
+    expect(listed.terminals.items).toHaveLength(2)
+    expect(listed.terminals.more).toBe(true)
+    const firstId = listed.terminals.items[0]!.id
+    const get = owner.ctx.get.bind(owner.ctx)
+    const raw = Reflect.get(owner.ctx.get('terminals')!, symbols.original) as TerminalSessionService
+    const direct = vi.spyOn(owner.ctx, 'get').mockImplementation(name => name === 'terminals' ? raw : get(name) as unknown)
+    expect((await f.observe()).terminals).toMatchObject({ items: [{ id: firstId }, {}] })
+    direct.mockRestore()
+    const foreignId = `${firstId.slice(0, firstId.lastIndexOf(':') + 1)}${foreignTerminal.sessionId}` as typeof firstId
+    expect((await f.harness.execution.observeAgentRun(f.receipt.preparation.operation, { id: foreignId, offset: 0 }, f.signal)).terminals)
+      .toMatchObject({ items: [{ id: firstId }, {}], selected: { state: 'missing', id: foreignId } })
+    expect(read).not.toHaveBeenCalled()
+    await foreign.dispose()
+    const thirdId = `${firstId.slice(0, firstId.lastIndexOf(':') + 1)}${third.sessionId}` as typeof firstId
+    const selected = await f.harness.execution.observeAgentRun(f.receipt.preparation.operation, { id: thirdId, offset: 6 }, f.signal)
+    expect(selected).toMatchObject({ session: { activity: { state: 'succeeded' } }, terminals: {
+      state: 'confirmed', more: true, selected: { state: 'confirmed', id: thirdId, text: '456🌍', lineBegin: 6, lineEnd: 9, truncated: true },
+    } })
+    if (selected.terminals.state !== 'confirmed') throw new Error('Selected Terminal missing')
+    expect(selected.terminals.items[1]!.name).toHaveLength(256)
+    expect(selected.terminals.items[1]!.name).not.toContain('\u0000')
+    expect(read).toHaveBeenLastCalledWith({ offset: 6, count: 3 })
+    expect((await f.observe()).terminals).toMatchObject({ items: [{ id: firstId }, {}] })
+    process = { kind: 'exited', exitCode: 2, signal: 'SIGTERM' }
+    expect((await f.observe()).terminals).toMatchObject({ items: [{ process: { state: 'exited', exitCode: 2, signal: 'SIGTERM' } }, {}] })
+    read.mockImplementationOnce(() => { throw new Error('scrollback unavailable') })
+    expect((await f.harness.execution.observeAgentRun(f.receipt.preparation.operation, { id: firstId, offset: 0 }, f.signal)).terminals)
+      .toEqual({ state: 'unavailable', reason: 'read-failed' })
+    await fiber.dispose()
+    expect((await f.observe()).terminals).toEqual({ state: 'unavailable', reason: 'provider-unavailable' })
+    fiber = await f.harness.context.plugin(TerminalSessionService)
+    install()
+    await f.harness.context.terminals.spawn(owner, { type: 'test-pty' })
+    const replaced = await f.harness.execution.observeAgentRun(f.receipt.preparation.operation, { id: firstId, offset: 0 }, f.signal)
+    expect(replaced.terminals).toMatchObject({ state: 'confirmed', selected: { state: 'missing', id: firstId } })
+    if (replaced.terminals.state !== 'confirmed') throw new Error('Replacement registry missing')
+    expect(replaced.terminals.items[0]!.id).not.toBe(firstId)
+    await fiber.dispose()
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+})
+
 class ScriptedAdapter extends LlmAdapter {
   readonly requests: GenerateOptions[] = []
 
@@ -2473,6 +2643,7 @@ async function createAgentRunWorld(): Promise<AgentRunWorld> {
 async function mountAgentRunHarness(
   world: AgentRunWorld,
   responses: StreamChunk[][],
+  config: Partial<Config> = {},
 ): Promise<AgentRunHarness> {
   const { presetRoot, repository, sessionRoot, storageRoot } = world
   const context = new Context()
@@ -2503,7 +2674,7 @@ async function mountAgentRunHarness(
   context.provide('workspaceRegistry', { list: () => [{ id: WORKSPACE_ID, path: repository }] })
   const adapter = new ScriptedAdapter(responses)
   context.llm.registerAdapter(['test-provider'], adapter)
-  await context.plugin(LocalSakiHostExecution, CONFIG)
+  await context.plugin(LocalSakiHostExecution, { ...CONFIG, ...config })
   return {
     context,
     execution: context.sakiHostExecution as LocalSakiHostExecution,

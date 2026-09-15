@@ -15,8 +15,8 @@ import '@deepseek-ai/dsh-session'
 
 /** Cordis plugin name. */
 export const name = 'saki-tool-intervention'
-/** Host and Agent-scoped services required by the tool and its durability handoff. */
-export const inject = ['tools', 'sessions', 'sakiControlPlane', 'timer']
+/** Services available during Agent restoration; each operation resolves the control plane after registration. */
+export const inject = ['tools', 'sessions', 'timer']
 
 /** Local recovery scheduling for an Intervention opening. */
 export interface Config {
@@ -34,7 +34,7 @@ const description = 'Request durable input from the Saki operator when work cann
 
 /**
  * Register the Development Agent's durable Intervention request tool.
- * @param ctx - Agent Context carrying Tools, Sessions, and the Saki control plane.
+ * @param ctx - Agent Context carrying Tools and Sessions; control-plane availability is checked per operation.
  * @param config - local retry timing for opening finalization.
  */
 export function apply(ctx: Context, config: Config = {}): void {
@@ -44,6 +44,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   const active = new Set<Promise<void>>()
   const retryTimers = new Map<SessionId, () => void>()
   const lifetime = new AbortController()
+  const interventions = () => {
+    const controlPlane = ctx.get('sakiControlPlane')
+    if (controlPlane === undefined) throw new Error('request_intervention requires an available Saki control plane')
+    return controlPlane.agentInterventions
+  }
 
   const clearRetry = (sessionId: SessionId): void => {
     retryTimers.get(sessionId)?.()
@@ -70,7 +75,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     let retry = false
     const operation = (async () => {
       await ctx.sessions.flush(session)
-      await ctx.sakiControlPlane.agentInterventions.finalizeOpening(
+      await interventions().finalizeOpening(
         interventionId,
         lifetime.signal,
       )
@@ -130,7 +135,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (exec.agent === undefined) {
         throw new Error('request_intervention requires an active Saki Development Agent')
       }
-      const result = await ctx.sakiControlPlane.agentInterventions.request({
+      const result = await interventions().request({
         sessionId: exec.agent.session.id,
         toolCallId: exec.callId,
         prompt: args.question,

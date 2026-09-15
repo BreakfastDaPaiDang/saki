@@ -139,6 +139,8 @@ interface FakeOperation {
 }
 
 class FakeExecution extends SakiHostExecution {
+  async observeAgentRun(): Promise<never> { throw new Error('Run observation is not configured in this fixture') }
+
   readonly pushCredentialHelper = undefined
   readonly operations = new Map<string, FakeOperation>()
   readonly listeners = new Set<(change: HostOperationChange) => void>()

@@ -1,0 +1,25 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`records failed execution separately from delivered input and readable history after restart 1`] = `
+{
+  "actions": [
+    "返回看板",
+    "会话与运行",
+    "刷新运行证据",
+    "打开 Session",
+    "返回工作项",
+    "变更",
+    "交付",
+    "概览",
+    "执行记录",
+    "终端",
+  ],
+  "headings": [
+    "Agent Run",
+    "#27 Ship the read-only GitHub Board projection",
+  ],
+  "history": "DSH Session 历史可读取，可在 Conversation 查看。后续执行是否可用由当前配置与权限决定。",
+  "status": "最近执行失败",
+  "terminal": "Terminal 不可恢复：此 Run 的 Agent 当前不在此 Host 运行。Session 历史是否可读单独显示。",
+}
+`;

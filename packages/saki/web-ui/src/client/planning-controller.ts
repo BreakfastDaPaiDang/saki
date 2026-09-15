@@ -4,13 +4,14 @@ import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import { sakiMoveWorkItemIntentSchema } from '@breakfastdapaidang/saki-host-api/wire'
 import type { SakiHostClient } from '@breakfastdapaidang/saki-host-api/client'
 import type {
+  SakiWireProjectSessionsResult, SakiWireAgentRunViewResult,
   SakiWireAccessProjection, SakiWireBoardResult, SakiWireConfigureGitHubSynchronizationIntent,
   SakiWireConfigureGitHubSynchronizationResult, SakiWireMilestoneViewResult, SakiWireMoveWorkItemIntent,
   SakiWireMoveWorkItemResult, SakiWireProjectId, SakiWireProjectMappingResult,
   SakiWireProjectMilestonesResult, SakiWireProjectionCursor, SakiWireWorkItemViewResult,
 } from '@breakfastdapaidang/saki-host-api/wire'
 import { createPlanningStore, initialPlanningAddress } from './planning-state.ts'
-import type { BoardStatus, MilestoneId, PlanningAddress, WorkItemId } from './planning-state.ts'
+import type { AgentRunId, BoardStatus, MilestoneId, PlanningAddress, WorkItemId } from './planning-state.ts'
 import type { createSakiNavigationStore } from './navigation.ts'
 
 type Projection<R> = Extract<R, { ok: true }> extends { projection: infer P } ? P : never
@@ -35,6 +36,8 @@ export interface PlanningProject {
   readonly milestone: PlanningRead<Projection<SakiWireMilestoneViewResult>>
   readonly milestones: PlanningRead<Projection<SakiWireProjectMilestonesResult>>
   readonly mapping: PlanningRead<Projection<SakiWireProjectMappingResult>>
+  readonly sessions: PlanningRead<Projection<SakiWireProjectSessionsResult>>
+  readonly run: PlanningRead<Projection<SakiWireAgentRunViewResult>>
   readonly mappingResult: SakiWireConfigureGitHubSynchronizationResult | 'unacknowledged' | 'pending' | null
   readonly moves: readonly PlanningMove[]
   readonly focusVersion: number
@@ -48,10 +51,12 @@ export interface PlanningSnapshot {
 
 type Navigation = ReturnType<ReturnType<typeof createSakiNavigationStore>['create']>
 type Interaction = ReturnType<ReturnType<typeof createPlanningStore>['create']>
-type PlanningApi = Pick<SakiHostClient, 'readAccess' | 'exchangeBootstrap' | 'watchProjections' | 'queryBoard' | 'queryProjectMilestones' | 'queryWorkItemView' | 'queryMilestoneView' | 'queryProjectMapping' | 'moveWorkItem' | 'configureGitHubSynchronization'>
+type PlanningApi = Pick<SakiHostClient, 'readAccess' | 'exchangeBootstrap' | 'watchProjections' | 'queryBoard' | 'queryProjectSessions' | 'queryAgentRunView' | 'queryProjectMilestones' | 'queryWorkItemView' | 'queryMilestoneView' | 'queryProjectMapping' | 'moveWorkItem' | 'configureGitHubSynchronization'>
 type Authenticated = Extract<SakiWireAccessProjection, { kind: 'authenticated' }>
 type ReadResult<T> = { readonly ok: true; readonly projection: T } | { readonly ok: false; readonly reason: string }
-type ProjectCache = Omit<PlanningProject, 'address' | 'moves' | 'detail' | 'milestone'> & {
+type ProjectCache = Omit<PlanningProject, 'address' | 'moves' | 'detail' | 'milestone' | 'sessions' | 'run'> & {
+  sessionPages: Map<string, PlanningRead<Projection<SakiWireProjectSessionsResult>>>
+  runViews: Map<string, PlanningRead<Projection<SakiWireAgentRunViewResult>>>
   details: Map<WorkItemId, PlanningRead<Projection<SakiWireWorkItemViewResult>>>
   milestoneViews: Map<MilestoneId, PlanningRead<Projection<SakiWireMilestoneViewResult>>>
 }
@@ -107,7 +112,7 @@ export class PlanningController {
     this.interaction = interaction
     interaction.actions.hydrate(interaction.store.getSnapshot())
     this.disposers.push(interaction.store.subscribe(() =>{  this.publish() }))
-    this.disposers.push(navigation.store.subscribe(() => { this.publish(); void this.loadSelected(false) }))
+    this.disposers.push(navigation.store.subscribe(() => { this.publish(); void this.loadSelected(true) }))
   }
 
   /**
@@ -168,7 +173,7 @@ export class PlanningController {
     const selected = this.selected()
     if (selected === undefined) return
     this.interaction.actions.address(selected.auth.principal.id, selected.id, { ...selected.address, ...patch })
-    this.publish(); void this.loadSelected(false)
+    this.publish(); void this.loadSelected(patch.view !== undefined)
   }
   /**
    * Open a Work Item and preserve its return destination.
@@ -321,7 +326,7 @@ export class PlanningController {
     if (cache === undefined) {
       cache = {
         id, board: emptyRead(), milestones: emptyRead(), mapping: emptyRead(), details: new Map(),
-        milestoneViews: new Map(), mappingResult: null, focusVersion: 0,
+        milestoneViews: new Map(), sessionPages: new Map(), runViews: new Map(), mappingResult: null, focusVersion: 0,
       }
       this.cache.set(id, cache)
     }
@@ -343,6 +348,8 @@ export class PlanningController {
         detail: selected.address.workItemId === null ? emptyRead() : cache.details.get(selected.address.workItemId) ?? emptyRead(),
         milestone: selected.address.milestoneId === null
           ? emptyRead() : cache.milestoneViews.get(selected.address.milestoneId) ?? emptyRead(),
+        sessions: cache.sessionPages.get(this.sessionsKey(selected.address)) ?? emptyRead(),
+        run: cache.runViews.get(this.runKey(selected.address)) ?? emptyRead(),
         mappingResult: cache.mappingResult ?? (pendingMapping === undefined ? null : 'unacknowledged'),
         moves: this.projectMoves(selected.id, selected.auth), focusVersion: cache.focusVersion,
       }
@@ -401,6 +408,11 @@ export class PlanningController {
       const id = selected.address.milestoneId
       if (refresh || !cache.milestoneViews.has(id)) tasks.push(this.readMilestone(selected.id, id))
     }
+    if (selected.address.view === 'sessions' && (refresh || !cache.sessionPages.has(this.sessionsKey(selected.address)))) tasks.push(this.readSessions(selected.id, selected.address))
+    if (selected.address.view === 'run' && selected.address.agentRunId !== null
+      && (refresh || heartbeat || !cache.runViews.has(this.runKey(selected.address)))) {
+      tasks.push(this.readRun(selected.id, selected.address, selected.address.agentRunId))
+    }
     if (selected.address.view === 'mapping' && (refresh || cache.mapping.value === null)) tasks.push(this.readMapping(selected.id))
     await Promise.all(tasks)
   }
@@ -450,6 +462,26 @@ export class PlanningController {
   }
   private readMilestone(projectId: SakiWireProjectId, id: MilestoneId, refresh: 'cached' | 'interactive' = 'cached') {
     return this.read<Projection<SakiWireMilestoneViewResult>>(`milestone:${projectId}:${id}`, () => this.projectCache(projectId).milestoneViews.get(id) ?? emptyRead(), value => this.projectCache(projectId).milestoneViews.set(id, value), signal => this.api.queryMilestoneView(projectId, id, refresh, signal), refresh === 'interactive')
+  }
+  private sessionsKey(address: PlanningAddress): string {
+    return JSON.stringify([address.sessionsWorkItemId, address.sessionsAfter])
+  }
+  private runKey(address: PlanningAddress): string {
+    return JSON.stringify([address.agentRunId, address.dispatchAfter, address.runTab === 'terminal' ? address.terminal : null])
+  }
+  private readSessions(projectId: SakiWireProjectId, address: PlanningAddress) {
+    const key = this.sessionsKey(address)
+    return this.read<Projection<SakiWireProjectSessionsResult>>(`sessions:${projectId}:${key}`,
+      () => this.projectCache(projectId).sessionPages.get(key) ?? emptyRead(),
+      value => this.projectCache(projectId).sessionPages.set(key, value),
+      signal => this.api.queryProjectSessions({ type: 'project-sessions', projectId, workItemId: address.sessionsWorkItemId, after: address.sessionsAfter }, signal))
+  }
+  private readRun(projectId: SakiWireProjectId, address: PlanningAddress, agentRunId: AgentRunId) {
+    const key = this.runKey(address)
+    return this.read<Projection<SakiWireAgentRunViewResult>>(`run:${projectId}:${key}`,
+      () => this.projectCache(projectId).runViews.get(key) ?? emptyRead(),
+      value => this.projectCache(projectId).runViews.set(key, value),
+      signal => this.api.queryAgentRunView({ type: 'agent-run-view', projectId, agentRunId, afterDispatch: address.dispatchAfter, terminal: address.runTab === 'terminal' ? address.terminal : null }, signal))
   }
   private readMapping(id: SakiWireProjectId) {
     return this.read(`mapping:${id}`, () => this.projectCache(id).mapping, (mapping) => { this.cache.set(id, { ...this.projectCache(id), mapping }) }, signal => this.api.queryProjectMapping(id, signal))
