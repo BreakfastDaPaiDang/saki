@@ -2,10 +2,10 @@
 .header, .actions, .tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .header { justify-content: space-between; }
 .tabs { margin: 20px 0; }
-.notice { padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; }
+.notice { padding: 12px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 8px; }
 .status { font-weight: 600; }
 .sessions, .rows { list-style: none; padding: 0; display: grid; gap: 12px; }
-.card, .rows > li { padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; }
+.card, .rows > li { padding: 12px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 8px; }
 .rows > li { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .rows details { flex-basis: 100%; }
 .facts { display: grid; gap: 12px; }
