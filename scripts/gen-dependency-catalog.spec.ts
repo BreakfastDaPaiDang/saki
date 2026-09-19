@@ -148,6 +148,7 @@ describe('published npm dependency catalog', () => {
 
   it('isolates scoped registries, resolver settings, and caches from user, global, and environment configuration', async () => {
     const root = fixture()
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'npm-isolation-test', private: true }))
     const userConfig = join(root, 'user.npmrc')
     const globalConfig = join(root, 'global.npmrc')
     writeFileSync(userConfig, '@deepseek-ai:registry=https://user-override.invalid/\nstrict-peer-deps=true\n')
