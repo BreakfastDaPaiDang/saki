@@ -25,7 +25,7 @@ Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.pa
 
 启动器把 preset 名册绑定到包内 `config/agent-presets` 的绝对路径，并禁用 DSH 随包 preset 和用户 preset 根目录。随包提供的 `development` preset 提供仓库指令、持久 `request_intervention` 工具、Windows 前台 PowerShell，以及基于 Agent 隔离沙箱文件系统的 `read`、`write` 与 `edit` 工具；Host 操作继续使用独立的本地文件系统提供方。生产组合不安装模型 adapter；创建或恢复 Agent 后会保持 idle，直至拥有该 Agent Run 的 operation 提交持久输入。
 
-在 Windows 上，该组合还挂载当前用户 DPAPI 凭据 Provider 与 Saki Product GitHub App Provider；不支持的平台会禁用这两个配置项，而不会把更弱的凭据来源报告成 `local-user-trust`。启动流程会先根据精确的 succeeded Host Operation 与物理 Session evidence 恢复每个已经过控制面校验的 running Agent，随后启动器才会发布就绪记录或 bootstrap handoff。就绪配置项提供稳定的 `{"product":"saki","status":"ready"}` 记录。启动器只在 `boot()` 完成配置项激活审计后将其写入 stdout；报告失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。
+在 Windows 上，该组合还挂载当前用户 DPAPI 凭据 Provider 与 Saki Product GitHub App Provider；不支持的平台会禁用这两个配置项，而不会把更弱的凭据来源报告成 `local-user-trust`。启动流程会先根据精确的 succeeded Host Operation 与物理 Session evidence 恢复每个已经过控制面校验的 running Agent，随后启动器才会发布就绪记录或 bootstrap handoff。就绪配置项提供稳定的 `{"product":"saki","status":"ready"}` 记录。在 `boot()` 完成共享启动审计后，启动器要求所有已启用的 Loader 配置项均已激活，才会写入就绪记录。已禁用的配置项不参与检查；激活或报告失败时，启动器会对应用执行 dispose（资源释放）并进入失败路径。
 
 Connection 激活会等待控制面完成恢复。因此浏览器重连不能在 Local Host 建立 Agent 所有权前，通过通用 Conversation API 恢复保留的 Session。Development Agent 的 Intervention 工具可在恢复期间注册，只在请求或 opening 最终确认时解析控制面。
 

@@ -26,6 +26,8 @@ Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 
 
 原生子进程和 shell 夹具先等待 shell 启动并观察目标输出，再测试取消或释放。Linux observer 保留每次查询开始前确认的建立状态，并丢弃被并发信号失效的回复；两类回复都不能证明新启动或刚收到信号的目标已经完全停稳。假终端生命周期与启动失败释放顺序用例选择进程组实现；专门的 Linux scope 用例验证原生启动与结果处理。超时输出用例为原生引导进程在受测期限内启动目标留出时间。前台输出观察器会恢复实例上的 spawn spy，夹具清理先等待所属进程退出，再移除目录。PowerShell 生命周期用例在释放前观察目标 PID，随后验证其退出，并在 `finally` 中释放上下文；用例期限覆盖原生启动和托管范围退出两个阶段。
 
+即使共享启动策略允许可选配置项保持未激活，Saki 就绪检查仍要求每个已启用的 Loader 配置项均已激活。announcer 在写入 stdout 或请求正常退出前检查已完成启动的配置树，并在拒绝时释放应用。仅检查就绪 provider 会让恢复不完整或 Host 组合不完整的应用看起来可用。已禁用配置项仍表示有意的配置选择，Loader 告警保留详细激活诊断。
+
 bundle 的 `./launcher` 入口拥有启动环境依赖。就绪插件在干净检出中仍可独立从 TypeScript 加载，完整进程夹具则通过构建入口解析启动器辅助函数。
 
 bundle 显式设置 `personaPrefix` 与 `personaSuffix`；development preset 通过 Persona 插件的 `prefix` 字段提供稳定提示。Connection 在 WebServer 可用时安装 HTTP 路由，并将已验证的恢复配置发布到浏览器 bootstrap。Saki 路由身份认证也适用于派发前失败。
