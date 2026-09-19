@@ -143,7 +143,7 @@ describe('search', () => {
         hasMore: false,
       },
     })
-    expect(call.mock.calls.find(([, endpoint]) => endpoint === 'session/search')?.[3]).toBe(signal)
+    expect(call.mock.calls.find(([, endpoint]) => endpoint === 'session/search')?.[3]?.signal).toBe(signal)
     expect(b.svc.list.getSnapshot()).toBe(before)
   })
 })
