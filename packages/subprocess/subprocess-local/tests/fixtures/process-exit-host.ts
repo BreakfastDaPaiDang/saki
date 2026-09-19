@@ -55,6 +55,7 @@ if (kind === 'ordinary') {
     cwd: process.cwd(),
     rows: 24,
     cols: 80,
+    terminalType: 'dumb',
     graceMs: trigger === 'dispose' || coordination === 'exit-before-proceed' ? 100 : 30_000,
   })
   handle.output.setEncoding('utf8')

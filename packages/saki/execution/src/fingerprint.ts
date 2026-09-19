@@ -26,7 +26,7 @@ const UTF8 = new TextEncoder()
 
 /**
  * Compute the immutable payload identity of one preallocated Agent Run input.
- * @param input - complete identified UserMessage, including Saki provenance.
+ * @param input - complete identified UserMessage, including Saki message source metadata.
  * @returns lowercase canonical SHA-256 digest.
  */
 export function computeStartAgentRunPayloadDigest(input: StartAgentRunInputMessage): string {

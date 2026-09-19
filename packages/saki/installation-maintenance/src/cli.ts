@@ -17,7 +17,7 @@ import type {
 import { CURRENT_SAKI_BUILD_ID, LEGACY_B03_BUILD_ID } from './release.ts'
 
 interface CommandBase {
-  /** Exact Installation paths and fixed build provenance. */
+  /** Exact Installation paths and fixed build identity. */
   readonly options: SakiMaintenanceOptions
 }
 

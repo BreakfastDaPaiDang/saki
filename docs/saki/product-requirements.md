@@ -138,7 +138,7 @@ Saki treats model access as execution supply rather than an attribute of a Work 
 
 Context Capacity, Runtime Context Limit, and Context Policy remain separate facts. The model advertises Context Capacity; a product surface, subscription, or account may expose a lower Runtime Context Limit; a versioned Context Policy chooses a lower compaction trigger and a strategy for compaction, pruning, restoration, and observation. Saki must not infer one from another or present logical retrieved history as a physical model window.
 
-Generated media is durable project output rather than an ephemeral chat response. A Generation Job records its resolved Model Route, inputs, lifecycle, output artifacts, and provenance and may run concurrently subject to provider-account limits. The [Model Supply domain language](../contexts/model-supply/CONTEXT.md) owns these terms.
+Generated media is durable project output rather than an ephemeral chat response. A Generation Job records its resolved Model Route, inputs, lifecycle, output artifacts, and request attribution and may run concurrently subject to provider-account limits. The [Model Supply domain language](../contexts/model-supply/CONTEXT.md) owns these terms.
 
 ## Agent coordination and work sessions
 

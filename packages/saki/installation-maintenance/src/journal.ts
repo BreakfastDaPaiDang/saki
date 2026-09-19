@@ -240,7 +240,7 @@ export interface UpgradeOperationJournalRequest {
   readonly sourceStateVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
   /** Physical source generation that the Recovery Backup must preserve. */
   readonly sourceStorageGenerationId: SakiStorageGenerationId
-  /** Source-build provenance that the Recovery Backup must repeat. */
+  /** Source-build identity that the Recovery Backup must repeat. */
   readonly sourceBuildId: SakiBuildId
   /** Required pre-upgrade Recovery Backup identity. */
   readonly backupId: SakiRecoveryBackupId

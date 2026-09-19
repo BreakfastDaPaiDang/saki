@@ -76,7 +76,7 @@ function requireDurable(result: DurableFileResult, subject: string): void {
  * publishing that sole authority.
  * @param installationRoot - Installation root held under its exclusive lease.
  * @param journal - selected immutable fresh or upgrade operation.
- * @param identity - identities fixed by the journal plus creator provenance.
+ * @param identity - identities fixed by the journal plus creator-build identity.
  * @param signal - cancellation through the final directory commit.
  * @param materialize - creates the complete candidate database at the supplied missing path.
  * @param effects - optional phase-adjacent failures used by crash tests.

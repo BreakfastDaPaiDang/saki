@@ -22,4 +22,4 @@ Model Supply 定义 Saki 如何命名外部模型账号、为 Execution 解析�
 
 **Usage Snapshot**：对一个 Provider Account Profile 的额度周期、剩余用量、credits 和读取状态所作的带提供方来源、带时点观测。它不是 Saki 拥有的余额，也不授权超过提供方限制。_避免_：额度余额、共享额度
 
-**Generation Job**：通过已解析 Model Route 生成或编辑媒体的一次可追踪请求。它记录输入、状态、输出和来源，并可把产物关联到 Work Session 或 Work Item。_避免_：Agent Run、图片消息
+**Generation Job**：通过已解析 Model Route 生成或编辑媒体的一次可追踪请求。它记录输入、状态、输出和请求归属，并可把产物关联到 Work Session 或 Work Item。_避免_：Agent Run、图片消息

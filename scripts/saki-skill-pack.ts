@@ -60,7 +60,7 @@ interface IgnoredUpstreamFile {
   reason: string
 }
 
-/** Provenance and compatibility declaration for one adapted skill. */
+/** Source records, patches, and compatibility declaration for one adapted skill. */
 interface SkillPackEntry {
   name: string
   category: string
@@ -72,7 +72,7 @@ interface SkillPackEntry {
   requirements: SkillRequirements
 }
 
-/** Complete machine-readable provenance for the repository skill pack. */
+/** Complete machine-readable source and patch records for the repository skill pack. */
 export interface SkillPackManifest {
   schemaVersion: 1
   upstream: {
@@ -532,7 +532,7 @@ export async function verifySakiSkillPack(root: string): Promise<string[]> {
 /**
  * Validate and publish a complete candidate pack as one update transaction.
  * @param root - repository root whose current pack is replaced.
- * @param candidateRoot - isolated root containing the candidate skill and provenance trees.
+ * @param candidateRoot - isolated root containing the candidate skill and source-record trees.
  * @param options - filesystem operation used to publish and roll back the directory transaction.
  * @returns resolution after the candidate is published and temporary state is removed.
  */

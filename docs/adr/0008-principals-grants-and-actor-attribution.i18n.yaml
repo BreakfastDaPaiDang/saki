@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/adr/0008-principals-grants-and-actor-attribution.md
-0008-principals-grants-and-actor-attribution.md: d844eacca22f9e1d997a7149ac098859fc7925a0
+0008-principals-grants-and-actor-attribution.md: 251b9792faa202b429ef1a873c2efeeca93c559a
 0008-principals-grants-and-actor-attribution.zh.md: daef7e4b47a7095865dd47cb2f8ffcab335c3a4d

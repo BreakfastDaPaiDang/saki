@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-08-19-repository-owned-development-skill-pack.md
-2026-08-19-repository-owned-development-skill-pack.md: 1a70b6829945c7811b707ed30f5546612ff6fde5
-2026-08-19-repository-owned-development-skill-pack.zh.md: d27650e6b863048df3485075372e4451641e3d49
+2026-08-19-repository-owned-development-skill-pack.md: ee0d282966bcd00d26ddb216e4bc24a4a9415715
+2026-08-19-repository-owned-development-skill-pack.zh.md: b9ddf9176ef4a6958bdad40b9fa72531ad13a30a

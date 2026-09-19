@@ -28,7 +28,7 @@ export interface NewSakiGenerationIdentity {
   readonly installationId: SakiInstallationId
   /** Fresh physical generation identity. */
   readonly storageGenerationId: SakiStorageGenerationId
-  /** Creator provenance recorded in the generation seal. */
+  /** Creator-build identity recorded in the generation seal. */
   readonly createdByBuildId: SakiBuildId
 }
 
@@ -140,7 +140,7 @@ export async function materializeFreshSakiGeneration(
  * are validated again against the complete current candidate by the outer operation.
  * @param sourceDatabasePath - exact closed retained source selected by manifest or legacy config.
  * @param targetDatabasePath - missing candidate `state.sqlite` path on different media.
- * @param identity - retained Installation plus fresh generation and build provenance.
+ * @param identity - retained Installation plus fresh generation and build identity.
  * @param signal - cancellation through migration and seal materialization.
  * @param retainedHostExecution - exact Host domain version and snapshot for v5-v9 sources, absent for pre-v5 sources.
  */

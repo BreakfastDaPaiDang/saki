@@ -70,7 +70,7 @@ Cordis 服务访问返回带追踪的代理对象，因此重新读取服务属�
 
 **使用可变 branch、PR 或 GitHub Release `target_commitish` 作为 delivery identity。**它们可以各自独立移动，并在较早 observation 之后指向不同 Commit。准确 Commit、ref、PR head、递归 peel 后 tag 与 Release relation 保留了 acceptance 和 release finalization 所需的 identity。
 
-**把 Agent Run success、PR approval 或外部 credential 视为 acceptance。**这些事实分别建立 execution、review 或 effect identity，而不是当前 human Principal 的带归因决策。混淆它们会让 provenance 或 external account 取得 Saki authority。
+**把 Agent Run success、PR approval 或外部 credential 视为 acceptance。**这些事实分别建立 execution、review 或 effect identity，而不是当前 human Principal 的带归因决策。混淆它们会让 source attribution 或 external account 取得 Saki authority。
 
 **在 response 不可用后重试 Push 或 PR 创建。**没有响应不能证明远端副作用失败。准确 remote-ref 或基于 marker 的 inspection 可以证明 result、安全 absence、conflict 或 reconciliation requirement，而不会重复或覆盖外部工作。
 

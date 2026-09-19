@@ -101,7 +101,7 @@ export type SakiInstallationId = Branded<'SakiInstallationId'>
 export type SakiInstallationGenerationId = Branded<'SakiInstallationGenerationId'>
 /** Stable identity sealed into one physical Saki storage generation. */
 export type SakiStorageGenerationId = Branded<'SakiStorageGenerationId'>
-/** Provenance identity of the Saki build that created one artifact. */
+/** Identity of the Saki build that created one artifact. */
 export type SakiBuildId = Branded<'SakiBuildId'>
 /** Stable identity of one security Principal. */
 export type SakiPrincipalId = Branded<'SakiPrincipalId'>

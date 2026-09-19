@@ -40,7 +40,7 @@ e2e 断言应重新运行命令或从外部重新读取文件；对 agent 自身
 
 - 产品可见的插件必须有一个非单元的真实组合测试。手动构建的 `ctx.plugin(...)` 套件不够：通过 Loader 和 app/process 启动仅用于测试的 `cordis.yml`，只 mock 外部服务或非确定性输入，断言模型可见的请求/日志、持久状态或用户可见输出。不要把 opt-in 选项混入交付默认值。
 - 一个守卫只有在回归能让它失败时才有效。对于没有 `inject` 的插件（bundle/组合插件），Loader 冒烟测试在默认导出替换必需的具名导出时仍然绿着——需要添加显式的 `expect('default' in mod).toBe(false)` 加 `unwrapExports` 往返断言，并证明它有效：引入回归、观察变红、回退。
-- 产品冒烟测试通过 `dsh` 使用普通 Node 运行构建产物（[启动规则](architecture.zh.md#application-launch)），暴露 tsx 会掩盖的失败：结算竞态、模块解析和被吞掉的加载失败。非 index 运行时入口和共享单例模块也需要构建产物冒烟测试（`packages/code-runtime/code-runtime-worker-thread/tests/built-lib.e2e.ts`、`packages/sdk/server/tests/built-scope-carrier.e2e.ts`）。断言缺失的配置以非零状态退出。
+- 产品冒烟测试通过 `dsh` 使用普通 Node 运行构建产物（[启动规则](architecture.zh.md#application-launch)），暴露 tsx 会掩盖的失败：结算竞态、模块解析和被吞掉的加载失败。非 index 运行时入口和共享单例模块也需要构建产物冒烟测试（`packages/ptc-runtime/ptc-runtime-node/tests/built-lib.e2e.ts`、`packages/sdk/server/tests/built-scope-carrier.e2e.ts`）。断言缺失的配置以非零状态退出。
 
 ## 测试解析：仅限源码
 

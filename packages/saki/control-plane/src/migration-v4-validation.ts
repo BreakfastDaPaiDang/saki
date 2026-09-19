@@ -86,7 +86,7 @@ interface HistoricalProjectIntentState {
  * @param storageGeneration - opened exact `saki_storage_generation@2` source domain.
  * @param expectedInstallationId - Installation selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation selected by maintenance metadata.
- * @param expectedCreatedByBuildId - generation provenance repeated by the seal.
+ * @param expectedCreatedByBuildId - generation build identity repeated by the seal.
  * @returns nothing after all retained v4 product invariants pass.
  */
 export function validateSakiV4SourceState(

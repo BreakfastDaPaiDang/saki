@@ -390,7 +390,7 @@ function JobsBlock(props: {
               <div className={styles.jobMeta}>
                 <span>{job.route}</span>
                 <span>{job.createdAt}</span>
-                <span>{job.provenance}</span>
+                <span>{job.requestSource}</span>
                 {job.output ? <code className={styles.mono}>{job.output}</code> : null}
               </div>
             </li>

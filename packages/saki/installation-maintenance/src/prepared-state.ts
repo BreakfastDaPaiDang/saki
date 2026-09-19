@@ -23,7 +23,7 @@ interface PreparedStateBase {
   readonly storageGenerationId: SakiStorageGenerationId
   /** Sole writable state version. */
   readonly stateVersion: 10
-  /** Artifact creator provenance; it does not decide compatibility. */
+  /** Artifact creator-build identity; it does not decide compatibility. */
   readonly createdByBuildId: SakiBuildId
 }
 

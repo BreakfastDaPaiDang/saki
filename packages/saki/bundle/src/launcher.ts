@@ -17,7 +17,7 @@ const SHIPPED_AGENT_PRESET_ROOT = fileURLToPath(new URL('../config/agent-presets
  * Resolve the Installation root and exact legacy B03 path from launch environment.
  * `SAKI_DATABASE_PATH` never selects state after an Installation manifest exists.
  * @param environment - immutable process environment snapshot.
- * @returns strict paths and creator provenance for serving preparation.
+ * @returns strict paths and creator-build identity for serving preparation.
  */
 export function sakiServingInstallationOptions(
   environment: NodeJS.ProcessEnv = process.env,

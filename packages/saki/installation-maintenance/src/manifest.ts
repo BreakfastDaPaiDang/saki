@@ -113,7 +113,7 @@ export function generationJsonLeaf(storageGenerationId: SakiStorageGenerationId)
  * @param installationId - retained Installation identity.
  * @param storageGenerationId - physical generation identity.
  * @param stateVersion - product state-format version.
- * @param createdByBuildId - creator provenance only.
+ * @param createdByBuildId - creator-build identity only.
  * @returns strict UTF-8 JSON with one trailing newline.
  */
 export function renderGenerationManifest(

@@ -123,7 +123,7 @@ export const recoveryBackupManifestSchema = z.object({
 /** Parsed strict Recovery Backup metadata. */
 export type RecoveryBackupManifest = z.infer<typeof recoveryBackupManifestSchema>
 
-/** Identity and state provenance fixed before a Recovery Backup is copied. */
+/** Identity and state build identity fixed before a Recovery Backup is copied. */
 export interface RecoveryBackupCreateRequest {
   /** Installation retained by the backup. */
   readonly installationId: SakiInstallationId
@@ -131,7 +131,7 @@ export interface RecoveryBackupCreateRequest {
   readonly storageGenerationId: SakiStorageGenerationId
   /** Product-state format of the copied database. */
   readonly stateVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10
-  /** Build provenance; this value never decides readability. */
+  /** Build identity; this value never decides readability. */
   readonly sourceBuildId: SakiBuildId
 }
 
@@ -292,7 +292,7 @@ export interface RecoveryBackupStore {
    * Copy, publish, and verify one captured SQLite state into a reserved backup.
    * @param reservation - active one-shot missing-target authority.
    * @param source - already captured SQLite artifact set.
-   * @param request - Installation, generation, state-version, and provenance metadata.
+   * @param request - Installation, generation, state-version, and build identity metadata.
    * @param capability - code-owned state readability used without build-id comparison.
    * @param signal - cancellation observed until the final directory commit.
    * @returns durable or exact visible final publication evidence.
@@ -535,7 +535,7 @@ export async function withMissingRecoveryBackupTarget<T>(
  * Copy and publish a captured SQLite state through a default reservation.
  * @param reservation - active one-shot missing-target authority.
  * @param source - already captured SQLite artifact set.
- * @param request - Installation, generation, state-version, and provenance metadata.
+ * @param request - Installation, generation, state-version, and build identity metadata.
  * @param capability - code-owned state readability used without build-id comparison.
  * @param signal - cancellation observed until the final directory commit.
  * @returns durable or exact visible final publication evidence.

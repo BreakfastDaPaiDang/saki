@@ -494,7 +494,7 @@ export function baseMilestones(): MilestoneEntry[] {
       dueDate: null,
       counts: { done: 9, canceled: 1 },
       blockedCount: 0,
-      release: { tag: 'saki-v0.1.0', commit: 'e3dde79' },
+      release: { tag: 'saki-v0.1.0', commit: '1234abc' },
     },
   ]
 }
@@ -560,11 +560,11 @@ export function baseModelSupply(): ModelSupplyProjection {
       { policyId: 'cp-conservative', name: '保守裁剪', version: 'v1', trigger: '达到 Runtime Context Limit 的 70%', strategy: '更早压缩，保留更多余量（实验性）', isDefault: false },
     ],
     generationJobs: [
-      { jobId: 'gj-301', projectName: SAKI, prompt: '为反馈看板生成空状态插画', route: 'Codex · GPT-5（个人 Pro）', state: 'running', createdAt: '10:11', output: null, provenance: 'Work Session #2310' },
-      { jobId: 'gj-300', projectName: SAKI, prompt: '官网首页横幅参考图编辑', route: 'Codex · GPT-5（个人 Pro）', state: 'queued', createdAt: '10:09', output: null, provenance: 'Work Item #128' },
-      { jobId: 'gj-299', projectName: WEB, prompt: '定价模块示意图', route: 'Kimi · K2（个人订阅）', state: 'queued', createdAt: '09:55', output: null, provenance: 'Work Item #121' },
-      { jobId: 'gj-298', projectName: SAKI, prompt: '新手引导第 2 步截图重绘', route: 'Codex · GPT-5（个人 Pro）', state: 'succeeded', createdAt: '昨天 16:20', output: 'onboarding-step2.png', provenance: 'Work Item #119' },
-      { jobId: 'gj-297', projectName: SAKI, prompt: '错误页插画', route: 'Kimi · K2（个人订阅）', state: 'failed', createdAt: '昨天 15:02', output: null, provenance: 'Work Session #2280' },
+      { jobId: 'gj-301', projectName: SAKI, prompt: '为反馈看板生成空状态插画', route: 'Codex · GPT-5（个人 Pro）', state: 'running', createdAt: '10:11', output: null, requestSource: 'Work Session #2310' },
+      { jobId: 'gj-300', projectName: SAKI, prompt: '官网首页横幅参考图编辑', route: 'Codex · GPT-5（个人 Pro）', state: 'queued', createdAt: '10:09', output: null, requestSource: 'Work Item #128' },
+      { jobId: 'gj-299', projectName: WEB, prompt: '定价模块示意图', route: 'Kimi · K2（个人订阅）', state: 'queued', createdAt: '09:55', output: null, requestSource: 'Work Item #121' },
+      { jobId: 'gj-298', projectName: SAKI, prompt: '新手引导第 2 步截图重绘', route: 'Codex · GPT-5（个人 Pro）', state: 'succeeded', createdAt: '昨天 16:20', output: 'onboarding-step2.png', requestSource: 'Work Item #119' },
+      { jobId: 'gj-297', projectName: SAKI, prompt: '错误页插画', route: 'Kimi · K2（个人订阅）', state: 'failed', createdAt: '昨天 15:02', output: null, requestSource: 'Work Session #2280' },
     ],
     generationConcurrency: { limit: 2, running: 1, queued: 2 },
   }

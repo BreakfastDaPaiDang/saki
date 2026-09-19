@@ -944,7 +944,7 @@ describe('frozen Saki control-plane v4 source schemas', () => {
         },
       },
       {
-        name: 'generation seal with different provenance',
+        name: 'generation seal with different build identity',
         issue: 'historical Saki v4 storage generation seal disagrees with selected generation metadata',
         mutate: fixture => replaceOnly(
           fixture.storageTables.storage_generation,

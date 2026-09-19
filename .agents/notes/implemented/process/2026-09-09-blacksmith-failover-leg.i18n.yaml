@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-09-09-blacksmith-failover-leg.md
-2026-09-09-blacksmith-failover-leg.md: c23f77eefe38be6c9592b9adb65a6b149dfeb45f
-2026-09-09-blacksmith-failover-leg.zh.md: 4ada0cb5c4d9ec42505edb4d6d7d718b1a4ec4d8
+2026-09-09-blacksmith-failover-leg.md: c14acaf2cf26f148a7736442173936942a345e54
+2026-09-09-blacksmith-failover-leg.zh.md: 720265bfe86cebdca878fa737ee2d87937e20075

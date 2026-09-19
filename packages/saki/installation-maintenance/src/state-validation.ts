@@ -111,7 +111,7 @@ interface BranchDeliveryControlPlaneDomain {
  * @param storageGeneration - opened exact `saki_storage_generation@8` domain.
  * @param expectedInstallationId - Installation selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation selected by maintenance metadata.
- * @param expectedCreatedByBuildId - generation provenance repeated by its seal.
+ * @param expectedCreatedByBuildId - generation build identity repeated by its seal.
  * @returns nothing after every within-domain and cross-domain relationship passes.
  */
 export function validateCurrentSakiProductState(

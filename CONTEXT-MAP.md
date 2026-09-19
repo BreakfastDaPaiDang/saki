@@ -10,4 +10,4 @@
 
 - **Work Management → Agent Operations**: A Work Item may have a Work Assignment and multiple Work Sessions while designating at most one Session as primary; Agent Runs may use those relations without determining Work Item Status.
 - **Agent Operations → Model Supply**: An Agent Profile requests a Model Route and Context Policy; each Agent Run records the route and account actually resolved.
-- **Model Supply → Work Management**: A Generation Job may attach generated artifacts and their provenance to a Work Item as Outcome Evidence.
+- **Model Supply → Work Management**: A Generation Job may attach generated artifacts and their request attribution to a Work Item as Outcome Evidence.

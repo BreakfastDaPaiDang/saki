@@ -674,7 +674,7 @@ export interface PushBranchHostOperationRequest {
   readonly targetRef: string
 }
 
-/** Provenance of the exact initial input for one Saki Agent Run. */
+/** Message source metadata of the exact initial input for one Saki Agent Run. */
 export interface SakiAgentRunMessageSource {
   readonly kind: 'saki-agent-run'
   readonly dispatchId: SakiExecutionDispatchId
@@ -693,7 +693,7 @@ export interface SakiControlIntentActorAttribution {
   readonly grantRevision: number
 }
 
-/** Provenance of one attributed Intervention answer delivered to its owning Agent Run. */
+/** Message source metadata of one attributed Intervention answer delivered to its owning Agent Run. */
 export interface SakiInterventionAnswerMessageSource {
   readonly kind: 'saki-intervention-answer'
   readonly interventionId: SakiInterventionRequestId
@@ -726,7 +726,7 @@ export type InterventionOpeningEvidence =
   | { readonly kind: 'confirmed'; readonly turn: number; readonly step: number }
   | { readonly kind: 'conflict' }
 
-/** Product provenance accepted by the existing StartAgentRun delivery operation. */
+/** Product message source metadata accepted by the existing StartAgentRun delivery operation. */
 export type StartAgentRunMessageSource = SakiAgentRunMessageSource | SakiInterventionAnswerMessageSource
 
 declare module '@deepseek-ai/dsh-llm' {
