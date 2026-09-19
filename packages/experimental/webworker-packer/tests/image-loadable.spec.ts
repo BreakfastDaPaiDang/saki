@@ -304,6 +304,7 @@ const archive = async (): Promise<Uint8Array> =>
     }
     inventory.apply({
       baseUrl,
+      get: () => undefined,
       loader: tree,
       deepseekLlmApiExtensions: {
         register: (field: string, contribution: { readonly prepare: Prepare }): void => {
