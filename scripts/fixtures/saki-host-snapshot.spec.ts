@@ -38,6 +38,6 @@ it('inspects staged content without refreshing an index with uncached file metad
     expect(await readFile(index)).toEqual(bytes)
     expect((await stat(index, { bigint: true })).mtimeNs).toBe(modified)
   } finally {
-    await rm(root, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 })

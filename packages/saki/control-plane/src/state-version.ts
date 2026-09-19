@@ -212,7 +212,7 @@ export const sakiStorageGenerationDomainSpec = defineDomain({
  * Create the exact singleton stored in a new v10 generation.
  * @param installationId - Installation retained across physical generations.
  * @param storageGenerationId - new physical generation identity.
- * @param createdByBuildId - provenance of the creating build.
+ * @param createdByBuildId - build identity of the creating build.
  * @returns strict seal record for `saki_storage_generation@8`.
  */
 export function createStorageGenerationSeal(

@@ -101,7 +101,7 @@ export const scenarios: ScenarioDef[] = [
         projectId: 'proj-registered',
         displayPath: 'D:\\saki',
         branch: 'master',
-        head: 'e3dde79',
+        head: '1234abc',
         aheadBehind: { ahead: 0, behind: 0 },
         dirtySummary: { staged: 0, unstaged: 4, untracked: 1 },
         primaryWorkSessionId: null,

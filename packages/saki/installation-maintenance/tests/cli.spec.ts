@@ -53,7 +53,7 @@ function verifiedBackup(): VerifiedRecoveryBackup {
 }
 
 describe('Saki maintenance CLI', () => {
-  it('pins B10 creator provenance and the retained manifest-less B03 source provenance', () => {
+  it('pins B10 creator-build identity and the retained manifest-less B03 source build identity', () => {
     expect(CURRENT_SAKI_BUILD_ID).toBe('saki-build-0.1.0-b10')
     expect(LEGACY_B03_BUILD_ID).toBe('saki-build-0.1.0-b03')
   })

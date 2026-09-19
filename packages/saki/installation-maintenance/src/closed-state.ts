@@ -71,7 +71,7 @@ export interface ClosedCurrentSakiStateExpectation {
   readonly installationId: SakiInstallationId
   /** Physical storage generation selected by installation.json and generation.json. */
   readonly storageGenerationId: SakiStorageGenerationId
-  /** Build provenance recorded by generation.json. */
+  /** Build identity recorded by generation.json. */
   readonly createdByBuildId: SakiBuildId
 }
 
@@ -322,7 +322,7 @@ interface ClosedRead<T> {
  * throughout the operation. The returned Domain facades have no live backend handles and
  * reject every mutation method.
  * @param databasePath - manifest-selected real SQLite database path.
- * @param expected - identities and build provenance selected by trusted manifests.
+ * @param expected - identities and build identity selected by trusted manifests.
  * @param signal - caller cancellation observed during capture and every closed read.
  * @returns detached current state after schema and product-relationship validation.
  */
@@ -362,7 +362,7 @@ export async function readClosedCurrentSakiState(
  * empty control plane or schema-valid partial provisioning state remains recoverable by the
  * ordinary provisioning service. The operation never opens the selected path as a writer.
  * @param databasePath - provisioning manifest's selected real SQLite database path.
- * @param expected - identities, state version, and build provenance fixed before provisioning.
+ * @param expected - identities, state version, and build identity fixed before provisioning.
  * @param signal - caller cancellation observed during capture and every closed read.
  * @returns detached current-format provisioning state with read-only Domain facades.
  */
@@ -426,7 +426,7 @@ export async function readClosedSakiV2State(
 /**
  * Read and validate exact historical v3 domains through SQLite frozen private copies.
  * @param databasePath - selected historical SQLite database path.
- * @param expected - identities and provenance selected by trusted manifests.
+ * @param expected - identities and build identity selected by trusted manifests.
  * @param signal - caller cancellation observed during capture and every closed read.
  * @returns detached exact v3 state suitable for adjacent migration.
  */
@@ -464,7 +464,7 @@ export async function readClosedSakiV3State(
  * Read and validate exact historical v4 domains through SQLite frozen private copies.
  * Any Host Execution domain makes the source an invalid v4/v5 hybrid.
  * @param databasePath - selected historical SQLite database path.
- * @param expected - identities and provenance selected by trusted manifests.
+ * @param expected - identities and build identity selected by trusted manifests.
  * @param signal - caller cancellation observed during capture and every closed read.
  * @returns detached exact v4 state suitable for adjacent migration.
  */
@@ -502,7 +502,7 @@ export async function readClosedSakiV4State(
  * Read and validate exact historical v5 domains through SQLite frozen private copies.
  * The source Host Operation snapshot is returned so adjacent migration preserves provider-private recovery evidence.
  * @param databasePath - selected historical SQLite database path.
- * @param expected - identities and provenance selected by trusted manifests.
+ * @param expected - identities and build identity selected by trusted manifests.
  * @param signal - caller cancellation observed during capture and every closed read.
  * @returns detached exact v5 state suitable for adjacent migration.
  */
@@ -528,7 +528,7 @@ export async function readClosedSakiV5State(
 /**
  * Read and validate exact historical v6 domains through SQLite frozen private copies.
  * @param databasePath - selected historical SQLite database path.
- * @param expected - identities and provenance selected by trusted manifests.
+ * @param expected - identities and build identity selected by trusted manifests.
  * @param signal - caller cancellation observed during capture and every closed read.
  * @returns detached exact v6 state suitable for adjacent migration.
  */
@@ -554,7 +554,7 @@ export async function readClosedSakiV6State(
 /**
  * Read and validate exact historical v7 domains through SQLite frozen private copies.
  * @param databasePath - selected historical SQLite database path.
- * @param expected - identities and provenance selected by trusted manifests.
+ * @param expected - identities and build identity selected by trusted manifests.
  * @param signal - caller cancellation observed during capture and every closed read.
  * @returns detached exact v7 state suitable for adjacent migration.
  */
@@ -581,7 +581,7 @@ export async function readClosedSakiV7State(
 /**
  * Read and validate exact historical v8 domains through SQLite frozen private copies.
  * @param databasePath - selected historical SQLite database path.
- * @param expected - identities and provenance selected by trusted manifests.
+ * @param expected - identities and build identity selected by trusted manifests.
  * @param signal - caller cancellation observed during capture and every closed read.
  * @returns detached exact v8 state suitable for adjacent migration.
  */
@@ -608,7 +608,7 @@ export async function readClosedSakiV8State(
 /**
  * Read and validate exact historical v9 domains through SQLite frozen private copies.
  * @param databasePath - selected historical SQLite database path.
- * @param expected - identities and provenance selected by trusted manifests.
+ * @param expected - identities and build identity selected by trusted manifests.
  * @param signal - caller cancellation observed during capture and every closed read.
  * @returns detached exact v9 state suitable for adjacent migration.
  */

@@ -57,15 +57,15 @@ import { recoverActiveSakiOperation } from './recovery.ts'
 import { LEGACY_B03_BUILD_ID } from './release.ts'
 import { sakiStateCapability } from './state-version.ts'
 
-/** Exact paths and build provenance required by offline maintenance. */
+/** Exact paths and build identity required by offline maintenance. */
 export interface SakiMaintenanceOptions {
   /** Absolute Installation metadata root. */
   readonly installationRoot: string
   /** Exact absolute B03 database path used only in the manifest-less layout. */
   readonly legacyDatabasePath: string
-  /** Provenance recorded for a generation created by this build. */
+  /** Build identity recorded for a generation created by this build. */
   readonly currentBuildId: SakiBuildId
-  /** Fixed provenance of the one known manifest-less B03 source. */
+  /** Fixed build identity of the one known manifest-less B03 source. */
   readonly legacyBuildId: SakiBuildId
 }
 
@@ -190,7 +190,7 @@ function requireAbsolutePath(path: string, subject: string): string {
 function normalizedOptions(options: SakiMaintenanceOptions): SakiMaintenanceOptions {
   const legacyBuildId = sakiBuildIdSchema.parse(options.legacyBuildId)
   if (legacyBuildId !== LEGACY_B03_BUILD_ID) {
-    throw new Error(`legacy Saki build provenance must be '${LEGACY_B03_BUILD_ID}'`)
+    throw new Error(`legacy Saki build identity must be '${LEGACY_B03_BUILD_ID}'`)
   }
   return {
     installationRoot: requireAbsolutePath(options.installationRoot, 'Saki Installation root'),
@@ -590,7 +590,7 @@ const defaultOperations = createSakiMaintenanceOperations()
 
 /**
  * Create and verify one explicit Recovery Backup under the Installation lease.
- * @param options - Installation paths and fixed build provenance.
+ * @param options - Installation paths and fixed build identity.
  * @param signal - cancellation retained through lease release.
  * @returns the verified immutable backup.
  */
@@ -603,7 +603,7 @@ export async function backupSakiInstallation(
 
 /**
  * Verify one explicit Recovery Backup under the Installation lease.
- * @param options - Installation paths and fixed build provenance.
+ * @param options - Installation paths and fixed build identity.
  * @param backupId - exact backup selected by the caller.
  * @param signal - cancellation retained through lease release.
  * @returns the verified immutable backup.
@@ -618,7 +618,7 @@ export async function verifySakiInstallationBackup(
 
 /**
  * Upgrade exact retained state through a verified backup into a fresh v10 generation.
- * @param options - Installation paths and fixed build provenance.
+ * @param options - Installation paths and fixed build identity.
  * @param signal - cancellation retained through lease release.
  * @returns the published v10 generation and its verified backup.
  */

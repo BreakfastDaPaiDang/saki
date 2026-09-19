@@ -70,7 +70,7 @@ The [browser delivery decision](2026-09-14-saki-explicit-browser-delivery.md) ow
 
 **Use a mutable branch, pull request, or GitHub Release `target_commitish` as delivery identity.** Each can move independently and can point at a different Commit after an earlier observation. Exact Commit, ref, pull-request head, recursively peeled tag, and Release relationships preserve the identity that acceptance and release finalization require.
 
-**Treat Agent Run success, pull-request approval, or the external credential as acceptance.** Those facts establish execution, review, or effect identity rather than a current human Principal's attributed decision. Conflating them would let provenance or an external account confer Saki authority.
+**Treat Agent Run success, pull-request approval, or the external credential as acceptance.** Those facts establish execution, review, or effect identity rather than a current human Principal's attributed decision. Conflating them would let source attribution or an external account confer Saki authority.
 
 **Retry Push or pull-request creation after an unavailable response.** Silence does not prove that the remote effect failed. Exact remote-ref or marker-based inspection can prove a result, safe absence, conflict, or reconciliation requirement without duplicating or overwriting external work.
 

@@ -869,7 +869,7 @@ describe('closed Saki state reads', () => {
     await expect(readFile(path)).resolves.toEqual(before)
   })
 
-  it('rejects a provisioning seal that disagrees with fixed build provenance without changing the source', async () => {
+  it('rejects a provisioning seal that disagrees with fixed build identity without changing the source', async () => {
     const path = await databasePath()
     await materialize(path, [
       { spec: sakiControlPlaneDomainSpec, snapshot: emptySnapshot(sakiControlPlaneDomainSpec) },
@@ -1105,7 +1105,7 @@ describe('closed Saki state reads', () => {
       global: null,
       tables: { storage_generation: { unexpected: v7SealSnapshot().tables.storage_generation![STORAGE_GENERATION_KEY] } },
     }), 'is not the required singleton'],
-    ['different build provenance', () => v7SealSnapshot(OTHER_BUILD_ID), 'disagrees with selected generation metadata'],
+    ['different build identity', () => v7SealSnapshot(OTHER_BUILD_ID), 'disagrees with selected generation metadata'],
   ] as const)('rejects retained v9 %s without modifying its database', async (_name, snapshot, message) => {
     const path = await databasePath()
     await materializeV9(path, snapshot())
@@ -1136,7 +1136,7 @@ describe('closed Saki state reads', () => {
       global: null,
       tables: { storage_generation: { unexpected: v6SealSnapshot().tables.storage_generation![STORAGE_GENERATION_KEY] } },
     }), 'is not the required singleton'],
-    ['different build provenance', () => v6SealSnapshot(OTHER_BUILD_ID), 'disagrees with selected generation metadata'],
+    ['different build identity', () => v6SealSnapshot(OTHER_BUILD_ID), 'disagrees with selected generation metadata'],
   ] as const)('rejects historical v8 state with %s without modifying its database', async (_name, snapshot, message) => {
     const path = await databasePath()
     await materializeV8(path, snapshot())
@@ -1155,7 +1155,7 @@ describe('closed Saki state reads', () => {
       causeMessage: 'historical v7 Saki storage-generation seal is not the required singleton',
     },
     {
-      description: 'a storage-generation seal that disagrees with manifest build provenance',
+      description: 'a storage-generation seal that disagrees with manifest build identity',
       snapshot: () => v5SealSnapshot(OTHER_BUILD_ID),
       causeMessage: 'historical v7 Saki storage-generation seal disagrees with selected generation metadata',
     },
@@ -1186,7 +1186,7 @@ describe('closed Saki state reads', () => {
       causeMessage: 'historical v6 Saki storage-generation seal is not the required singleton',
     },
     {
-      description: 'a storage-generation seal that disagrees with manifest build provenance',
+      description: 'a storage-generation seal that disagrees with manifest build identity',
       snapshot: () => v4SealSnapshot(OTHER_BUILD_ID),
       causeMessage: 'historical v6 Saki storage-generation seal disagrees with selected generation metadata',
     },
@@ -1234,7 +1234,7 @@ describe('closed Saki state reads', () => {
       causeMessage: 'historical v5 Saki storage-generation seal is not the required singleton',
     },
     {
-      description: 'a storage-generation seal that disagrees with manifest build provenance',
+      description: 'a storage-generation seal that disagrees with manifest build identity',
       snapshot: () => v3SealSnapshot(OTHER_BUILD_ID),
       causeMessage: 'historical v5 Saki storage-generation seal disagrees with selected generation metadata',
     },
@@ -1248,7 +1248,7 @@ describe('closed Saki state reads', () => {
     })
   })
 
-  it('classifies a historical v3 seal that disagrees with selected build provenance', async () => {
+  it('classifies a historical v3 seal that disagrees with selected build identity', async () => {
     const path = await databasePath()
     await materialize(path, [
       { spec: sakiControlPlaneV3DomainSpec, snapshot: v3ControlSnapshot() },

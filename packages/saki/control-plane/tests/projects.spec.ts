@@ -304,7 +304,7 @@ afterEach(async () => {
   await Promise.all([...openHarnesses].map(harness => harness.close()))
   await Promise.all(roots.splice(0).map(async (root) => { await rm(root, { recursive: true, force: true }) }))
   vi.useRealTimers()
-})
+}, process.platform === 'win32' ? 180_000 : 60_000)
 
 async function paths(): Promise<DurablePaths> {
   const root = await mkdtemp(join(tmpdir(), 'saki-projects-'))
@@ -907,7 +907,8 @@ function installPushHostFixture(execution: SakiHostExecution, notify: (change: H
   })
 }
 
-describe('Development Project registration', { timeout: 60_000 }, () => {
+// Complete registration/read flows execute hundreds of real Git commands on Windows.
+describe('Development Project registration', { timeout: process.platform === 'win32' ? 180_000 : 60_000 }, () => {
   it('bounds the independent durable-pending targeted polling interval', () => {
     expect(SakiControlPlane.Config(CONTROL_CONFIG).targetedPendingPollIntervalMs).toBe(300_000)
     expect(SakiControlPlane.Config({ ...CONTROL_CONFIG, targetedPendingPollIntervalMs: 1_000 })

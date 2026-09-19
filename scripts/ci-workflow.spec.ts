@@ -9,6 +9,17 @@ const runnerPrivatePnpmDestination = /^\$\{\{ runner\.temp \}\}\/setup-pnpm-\$\{
 const nativeWindowsPnpmDestination = '${{ runner.temp }}/setup-pnpm-js-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 
 describe('CI workflow', () => {
+  it('prepares confinement before Node compatibility smokes', () => {
+    const job = workflowJob(loadWorkflow('.github/workflows/ci.yml'), 'node-compat')
+    if (!Array.isArray(job.steps)) throw new TypeError('Node compatibility job must define steps')
+    const steps = job.steps.filter(isRecord)
+    const preparation = steps.findIndex(step => step.run === 'bash scripts/prepare-ci-bubblewrap.sh')
+    const smoke = steps.findIndex(step => step.run === 'pnpm run check:node-compat')
+    expect(preparation).toBeGreaterThanOrEqual(0)
+    expect(smoke).toBeGreaterThan(preparation)
+    expect(steps[preparation]).not.toHaveProperty('continue-on-error', true)
+  })
+
   it('isolates every pnpm action setup destination per runner', () => {
     const files = ['.github/workflows/ci.yml']
     const setups: Array<{ jobName: string; step: unknown }> = []
@@ -306,33 +317,6 @@ describe('DeepSeek e2e workflow', () => {
   })
 })
 
-describe('E2B e2e workflow', () => {
-  it('is manual-only and fails loud before running the focused live suite', () => {
-    const workflow = loadWorkflow('.github/workflows/e2b-e2e.yml')
-    expect(workflow.on).toEqual({ workflow_dispatch: null })
-    if (!isRecord(workflow.jobs) || !isRecord(workflow.jobs.e2b) || !Array.isArray(workflow.jobs.e2b.steps)) {
-      throw new TypeError('E2B e2e workflow must define the e2b job steps')
-    }
-
-    const steps = workflow.jobs.e2b.steps.filter(isRecord)
-    const preflight = steps.find(step => step.name === 'Preflight (require E2B API key)')
-    const e2b = steps.find(step => step.name === 'E2B tests (live sandbox)')
-
-    expect(preflight).toMatchObject({
-      env: { E2B_API_KEY: '${{ secrets.E2B_API_KEY_EXTERNAL }}' },
-    })
-    expect(preflight?.run).toContain('E2B_API_KEY_EXTERNAL repository secret')
-    expect(e2b).toMatchObject({
-      env: {
-        E2B_API_KEY: '${{ secrets.E2B_API_KEY_EXTERNAL }}',
-        DSH_E2E_MAX_WORKERS: '1',
-        DSH_EXAMPLE_MODE: 'lib',
-      },
-    })
-    expect(e2b?.run).toContain('packages/e2b/e2b/tests/composition.e2e.ts')
-  })
-})
-
 describe('Python release workflows', () => {
   it('keeps complete wheel validation separate from protected public publication', () => {
     const workflow = loadWorkflow('.github/workflows/python-release.yml')
@@ -501,12 +485,14 @@ describe('Python release workflows', () => {
     expect(String(realApiPreflightPosix.if)).toContain('head.repo.fork')
     expect(String(realApiPreflightPosix.if)).toContain('dependabot[bot]')
     expect(realApiPreflightWindows).toMatchObject({ shell: 'pwsh' })
-    expect(installedRealApiPosix).toMatchObject({
-      env: {
-        DEEPSEEK_API_KEY: '${{ secrets.DEEPSEEK_API_KEY_EXTERNAL }}',
-        DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
-      },
-    })
+    for (const step of [installedRealApiPosix, installedRealApiWindows]) {
+      expect(step).toMatchObject({
+        env: {
+          DEEPSEEK_API_KEY: '${{ secrets.DEEPSEEK_API_KEY_EXTERNAL }}',
+          DEEPSEEK_BASE_URL: 'https://api.deepseek.com/anthropic',
+        },
+      })
+    }
     expect(JSON.stringify(installedRealApiPosix)).toContain('--scenario sdk-live')
     expect(JSON.stringify(installedRealApiPosix)).toContain('-u DSH_RUNTIME_MODE')
     expect(installedRealApiWindows).toMatchObject({ shell: 'pwsh' })
@@ -609,19 +595,16 @@ describe('Request review workflow', () => {
 })
 
 describe('Issue lifecycle workflow', () => {
-  it('runs the lifecycle job on every PR/review event but gates token and board steps', () => {
+  it('allocates lifecycle runners only for events that can change the board', () => {
     const lifecycle = loadWorkflow('.github/workflows/issue-lifecycle.yml')
     const policy = loadWorkflow('.github/workflows/issue-policy.yml')
     const lifecycleJob = workflowJob(lifecycle, 'lifecycle')
     if (!Array.isArray(lifecycleJob.steps)) throw new TypeError('Issue lifecycle job must define steps')
 
-    // The job has no job-level `if`, so it is listed on every pull_request /
-    // pull_request_review event and reports success instead of a gray skip. The
-    // write-capable steps are gated at step level so approved/commented reviews
-    // never mint a Project/Issue App token nor touch the board.
     expect(lifecycle.on).toHaveProperty('pull_request')
     expect(lifecycle.on).toHaveProperty('pull_request_review')
-    expect(lifecycleJob.if).toBeUndefined()
+    expect(lifecycleJob.if).toContain("github.event.review.state == 'changes_requested'")
+    expect(lifecycleJob.if).toContain('github.event.changes.body != null')
     // Keep the subscription-type gates: issue-lifecycle does not re-subscribe
     // ready_for_review (issue-policy owns that) and only reacts to submitted
     // review events.
@@ -631,31 +614,43 @@ describe('Issue lifecycle workflow', () => {
     expect(lifecyclePullRequest.types).not.toContain('ready_for_review')
     expect(lifecyclePullRequest.types).toContain('review_requested')
     expect(lifecycleReview.types).toEqual(['submitted'])
-    const gated = "${{ github.event_name != 'pull_request_review' || github.event.review.state == 'changes_requested' }}"
+    expect(lifecyclePullRequest.types).not.toContain('synchronize')
+    expect(lifecyclePullRequest.types).not.toContain('labeled')
+    expect(lifecyclePullRequest.types).not.toContain('unlabeled')
+    const issueEvents = workflowEvent(lifecycle, 'issues')
+    expect(issueEvents.types).not.toContain('assigned')
+    expect(issueEvents.types).not.toContain('unassigned')
+    expect(issueEvents.types).toContain('typed')
+    expect(issueEvents.types).toContain('untyped')
     const steps = lifecycleJob.steps.filter(isRecord)
     const tokenStep = steps.find(s => s.name === 'Create project token')
     const handleStep = steps.find(s => s.name === 'Handle repository event')
-    expect(tokenStep).toMatchObject({ if: gated })
-    expect(handleStep).toMatchObject({ if: gated })
+    expect(tokenStep?.if).toBeUndefined()
+    expect(handleStep?.if).toBeUndefined()
 
     // issue-policy owns PR validation; it is read-only and a real gate.
     const policyPullRequest = workflowEvent(policy, 'pull_request')
     expect(policyPullRequest.types).toContain('ready_for_review')
   })
 
-  it('uses a read-only Project token only for human pull request policy metadata', () => {
+  it('mints Project credentials only after preflight and always revalidates current metadata', () => {
     const policy = loadWorkflow('.github/workflows/issue-policy.yml')
     const policyJob = workflowJob(policy, 'policy')
     if (!Array.isArray(policyJob.steps)) throw new TypeError('Issue policy job must define steps')
     const steps = policyJob.steps.filter(isRecord)
     const tokenStep = steps.find(step => step.name === 'Create Project read token')
     const validateStep = steps.find(step => step.name === 'Validate pull request')
-    const humanPullRequest =
-      "${{ github.event.pull_request.user.type != 'Bot' && github.event.pull_request.user.type != 'App' }}"
+    const preflightStep = steps.find(step => step.id === 'preflight')
+    expect(preflightStep).toMatchObject({ shell: 'bash' })
+    expect(preflightStep?.run).toContain('if [ -f .github/issue-management/selective-preflight.json ]; then')
+    expect(preflightStep?.run).toContain('node .github/issue-management/policy.mjs pr-preflight')
+    expect(preflightStep?.if).toBeUndefined()
+    expect(policyJob.if).toBeUndefined()
+    expect(validateStep?.if).toBe("${{ steps.preflight.outputs.legacy-automated != 'true' }}")
 
     expect(tokenStep).toMatchObject({
       id: 'app-token',
-      if: humanPullRequest,
+      if: "${{ steps.preflight.outputs.needs-project == 'true' }}",
       uses: 'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1',
       with: {
         'client-id': '${{ vars.DSH_ISSUE_APP_CLIENT_ID }}',
@@ -667,7 +662,6 @@ describe('Issue lifecycle workflow', () => {
       },
     })
     expect(validateStep).toMatchObject({
-      if: humanPullRequest,
       env: {
         GITHUB_TOKEN: '${{ github.token }}',
         PROJECT_TOKEN: '${{ steps.app-token.outputs.token }}',
@@ -761,7 +755,7 @@ describe('Git hooks', () => {
     }
   })
 
-  it('regenerates third-party notices when skill-pack provenance changes', () => {
+  it('regenerates third-party notices when skill-pack source and patch records changes', () => {
     const lefthook = loadWorkflow('lefthook.yml')
     const preCommit = lefthook['pre-commit']
     if (!isRecord(preCommit) || !Array.isArray(preCommit.jobs)) {

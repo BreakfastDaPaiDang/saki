@@ -2270,14 +2270,15 @@ describe('LocalSakiHostExecution', () => {
   it('contains an observation timeout during repository discovery', async () => {
     const root = await repository()
     const harness = await localInspectionHarness()
-    let delayed = false
+    const discoveryCancellation: (boolean | undefined)[] = []
     const filesystem = new Proxy(harness.fs, {
       get(target, property) {
         if (property === 'lstat') {
           return async (...args: Parameters<FileSystem['lstat']>) => {
-            if (!delayed && args[0] === join(root, '.git')) {
-              delayed = true
-              await new Promise(resolve => setTimeout(resolve, 50))
+            if (discoveryCancellation.length === 0 && args[0] === join(root, '.git')) {
+              discoveryCancellation.push(args[2]?.aborted)
+              await vi.advanceTimersByTimeAsync(6)
+              discoveryCancellation.push(args[2]?.aborted)
             }
             return await target.lstat(...args)
           }
@@ -2289,15 +2290,20 @@ describe('LocalSakiHostExecution', () => {
       },
     })
 
-    await expect(inspectLocalProjectSelection(
-      filesystem,
-      { list: () => [] },
-      harness.git,
-      { ...CONFIG, inventoryMaxCaptureMs: 5 },
-      { hostId: HOST_ID, directoryLocator: root },
-      new AbortController().signal,
-    )).resolves.toEqual({ ok: false, reason: 'unavailable' })
-    expect(delayed).toBe(true)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    try {
+      await expect(inspectLocalProjectSelection(
+        filesystem,
+        { list: () => [] },
+        harness.git,
+        { ...CONFIG, inventoryMaxCaptureMs: 5 },
+        { hostId: HOST_ID, directoryLocator: root },
+        new AbortController().signal,
+      )).resolves.toEqual({ ok: false, reason: 'unavailable' })
+      expect(discoveryCancellation).toEqual([false, true])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('checks the observation clock after reading the Workspace index', async () => {

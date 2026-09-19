@@ -27,8 +27,8 @@ async function setup() {
   const fiber = await ctx.plugin(fixture)
   const parent = agent('parent')
   const child = agent('child', parent.session.id)
-  ctx.emit('agent/created', { agent: parent })
-  ctx.emit('agent/created', { agent: child })
+  ctx.emit('agent/created', { agent: parent, source: 'startup' })
+  ctx.emit('agent/created', { agent: child, source: 'startup' })
   const next = vi.fn(() => Promise.resolve<PreStepDecision>({ kind: 'enter', messages: [] }))
   const start = (signal = new AbortController().signal) => ctx.waterfall('agent/pre-step', {
     agent: child, messages: [], turn: 1, step: 1, signal,
@@ -44,7 +44,7 @@ it('holds child replay until the parent finishes its first turn and becomes idle
     expect(next).not.toHaveBeenCalled()
     ctx.emit('agent/status', { agent: parent, status: 'idle' })
     const other = agent('other')
-    ctx.emit('agent/created', { agent: other })
+    ctx.emit('agent/created', { agent: other, source: 'startup' })
     other.session.append('turn/start', { turn: 1 })
     ctx.emit('session/event', other.session, other.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } }))
     ctx.emit('agent/status', { agent: other, status: 'idle' })

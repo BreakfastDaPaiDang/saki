@@ -74,7 +74,9 @@ async function run(): Promise<void> {
 
     const preset = await ctx.agentPresets.resolve('development')
     let sessionStarts = 0
-    ctx.on('agent/session-start', () => { sessionStarts += 1 })
+    ctx.on('agent/created', ({ source }) => {
+      if (source === 'startup') sessionStarts += 1
+    })
     const handle = await ctx.agents.create({
       sessionId: SessionId('saki-development-start'),
       meta: { cwd: process.cwd(), agentPreset: 'development' },

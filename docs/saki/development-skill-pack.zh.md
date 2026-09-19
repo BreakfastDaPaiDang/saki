@@ -46,6 +46,6 @@ pnpm run update-saki-skill-pack -- --ref <40-character-commit> --write
 
 `--write` 还要求 `.dsh/skills` 和 `.dsh/skill-pack` 目录树保持 clean。它暂存当前 `.dsh` 目录，只替换其中已校验的 skill 与来源记录子树，再通过同一文件系统内的目录事务发布结果；发布失败时恢复原目录树。提交之前根据签入仓库的补丁逐项审阅所有重写的指令，然后运行校验器、发现测试、装配快照和文档检查。
 
-## 来源记录
+## 来源与补丁记录
 
 [`.dsh/skill-pack/manifest.json`](../../.dsh/skill-pack/manifest.json)记录上游仓库、精确 commit 与日期、选中和忽略的上游 Git blob、适配补丁 hash、输出 hash 与能力声明。[保留的 MIT 许可证](../../.dsh/skill-pack/LICENSE.mattpocock-skills)与[第三方声明](../../THIRD_PARTY_NOTICES.md)覆盖嵌入的指令。补丁是上游文件与仓库拥有的 DSH 变体之间可审阅的差异。

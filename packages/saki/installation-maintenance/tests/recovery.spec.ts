@@ -1289,7 +1289,7 @@ describe('active Saki operation recovery', () => {
       ...V2_UPGRADE_SOURCE,
       sourceStorageGenerationId: OTHER_GENERATION_ID,
     }],
-    ['build provenance', { ...V2_UPGRADE_SOURCE, sourceBuildId: BUILD_ID }],
+    ['build identity', { ...V2_UPGRADE_SOURCE, sourceBuildId: BUILD_ID }],
   ])('retains a pre-commit manifest-less upgrade whose journal has the wrong source %s', async (
     _subject,
     sourceIdentity,

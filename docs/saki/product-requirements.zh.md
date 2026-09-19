@@ -138,7 +138,7 @@ Saki 把模型访问视为执行供应，不把它当作 Work Item 属性。Agen
 
 Context Capacity、Runtime Context Limit 和 Context Policy 保持为三个独立事实。模型声明 Context Capacity；产品界面、订阅或账号可以开放更低的 Runtime Context Limit；可版本化的 Context Policy 选择更低的压缩触发点，以及压缩、裁剪、恢复和观测策略。Saki 不得从其中一项推断另一项，也不得把经过检索的逻辑历史展示成物理模型窗口。
 
-生成式媒体是持久 Project 输出，而不是临时聊天回复。Generation Job 记录其已解析 Model Route、输入、生命周期、输出产物和来源，并可以在 Provider Account Profile 限制内并发运行。[Model Supply 领域词汇](../contexts/model-supply/CONTEXT.zh.md)定义这些术语。
+生成式媒体是持久 Project 输出，而不是临时聊天回复。Generation Job 记录其已解析 Model Route、输入、生命周期、输出产物和请求归属，并可以在 Provider Account Profile 限制内并发运行。[Model Supply 领域词汇](../contexts/model-supply/CONTEXT.zh.md)定义这些术语。
 
 ## Agent 协调与工作会话
 

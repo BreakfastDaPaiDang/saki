@@ -908,7 +908,7 @@ describe('offline Saki Installation operations', () => {
     await expect(backupSakiInstallation({
       ...options,
       legacyBuildId: 'saki-build-not-b03' as SakiBuildId,
-    }, signal)).rejects.toThrow(`legacy Saki build provenance must be '${LEGACY_B03_BUILD_ID}'`)
+    }, signal)).rejects.toThrow(`legacy Saki build identity must be '${LEGACY_B03_BUILD_ID}'`)
   })
 
   it('rejects maintenance when neither an Installation manifest nor B03 source exists', async () => {

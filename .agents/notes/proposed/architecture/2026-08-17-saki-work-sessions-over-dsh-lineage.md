@@ -10,7 +10,7 @@ DSH continuable subagents provide durable child Sessions, parent coordination, i
 
 ## Proposal
 
-Saki's control plane records Work Session identity, Work Item association, assignment, primary status, and participant attribution independently of DSH Session lineage, following [Agent Operations ADR 0002](../../../../docs/adr/agent-operations/0002-work-sessions-and-subagent-lineage.md). The execution adapter associates each Work Session with a DSH session id and may use either a top-level Session or a continuable subagent; optional `parentSession` data remains execution provenance and runtime authority.
+Saki's control plane records Work Session identity, Work Item association, assignment, primary status, and participant attribution independently of DSH Session lineage, following [Agent Operations ADR 0002](../../../../docs/adr/agent-operations/0002-work-sessions-and-subagent-lineage.md). The execution adapter associates each Work Session with a DSH session id and may use either a top-level Session or a continuable subagent; optional `parentSession` data remains execution lineage and runtime authority.
 
 A Project Coordinator is a persistent Agent Identity that operates through replaceable Coordination Sessions. It receives attributed summaries and Signals from Work Sessions and reads durable Project projections rather than retaining every child transcript in one model context. Human messages, coordinator messages, and executing-Agent messages keep distinct sources even when they enter the same Work Session.
 

@@ -57,7 +57,7 @@ export interface SakiServingInstallationOptions {
   readonly installationRoot: string
   /** Exact absolute B03 database path used only while no Installation manifest exists. */
   readonly legacyDatabasePath: string
-  /** Provenance recorded only when this build creates a new generation. */
+  /** Build identity recorded only when this build creates a new generation. */
   readonly currentBuildId: SakiBuildId
 }
 
@@ -356,7 +356,7 @@ async function prepareSakiServingState(
 
 /**
  * Hold the Installation lease across preflight, boot, the complete serving lifetime, and teardown.
- * @param options - exact Installation paths and current creator provenance.
+ * @param options - exact Installation paths and current creator-build identity.
  * @param signal - cancellation during lock acquisition and pre-serving maintenance.
  * @param serve - callback whose settlement means every storage writer has closed.
  * @returns callback result after the crash-released Installation lease is released.

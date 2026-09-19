@@ -103,7 +103,7 @@ describe('Saki product state versions', () => {
     expect(STORAGE_GENERATION_KEY).toBe('storage-generation')
   })
 
-  it('keeps build provenance bounded without treating it as a compatibility key', () => {
+  it('keeps build identity bounded without treating it as a compatibility key', () => {
     expect(sakiBuildIdSchema.parse('saki-build-0.1.0+abcdef')).toBe('saki-build-0.1.0+abcdef')
     expect(sakiBuildIdSchema.safeParse('../build').success).toBe(false)
     expect(sakiBuildIdSchema.safeParse('x'.repeat(201)).success).toBe(false)

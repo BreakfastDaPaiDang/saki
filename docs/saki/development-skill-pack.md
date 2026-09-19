@@ -37,15 +37,15 @@ Every included `SKILL.md` declares the required DSH capabilities, alternative ca
 
 ## Updating the pin
 
-The updater accepts only a full 40-character commit and performs a dry run by default. It fetches the exact commit from `mattpocock/skills`, rejects additions or removals outside the reviewed source and ignored-file allowlists, applies the checked-in per-skill patches, writes the exact commit into every adapted skill's provenance metadata, and verifies the complete candidate offline. A dry run reports changed outputs without modifying the repository.
+The updater accepts only a full 40-character commit and performs a dry run by default. It fetches the exact commit from `mattpocock/skills`, rejects additions or removals outside the reviewed source and ignored-file allowlists, applies the checked-in per-skill patches, writes the exact commit into every adapted skill's source metadata, and verifies the complete candidate offline. A dry run reports changed outputs without modifying the repository.
 
 ```sh
 pnpm run update-saki-skill-pack -- --ref <40-character-commit>
 pnpm run update-saki-skill-pack -- --ref <40-character-commit> --write
 ```
 
-`--write` also requires clean `.dsh/skills` and `.dsh/skill-pack` trees. It stages the current `.dsh` directory, replaces only the verified skill and provenance subtrees, then publishes the result through a same-filesystem directory transaction that restores the previous tree if publication fails. Review every rewritten instruction against its checked-in patch before committing, then run the verifier, discovery test, assembled snapshots, and documentation checks.
+`--write` also requires clean `.dsh/skills` and `.dsh/skill-pack` trees. It stages the current `.dsh` directory, replaces only the verified skill and source-record subtrees, then publishes the result through a same-filesystem directory transaction that restores the previous tree if publication fails. Review every rewritten instruction against its checked-in patch before committing, then run the verifier, discovery test, assembled snapshots, and documentation checks.
 
-## Provenance
+## Source and patch records
 
 [`.dsh/skill-pack/manifest.json`](../../.dsh/skill-pack/manifest.json) records the upstream repository, exact commit and date, selected and ignored upstream Git blobs, adaptation patch hashes, output hashes, and capability declarations. [The preserved MIT license](../../.dsh/skill-pack/LICENSE.mattpocock-skills) and [third-party notices](../../THIRD_PARTY_NOTICES.md) cover the embedded instructions. The patches are the reviewable difference between the upstream files and the repository-owned DSH variants.

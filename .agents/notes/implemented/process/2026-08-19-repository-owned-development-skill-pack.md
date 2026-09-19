@@ -16,11 +16,11 @@ The repository owns an adapted 11-skill set under [`.dsh/skills`](../../../../.d
 
 Each instruction declares its required, alternative, and optional capabilities, host commands, and mutation class. Its compatibility preflight stops before mutation when a required facility is unavailable. Tracker workflows run non-repository commands such as `gh auth status` without `-R` and pass `-R BreakfastDaPaiDang/saki` to every repository-scoped `gh` command; the handoff workflow writes only below `.scratch/handoffs/`.
 
-The update command requires a full commit, defaults to dry-run, verifies the current pack, fetches only the named upstream revision, rejects upstream inventory outside reviewed allowlists, and reapplies the checked-in patches. It materializes the requested commit in every adapted skill and verifies the complete candidate offline. Publication stages the current `.dsh` directory, replaces only the owned skill and provenance subtrees, and swaps that directory with rollback. `--write` refuses dirty pack trees; a rejected candidate does not change the checked-out pack.
+The update command requires a full commit, defaults to dry-run, verifies the current pack, fetches only the named upstream revision, rejects upstream inventory outside reviewed allowlists, and reapplies the checked-in patches. It materializes the requested commit in every adapted skill and verifies the complete candidate offline. Publication stages the current `.dsh` directory, replaces only the owned skill and source-record subtrees, and swaps that directory with rollback. `--write` refuses dirty pack trees; a rejected candidate does not change the checked-out pack.
 
 ## Verification
 
-The portable offline verifier rejects provenance drift, changed outputs or patches, unexpected files, symbolic links, broken resource links, inconsistent compatibility metadata, and a skill set other than the frozen eleven. The focused test loads the actual filesystem skill provider from an isolated clean project and isolated home directories. Keyless assembled ACP snapshots cover a planning-to-handoff flow and an actionable preflight failure when a required shell capability is absent. Third-party notices disclose the pinned source and preserved license.
+The portable offline verifier rejects source and patch records drift, changed outputs or patches, unexpected files, symbolic links, broken resource links, inconsistent compatibility metadata, and a skill set other than the frozen eleven. The focused test loads the actual filesystem skill provider from an isolated clean project and isolated home directories. Keyless assembled ACP snapshots cover a planning-to-handoff flow and an actionable preflight failure when a required shell capability is absent. Third-party notices disclose the pinned source and preserved license.
 
 ## Alternatives considered
 
@@ -28,12 +28,12 @@ The portable offline verifier rejects provenance drift, changed outputs or patch
 
 **Load the upstream repository or branch at runtime.** This reduces checked-in files but introduces network availability, moving-source, and unreviewed-instruction risks at the moment an Agent acts.
 
-**Copy the local Codex installation.** This is convenient on one machine but does not prove upstream provenance and can incorporate local edits or installation-specific metadata.
+**Copy the local Codex installation.** This is convenient on one machine but does not prove upstream source and patch records and can incorporate local edits or installation-specific metadata.
 
 **Introduce a Saki-specific skill loader.** The existing DSH filesystem provider already discovers repository skills with defined precedence, so another loader duplicates lifecycle and discovery behavior.
 
 ## Consequences
 
-Skill changes are ordinary repository changes with reviewable provenance, bilingual operating documentation, license disclosure, and keyless evidence. A checkout can discover the same pack on Linux, macOS, and Windows without external credentials.
+Skill changes are ordinary repository changes with reviewable source and patch records, bilingual operating documentation, license disclosure, and keyless evidence. A checkout can discover the same pack on Linux, macOS, and Windows without external credentials.
 
 Updating the upstream pin is intentionally review-heavy: upstream inventory changes require an explicit allowlist decision, patch conflicts stop the update, and adapted output changes require new hashes and snapshots. The pack cannot promise that every skill runs in every DSH composition; explicit preflight converts a missing capability into a diagnostic before mutation.

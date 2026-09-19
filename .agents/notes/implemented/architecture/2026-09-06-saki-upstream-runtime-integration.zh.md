@@ -18,13 +18,15 @@ POSIX Session 写锁使用[预构建系统原语](2026-09-07-prebuilt-system-pri
 
 持久 PowerShell 使用上游无界面终端模拟器处理协议回复，协议与调用方输入经过相同的串行终端写入。非交互宿主与前台子进程输入各有语义：宿主提示会拒绝，子 REPL 仍可从 PTY 读取。[持久 PTY 决策](../../archived/architecture/2026-08-11-pwsh-persistent-pty.md) 拥有就绪与输入顺序规则。
 
-Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 组合及最终工作区预期。断言保留路由后的 `ask-matt`、`handoff` 调用，以及 `to-tickets` 缺少 shell 时的拒绝。不以录制会话为输入的 Host 和凭据预期输出保留在所属方的 expected-output 层。Saki 进程预期通过共享启动器遵循 `DSH_EXAMPLE_MODE`；CI 通过构建后的包导出验证完整 Git 与恢复输出，源码启动用例则检查模块解析与身份认证。
+Saki 技能场景位于共享 SDK 会话语料中，使用显式可移植 shell 组合及最终工作区预期。断言保留路由后的 `ask-matt`、`handoff` 调用，以及 `to-tickets` 缺少 shell 时的拒绝。不以录制会话为输入的 Host 和凭据预期输出保留在所属方的 expected-output 层。Saki 进程预期通过共享启动器遵循 `DSH_EXAMPLE_MODE`；CI 通过构建后的包导出验证完整 Git 与恢复输出，源码启动用例则检查模块解析与身份认证。 工具 schema sidecar 与发行版 SDK profile 一致，该 profile 不包含可选的 `ralph` 工具。
 
-在 Linux 上，真实 Git 行为单元夹具选择进程组实现，因为每条 Git 命令都会重复启动原生源码引导进程。GitRunner 测试与完整 Saki 场景保留平台选择的原生隔离。两层中的仓库状态、操作回执、取消与重启断言都保持精确。
+真实 Git 行为夹具与源码启动的浏览器流程通过受保护的进程管理选择方法使用本地提供方的平台回退实现，并保留句柄跟踪与清理。POSIX 使用进程组；Windows 使用直接子进程观察与进程树终止。反复启动源码 runner 会在 Git 证据采集完成之前耗尽聚合清单的期限。GitRunner 测试、完整进程期望测试和启动器 smoke 保留按平台选择的原生进程约束。两层测试中的仓库状态、操作回执、取消与重启断言均保持精确。Windows Project 注册夹具为完整流程和清理提供 180 秒：注册与读取用例执行数百次真实 Git 命令，在维护主机上约需 76 秒；命令和采集期限仍独立执行。
 
 完整 Delivery 转录显式请求证据刷新，并将 `targetedPendingPollIntervalMs` 设为用例期限。后台刷新会推进 Delivery 版本，因此在 Push 回执与下一次变更之间自动刷新，会使转录的预期版本失效。单元测试独立验证这种过期变更的拒绝行为。
 
-原生子进程和 shell 夹具先观察目标输出，再测试取消或释放。假终端生命周期与启动失败释放顺序用例选择进程组实现；专门的 Linux scope 用例验证原生启动与结果处理。超时输出用例为原生引导进程在受测期限内启动目标留出时间。前台输出观察器会恢复实例上的 spawn spy，夹具清理先等待所属进程退出，再移除目录。PowerShell 生命周期用例在释放前观察目标 PID，随后验证其退出，并在 `finally` 中释放上下文；用例期限覆盖原生启动和托管范围退出两个阶段。
+原生子进程和 shell 夹具先等待 shell 启动并观察目标输出，再测试取消或释放。Linux observer 保留每次查询开始前确认的建立状态，并丢弃被并发信号失效的回复；两类回复都不能证明新启动或刚收到信号的目标已经完全停稳。假终端生命周期与启动失败释放顺序用例选择进程组实现；专门的 Linux scope 用例验证原生启动与结果处理。超时输出用例为原生引导进程在受测期限内启动目标留出时间。前台输出观察器会恢复实例上的 spawn spy，夹具清理先等待所属进程退出，再移除目录。PowerShell 生命周期用例在释放前观察目标 PID，随后验证其退出，并在 `finally` 中释放上下文；用例期限覆盖原生启动和托管范围退出两个阶段。
+
+即使共享启动策略允许可选配置项保持未激活，Saki 就绪检查仍要求每个已启用的 Loader 配置项均已激活。announcer 在写入 stdout 或请求正常退出前检查已完成启动的配置树，并在拒绝时释放应用。仅检查就绪 provider 会让恢复不完整或 Host 组合不完整的应用看起来可用。已禁用配置项仍表示有意的配置选择，Loader 告警保留详细激活诊断。
 
 bundle 的 `./launcher` 入口拥有启动环境依赖。就绪插件在干净检出中仍可独立从 TypeScript 加载，完整进程夹具则通过构建入口解析启动器辅助函数。
 
@@ -45,6 +47,10 @@ Git 测试夹具先解除 junction，再等待递归删除，使暂存的 Window
 Saki 包与 DPAPI 提供方依据 [invariant 发布规则](../simplification/2026-08-28-omit-unneeded-invariant-companions.zh.md) 省略空 invariant companion。README 中的原因明确权威解析器或状态拥有方；移除空注册不会移除持久状态校验。
 
 [Saki Actions 成本策略](../process/2026-08-18-saki-actions-cost-policy.zh.md) 拥有触发频率和 runner 分配。上游备用 runner note 保留适用的实现结论，但不会恢复 master-push 工作流。归档 note 保持不可变。
+
+术语检查保留 Saki 技能交接录制中的五个精确文件：v2 与 v3 Session 日志、工作区种子，以及两个预期工作区文件。SHA-256 封存值仅允许原始捕获字节；修改后的内容与新路径仍受检查。为文字规则重写录制的用户、模型和工具文本，会在运行时行为未变的情况下改变回放证据。当前源码、诊断和文档明确使用构建标识、消息来源元数据、执行谱系和请求归属等术语。
+
+持久化类型历史通过 [Saki 封存确认记录](../../../../docs/persistence-changes/2026-09-19-saki-message-sources.zh.md) 纳入已有的 `saki-agent-run`、`saki-intervention-answer` 和 `saki-agent-run-wake` 消息来源。三个精确的前驱与后继摘要对区分既有词汇的接纳和新增的持久化类型变化。导入保留 Session 格式 3 与上游历史；改变后的 schema 接受通常的版本分类。
 
 ## Alternatives considered
 

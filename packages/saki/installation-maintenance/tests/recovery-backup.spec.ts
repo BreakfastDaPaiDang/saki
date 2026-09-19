@@ -711,7 +711,7 @@ describe('Saki Recovery Backup primitive', () => {
     }
   })
 
-  it('accepts v2 through the supplied capability and treats build id only as provenance', async () => {
+  it('accepts v2 through the supplied capability and treats build id only as build identity', async () => {
     const installationRoot = await root()
     await publish(installationRoot, BACKUP_ID, 2, v2Capability)
 

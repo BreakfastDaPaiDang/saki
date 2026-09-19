@@ -123,7 +123,7 @@ export function validateDisjointControlIntentIds(
  * @param storageGeneration - opened `saki_storage_generation@7` candidate domain.
  * @param expectedInstallationId - Installation identity selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation identity selected by maintenance metadata.
- * @param expectedCreatedByBuildId - generation.json provenance that the seal must repeat.
+ * @param expectedCreatedByBuildId - generation.json build identity that the seal must repeat.
  * @returns nothing after all current product invariants pass.
  */
 export function validateCurrentSakiState(
@@ -167,7 +167,7 @@ export function validateSakiV2SourceState(
  * @param storageGeneration - opened exact `saki_storage_generation@1` source domain.
  * @param expectedInstallationId - Installation selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation selected by maintenance metadata.
- * @param expectedCreatedByBuildId - generation provenance repeated by the seal.
+ * @param expectedCreatedByBuildId - generation build identity repeated by the seal.
  * @returns nothing after all retained v3 product invariants pass.
  */
 export function validateSakiV3SourceState(
@@ -244,7 +244,7 @@ function validateStorageGenerationSeal(
     throw new Error('Saki storage generation seal belongs to another physical generation')
   }
   if (seal.createdByBuildId !== expectedCreatedByBuildId) {
-    throw new Error('Saki storage generation seal disagrees with generation build provenance')
+    throw new Error('Saki storage generation seal disagrees with generation build identity')
   }
 }
 

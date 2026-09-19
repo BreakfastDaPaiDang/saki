@@ -3,10 +3,10 @@
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 
 /**
- * Use POSIX process groups for Linux Git behavior tests. Native containment is
- * exercised by GitRunner tests and the assembled Saki expected-output cases.
+ * Exercise real Git with the provider's platform fallback, avoiding a source-runner
+ * bootstrap for every command. GitRunner, process expectations, and launcher smokes retain native ownership.
  */
 export default class SakiGitFixtureSubprocess extends LocalSubprocessRuntime {
-  /** The Darwin selection uses the shared POSIX process-group implementation. */
-  override internals = process.platform === 'linux' ? { platform: 'darwin' as const } : {}
+  /** @inheritdoc */
+  protected override selectContainmentMode(): 'fallback' { return 'fallback' }
 }

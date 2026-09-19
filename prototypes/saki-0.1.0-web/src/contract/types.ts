@@ -393,7 +393,7 @@ export interface GenerationJob {
   state: 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
   createdAt: string
   output: string | null
-  provenance: string
+  requestSource: string
 }
 
 export interface ModelSupplyProjection {

@@ -186,9 +186,23 @@ try {
       const fakeProviderEnabled = process.env.SAKI_BOARD_SNAPSHOT_PROVIDER_ENABLED !== '0'
       const agentRunSnapshot = process.env.SAKI_AGENT_RUN_SNAPSHOT === '1' || process.env.SAKI_WORK_BROWSER_FIXTURE === '1'
       const deliverySnapshot = process.env.SAKI_DELIVERY_SNAPSHOT === '1'
+      const browserFixture = [
+        'SAKI_PLANNING_BROWSER_FIXTURE', 'SAKI_WORK_BROWSER_FIXTURE',
+        'SAKI_CHANGES_BROWSER_FIXTURE', 'SAKI_DELIVERY_BROWSER_FIXTURE',
+      ].some(key => process.env[key] === '1')
       const bundlePatches = loadOverlayPatches('saki-board-snapshot', BUNDLE_PATCH)
       const patches = [
         ...bundlePatches,
+        ...(browserFixture ? [{
+          id: 'subprocess',
+          name: '@deepseek-ai/dsh-subprocess-local',
+          disabled: true,
+        }, {
+          insert: [{
+            id: 'saki-browser-subprocess',
+            name: '../../../scripts/fixtures/saki-git-subprocess.ts',
+          }],
+        }] : []),
         { id: 'saki-github-app', disabled: true },
         ...(fakeProviderEnabled ? [{
           insert: [{

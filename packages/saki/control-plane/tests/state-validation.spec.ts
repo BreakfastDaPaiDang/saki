@@ -1220,7 +1220,7 @@ describe('current Saki state validation', () => {
     }).toThrow(`another ${_name}`)
   })
 
-  it('rejects seal provenance that disagrees with generation.json', () => {
+  it('rejects seal build identity that disagrees with generation.json', () => {
     const fixture = currentFixture()
     fixture.seals.set(
       STORAGE_GENERATION_KEY,
@@ -1239,7 +1239,7 @@ describe('current Saki state validation', () => {
         STORAGE_GENERATION_ID,
         BUILD_ID,
       )
-    }).toThrow('build provenance')
+    }).toThrow('build identity')
   })
 
   it('rejects a non-singleton storage-generation seal table', () => {
@@ -1913,7 +1913,7 @@ describe('historical Saki v3 source validation', () => {
   it.each([
     ['Installation', { installationId: OTHER_INSTALLATION_ID }],
     ['physical generation', { storageGenerationId: OTHER_STORAGE_GENERATION_ID }],
-    ['build provenance', { createdByBuildId: 'saki-build-other' as SakiBuildId }],
+    ['build identity', { createdByBuildId: 'saki-build-other' as SakiBuildId }],
   ] as const)('rejects v1 seal metadata for another %s', (_name, overrides) => {
     const seals = new Map([[STORAGE_GENERATION_KEY, v1Seal(overrides)]])
     const domains = v3Domains(currentFixture(), seals)

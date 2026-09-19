@@ -22,4 +22,4 @@ Model Supply defines how Saki names external model accounts, resolves models for
 
 **Usage Snapshot**: A provider-attributed, point-in-time observation of allowance windows, remaining usage, credits, and retrieval status for one Provider Account Profile. It is not a Saki-owned balance or authorization to exceed provider limits. _Avoid_: quota balance, shared allowance
 
-**Generation Job**: A traceable request to generate or edit media through a resolved Model Route. It records inputs, status, outputs, and provenance and may attach its artifacts to a Work Session or Work Item. _Avoid_: Agent Run, image message
+**Generation Job**: A traceable request to generate or edit media through a resolved Model Route. It records inputs, status, outputs, and request attribution and may attach its artifacts to a Work Session or Work Item. _Avoid_: Agent Run, image message

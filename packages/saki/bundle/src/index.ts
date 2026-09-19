@@ -3,7 +3,10 @@
  * @module @breakfastdapaidang/saki-bundle
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, FiberState } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
+
+const FIBER_ACTIVE = 2 as FiberState.ACTIVE
 
 /** Stable Cordis plugin name. */
 export const name = 'saki-readiness'
@@ -37,9 +40,9 @@ export function apply(ctx: Context): void {
 }
 
 /**
- * Announce readiness only after boot and its final entry-activation audit succeed.
- * A reporting failure disposes the booted tree before it is returned to the launcher.
- * @param startup - complete application boot, including the activation audit.
+ * Announce readiness only after every enabled Loader entry activates.
+ * An activation or reporting failure disposes the booted tree before rejecting.
+ * @param startup - complete application boot, including the shared startup audit.
  * @param io - launcher-owned stdout and clean-exit request.
  * @param options - readiness-process behavior after the record is written.
  * @returns the audited application context after readiness is requested.
@@ -53,6 +56,13 @@ export async function announceSakiReadiness(
   try {
     const record = ctx.get('sakiReadiness')
     if (record === undefined) throw new Error('saki: activated bundle did not provide sakiReadiness')
+    const loader = ctx.get('loader')
+    if (loader === undefined) throw new Error('saki: readiness requires the application Loader')
+    for (const entry of loader.entries()) {
+      if (!entry.disabled && entry.fiber?.state !== FIBER_ACTIVE) {
+        throw new Error(`saki: entry ${entry.options.id} (${entry.options.name}) did not activate`)
+      }
+    }
     io.stdout.write(`${JSON.stringify(record)}\n`)
     if (options.exitAfterAnnounce !== false) io.exit(0)
     return ctx

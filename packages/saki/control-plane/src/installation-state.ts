@@ -13,7 +13,7 @@ export abstract class SakiInstallationState extends Service {
   abstract readonly storageGenerationId: SakiStorageGenerationId
   /** State-format version selected by the Installation manifest. */
   abstract readonly stateVersion: 10
-  /** Build provenance recorded when this storage generation was created. */
+  /** Build identity recorded when this storage generation was created. */
   abstract readonly createdByBuildId: SakiBuildId
 
   /**

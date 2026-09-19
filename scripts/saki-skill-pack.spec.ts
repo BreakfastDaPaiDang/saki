@@ -71,7 +71,7 @@ describe('Saki Development Skill Pack verifier', () => {
     )
   })
 
-  it('rejects missing provenance, unexpected files, and invalid compatibility declarations', async () => {
+  it('rejects missing source and patch records, unexpected files, and invalid compatibility declarations', async () => {
     const root = await copyPack()
     await rm(resolve(root, '.dsh/skill-pack/LICENSE.mattpocock-skills'))
     await writeFile(resolve(root, '.dsh/skills/unreviewed.md'), '# unreviewed\n')

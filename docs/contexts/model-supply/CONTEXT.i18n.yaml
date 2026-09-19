@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/contexts/model-supply/CONTEXT.md
-CONTEXT.md: 163790656ff118741a493a041b69f807e823e278
-CONTEXT.zh.md: 6a19aedcf241c0efdc2ccc990deeb8377433a082
+CONTEXT.md: 77a19b97ce6656d666cf9dc026ffb9175810af61
+CONTEXT.zh.md: e917a87fc87369e5d14b7f7dac77722189fd72d2

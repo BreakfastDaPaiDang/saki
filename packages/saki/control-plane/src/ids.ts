@@ -81,7 +81,7 @@ export const sakiWorkItemRecoveryIdSchema = digestId<SakiWorkItemRecoveryId>('wo
 export const sakiGitHubScanAttemptIdSchema = brandedId<SakiGitHubScanAttemptId>('scan-attempt')
 /** Strict confirmed remote-input fingerprint. */
 export const sakiBoardRemoteFingerprintSchema = digestId<SakiBoardRemoteFingerprint>('remote-fingerprint')
-/** Bounded non-path build provenance; it never decides format compatibility. */
+/** Bounded non-path build identity; it never decides format compatibility. */
 export const sakiBuildIdSchema = z.string()
   .min(1)
   .max(200)

@@ -115,7 +115,7 @@ export type SakiStateVersionSpec =
     storageGeneration: typeof sakiStorageGenerationDomainSpec
   }>
 
-/** State-format support owned by code, independently of artifact build provenance. */
+/** State-format support owned by code, independently of artifact build identity. */
 export interface SakiStateCapability {
   /** Every product-state version this build can inspect or migrate. */
   readonly readable: readonly SakiStateVersionSpec[]

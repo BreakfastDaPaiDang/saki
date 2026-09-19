@@ -1161,7 +1161,7 @@ export const interventionOpeningEvidenceSchema: z.ZodType<InterventionOpeningEvi
   z.object({ kind: z.literal('conflict') }).strict(),
 ])
 
-/** Exact provenance carried by one preallocated Agent Run input. */
+/** Exact message source metadata carried by one preallocated Agent Run input. */
 export const sakiAgentRunMessageSourceSchema = z.object({
   kind: z.literal('saki-agent-run'),
   dispatchId: sakiExecutionDispatchIdSchema,
@@ -1180,7 +1180,7 @@ export const sakiControlIntentActorAttributionSchema: z.ZodType<SakiControlInten
   grantRevision: nonnegative,
 }).strict()
 
-/** Exact attributed provenance for an Intervention answer. */
+/** Exact attributed message source metadata for an Intervention answer. */
 export const sakiInterventionAnswerMessageSourceSchema: z.ZodType<SakiInterventionAnswerMessageSource> = z.object({
   kind: z.literal('saki-intervention-answer'),
   interventionId: sakiInterventionRequestIdSchema,
@@ -1191,7 +1191,7 @@ export const sakiInterventionAnswerMessageSourceSchema: z.ZodType<SakiInterventi
   actor: sakiControlIntentActorAttributionSchema,
 }).strict()
 
-/** Current message provenance accepted by StartAgentRun. */
+/** Current message source metadata accepted by StartAgentRun. */
 export const startAgentRunMessageSourceSchema = z.union([
   sakiAgentRunMessageSourceSchema,
   sakiInterventionAnswerMessageSourceSchema,
