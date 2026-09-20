@@ -66,11 +66,7 @@
     - id: agent
       name: '@deepseek-ai/dsh-agent'
 
-    # Transport-independent default model selection read when a Session is
-    # created or resumed. Production installs no model adapter, so this named
-    # route is never served: any actual model use fails loud at the point of
-    # use, mirroring the control plane's absent modelRouteRequest, which leaves
-    # agent dispatch unavailable.
+    # Account routes require explicit selection before an Agent can use a model.
     - id: agent-default-model
       name: '@deepseek-ai/dsh-agent-default-model'
       config:
@@ -145,6 +141,17 @@
       name: '@breakfastdapaidang/saki-model-account-codex'
       disabled: !!js process.platform !== 'win32'
 
+    - id: saki-model-settings
+      name: '@deepseek-ai/dsh-settings-file'
+
+    - id: saki-api-models
+      name: '@deepseek-ai/dsh-llm-pi-ai'
+      disabled: !!js process.platform !== 'win32'
+
+    - id: saki-model-account-api
+      name: '@breakfastdapaidang/saki-model-account-api'
+      disabled: !!js process.platform !== 'win32'
+
     - id: saki-github-app
       name: '@breakfastdapaidang/saki-github-app'
       inject:
@@ -207,9 +214,7 @@
     - id: session-controller
       name: '@deepseek-ai/dsh-api-session-controller'
 
-    # Configuration-surface reads and writes over Typert Remote. Saki mounts
-    # no settings provider, so each call answers the configuration API's
-    # actionable missing-provider diagnostic.
+    # Configuration-surface reads and protected credential writes over Typert Remote.
     - id: settings-controller
       name: '@deepseek-ai/dsh-api-settings-controller'
 
@@ -261,6 +266,9 @@
 
     - id: ui-settings-general
       name: '@deepseek-ai/dsh-client-ui-settings-general'
+
+    - id: ui-settings-models
+      name: '@deepseek-ai/dsh-client-ui-settings-models'
 
     - id: ui-conversation
       name: '@deepseek-ai/dsh-client-ui-conversation'

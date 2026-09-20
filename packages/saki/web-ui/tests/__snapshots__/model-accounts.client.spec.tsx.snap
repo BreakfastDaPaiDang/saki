@@ -28,6 +28,9 @@ exports[`submits the advertised authorization method from the account page > ava
       <h2>
         连接账户
       </h2>
+      <p>
+        在“设置 → 模型”配置 API 连接后，在这里添加账户。修改原连接后需重新导入，已保存的账户不会自动跟随。
+      </p>
       <label>
         账户名称
         <input

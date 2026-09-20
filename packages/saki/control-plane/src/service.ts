@@ -690,6 +690,16 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
     let settleStartup!: () => void
     this.startupSettled = new Promise((resolve) => { settleStartup = resolve })
+    this.ctx.on('saki-model-accounts/changed', () => {
+      void this.runOwnedOperation(this.lifetime.signal, async (signal) => {
+        await this.startupSettled
+        signal.throwIfAborted()
+        await this.modelSupply.providersChanged()
+      }).catch(() => {
+        // Provider and storage failures can carry sensitive text; retain the durable choice for explicit recovery.
+        if (!this.lifetime.signal.aborted) this.notify(['model-supply'])
+      })
+    })
     try {
       let control = this.controlStateTable.get(CONTROL_STATE_KEY)
       if (control === undefined) {

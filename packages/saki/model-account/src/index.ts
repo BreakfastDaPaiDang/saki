@@ -47,6 +47,13 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     sakiModelAccounts: ModelAccountService
   }
+  interface Events {
+    /**
+     * Account implementations or their available connection methods changed.
+     * @mode emit
+     */
+    'saki-model-accounts/changed'(): void
+  }
 }
 
 /** The provider registry owns reversible route registrations, never product selection. */
@@ -69,10 +76,12 @@ export class ModelAccountService extends Service {
     return this.ctx.effect(() => {
       if (this.providers.has(provider.id)) throw new Error('Model Account Provider already registered')
       this.providers.set(provider.id, provider)
+      this.ctx.emit('saki-model-accounts/changed')
       return async () => {
         this.providers.delete(provider.id)
         await Promise.all([...this.routes.get(provider) ?? []].map(dispose => dispose()))
         this.routes.delete(provider)
+        this.ctx.emit('saki-model-accounts/changed')
       }
     })
   }

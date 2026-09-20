@@ -3757,6 +3757,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [],
   },
   {
+    name: 'saki-model-accounts/changed',
+    mode: 'emit',
+    signature: '\'saki-model-accounts/changed\'(): void',
+    summary: 'Account implementations or their available connection methods changed.',
+    description: 'Account implementations or their available connection methods changed.',
+    parameters: [],
+  },
+  {
     name: 'session-telemetry/record',
     mode: 'waterfall',
     signature: '\'session-telemetry/record\'(record: SessionTelemetryRecord, next: () => SessionTelemetryRecord): SessionTelemetryRecord',
@@ -5734,7 +5742,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ModelAccountAuthorizationMethod',
-    declaration: 'export interface ModelAccountAuthorizationMethod {\n    readonly id: string;\n    readonly kind: \'browser\' | \'device-code\';\n}',
+    declaration: 'export interface ModelAccountAuthorizationMethod {\n    readonly id: string;\n    readonly kind: \'browser\' | \'device-code\' | \'stored-credential\';\n    readonly name?: string;\n}',
   },
   {
     name: 'ModelAccountAuthorizationProgress',
@@ -5834,7 +5842,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ModelSupplyProjection',
-    declaration: 'export interface ModelSupplyProjection {\n    readonly type: \'model-supply\';\n    readonly providers: readonly {\n        readonly id: ModelAccountProviderId;\n        readonly implementation: {\n            readonly name: string;\n            readonly version: string;\n        };\n        readonly methods: readonly {\n            readonly id: string;\n            readonly kind: \'browser\' | \'device-code\';\n        }[];\n    }[];\n    readonly profiles: readonly {\n        readonly id: ModelAccountProfileId;\n        readonly name: string;\n        readonly revision: number;\n        readonly providerId: ModelAccountProviderId;\n        readonly routeId: ModelAccountRouteId;\n        readonly configurationRevision: number;\n        readonly implementation: ModelAccountRecord[\'implementation\'];\n        readonly connected: boolean;\n        readonly desiredActive: boolean;\n        readonly effectiveActive: boolean;\n        readonly snapshot: ModelAccountRecord[\'snapshot\'];\n        readonly lastConfirmedUsage: ModelAccountRecord[\'lastConfirmedUsage\'];\n    }[];\n    readonly authorizations: readonly {\n        readonly intentId: ModelAccountIntentRecord[\'id\'];\n        readonly profileId: ModelAccountProfileId | null;\n        readonly state: ModelAccountIntentRecord[\'state\'];\n        readonly progress: ModelAccountIntentRecord[\'progress\'];\n    }[];\n}',
+    declaration: 'export interface ModelSupplyProjection {\n    readonly type: \'model-supply\';\n    readonly providers: readonly {\n        readonly id: ModelAccountProviderId;\n        readonly implementation: {\n            readonly name: string;\n            readonly version: string;\n        };\n        readonly methods: readonly {\n            readonly id: string;\n            readonly kind: \'browser\' | \'device-code\' | \'stored-credential\';\n            readonly name?: string | undefined;\n        }[];\n    }[];\n    readonly profiles: readonly {\n        readonly id: ModelAccountProfileId;\n        readonly name: string;\n        readonly revision: number;\n        readonly providerId: ModelAccountProviderId;\n        readonly routeId: ModelAccountRouteId;\n        readonly configurationRevision: number;\n        readonly implementation: ModelAccountRecord[\'implementation\'];\n        readonly connected: boolean;\n        readonly desiredActive: boolean;\n        readonly effectiveActive: boolean;\n        readonly snapshot: ModelAccountRecord[\'snapshot\'];\n        readonly lastConfirmedUsage: ModelAccountRecord[\'lastConfirmedUsage\'];\n    }[];\n    readonly authorizations: readonly {\n        readonly intentId: ModelAccountIntentRecord[\'id\'];\n        readonly profileId: ModelAccountProfileId | null;\n        readonly state: ModelAccountIntentRecord[\'state\'];\n        readonly progress: ModelAccountIntentRecord[\'progress\'];\n    }[];\n}',
   },
   {
     name: 'MoveWorkItemIntent',

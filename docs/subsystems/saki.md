@@ -325,4 +325,24 @@ async activate(binding: ModelAccountBinding, signal: AbortSignal): Promise<() =>
 ```
 
 Source: [`packages/saki/model-account/src/index.ts`](../../packages/saki/model-account/src/index.ts)
+
+<a id="saki-model-accounts-events"></a>
+
+### `saki-model-accounts/*` events
+
+<a id="saki-model-accountschanged--emit"></a>
+
+#### `saki-model-accounts/changed` — emit
+
+Account implementations or their available connection methods changed.
+
+```ts cordis-catalog
+/**
+ * Account implementations or their available connection methods changed.
+ * @mode emit
+ */
+'saki-model-accounts/changed'(): void
+```
+
+Source: [`packages/saki/model-account/src/index.ts`](../../packages/saki/model-account/src/index.ts)
 <!-- END GENERATED cordis-surface -->

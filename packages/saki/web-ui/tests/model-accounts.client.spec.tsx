@@ -71,3 +71,18 @@ it('submits the advertised authorization method from the account page', async ()
   expect(h.api.submitModelAccount.mock.calls[0]?.[0]).toMatchObject({ type: 'authorize-model-account',
     providerId: 'codex', method: 'device_code' })
 })
+
+it('imports the named settings connection without accepting credential material from the page', async () => {
+  const h = await setup()
+  h.api.queryModelSupply.mockResolvedValue(sakiModelSupplyResultSchema.parse({ ok: true, projection: {
+    type: 'model-supply', profiles: [], authorizations: [],
+    providers: [{ id: 'api', implementation: { name: 'fixture', version: '1' },
+      methods: [{ id: 'relay', kind: 'stored-credential', name: 'Relay' }] }],
+  } }))
+  await h.controller.refresh()
+  render(<ModelAccountsPage state={h.controller.getSnapshot()} actions={h.controller} t={t} />)
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'My relay' } })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Relay/ })) })
+  expect(h.api.submitModelAccount.mock.calls[0]?.[0]).toMatchObject({ type: 'authorize-model-account',
+    providerId: 'api', method: 'relay', name: 'My relay', configuration: { connection: 'relay' } })
+})

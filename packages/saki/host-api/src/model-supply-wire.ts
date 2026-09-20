@@ -65,7 +65,8 @@ const progress = z.discriminatedUnion('kind', [
 export const sakiModelSupplyProjectionSchema: z.ZodType<ModelSupplyProjection> = z.object({
   type: z.literal('model-supply'),
   providers: z.array(z.object({ id: providerId, implementation,
-    methods: z.array(z.object({ id: z.string().min(1), kind: z.enum(['browser', 'device-code']) }).strict()) }).strict()),
+    methods: z.array(z.object({ id: z.string().min(1), kind: z.enum(['browser', 'device-code', 'stored-credential']),
+      name: z.string().optional() }).strict()) }).strict()),
   profiles: z.array(z.object({ id: profileId, name, revision, providerId, routeId, configurationRevision: revision,
     implementation, connected: z.boolean(), desiredActive: z.boolean(), effectiveActive: z.boolean(),
     snapshot: snapshot.nullable(), lastConfirmedUsage: availableUsage.nullable() }).strict()),

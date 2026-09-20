@@ -150,6 +150,26 @@ export class ModelSupply {
     for (const [, profile] of this.options.profiles.entries()) await this.reconcile(profile)
   }
 
+  /** Reconcile retained choices when an account implementation mounts or withdraws. */
+  async providersChanged(): Promise<void> {
+    if (this.closed || this.options.lifetime.aborted) return
+    for (const [, record] of this.options.intents.entries()) {
+      if (record.profileId === null || record.request.type !== 'authorize-model-account' || this.running.has(record.id)
+        || !['accepted', 'authorizing', 'interrupted'].includes(record.state)) continue
+      await enqueueKeyedOperation(this.operations, record.profileId, async () => {
+        if (this.closed || this.options.lifetime.aborted) return
+        await this.finishAuthorization(record, true)
+      })
+    }
+    for (const [id] of this.options.profiles.entries()) {
+      await enqueueKeyedOperation(this.operations, id, async () => {
+        const profile = this.options.profiles.get(id)
+        if (profile !== undefined && !this.closed && !this.options.lifetime.aborted) await this.reconcile(profile)
+      })
+    }
+    this.options.notifyChanged()
+  }
+
   /** Cancel owned logins, await settlement and withdraw all account routes. */
   async dispose(): Promise<void> {
     this.closed = true

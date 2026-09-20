@@ -29,6 +29,7 @@
     // under its own tsconfig boundary.
     "paths": {
       "@breakfastdapaidang/saki-model-account-codex": ["./packages/saki/model-account-codex/src/index.ts"],
+      "@breakfastdapaidang/saki-model-account-api": ["./packages/saki/model-account-api/src/index.ts"],
       "@breakfastdapaidang/saki-model-account": ["./packages/saki/model-account/src/index.ts"],
       "@deepseek-ai/dsh-browser-use": ["./packages/browser-use/browser-use/src/index.ts"],
       "@deepseek-ai/dsh-browser-use/brand": ["./packages/browser-use/browser-use/src/brand.ts"],

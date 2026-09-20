@@ -20,12 +20,14 @@ export function ModelAccountsPage(props: { state: ModelAccountsSnapshot; actions
     {state.failure !== null ? <p role="alert">{t(`accounts.failure.${state.failure}`)}</p> : null}
     <section className={css.card}>
       <h2>{t('accounts.connect')}</h2>
+      <p>{t('accounts.importHelp')}</p>
       <label>{t('accounts.name')}<input value={name} onChange={(event) => { setName(event.target.value) }} maxLength={200} /></label>
       <div className={css.actions}>{state.supply?.providers.map(provider => provider.methods.map(method =>
         <button type="button" key={`${provider.id}:${method.id}`} disabled={name.trim() === '' || state.pending.length > 0}
           onClick={() => { void actions.submit({ type: 'authorize-model-account', providerId: provider.id,
-            name, method: method.id, configuration: {} }) }}>
-          {provider.id} · {t(method.kind === 'browser' ? 'accounts.browser' : 'accounts.device')}
+            name, method: method.id, configuration: method.kind === 'stored-credential' ? { connection: method.id } : {} }) }}>
+          {provider.id} · {t(method.kind === 'stored-credential' ? 'accounts.import' : method.kind === 'browser' ? 'accounts.browser' : 'accounts.device')}
+          {method.name === undefined ? null : ` · ${method.name}`}
         </button>))}</div>
     </section>
     {state.pending.map(intent => <div className={css.card} key={intent.intentId}>
@@ -51,7 +53,8 @@ export function ModelAccountsPage(props: { state: ModelAccountsSnapshot; actions
         {state.supply?.providers.find(provider => provider.id === profile.providerId)?.methods.map(method =>
           <button type="button" key={method.id} onClick={() => { void actions.submit({ type: 'authorize-model-account',
             providerId: profile.providerId, name: profile.name, method: method.id,
-            existing: { profileId: profile.id, expectedRevision: profile.revision } }) }}>{t('accounts.reauthorize')} · {t(method.kind === 'browser' ? 'accounts.browser' : 'accounts.device')}</button>)}
+            ...method.kind === 'stored-credential' ? { configuration: { connection: method.id } } : {},
+            existing: { profileId: profile.id, expectedRevision: profile.revision } }) }}>{t('accounts.reauthorize')} · {t(method.kind === 'stored-credential' ? 'accounts.import' : method.kind === 'browser' ? 'accounts.browser' : 'accounts.device')}{method.name === undefined ? null : ` · ${method.name}`}</button>)}
         <button type="button" disabled={(names[profile.id] ?? profile.name).trim() === ''} onClick={() => {
           void actions.submit({ type: 'rename-model-account', profileId: profile.id, expectedRevision: profile.revision, name: names[profile.id] ?? profile.name })
         }}>{t('accounts.rename')}</button>

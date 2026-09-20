@@ -202,6 +202,48 @@ describe('durable account authorization', () => {
     expect(h.supply.projection().profiles[0]).toMatchObject({ desiredActive: false, effectiveActive: false })
   })
 
+  it('restores a retained active choice after the same Provider remounts', async () => {
+    const h = await setup()
+    const signal = new AbortController().signal
+    await h.supply.submit(request, actor, signal)
+    h.release.resolve(undefined)
+    await h.terminal()
+    const profile = h.supply.projection().profiles[0]!
+    await h.supply.submit(modelAccountIntentSchema.parse({ type: 'set-model-account-active',
+      intentId: 'intent-00000000-0000-4000-8000-000000000003', profileId: profile.id,
+      expectedRevision: profile.revision, active: true }), actor, signal)
+    await h.unregister()
+    await h.supply.providersChanged()
+    expect(h.supply.projection().profiles[0]).toMatchObject({ desiredActive: true, effectiveActive: false })
+    h.accounts.register(h.provider)
+    await h.supply.providersChanged()
+    expect(h.supply.projection().profiles[0]).toMatchObject({ desiredActive: true, effectiveActive: true })
+    expect(h.login).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers a committed credential when its Provider mounts after startup', async () => {
+    const h = await setup()
+    await h.supply.submit(request, actor, new AbortController().signal)
+    await h.entered.promise
+    const accepted = h.intents.get(request.intentId)!
+    h.records.add(accepted.binding!.credentialKey)
+    await h.supply.dispose()
+    await h.intents.put(accepted.id, accepted)
+    await h.unregister()
+    const recovered = new ModelSupply({ profiles: h.profiles, intents: h.intents,
+      accounts: () => h.accounts, credentials: () => undefined, authorityCurrent: () => true,
+      lifetime: new AbortController().signal, notifyChanged: () => {} })
+    cleanups.push(() => recovered.dispose())
+    await recovered.recover()
+    expect(h.intents.get(request.intentId)?.state).toBe('interrupted')
+    expect(h.profiles.size).toBe(0)
+    h.accounts.register(h.provider)
+    await recovered.providersChanged()
+    expect(h.intents.get(request.intentId)?.state).toBe('completed')
+    expect(h.profiles.size).toBe(1)
+    expect(h.login).toHaveBeenCalledTimes(1)
+  })
+
   it('refuses completion under a replacement Provider implementation', async () => {
     const h = await setup()
     await h.supply.submit(request, actor, new AbortController().signal)

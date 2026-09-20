@@ -247,6 +247,7 @@ flowchart LR
   pkg_saki_model_account["saki/model-account"]
   svc_sakiModelAccounts["ctx.sakiModelAccounts<br/>Saki Model Accounts"]
   pkg_saki_model_account_codex["saki/model-account-codex"]
+  pkg_saki_model_account_api["saki/model-account-api"]
   pkg_saki_execution["saki/execution"]
   svc_sakiHostExecution["ctx.sakiHostExecution<br/>Saki Host Execution"]
   pkg_saki_execution_local["saki/execution-local"]
@@ -331,6 +332,7 @@ flowchart LR
   pkg_saki_github_app --> svc_sakiGitHub
   pkg_saki_installation_maintenance --> svc_sakiInstallationState
   pkg_saki_model_account --> svc_sakiModelAccounts
+  pkg_saki_model_account_api --> svc_sakiModelAccounts
   pkg_saki_model_account_codex --> svc_sakiModelAccounts
   pkg_sandbox --> svc_sandbox
   pkg_sandbox_local --> svc_sandbox
@@ -613,7 +615,7 @@ flowchart LR
 | `ctx.sakiInstallationState` | `seam` | [`saki/control-plane`](../packages/saki/control-plane) | [`saki/installation-maintenance`](../packages/saki/installation-maintenance) | [`saki/control-plane`](../packages/saki/control-plane) | - | Installation maintenance selects and validates one manifest-backed state generation before the Saki bundle mounts the control plane; the control plane consumes that exact identity and promotes fresh provisioning only after product validation. |
 | `ctx.sakiControlPlane` | `core` | [`saki/control-plane`](../packages/saki/control-plane) | - | [`saki/host-api`](../packages/saki/host-api) | - | Owns Installation Access, current local authority, protected product Projections, and Control Intent admission; the Host API adapts its narrow interfaces to the browser transport. |
 | `ctx.sakiGitHub` | `seam` | [`saki/github`](../packages/saki/github) | [`saki/github-app`](../packages/saki/github-app) | [`saki/control-plane`](../packages/saki/control-plane) | - | The Service Definition exposes provider-neutral detached reads and complete scans; the GitHub App Provider owns authentication, pagination, and response admission, while the control plane owns durable synchronization, Status mapping, and product Projections. |
-| `ctx.sakiModelAccounts` | `seam` | [`saki/model-account`](../packages/saki/model-account) | [`saki/model-account-codex`](../packages/saki/model-account-codex) | [`saki/control-plane`](../packages/saki/control-plane) | - | The account Provider owns authorization, protected refresh, observations, and account-specific transport; the control plane owns durable Profiles, Intents, and operator selection. |
+| `ctx.sakiModelAccounts` | `seam` | [`saki/model-account`](../packages/saki/model-account) | [`saki/model-account-codex`](../packages/saki/model-account-codex), [`saki/model-account-api`](../packages/saki/model-account-api) | [`saki/control-plane`](../packages/saki/control-plane) | - | The account Provider owns authorization, protected refresh, observations, and account-specific transport; the control plane owns durable Profiles, Intents, and operator selection. |
 | `ctx.sakiHostExecution` | `seam` | [`saki/execution`](../packages/saki/execution) | [`saki/execution-local`](../packages/saki/execution-local) | [`saki/control-plane`](../packages/saki/control-plane) | - | The Local Host resolves untrusted project selections and returns detached Git evidence; the control plane owns authorization, Project policy, and durable product records. |
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Owns the in-memory definition registry, the vm sandbox for host halves, and the request-run round trip; browser pages reach the same service over the wire through its remote namespace. |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | Registers host inspect providers, mirrors the client provider manifest, and routes client queries through the dynamic Cordis transport. |

@@ -18,6 +18,8 @@ Status: implemented
 
 Codex SSE 请求在异步准备前捕获所选路由、Session id 和已记录轮次号。最终公开 fetch 钩子强制使用 Harness User-Agent、Saki originator 和 Session 请求标识。响应轮次状态仅属于该账户、会话和活动轮次，在轮次结束或释放时丢弃。此提供者专属映射扩展[应用归属决策](2026-06-21-mandatory-app-attribution-headers.zh.md)。
 
+[API Provider](../../../../packages/saki/model-account-api/README.zh.md) 将显式 DSH Models 连接导入为不可变配置修订，并把密钥复制到独立的受保护记录。来源修改不会改变已导入账户的目标。其 identity 表示本地 Profile，并非已验证的远端账户；健康度和使用权限保持未知，额度检查暂不支持。Provider 注册变化会在启动与重新挂载后触发对账，而不重复授权。
+
 ## 考虑过的替代方案
 
 **加载整个社区订阅组合包。** 这会导入所需能力之外的账户 UI、路由、可选外部 Agent 集成和凭据存储假设。维护中的公开额度助手减少自有额度解析，同时不转移产品权威。

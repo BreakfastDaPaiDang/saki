@@ -31,10 +31,12 @@ export interface ModelAccountBinding {
   readonly configuration: Readonly<Record<string, unknown>>
 }
 
-/** A provider's supported interactive authorization method. */
+/** A provider's supported login or protected credential import method. */
 export interface ModelAccountAuthorizationMethod {
   readonly id: string
-  readonly kind: 'browser' | 'device-code'
+  readonly kind: 'browser' | 'device-code' | 'stored-credential'
+  /** Configured connection label; absent for provider-wide login methods. */
+  readonly name?: string
 }
 
 /** Safe progress; provider error text and credentials never enter these values. */

@@ -132,7 +132,7 @@ export interface ModelSupplyProjection {
   readonly providers: readonly {
     readonly id: ModelAccountProviderId
     readonly implementation: { readonly name: string; readonly version: string }
-    readonly methods: readonly { readonly id: string; readonly kind: 'browser' | 'device-code' }[]
+    readonly methods: readonly { readonly id: string; readonly kind: 'browser' | 'device-code' | 'stored-credential'; readonly name?: string | undefined }[]
   }[]
   readonly profiles: readonly {
     readonly id: ModelAccountProfileId

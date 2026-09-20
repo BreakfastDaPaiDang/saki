@@ -735,7 +735,7 @@ const SERVICE_ROLES: ServiceRole[] = [
     pkg: 'saki/model-account',
     title: 'Saki Model Accounts',
     mode: 'seam',
-    implementations: ['saki/model-account-codex'],
+    implementations: ['saki/model-account-codex', 'saki/model-account-api'],
     consumers: ['saki/control-plane'],
     note: 'The account Provider owns authorization, protected refresh, observations, and account-specific transport; the control plane owns durable Profiles, Intents, and operator selection.',
   },

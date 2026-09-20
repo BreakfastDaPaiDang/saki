@@ -3732,6 +3732,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 
 - `@breakfastdapaidang/saki-bundle` ([`packages/saki/bundle/src/index.ts`](../packages/saki/bundle/src/index.ts))
 - `@breakfastdapaidang/saki-model-account` — requires `llm` ([`packages/saki/model-account/src/index.ts`](../packages/saki/model-account/src/index.ts))
+- `@breakfastdapaidang/saki-model-account-api` — requires `sakiModelAccounts` · `credentials` · `settings` ([`packages/saki/model-account-api/src/index.ts`](../packages/saki/model-account-api/src/index.ts))
 - `@breakfastdapaidang/saki-model-account-codex` — requires `sakiModelAccounts` · `credentials` · `authorization` · `sessions` ([`packages/saki/model-account-codex/src/index.ts`](../packages/saki/model-account-codex/src/index.ts))
 - `@breakfastdapaidang/saki-web-ui` ([`packages/saki/web-ui/src/index.ts`](../packages/saki/web-ui/src/index.ts))
 - `@deepseek-ai/dsh-acp-app` — requires `cmdlineArgs` ([`packages/bundle/acp-app/src/index.ts`](../packages/bundle/acp-app/src/index.ts))

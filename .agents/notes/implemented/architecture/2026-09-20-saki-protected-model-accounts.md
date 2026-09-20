@@ -18,6 +18,8 @@ Protected record reads and refresh transactions extend the [DPAPI decision](2026
 
 Codex SSE requests capture the selected route, Session id, and logged turn number before asynchronous preparation. The final public fetch hook enforces Harness User-Agent, Saki originator, and Session request identifiers. Response turn state belongs only to that account, Session, and active turn; it is discarded on turn end or disposal. This provider-specific mapping extends the [application attribution decision](2026-06-21-mandatory-app-attribution-headers.md).
 
+The [API Provider](../../../../packages/saki/model-account-api/README.md) imports an explicit DSH Models connection into an immutable configuration revision and copies its key into an independently protected record. Source edits do not retarget imported accounts. Its identity denotes a local Profile, not a verified remote account; health and entitlement remain unknown, and quota inspection is unsupported. Provider registration changes trigger reconciliation after startup and remount without repeating authorization.
+
 ## Alternatives considered
 
 **Mount the entire community subscription bundle.** This would import account UI, routing, optional external-Agent integration, and credential-storage assumptions beyond the required capability. The maintained public usage helper deletes owned quota parsing without transferring product authority.
