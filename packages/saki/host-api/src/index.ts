@@ -1,3 +1,4 @@
+import { sakiModelAccountResultSchema, sakiModelSupplyResultSchema } from './model-supply-wire.ts'
 /** Host half of the typed Saki `/saki` Connection channel. @module @breakfastdapaidang/saki-host-api */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -226,6 +227,7 @@ async function query(
     case 'board': {
       return reply({ ok: true, value: sakiBoardResultSchema.parse(result) })
     }
+    case 'model-supply': return reply({ ok: true, value: sakiModelSupplyResultSchema.parse(result) })
     case 'project-mapping': return reply({ ok: true, value: sakiProjectMappingResultSchema.parse(result) })
     case 'work-item-view': return reply({ ok: true, value: sakiWorkItemViewResultSchema.parse(result) })
     case 'project-sessions': return reply({ ok: true, value: sakiProjectSessionsResultSchema.parse(result) })
@@ -327,6 +329,15 @@ async function authenticatedMutation(
       case 'give-work-item-to-agent': {
         const result = await controlPlane.submit(authentication, operation.intent, signal)
         return reply({ ok: true, value: sakiGiveWorkItemToAgentResultSchema.parse(result) })
+      }
+      case 'authorize-model-account':
+      case 'set-model-account-active':
+      case 'rename-model-account':
+      case 'refresh-model-account':
+      case 'disconnect-model-account':
+      case 'cancel-model-authorization': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiModelAccountResultSchema.parse(result) })
       }
       case 'answer-intervention': {
         const result = await controlPlane.submit(authentication, operation.intent, signal)

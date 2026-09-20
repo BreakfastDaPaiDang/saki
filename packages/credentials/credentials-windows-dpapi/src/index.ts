@@ -325,13 +325,39 @@ export class WindowsDpapiCredentialProvider extends CredentialProvider {
 
   override async describeRecord(key: CredentialKey): Promise<CredentialRecordInfo> {
     const stored = (await readCredentialDocument(this.spec.filename)).records.get(key)
-    if (stored === undefined) return { configured: false, writable: !this.closed }
-    return { configured: true, kind: stored.recordKind, writable: !this.closed }
+    if (stored === undefined) return {
+      configured: false, writable: !this.closed, protectionLevel: CREDENTIAL_PROTECTION_LOCAL_USER_TRUST,
+    }
+    return {
+      configured: true, kind: stored.recordKind, writable: !this.closed,
+      protectionLevel: CREDENTIAL_PROTECTION_LOCAL_USER_TRUST,
+    }
+  }
+
+  override readRecordProtected(
+    key: CredentialKey,
+    required: import('@deepseek-ai/dsh-credentials').CredentialProtectionLevel,
+  ): Promise<CredentialRecord | undefined> {
+    if (required !== CREDENTIAL_PROTECTION_LOCAL_USER_TRUST) {
+      return Promise.reject(new Error('credentials-windows-dpapi: unsupported record protection requirement'))
+    }
+    return this.readRecord(key)
   }
 
   override async listRecords(): Promise<readonly CredentialRecordEntry[]> {
     const { records } = await readCredentialDocument(this.spec.filename)
     return [...records].map(([key, record]) => ({ key, kind: record.recordKind }))
+  }
+
+  override modifyRecordProtected(
+    key: CredentialKey,
+    required: import('@deepseek-ai/dsh-credentials').CredentialProtectionLevel,
+    mutate: (current: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>,
+  ): Promise<CredentialRecord | undefined> {
+    if (required !== CREDENTIAL_PROTECTION_LOCAL_USER_TRUST) {
+      return Promise.reject(new Error('credentials-windows-dpapi: unsupported record protection requirement'))
+    }
+    return this.modifyRecord(key, mutate)
   }
 
   override async modifyRecord(

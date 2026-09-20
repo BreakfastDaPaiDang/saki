@@ -31,6 +31,8 @@ Saki 专属产品语义位于 `packages/saki/<pkg>`，并使用 `@breakfastdapai
 | [`execution-local/`](execution-local/README.zh.md) | 使用本地文件系统、Git、subprocess、storage 与 Workspace index 的 Host 检查和结构化 operation Service Provider | 提供 `sakiHostExecution` |
 | [`github/`](github/README.zh.md) | 提供方无关的 GitHub 读取、完整 Project board 扫描、原子 mutation、定向 inspection 与 Provider 约定 | `sakiGitHub` |
 | [`github-app/`](github-app/README.zh.md) | 使用 operation 作用域 token、有界完整 scan、mutation 与定向 inspection 的 Saki Product GitHub App Service Provider | 提供 `sakiGitHub` |
+| [`model-account/`](model-account/README.zh.md) | 账户授权与路由激活服务定义 | `sakiModelAccounts` |
+| [`model-account-codex/`](model-account-codex/README.zh.md) | Codex OAuth、额度检查与账户专属 SSE 提供者 | 注册到 `sakiModelAccounts` |
 | [`control-plane/`](control-plane/README.zh.md) | Installation 置备、本地 Access 权限真源、持久 Project 登记、原子 GitHub Board 发布、可恢复 Work Item mutation，以及受保护产品 Projection | `sakiControlPlane` |
 | [`host-api/`](host-api/README.zh.md) | 双侧 `/saki` Host 与浏览器传输适配器 | 浏览器侧提供 `sakiHostClient` |
 | [`installation-maintenance/`](installation-maintenance/README.zh.md) | Installation 范围 lease、manifest 所选状态 generation、已验证 Recovery Backup 与离线前向升级 | — |

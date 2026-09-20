@@ -1,3 +1,4 @@
+import type { ModelAccountIntent, ModelAccountIntentResult, ModelSupplyProjection } from './model-supply-spec.ts'
 /** Public Saki control-plane value types. @module @breakfastdapaidang/saki-control-plane/types */
 
 import type { Branded } from '@deepseek-ai/dsh-brand'
@@ -1113,6 +1114,12 @@ export interface SakiProjectSettingsProjection {
 
 /** Control-plane Projection query map. */
 export interface SakiQueryMap {
+  readonly 'model-supply': {
+    readonly request: { readonly type: 'model-supply' }
+    readonly projection: ModelSupplyProjection
+    readonly failure: 'denied' | 'unavailable'
+  }
+
   /** Complete current Status mapping choices at an exact saved configuration revision. */
   readonly 'project-mapping': {
     readonly request: { readonly type: 'project-mapping'; readonly projectId: SakiDevelopmentProjectId }
@@ -1357,6 +1364,13 @@ type SakiWorkItemIntent = CreateWorkItemIntent | MoveWorkItemIntent
 
 /** Control-plane Intent request map. */
 export interface SakiIntentMap {
+  readonly 'authorize-model-account': Extract<ModelAccountIntent, { readonly type: 'authorize-model-account' }>
+  readonly 'set-model-account-active': Extract<ModelAccountIntent, { readonly type: 'set-model-account-active' }>
+  readonly 'rename-model-account': Extract<ModelAccountIntent, { readonly type: 'rename-model-account' }>
+  readonly 'refresh-model-account': Extract<ModelAccountIntent, { readonly type: 'refresh-model-account' }>
+  readonly 'disconnect-model-account': Extract<ModelAccountIntent, { readonly type: 'disconnect-model-account' }>
+  readonly 'cancel-model-authorization': Extract<ModelAccountIntent, { readonly type: 'cancel-model-authorization' }>
+
   readonly 'register-development-project': RegisterDevelopmentProjectIntent
   readonly 'configure-github-synchronization': ConfigureGitHubSynchronizationIntent
   readonly 'stage-files': StageFilesIntent
@@ -1789,6 +1803,13 @@ export type SakiAnswerInterventionIntentReceipt =
 
 /** Intent-correlated receipt result map. */
 export interface SakiIntentReceiptMap {
+  readonly 'authorize-model-account': ModelAccountIntentResult
+  readonly 'set-model-account-active': ModelAccountIntentResult
+  readonly 'rename-model-account': ModelAccountIntentResult
+  readonly 'refresh-model-account': ModelAccountIntentResult
+  readonly 'disconnect-model-account': ModelAccountIntentResult
+  readonly 'cancel-model-authorization': ModelAccountIntentResult
+
   readonly 'register-development-project':
     | { readonly ok: true; readonly receipt: Extract<SakiRegistrationReceipt, { readonly state: 'confirmed' }> }
     | { readonly ok: false; readonly reason: 'denied'; readonly receipt?: never }
@@ -1853,6 +1874,7 @@ export type SakiIntentReceipt<K extends keyof SakiIntentReceiptMap = keyof SakiI
 
 /** Projection key invalidated after a committed access or authority change. */
 export type SakiProjectionKey =
+  | 'model-supply'
   | 'access'
   | 'my-work'
   | 'attention'

@@ -20,6 +20,7 @@ import {
 import { v4Source } from './migration-v4-source.ts'
 import { sakiAgentProfileIdSchema, sakiStorageGenerationIdSchema } from './ids.ts'
 import { sakiControlPlaneDomainSpec } from './domain-spec.ts'
+import { sakiControlPlaneV10DomainSpec } from './migration-v10-source.ts'
 import { sakiControlPlaneV9DomainSpec } from './migration-v9-source.ts'
 import { migrateSakiV9ToV10 } from './migration-v10.ts'
 import {
@@ -41,6 +42,7 @@ import {
   githubWorkItemIntentRecordSchema,
   githubWorkItemRecoveryRecordSchema,
   HOST_OPERATOR_ACTIONS,
+  V10_HOST_OPERATOR_ACTIONS,
   historicalGrantRecordSchema,
   historicalRegistrationActorSchema,
   historicalControlStateRecordSchema,
@@ -955,7 +957,7 @@ function migrateGrantsToV9(snapshot: DomainMigrationSnapshot): Record<string, Gr
     sourceTable<z.infer<typeof v8GrantRecordSchema>>(snapshot, 'grants'),
   ).map(([key, value]) => {
     if (key !== control?.hostOperatorGrantId) return [key, value]
-    return [key, { ...value, revision: value.revision + 1, actions: [...HOST_OPERATOR_ACTIONS] }]
+    return [key, { ...value, revision: value.revision + 1, actions: [...V10_HOST_OPERATOR_ACTIONS] }]
   }))
 }
 
@@ -1253,8 +1255,25 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
     },
     {
       from: sakiControlPlaneV9DomainSpec,
-      to: sakiControlPlaneDomainSpec,
+      to: sakiControlPlaneV10DomainSpec,
       migrate: migrateSakiV9ToV10,
+    },
+    {
+      from: sakiControlPlaneV10DomainSpec,
+      to: sakiControlPlaneDomainSpec,
+      migrate: snapshot => ({
+        global: snapshot.global,
+        tables: {
+          ...snapshot.tables,
+          grants: Object.fromEntries(Object.entries(sourceTable<GrantRecord>(snapshot, 'grants')).map(([key, grant]) => {
+            const control = sourceTable<ControlStateRecord>(snapshot, 'control_state')[CONTROL_STATE_KEY]
+            return [key, key === control?.hostOperatorGrantId
+              ? { ...grant, revision: grant.revision + 1, actions: [...HOST_OPERATOR_ACTIONS] } : grant]
+          })),
+          model_accounts: {},
+          model_account_intents: {},
+        },
+      }),
     },
   ],
 })

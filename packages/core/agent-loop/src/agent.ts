@@ -377,7 +377,7 @@ export class ReactLoopAgent implements Agent {
         }
       }
       firstAttempt = false
-      const request = this.buildRequest(config, preparedCall, assembly.tools, startsRequestSeries, signal)
+      const request = this.buildRequest(turn, config, preparedCall, assembly.tools, startsRequestSeries, signal)
       const live = new AssistantStreamAttempt(
         this.session.id,
         ++this.assistantAttemptCounter,
@@ -552,6 +552,7 @@ export class ReactLoopAgent implements Agent {
 
   /** Log the resolved envelope and derive a frozen request from the admitted surface. */
   private buildRequest(
+    turn: number,
     config: LlmCallConfig,
     preparedCall: PreparedLlmCall | undefined,
     tools: GenerateOptions['tools'] & object,
@@ -613,6 +614,7 @@ export class ReactLoopAgent implements Agent {
       messages: boundaryMessages,
       ...header.tools !== undefined ? { tools: header.tools } : {},
       sessionId: this.session.id,
+      turn,
       signal,
     }))
     return request

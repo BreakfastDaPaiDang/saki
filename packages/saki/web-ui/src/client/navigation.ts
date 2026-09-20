@@ -11,8 +11,8 @@ import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-sto
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { SakiWireProjectId } from '@breakfastdapaidang/saki-host-api/wire'
 
-/** The two Saki top-level surfaces; null means the shell's Conversation fallback. */
-export type SakiSurface = 'work' | 'project'
+/** The Saki top-level surfaces; null means the shell's Conversation fallback. */
+export type SakiSurface = 'work' | 'project' | 'accounts'
 
 /** Navigation snapshot: the elected surface plus the Project the 「项目」 page addresses. */
 export interface SakiNavigationState {
@@ -25,6 +25,7 @@ export interface SakiNavigationState {
 }
 
 type SakiNavigationActions = {
+  showAccounts: (d: SakiNavigationState) => void
   showWork: (d: SakiNavigationState) => void
   showProject: (d: SakiNavigationState) => void
   selectProject: (d: SakiNavigationState, projectId: SakiWireProjectId) => void
@@ -41,6 +42,7 @@ export function createSakiNavigationStore(): EngineStoreHandle<SakiNavigationSta
     init: (): SakiNavigationState => ({ surface: null, projectId: null, lastProjectId: null }),
     persist: 'saki.navigation',
     actions: {
+      showAccounts: (d) => { d.surface = 'accounts' },
       showWork: (d) => { d.surface = 'work' },
       showProject: (d) => {
         d.surface = 'project'

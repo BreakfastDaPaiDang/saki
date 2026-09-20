@@ -119,7 +119,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/host-api/src/index.ts:73`](../packages/saki/host-api/src/index.ts)
+Source: [`packages/saki/host-api/src/index.ts:74`](../packages/saki/host-api/src/index.ts)
 
 <a id="breakfastdapaidangsaki-tool-intervention"></a>
 
@@ -3731,6 +3731,8 @@ Source: [`packages/workflow/workflow-ptc/src/index.ts:32`](../packages/workflow/
 These load from a `cordis.yml` entry with no `config:` block; they declare no configuration API.
 
 - `@breakfastdapaidang/saki-bundle` ([`packages/saki/bundle/src/index.ts`](../packages/saki/bundle/src/index.ts))
+- `@breakfastdapaidang/saki-model-account` — requires `llm` ([`packages/saki/model-account/src/index.ts`](../packages/saki/model-account/src/index.ts))
+- `@breakfastdapaidang/saki-model-account-codex` — requires `sakiModelAccounts` · `credentials` · `authorization` · `sessions` ([`packages/saki/model-account-codex/src/index.ts`](../packages/saki/model-account-codex/src/index.ts))
 - `@breakfastdapaidang/saki-web-ui` ([`packages/saki/web-ui/src/index.ts`](../packages/saki/web-ui/src/index.ts))
 - `@deepseek-ai/dsh-acp-app` — requires `cmdlineArgs` ([`packages/bundle/acp-app/src/index.ts`](../packages/bundle/acp-app/src/index.ts))
 - `@deepseek-ai/dsh-agent` ([`packages/core/agent/src/index.ts`](../packages/core/agent/src/index.ts))

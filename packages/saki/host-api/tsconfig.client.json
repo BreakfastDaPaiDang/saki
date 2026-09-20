@@ -6,6 +6,7 @@
     "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo"
   },
   "files": [
+    "src/model-supply-wire.ts",
     "src/client/index.ts",
     "src/wire.ts"
   ],

@@ -47,6 +47,9 @@
     }
   },
   "dependencies": {
+    "@breakfastdapaidang/saki-model-account": "workspace:^",
+    "@breakfastdapaidang/saki-model-account-codex": "workspace:^",
+    "@deepseek-ai/dsh-authorization": "workspace:^",
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
     "@breakfastdapaidang/saki-execution-local": "workspace:^",
     "@breakfastdapaidang/saki-github": "workspace:^",

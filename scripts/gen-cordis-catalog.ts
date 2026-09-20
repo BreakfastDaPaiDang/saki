@@ -95,6 +95,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   sandboxPolicy: 'sandbox.md',
   sakiControlPlane: 'saki.md',
   sakiGitHub: 'saki.md',
+  sakiModelAccounts: 'saki.md',
   sakiHostExecution: 'saki.md',
   sakiInstallationState: 'saki.md',
   ssh: 'ssh.md',
@@ -259,6 +260,8 @@ export const EVENT_WALK_EXEMPTIONS: Record<string, string> = {
  * appear on more than one page.
  */
 export const LINK_MAP: Readonly<Record<string, string>> = {
+  ModelAccountProvider: 'saki.md',
+  ModelAccountBinding: 'saki.md',
   BrowserUseProviderName: 'browser-use.md',
   ComputerUseProviderName: 'computer-use.md',
   Agent: 'core.md',

@@ -5,6 +5,8 @@ import { validateAgentOperationsDurableState } from './agent-operations.ts'
 import { validateBranchDeliveryOperationsDurableState } from './branch-delivery.ts'
 import { recoverBootstrapCompletion } from './bootstrap-completion.ts'
 import { sakiControlPlaneDomainSpec } from './domain-spec.ts'
+import type { sakiControlPlaneV10DomainSpec } from './migration-v10-source.ts'
+import { validateModelSupplyRecords } from './model-supply-validation.ts'
 import { validateGitHubSynchronizationDurableState } from './github-sync.ts'
 import { validateGitOperationsDurableState } from './git-operations.ts'
 import { validateMilestoneDeliveryOperationsDurableState } from './milestone-delivery.ts'
@@ -134,6 +136,24 @@ export function validateCurrentSakiState(
   expectedCreatedByBuildId: SakiBuildId,
 ): void {
   validateStorageGenerationSeal(storageGeneration, expectedInstallationId, expectedStorageGenerationId, expectedCreatedByBuildId)
+  const foundation = validateFoundationAndAccess(foundationRecords(
+    controlPlane.table('control_state'), controlPlane.table('installations'), controlPlane.table('hosts'),
+    controlPlane.table('principals'), controlPlane.table('grants'), controlPlane.table('installation_access'),
+  ), expectedInstallationId)
+  const accounts = validateModelSupplyRecords(controlPlane.table('model_accounts'), controlPlane.table('model_account_intents'),
+    (actor) => { validateRegistrationActorReference(actor, foundation) })
+  validateProjects(controlPlane, foundation, accounts)
+}
+
+/**
+ * Validate exact v10 Foundation, access, project and execution-admission relationships before migration.
+ * @param controlPlane - structurally validated v10 domain with its original table set.
+ * @param expectedInstallationId - Installation identity selected by maintenance.
+ */
+export function validateSakiV10SourceState(
+  controlPlane: Domain<typeof sakiControlPlaneV10DomainSpec>,
+  expectedInstallationId: SakiInstallationId,
+): void {
   const foundation = validateFoundationAndAccess(foundationRecords(
     controlPlane.table('control_state'), controlPlane.table('installations'), controlPlane.table('hosts'),
     controlPlane.table('principals'), controlPlane.table('grants'), controlPlane.table('installation_access'),
@@ -691,7 +711,13 @@ function validateBootstrapCompletion<
   }
 }
 
-function validateProjects(domain: ControlPlaneDomain, foundation: FoundationSnapshot): void {
+function validateProjects(
+  domain: Pick<Domain<Omit<typeof sakiControlPlaneV10DomainSpec, 'tables'> & {
+    tables: Omit<typeof sakiControlPlaneV10DomainSpec.tables, 'grants'>
+  }>, 'table'>,
+  foundation: FoundationSnapshot,
+  accountIntents: readonly { readonly id: SakiControlIntentId }[] = [],
+): void {
   const projects = validateDevelopmentProjectsDurableState(
     domain.table('development_project_registry'),
     domain.table('registration_intents'),
@@ -712,6 +738,7 @@ function validateProjects(domain: ControlPlaneDomain, foundation: FoundationSnap
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
   const workItemOtherIntentIds = new Set([
+    ...accountIntents.map(intent => intent.id),
     ...projects.intents.map(intent => intent.id),
     ...github.intents.map(intent => intent.id),
   ])
@@ -777,6 +804,7 @@ function validateProjects(domain: ControlPlaneDomain, foundation: FoundationSnap
     (actor) => { validateRegistrationActorReference(actor, foundation) },
   )
   validateDisjointControlIntentIds(
+    accountIntents,
     projects.intents,
     github.intents,
     workItems.intents,

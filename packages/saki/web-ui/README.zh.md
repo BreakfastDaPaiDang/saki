@@ -25,11 +25,11 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-在同时携带壳层花名册与 `/saki` Host API 的组合中挂载本插件后，两个侧边栏入口即可打开 Saki 页面。
+在同时携带壳层花名册与 `/saki` Host API 的组合中挂载本插件后，三个侧边栏入口即可打开 Saki 页面。
 
-- `sidebar.primary.action`：`saki-work` 与 `saki-project` 两个条目渲染 New Session 下方的主要入口，并通过 owner 的 `wide` 标志适配收起形态。
-- `main`：两个根作用域 keyed 条目（`saki:work` / `saki:project`）渲染 Saki 页面。保留的 `conversation` 条目隐藏时仍保持挂载，保留未完成的草稿与查看状态。
-- 导航 store 在两个主面板条目均注册后通过 `ctx.layout.selectPanel` 发布选择。Saki 侧边栏入口每次点击都会选择自己的面板；其活动状态跟随 `usePanelInfo`。持久化的 `saki.navigation` 值在刷新后恢复 Saki 页面。
+- `sidebar.primary.action`：`saki-work`、`saki-project` 与 `saki-accounts` 三个条目渲染 New Session 下方的主要入口，并通过 owner 的 `wide` 标志适配收起形态。
+- `main`：三个根作用域 keyed 条目（`saki:work` / `saki:project` / `saki:accounts`）渲染 Saki 页面。保留的 `conversation` 条目隐藏时仍保持挂载，保留未完成的草稿与查看状态。
+- 导航 store 在所有主面板条目均注册后通过 `ctx.layout.selectPanel` 发布选择。Saki 侧边栏入口每次点击都会选择自己的面板；其活动状态跟随 `usePanelInfo`。持久化的 `saki.navigation` 值在刷新后恢复 Saki 页面。
 - Workspace 导航 face 报告的用户驱动会话导航（`uiWorkspace.onSessionNavigation`：侧边栏 Session 行、New Session 或 fork 打开）会清除 surface，把中央列交还 Conversation；没有手势支撑的选举——壳层启动时的 Workspace 自动连接与持久化选中恢复——不会挤下已选中的页面，因此恢复出的「项目」页在登记流程中也保持不动。
 
 目录变更会使未完成的检查失效。登记 Intent 完成前路径不可编辑；发生冲突后，必须刷新登记表修订号与检查证据才能再次确认。
@@ -75,6 +75,10 @@ Status 映射无效时，看板写入不可用。授权用户可在状态映射�
 每次确认固定一个请求。响应丢失、pending 回执与 reconciliation 状态会跨页面重载和工作项导航保留该请求；“恢复原请求”重放原始 id、修订与文本。每个 Project 同时只允许一个尚未确认的交付请求，变更页的待定操作也会阻止新的交付操作。成功的验收回执不会替代单独读取的工作项状态。
 
 <a id="model-experience"></a>
+## 管理模型账户
+
+账户页发起浏览器或设备码授权，并显示 Host 拥有的进度。页面支持显式刷新、启用、停用、重命名和断开连接。未知额度与实测零值保持区别；上次确认额度保留观测时间。未确认操作按 Principal 持久化，重试使用同一 Intent id。
+
 ## 模型体验
 
 通过已确认的 Give-to-Agent 与 Intervention-answer Intent 间接影响模型；相应持久 Session 输入、模型路由与执行由 Agent runtime 拥有。

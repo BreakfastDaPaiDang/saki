@@ -165,6 +165,10 @@ Host 提供方在序列化或写入进程自有缓存前使用 Node-only 的 `@d
 
 -----
 
+## 受保护持久记录
+
+`readRecordProtected` 与 `modifyRecordProtected` 在暴露或修改授权信息前要求精确的保护等级。不支持该能力的提供者拒绝这些方法；仅检查元数据不能授权受保护读取。
+
 <a id="model-experience"></a>
 ## 模型体验
 

@@ -773,6 +773,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the record, or `undefined` while none is stored.',
       },
       {
+        signature: 'readRecordProtected(_key: CredentialKey, _required: CredentialProtectionLevel): Promise<CredentialRecord | undefined>',
+        description: 'Read a record only when this provider guarantees the requested protection on that read. Providers without a protected record implementation refuse before returning material.',
+        parameters: [{ name: '_key', description: 'record owned by the requesting integration.' }, { name: '_required', description: 'exact protection level required by the account.' }],
+        returns: 'the protected record, or undefined when absent.',
+      },
+      {
         signature: 'abstract describeRecord(key: CredentialKey): Promise<CredentialRecordInfo>',
         description: 'Describe one record for configuration surfaces without exposing its value.',
         parameters: [{ name: 'key', description: 'the record to describe.' }],
@@ -789,6 +795,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Serialized read-modify-write over one record — the only write path. `mutate` sees the record as it stands at the moment the write is exclusive, and returning `undefined` leaves the entry untouched. Exclusion holds across processes where the backing store supports it, which is what makes a token refresh safe: two processes rotating one refresh token concurrently would otherwise lose whichever wrote first.',
         parameters: [{ name: 'key', description: 'the record to modify.' }, { name: 'mutate', description: 'receives the current record and returns its replacement, or `undefined` to leave it.' }],
         returns: 'the record after the write, or the current one when `mutate` declined.',
+      },
+      {
+        signature: 'modifyRecordProtected( _key: CredentialKey, _required: CredentialProtectionLevel, _mutate: (current: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>, ): Promise<CredentialRecord | undefined>',
+        description: 'Serialize a record mutation while guaranteeing protection of both the read and committed replacement.',
+        parameters: [{ name: '_key', description: 'owned credential record address.' }, { name: '_required', description: 'exact protection required throughout the transaction.' }, { name: '_mutate', description: 'receives the current record and returns a replacement, or undefined to leave it unchanged.' }],
+        returns: 'committed record; unsupported providers reject without invoking the mutation.',
       },
       {
         signature: 'abstract deleteRecord(key: CredentialKey): Promise<void>',
@@ -1616,7 +1628,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'abstract readonly stateVersion: 10',
+        signature: 'abstract readonly stateVersion: 11',
         description: 'State-format version selected by the Installation manifest.',
         parameters: [],
       },
@@ -1629,6 +1641,43 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'abstract activateAfterValidation(signal: AbortSignal): Promise<void>',
         description: 'Promote an already-published provisioning manifest to ready after product validation. A generation selected by a ready manifest treats this as an idempotent validation point.',
         parameters: [{ name: 'signal', description: 'control-plane startup lifetime.' }],
+      },
+    ],
+  },
+  {
+    key: 'sakiModelAccounts',
+    summary: 'The provider registry owns reversible route registrations, never product selection.',
+    description: 'The provider registry owns reversible route registrations, never product selection.',
+    methods: [
+      {
+        signature: 'register(provider: ModelAccountProvider): () => Promise<void>',
+        description: 'Register a provider for this plugin lifetime.',
+        parameters: [{ name: 'provider', description: 'complete account implementation.' }],
+        returns: 'disposer that withdraws the implementation.',
+      },
+      {
+        signature: 'list(): readonly ModelAccountProvider[]',
+        description: 'List available account implementations.',
+        parameters: [],
+        returns: 'the currently registered implementations in registration order.',
+      },
+      {
+        signature: 'get(id: import(\'./types.ts\').ModelAccountProviderId): ModelAccountProvider | undefined',
+        description: 'Resolve an implementation without falling back to another provider.',
+        parameters: [{ name: 'id', description: 'exact registered provider identity.' }],
+        returns: 'provider or undefined while its plugin is absent.',
+      },
+      {
+        signature: 'isActive(routeId: import(\'./types.ts\').ModelAccountRouteId): boolean',
+        description: 'Observe whether an owned route still belongs to a live Provider registration.',
+        parameters: [{ name: 'routeId', description: 'immutable account route identity.' }],
+        returns: 'true until the route or its Provider is disposed.',
+      },
+      {
+        signature: 'async activate(binding: ModelAccountBinding, signal: AbortSignal): Promise<() => Promise<void>>',
+        description: 'Activate one immutable account route after verifying its current credential ownership.',
+        parameters: [{ name: 'binding', description: 'exact account and configuration revision.' }, { name: 'signal', description: 'activation cancellation.' }],
+        returns: 'disposer withdrawing this route from new requests.',
       },
     ],
   },
@@ -4481,7 +4530,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CredentialRecordInfo',
-    declaration: 'export interface CredentialRecordInfo {\n    configured: boolean;\n    kind?: CredentialRecord[\'kind\'];\n    writable: boolean;\n}',
+    declaration: 'export interface CredentialRecordInfo {\n    configured: boolean;\n    kind?: CredentialRecord[\'kind\'];\n    writable: boolean;\n    protectionLevel?: CredentialProtectionLevel;\n}',
   },
   {
     name: 'CredentialRef',
@@ -4696,10 +4745,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface FileUploadValue {\n    readonly receiptId: FileUploadReceiptId;\n    readonly file: FileAttachmentRef;\n}',
   },
   {
-    name: 'FinalizeMilestoneDeliveryIntent',
-    declaration: 'export interface FinalizeMilestoneDeliveryIntent {\n    readonly type: \'finalize-milestone-delivery\';\n    readonly intentId: SakiControlIntentId;\n    readonly deliveryId: SakiMilestoneDeliveryId;\n    readonly expectedDeliveryRevision: number;\n    readonly release: ReleaseEvidencePolicyV1Expectation;\n}',
-  },
-  {
     name: 'FinishReason',
     declaration: 'export type FinishReason = FinishReasonMap[keyof FinishReasonMap];',
   },
@@ -4753,7 +4798,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GenerateOptions',
-    declaration: 'export interface GenerateOptions {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: Message[];\n    system?: string;\n    tools?: ToolSchema[];\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    purpose?: \'compaction\' | \'session-title\';\n}',
+    declaration: 'export interface GenerateOptions {\n    provider: string;\n    model: string;\n    reasoningEffort?: ReasoningEffortId;\n    messages: Message[];\n    system?: string;\n    tools?: ToolSchema[];\n    temperature?: number;\n    maxTokens?: number;\n    stop?: string[];\n    signal?: AbortSignal;\n    sessionId?: Branded<\'SessionId\'>;\n    turn?: number;\n    purpose?: \'compaction\' | \'session-title\';\n}',
   },
   {
     name: 'GenericCallView',
@@ -4870,10 +4915,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitHubIssueStateSetRequest',
     declaration: 'export interface GitHubIssueStateSetRequest {\n    readonly kind: \'issue-state-set\';\n    readonly operationId: GitHubExternalOperationId;\n    readonly installation: GitHubInstallationProfile;\n    readonly repositoryId: GitHubRepositoryId;\n    readonly repositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly issueId: GitHubIssueId;\n    readonly desiredState: \'open\' | \'closed\';\n}',
-  },
-  {
-    name: 'GitHubMilestoneId',
-    declaration: 'export type GitHubMilestoneId = Branded<\'GitHubMilestoneId\'>;',
   },
   {
     name: 'GitHubMutationMap',
@@ -5692,12 +5733,68 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface MessageSourceMap {\n    user: {\n        kind: \'user\';\n    };\n    plugin: {\n        kind: \'plugin\';\n        plugin: string;\n    } & ContextFormed;\n    model: ModelMessageSource;\n    tool: ToolMessageSource;\n}',
   },
   {
-    name: 'MilestoneDeliveryIntent',
-    declaration: 'export type MilestoneDeliveryIntent = SaveMilestoneDeliveryIntent | FinalizeMilestoneDeliveryIntent;',
+    name: 'ModelAccountAuthorizationMethod',
+    declaration: 'export interface ModelAccountAuthorizationMethod {\n    readonly id: string;\n    readonly kind: \'browser\' | \'device-code\';\n}',
   },
   {
-    name: 'MilestoneDeliveryPhase',
-    declaration: 'export type MilestoneDeliveryPhase = \'planned\' | \'in-progress\' | \'ready-to-release\' | \'canceled\';',
+    name: 'ModelAccountAuthorizationProgress',
+    declaration: 'export type ModelAccountAuthorizationProgress = {\n    readonly kind: \'waiting\';\n} | {\n    readonly kind: \'browser\';\n    readonly verificationUri: string;\n} | {\n    readonly kind: \'device-code\';\n    readonly verificationUri: string;\n    readonly userCode: string;\n    readonly expiresAt: number;\n    readonly nextPollAt: number;\n};',
+  },
+  {
+    name: 'ModelAccountBinding',
+    declaration: 'export interface ModelAccountBinding {\n    readonly profileId: ModelAccountProfileId;\n    readonly providerId: ModelAccountProviderId;\n    readonly routeId: ModelAccountRouteId;\n    readonly revision: number;\n    readonly credentialKey: CredentialKey;\n    readonly requiredProtection: CredentialProtectionLevel;\n    readonly accountIdentity: ModelAccountIdentity | null;\n    readonly configuration: Readonly<Record<string, unknown>>;\n}',
+  },
+  {
+    name: 'ModelAccountIdentity',
+    declaration: 'export type ModelAccountIdentity = Branded<\'ModelAccountIdentity\'>;',
+  },
+  {
+    name: 'ModelAccountImplementation',
+    declaration: 'export interface ModelAccountImplementation {\n    readonly name: string;\n    readonly version: string;\n}',
+  },
+  {
+    name: 'ModelAccountIntent',
+    declaration: 'export type ModelAccountIntent = z.infer<typeof modelAccountIntentSchema>;',
+  },
+  {
+    name: 'ModelAccountIntentRecord',
+    declaration: 'export type ModelAccountIntentRecord = z.infer<typeof modelAccountIntentRecordSchema>;',
+  },
+  {
+    name: 'ModelAccountIntentResult',
+    declaration: 'export type ModelAccountIntentResult = {\n    readonly ok: true;\n    readonly receipt: {\n        readonly intentId: ModelAccountIntentRecord[\'id\'];\n        readonly state: ModelAccountIntentRecord[\'state\'];\n        readonly profileId: ModelAccountProfileId | null;\n    };\n} | {\n    readonly ok: false;\n    readonly reason: \'denied\' | \'conflict\' | \'unavailable\';\n};',
+  },
+  {
+    name: 'ModelAccountProfileId',
+    declaration: 'export type ModelAccountProfileId = Branded<\'ModelAccountProfileId\'>;',
+  },
+  {
+    name: 'ModelAccountProvider',
+    declaration: 'export interface ModelAccountProvider {\n    readonly id: ModelAccountProviderId;\n    readonly implementation: ModelAccountImplementation;\n    readonly methods: readonly ModelAccountAuthorizationMethod[];\n    resolveConfiguration(configuration: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;\n    authorize(binding: ModelAccountBinding, method: string, progress: (progress: ModelAccountAuthorizationProgress) => void, signal: AbortSignal): Promise<void>;\n    inspect(binding: ModelAccountBinding, signal: AbortSignal): Promise<ModelAccountSnapshot>;\n    createAdapter(binding: ModelAccountBinding): {\n        readonly adapter: LlmAdapter;\n        readonly dispose: () => void;\n    };\n}',
+  },
+  {
+    name: 'ModelAccountProviderId',
+    declaration: 'export type ModelAccountProviderId = Branded<\'ModelAccountProviderId\'>;',
+  },
+  {
+    name: 'ModelAccountRecord',
+    declaration: 'export type ModelAccountRecord = z.infer<typeof modelAccountRecordSchema>;',
+  },
+  {
+    name: 'ModelAccountRouteId',
+    declaration: 'export type ModelAccountRouteId = Branded<\'ModelAccountRouteId\'>;',
+  },
+  {
+    name: 'ModelAccountSnapshot',
+    declaration: 'export interface ModelAccountSnapshot {\n    readonly authentication: \'authorized\' | \'missing\' | \'reauthorization-required\';\n    readonly health: \'available\' | \'unavailable\' | \'unknown\';\n    readonly entitlement: \'unknown\' | \'denied\';\n    readonly identity: ModelAccountIdentity | null;\n    readonly protectionLevel: CredentialProtectionLevel | null;\n    readonly observedAt: number;\n    readonly usage: ModelAccountUsage;\n    readonly models: readonly Pick<LlmResolvedModelInfo, \'provider\' | \'id\' | \'name\' | \'description\' | \'inputModalities\' | \'context\' | \'reasoning\' | \'defaultMaxTokens\'>[];\n}',
+  },
+  {
+    name: 'ModelAccountUsage',
+    declaration: 'export type ModelAccountUsage = {\n    readonly state: \'available\';\n    readonly observedAt: number;\n    readonly source: string;\n    readonly windows: readonly ModelAccountUsageWindow[];\n} | {\n    readonly state: \'temporarily-unavailable\' | \'unsupported\';\n    readonly observedAt: number;\n    readonly source: string;\n};',
+  },
+  {
+    name: 'ModelAccountUsageWindow',
+    declaration: 'export interface ModelAccountUsageWindow {\n    readonly id: string;\n    readonly unit: \'percent\' | \'tokens\' | \'requests\' | \'currency\';\n    readonly remaining: number;\n    readonly limit: number | null;\n    readonly resetsAt: number | null;\n    readonly blocksRequests: boolean;\n}',
   },
   {
     name: 'ModelCatalog',
@@ -5734,6 +5831,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ModelReasoningEffort',
     declaration: 'export interface ModelReasoningEffort {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n}',
+  },
+  {
+    name: 'ModelSupplyProjection',
+    declaration: 'export interface ModelSupplyProjection {\n    readonly type: \'model-supply\';\n    readonly providers: readonly {\n        readonly id: ModelAccountProviderId;\n        readonly implementation: {\n            readonly name: string;\n            readonly version: string;\n        };\n        readonly methods: readonly {\n            readonly id: string;\n            readonly kind: \'browser\' | \'device-code\';\n        }[];\n    }[];\n    readonly profiles: readonly {\n        readonly id: ModelAccountProfileId;\n        readonly name: string;\n        readonly revision: number;\n        readonly providerId: ModelAccountProviderId;\n        readonly routeId: ModelAccountRouteId;\n        readonly configurationRevision: number;\n        readonly implementation: ModelAccountRecord[\'implementation\'];\n        readonly connected: boolean;\n        readonly desiredActive: boolean;\n        readonly effectiveActive: boolean;\n        readonly snapshot: ModelAccountRecord[\'snapshot\'];\n        readonly lastConfirmedUsage: ModelAccountRecord[\'lastConfirmedUsage\'];\n    }[];\n    readonly authorizations: readonly {\n        readonly intentId: ModelAccountIntentRecord[\'id\'];\n        readonly profileId: ModelAccountProfileId | null;\n        readonly state: ModelAccountIntentRecord[\'state\'];\n        readonly progress: ModelAccountIntentRecord[\'progress\'];\n    }[];\n}',
   },
   {
     name: 'MoveWorkItemIntent',
@@ -6064,10 +6165,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface RegisterDevelopmentProjectIntent {\n    readonly type: \'register-development-project\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectTitle: string;\n    readonly hostId: SakiHostId;\n    readonly directoryLocator: string;\n    readonly expectedRegistryRevision: number;\n    readonly confirmedFingerprint: ProjectInspectionFingerprint;\n    readonly confirmedBaseline: InheritedChangeBaseline;\n}',
   },
   {
-    name: 'ReleaseEvidencePolicyV1Expectation',
-    declaration: 'export interface ReleaseEvidencePolicyV1Expectation {\n    readonly repositoryId: GitHubRepositoryId;\n    readonly projectId: GitHubProjectId;\n    readonly milestoneId: GitHubMilestoneId;\n    readonly milestoneNumber: number;\n    readonly tagName: GitHubReleaseTagName;\n    readonly releaseCommitId: GitHubCommitId;\n    readonly upstreamRepositoryId: GitHubRepositoryId;\n    readonly upstreamRepositoryDatabaseId: GitHubRepositoryDatabaseId;\n    readonly upstreamRepositoryNameWithOwner: string;\n    readonly upstreamCommitId: GitHubCommitId;\n}',
-  },
-  {
     name: 'RemoteError',
     declaration: 'export class RemoteError<Code extends RemoteErrorCode = RemoteErrorCode> extends Error {\n    readonly isDSHRemoteError: true;\n    constructor(readonly code: Code, message: string, readonly details: RemoteErrorDetailsMap[Code], options?: ErrorOptions);\n}',
   },
@@ -6280,24 +6377,8 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SakiDevelopmentProjectId = Branded<\'SakiDevelopmentProjectId\'>;',
   },
   {
-    name: 'SakiDevelopmentProjectSummary',
-    declaration: 'export interface SakiDevelopmentProjectSummary {\n    readonly id: SakiDevelopmentProjectId;\n    readonly revision: number;\n    readonly projectTitle: string;\n    readonly binding: {\n        readonly id: SakiResourceBindingId;\n        readonly revision: number;\n        readonly health: \'active\' | \'missing\' | \'repair-required\';\n        readonly hostId: SakiHostId;\n        readonly displayLocation: string;\n        readonly objectFormat: \'sha1\' | \'sha256\';\n        readonly head: ProjectGitHead;\n        readonly inheritedChangeEntryCount: number;\n        readonly baseline: \'complete\' | \'unavailable\';\n        readonly automaticMutationEligible: boolean;\n        readonly configurationGaps: readonly (\'baseline-unavailable\' | \'conversion-ambiguous\' | \'binding-missing\' | \'binding-repair-required\')[];\n    };\n}',
-  },
-  {
-    name: 'SakiDevelopmentWorkspaceQuery',
-    declaration: 'export interface SakiDevelopmentWorkspaceQuery {\n    readonly type: \'development-workspace\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedRegistryRevision: number;\n}',
-  },
-  {
     name: 'SakiExecutionDispatchId',
     declaration: 'export type SakiExecutionDispatchId = Branded<\'SakiExecutionDispatchId\'>;',
-  },
-  {
-    name: 'SakiGitHubSynchronizationReceipt',
-    declaration: 'export type SakiGitHubSynchronizationReceipt = (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'prepared\';\n}) | (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'saved\';\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly synchronizationRevision: number;\n    readonly candidateRevision: number;\n}) | (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'conflict\';\n    readonly reason: \'expected-revision\' | \'project-not-found\' | \'configuration-incomplete\' | \'configuration-unchanged\';\n}) | (SakiGitHubSynchronizationReceiptBase & {\n    readonly state: \'failure\';\n    readonly reason: \'authority\';\n});',
-  },
-  {
-    name: 'SakiHostChoiceProjection',
-    declaration: 'export interface SakiHostChoiceProjection {\n    readonly id: SakiHostId;\n    readonly revision: number;\n    readonly state: \'enrolled\';\n}',
   },
   {
     name: 'SakiHostId',
@@ -6317,7 +6398,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiIntentMap',
-    declaration: 'export interface SakiIntentMap {\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n    readonly \'create-work-item\': CreateWorkItemIntent;\n    readonly \'move-work-item\': MoveWorkItemIntent;\n    readonly \'save-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'save-branch-delivery\';\n    }>;\n    readonly \'push-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'push-branch-delivery\';\n    }>;\n    readonly \'create-branch-delivery-pull-request\': Extract<BranchDeliveryIntent, {\n        readonly type: \'create-branch-delivery-pull-request\';\n    }>;\n    readonly \'associate-branch-delivery-pull-request\': Extract<BranchDeliveryIntent, {\n        readonly type: \'associate-branch-delivery-pull-request\';\n    }>;\n    readonly \'mark-branch-delivery-in-review\': Extract<BranchDeliveryIntent, {\n        readonly type: \'mark-branch-delivery-in-review\';\n    }>;\n    readonly \'accept-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'accept-branch-delivery\';\n    }>;\n    readonly \'save-milestone-delivery\': Extract<MilestoneDeliveryIntent, {\n        readonly type: \'save-milestone-delivery\';\n    }>;\n    readonly \'finalize-milestone-delivery\': Extract<MilestoneDeliveryIntent, {\n    /* …truncated — full shape in source */',
+    declaration: 'export interface SakiIntentMap {\n    readonly \'authorize-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'authorize-model-account\';\n    }>;\n    readonly \'set-model-account-active\': Extract<ModelAccountIntent, {\n        readonly type: \'set-model-account-active\';\n    }>;\n    readonly \'rename-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'rename-model-account\';\n    }>;\n    readonly \'refresh-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'refresh-model-account\';\n    }>;\n    readonly \'disconnect-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'disconnect-model-account\';\n    }>;\n    readonly \'cancel-model-authorization\': Extract<ModelAccountIntent, {\n        readonly type: \'cancel-model-authorization\';\n    }>;\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n    readonly \'create-work-item\': CreateWorkItemIntent;\n    readonly \'move-work-item\': MoveWorkItemIntent;\n    readonly \'save-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'save-branch-delivery\';\n    }>;\n    readonly \'push-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'push-branch-delivery\';\n    }>;\n    readonly \'create-branch-deliv /* …truncated — full shape in source */',
   },
   {
     name: 'SakiIntentReceipt',
@@ -6325,7 +6406,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiIntentReceiptMap',
-    declaration: 'export interface SakiIntentReceiptMap {\n    readonly \'register-development-project\': {\n        readonly ok: true;\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'confirmed\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'denied\';\n        readonly receipt?: never;\n    } | {\n        readonly ok: false;\n        readonly reason: \'unavailable\';\n        readonly receipt?: Extract<SakiRegistrationReceipt, {\n            readonly state: \'prepared\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'conflict\';\n        readonly receipt?: Extract<SakiRegistrationReceipt, {\n            readonly state: \'conflict\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'failure\';\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'failure\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'reconciliation-required\';\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'reconciliation-required\';\n        }>;\n    };\n    readonly \'configure-github-synchronization\': {\n        readonly ok: true;\n        readonly receipt: Extract<SakiGitHubSynchronizationReceipt, {\n            readonly state: \'saved\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'denied\';\n        readonly receipt?: never;\n    } | {\n        readonly ok: false;\n        readonly reason: \'unava /* …truncated — full shape in source */',
+    declaration: 'export interface SakiIntentReceiptMap {\n    readonly \'authorize-model-account\': ModelAccountIntentResult;\n    readonly \'set-model-account-active\': ModelAccountIntentResult;\n    readonly \'rename-model-account\': ModelAccountIntentResult;\n    readonly \'refresh-model-account\': ModelAccountIntentResult;\n    readonly \'disconnect-model-account\': ModelAccountIntentResult;\n    readonly \'cancel-model-authorization\': ModelAccountIntentResult;\n    readonly \'register-development-project\': {\n        readonly ok: true;\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'confirmed\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'denied\';\n        readonly receipt?: never;\n    } | {\n        readonly ok: false;\n        readonly reason: \'unavailable\';\n        readonly receipt?: Extract<SakiRegistrationReceipt, {\n            readonly state: \'prepared\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'conflict\';\n        readonly receipt?: Extract<SakiRegistrationReceipt, {\n            readonly state: \'conflict\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'failure\';\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'failure\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'reconciliation-required\';\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'reconciliation-require /* …truncated — full shape in source */',
   },
   {
     name: 'SakiInterventionAnswerMessageSource',
@@ -6338,10 +6419,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SakiInterventionRequiredAnswer',
     declaration: 'export interface SakiInterventionRequiredAnswer {\n    readonly kind: \'text\';\n    readonly prompt: string;\n    readonly maxLength: number;\n}',
-  },
-  {
-    name: 'SakiMilestoneDeliveryId',
-    declaration: 'export type SakiMilestoneDeliveryId = Branded<\'SakiMilestoneDeliveryId\'>;',
   },
   {
     name: 'SakiMyWorkGroup',
@@ -6360,16 +6437,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SakiMyWorkQuery {\n    readonly type: \'my-work\';\n}',
   },
   {
-    name: 'SakiProjectIndexProjection',
-    declaration: 'export interface SakiProjectIndexProjection {\n    readonly type: \'project-index\';\n    readonly revision: number;\n    readonly hosts: readonly SakiHostChoiceProjection[];\n    readonly projects: readonly SakiDevelopmentProjectSummary[];\n}',
-  },
-  {
     name: 'SakiProjectIndexQuery',
     declaration: 'export interface SakiProjectIndexQuery {\n    readonly type: \'project-index\';\n}',
   },
   {
     name: 'SakiProjectionKey',
-    declaration: 'export type SakiProjectionKey = \'access\' | \'my-work\' | \'attention\' | \'project-index\' | \'development-workspace\' | \'project-changes\' | \'project-settings\' | \'board\' | \'branch-delivery\' | \'milestone-view\';',
+    declaration: 'export type SakiProjectionKey = \'model-supply\' | \'access\' | \'my-work\' | \'attention\' | \'project-index\' | \'development-workspace\' | \'project-changes\' | \'project-settings\' | \'board\' | \'branch-delivery\' | \'milestone-view\';',
   },
   {
     name: 'SakiProjectSelectionInspectionProjection',
@@ -6377,7 +6450,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiQueryMap',
-    declaration: 'export interface SakiQueryMap {\n    readonly \'project-mapping\': {\n        readonly request: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n        };\n        readonly projection: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n            readonly synchronizationRevision: number;\n            readonly canConfigure: boolean;\n            readonly choices: GitHubProjectFieldsFact;\n        };\n        readonly failure: \'denied\' | \'unavailable\' | \'not-found\';\n    };\n    readonly \'my-work\': {\n        readonly request: SakiMyWorkQuery;\n        readonly projection: SakiMyWorkProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly attention: {\n        readonly request: SakiAttentionQuery;\n        readonly projection: SakiAttentionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'inspect-project-selection\': {\n        readonly request: SakiInspectProjectSelectionQuery;\n        readonly projection: SakiProjectSelectionInspectionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly projection: SakiProjectIndexProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'development-workspace\': {\n        readonly request: SakiDevelopmentWorkspaceQuery;\n        readonly projection /* …truncated — full shape in source */',
+    declaration: 'export interface SakiQueryMap {\n    readonly \'model-supply\': {\n        readonly request: {\n            readonly type: \'model-supply\';\n        };\n        readonly projection: ModelSupplyProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-mapping\': {\n        readonly request: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n        };\n        readonly projection: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n            readonly synchronizationRevision: number;\n            readonly canConfigure: boolean;\n            readonly choices: GitHubProjectFieldsFact;\n        };\n        readonly failure: \'denied\' | \'unavailable\' | \'not-found\';\n    };\n    readonly \'my-work\': {\n        readonly request: SakiMyWorkQuery;\n        readonly projection: SakiMyWorkProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly attention: {\n        readonly request: SakiAttentionQuery;\n        readonly projection: SakiAttentionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'inspect-project-selection\': {\n        readonly request: SakiInspectProjectSelectionQuery;\n        readonly projection: SakiProjectSelectionInspectionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly /* …truncated — full shape in source */',
   },
   {
     name: 'SakiQueryResult',
@@ -6442,10 +6515,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SaveImageAttachment',
     declaration: 'export interface SaveImageAttachment {\n    data: Uint8Array;\n    mediaType: ImageMediaType;\n    name?: string;\n}',
-  },
-  {
-    name: 'SaveMilestoneDeliveryIntent',
-    declaration: 'export interface SaveMilestoneDeliveryIntent {\n    readonly type: \'save-milestone-delivery\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedDeliveryRevision: number | null;\n    readonly expectedRegistryRevision: number;\n    readonly expectedProjectRevision: number;\n    readonly phase: MilestoneDeliveryPhase;\n    readonly release: ReleaseEvidencePolicyV1Expectation;\n}',
   },
   {
     name: 'SaveTextSpill',

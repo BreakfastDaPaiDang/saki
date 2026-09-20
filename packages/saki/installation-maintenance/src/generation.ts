@@ -79,7 +79,7 @@ async function materializeHostExecutionAndSeal(
   facility: DomainFacility,
   identity: NewSakiGenerationIdentity,
   signal: AbortSignal,
-  retainedHostExecution?: { readonly version: 1 | 2 | 3 | 4; readonly snapshot: KvUnitSnapshot },
+  retainedHostExecution?: { readonly version: 1 | 2 | 3 | 4 | 5; readonly snapshot: KvUnitSnapshot },
 ): Promise<void> {
   const hostExecution = sakiStateCapability.writable.hostExecution
   if (retainedHostExecution === undefined) {
@@ -88,6 +88,8 @@ async function materializeHostExecutionAndSeal(
       emptySnapshot(hostExecution),
       { targetBackend: 'candidate', signal },
     )
+  } else if (retainedHostExecution.version === hostExecution.version) {
+    await facility.materialize(hostExecution, retainedHostExecution.snapshot, { targetBackend: 'candidate', signal })
   } else {
     await facility.migrate(sakiStateHostExecutionMigrationPlan, {
       sourceBackend: 'source',
@@ -149,7 +151,7 @@ export async function migrateSakiGeneration(
   targetDatabasePath: string,
   identity: NewSakiGenerationIdentity,
   signal: AbortSignal,
-  retainedHostExecution: { readonly version: 1 | 2 | 3 | 4; readonly snapshot: KvUnitSnapshot } | undefined,
+  retainedHostExecution: { readonly version: 1 | 2 | 3 | 4 | 5; readonly snapshot: KvUnitSnapshot } | undefined,
 ): Promise<void> {
   signal.throwIfAborted()
   const context = new Context()

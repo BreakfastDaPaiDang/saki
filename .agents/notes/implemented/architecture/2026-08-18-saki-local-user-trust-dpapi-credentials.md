@@ -28,7 +28,7 @@ Only privileged Host consumers receive `ResolvedCredential.value`. The Provider 
 
 ## Saki composition
 
-On Windows, `@breakfastdapaidang/saki-bundle` composes this Provider and the Product GitHub App. GitHub synchronization configuration persists only the private-key `CredentialRef`; every Product App read and scan calls `resolveRequired(ref, 'local-user-trust')` before authentication and keeps the resolved value within that operation. Missing or differently protected values produce a bounded `auth-unavailable` failure. No Provider Account Profile implementation, Codex or Kimi authorization-completion flow, or dispatch-admission consumer composes the Provider yet, and Host replacement does not open an Intervention Request or expose credential health in the product UI. Those remaining Saki 0.1.0 obligations retain the same operation-boundary and safe-observation requirements.
+On Windows, the Saki bundle composes this Provider with the Product GitHub App and [protected Model Accounts](2026-09-20-saki-protected-model-accounts.md). GitHub reads require protected references; Codex authorization and refresh require protected record transactions. Host replacement and organization sharing retain their separate recovery and isolation obligations.
 
 Organization sharing also remains outside this implementation. `local-user-trust` is not sufficient for Host-supplied accounts used by other organization members; that capability requires a Credential Broker under a distinct OS security identity or an external secret manager, an authenticated operation path, and adversarial verification that Agent execution cannot recover raw values.
 

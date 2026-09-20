@@ -731,6 +731,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'The Service Definition exposes provider-neutral detached reads and complete scans; the GitHub App Provider owns authentication, pagination, and response admission, while the control plane owns durable synchronization, Status mapping, and product Projections.',
   },
   {
+    key: 'sakiModelAccounts',
+    pkg: 'saki/model-account',
+    title: 'Saki Model Accounts',
+    mode: 'seam',
+    implementations: ['saki/model-account-codex'],
+    consumers: ['saki/control-plane'],
+    note: 'The account Provider owns authorization, protected refresh, observations, and account-specific transport; the control plane owns durable Profiles, Intents, and operator selection.',
+  },
+  {
     key: 'sakiHostExecution',
     pkg: 'saki/execution',
     title: 'Saki Host Execution',

@@ -246,6 +246,9 @@ flowchart LR
   pkg_saki_github["saki/github"]
   svc_sakiGitHub["ctx.sakiGitHub<br/>Saki GitHub facts"]
   pkg_saki_github_app["saki/github-app"]
+  pkg_saki_model_account["saki/model-account"]
+  svc_sakiModelAccounts["ctx.sakiModelAccounts<br/>Saki Model Accounts"]
+  pkg_saki_model_account_codex["saki/model-account-codex"]
   pkg_saki_execution["saki/execution"]
   svc_sakiHostExecution["ctx.sakiHostExecution<br/>Saki Host Execution"]
   pkg_saki_execution_local["saki/execution-local"]
@@ -329,6 +332,8 @@ flowchart LR
   pkg_saki_github --> svc_sakiGitHub
   pkg_saki_github_app --> svc_sakiGitHub
   pkg_saki_installation_maintenance --> svc_sakiInstallationState
+  pkg_saki_model_account --> svc_sakiModelAccounts
+  pkg_saki_model_account_codex --> svc_sakiModelAccounts
   pkg_sandbox --> svc_sandbox
   pkg_sandbox_local --> svc_sandbox
   pkg_sandbox_policy --> svc_sandboxPolicy
@@ -441,6 +446,7 @@ flowchart LR
   svc_sakiGitHub --> pkg_saki_control_plane
   svc_sakiHostExecution --> pkg_saki_control_plane
   svc_sakiInstallationState --> pkg_saki_control_plane
+  svc_sakiModelAccounts --> pkg_saki_control_plane
   svc_sandbox --> pkg_bash_sandbox
   svc_sandbox --> pkg_terminal_bash
   svc_sandboxPolicy --> pkg_bash_sandbox
@@ -609,6 +615,7 @@ flowchart LR
 | `ctx.sakiInstallationState` | `seam` | [`saki/control-plane`](../packages/saki/control-plane) | [`saki/installation-maintenance`](../packages/saki/installation-maintenance) | [`saki/control-plane`](../packages/saki/control-plane) | - | Installation maintenance 会在 Saki bundle 挂载控制面前选择并验证一个 manifest 选中的状态 generation；控制面消费该精确 identity，并且只有产品校验通过后才将全新配置提升为 `ready`。 |
 | `ctx.sakiControlPlane` | `core` | [`saki/control-plane`](../packages/saki/control-plane) | - | [`saki/host-api`](../packages/saki/host-api) | - | 拥有 Installation Access、当前本地权限、受保护的产品 Projection 与 Control Intent 准入；Host API 把其收窄接口适配到浏览器传输。 |
 | `ctx.sakiGitHub` | `seam` | [`saki/github`](../packages/saki/github) | [`saki/github-app`](../packages/saki/github-app) | [`saki/control-plane`](../packages/saki/control-plane) | - | Service Definition 暴露提供方无关的分离读取与完整扫描；GitHub App Provider 拥有认证、分页和响应准入，控制面则拥有持久同步、Status 映射与产品 Projection。 |
+| `ctx.sakiModelAccounts` | `seam` | [`saki/model-account`](../packages/saki/model-account) | [`saki/model-account-codex`](../packages/saki/model-account-codex) | [`saki/control-plane`](../packages/saki/control-plane) | - | 账户提供者拥有授权、受保护刷新、观测与账户专属传输；控制平面拥有持久档案、意图和操作员选择。 |
 | `ctx.sakiHostExecution` | `seam` | [`saki/execution`](../packages/saki/execution) | [`saki/execution-local`](../packages/saki/execution-local) | [`saki/control-plane`](../packages/saki/control-plane) | - | Local Host 解析不可信 Project 选择并返回分离的 Git 证据；控制面拥有授权、Project policy 与持久产品记录。 |
 | `ctx.dynamicCordisRunner` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | 拥有内存定义注册表、Host 半的 vm 沙箱和 request-run 往返流程；浏览器页面通过其 Remote 命名空间在线访问同一服务。 |
 | `ctx.cordisInspect` | `core` | [`cordis-host-runner`](../packages/extensions/cordis-host-runner) | - | [`tool-cordis`](../packages/extensions/tool-cordis) | - | 注册 Host inspect 提供方、镜像 Client 提供方 manifest，并通过动态 Cordis 传输路由 Client 查询。 |

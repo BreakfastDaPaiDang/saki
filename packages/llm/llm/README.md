@@ -134,6 +134,8 @@ Read these pages when the package-level contract is not enough. They move from t
 
 -----
 
+Loop-built `GenerateOptions` retain `sessionId` and the logged `turn/start` number in `turn`. Adapters may use them as model-hidden transport identity; auxiliary requests without a turn do not inherit conversation turn state.
+
 <a id="model-experience"></a>
 ## Model Experience
 

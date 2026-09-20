@@ -1,3 +1,4 @@
+import { sakiModelAccountResultSchema, sakiModelSupplyResultSchema, type SakiWireModelSupplyResult, type SakiWireModelAccountIntent, type SakiWireModelAccountResult } from '../model-supply-wire.ts'
 /** Browser client for the typed Saki Connection channel. @module @breakfastdapaidang/saki-host-api/client */
 
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -109,6 +110,21 @@ const REQUEST_TOKEN_HEADER = 'x-saki-request-token'
  * failures, and invalid outbound payloads reject the returned Promise.
  */
 export interface SakiHostClient {
+  /**
+   * Read account availability and authorization progress.
+   * @param signal - optional query cancellation.
+   * @returns credential-free Model Account inventory.
+   */
+  queryModelSupply(signal?: AbortSignal): Promise<SakiWireModelSupplyResult>
+  /**
+   * Submit or replay one immutable account operation.
+   * @param intent - account mutation with its stable Intent id.
+   * @param requestToken - current browser session request token.
+   * @param signal - admission cancellation; accepted login has its own lifetime.
+   * @returns durable account acknowledgement.
+   */
+  submitModelAccount(intent: SakiWireModelAccountIntent, requestToken: string, signal?: AbortSignal): Promise<SakiWireModelAccountResult>
+
   /**
    * Wait for a committed change or heartbeat before re-reading protected Projections.
    * @param cursor - last observed cursor; null synchronizes a fresh Client.
@@ -937,6 +953,18 @@ export class SakiHostClientService extends Service implements SakiHostClient {
       signal,
       { [REQUEST_TOKEN_HEADER]: requestToken },
     ))
+  }
+
+  /** @inheritdoc */
+  async queryModelSupply(signal?: AbortSignal): Promise<SakiWireModelSupplyResult> {
+    return sakiModelSupplyResultSchema.parse(await this.call('control/query', { type: 'model-supply' }, signal))
+  }
+
+  /** @inheritdoc */
+  async submitModelAccount(
+    intent: SakiWireModelAccountIntent, requestToken: string, signal?: AbortSignal,
+  ): Promise<SakiWireModelAccountResult> {
+    return sakiModelAccountResultSchema.parse(await this.call('control/submit', intent, signal, { [REQUEST_TOKEN_HEADER]: requestToken }))
   }
 
   private async call(

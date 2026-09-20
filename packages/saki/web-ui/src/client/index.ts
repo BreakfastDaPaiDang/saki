@@ -1,7 +1,7 @@
 /**
- * Saki Web client plugin, browser half: registers the two top-level entries
- * (「工作」「项目」) into the shell's `sidebar.primary.action` list slot and
- * two keyed entries into the `main` slot, owns the small
+ * Saki Web client plugin, browser half: registers the top-level entries
+ * (「工作」「项目」「模型账户」) into the shell's `sidebar.primary.action` list slot and
+ * keyed entries into the `main` slot, owns the small
  * navigation store, hands the center column back to the Conversation on
  * user-driven Session navigation, and drives the Saki Host API client for
  * access, Project planning, and durable manual Work interactions.
@@ -21,6 +21,7 @@ import type { SakiHostClient } from '@breakfastdapaidang/saki-host-api/client'
 import { createSakiNavigationStore, surfaceTokenOf, type SakiNavigationActionsFace, type SakiSurface } from './navigation.ts'
 import { en, NS, zh, type SakiKey } from './locales.ts'
 import { PlanningController } from './planning-controller.ts'
+import { ModelAccountsController, type ModelAccountsActions } from './model-accounts-controller.ts'
 import type { PlanningActions } from './planning-controller.ts'
 import { WorkController } from './work-controller.ts'
 import type { WorkActions } from './work-controller.ts'
@@ -66,6 +67,7 @@ export interface SakiInjected extends SakiHostFace {
   planning: PlanningActions
   work: WorkActions
   changes: ChangesActions
+  accounts: ModelAccountsActions
   delivery: DeliveryActions
   openSession: (id: Extract<SakiWireWorkItemViewResult, { ok: true }>['projection']['runs'][number]['sessionId']) => void
   hooks: {
@@ -73,6 +75,7 @@ export interface SakiInjected extends SakiHostFace {
     planning: PlanningController
     work: WorkController
     changes: ChangesController
+    accounts: ModelAccountsController
     delivery: DeliveryController
   }
 }
@@ -89,6 +92,8 @@ export function apply(ctx: ClientContext): void {
   // entry, and the sync effects all share it).
   const navigation = createSakiNavigationStore().create()
   const planning = new PlanningController(ctx.sakiHostClient, navigation)
+  const accounts = new ModelAccountsController(ctx.sakiHostClient, planning)
+  ctx.effect(() => { accounts.start(); return () => { accounts.dispose() } }, 'saki-web-ui: account lifecycle')
   const work = new WorkController(ctx.sakiHostClient, planning)
   const changes = new ChangesController(ctx.sakiHostClient, planning)
   const delivery = new DeliveryController(ctx.sakiHostClient, planning, changes)
@@ -96,7 +101,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => { work.start(); return () => { work.dispose() } }, 'saki-web-ui: work lifecycle')
   ctx.effect(() => { changes.start(); return () => { changes.dispose() } }, 'saki-web-ui: changes lifecycle')
   ctx.effect(() => { delivery.start(); return () => { delivery.dispose() } }, 'saki-web-ui: delivery lifecycle')
-  ctx.effect(() => ctx.on('connection/reset', () => { void (async () => { await planning.reloadAccess(); await Promise.all([work.refresh(), changes.refresh(), delivery.refresh()]) })() }), 'saki-web-ui: reconnect')
+  ctx.effect(() => ctx.on('connection/reset', () => { void (async () => { await planning.reloadAccess(); await Promise.all([accounts.refresh(), work.refresh(), changes.refresh(), delivery.refresh()]) })() }), 'saki-web-ui: reconnect')
   const injected: SakiInjected = {
     readAccess: signal => ctx.sakiHostClient.readAccess(signal),
     exchangeBootstrap: (secret, signal) => planning.exchangeBootstrap(secret, signal),
@@ -107,6 +112,7 @@ export function apply(ctx: ClientContext): void {
       ctx.sakiHostClient.queryDevelopmentWorkspace(projectId, expectedRegistryRevision, signal),
     registerDevelopmentProject: (intent, requestToken, signal) =>
       ctx.sakiHostClient.registerDevelopmentProject(intent, requestToken, signal),
+    accounts: { refresh: accounts.refresh, submit: accounts.submit, retry: accounts.retry },
     nav: navigation.actions,
     planning: { reloadAccess: planning.reloadAccess, refresh: planning.refresh, navigate: planning.navigate,
       openItem: planning.openItem, closeDetail: planning.closeDetail, beginMove: planning.beginMove, closeMove: planning.closeMove,
@@ -120,7 +126,7 @@ export function apply(ctx: ClientContext): void {
     delivery: { refresh: delivery.refresh, editDraft: delivery.editDraft, prepare: delivery.prepare,
       cancel: delivery.cancel, confirm: delivery.confirm, retry: delivery.retry, dismiss: delivery.dismiss },
     openSession: (id) => { planning.navigate({ conversationSessionId: id }); ctx.uiWorkspace.openSession(id) },
-    hooks: { navigation: navigation.store, planning, work, changes, delivery },
+    hooks: { navigation: navigation.store, planning, work, changes, delivery, accounts },
   }
 
   // Startup Session restoration leaves the persisted Saki page intact;
@@ -139,7 +145,8 @@ export function apply(ctx: ClientContext): void {
         locale: NS,
         inject: () => ({
           open: () => {
-            if (surface === 'work') navigation.actions.showWork()
+            if (surface === 'accounts') navigation.actions.showAccounts()
+            else if (surface === 'work') navigation.actions.showWork()
             else navigation.actions.showProject()
             ctx.layout.selectPanel(surfaceTokenOf(navigation.store.getSnapshot()))
           },
@@ -154,9 +161,10 @@ export function apply(ctx: ClientContext): void {
 
   registerNavEntry('work', 'saki-work', 0)
   registerNavEntry('project', 'saki-project', 10)
+  registerNavEntry('accounts', 'saki-accounts', 20)
 
   ctx.slots.inject('main', function *() {
-    for (const page of ['work', 'project'] as const) {
+    for (const page of ['work', 'project', 'accounts'] as const) {
       yield ctx.slots.register({
         name: 'main',
         key: `saki:${page}`,

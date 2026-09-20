@@ -1,3 +1,5 @@
+import { sakiControlPlaneV10DomainSpec } from '../src/migration-v10-source.ts'
+import { V10_HOST_OPERATOR_ACTIONS, v10GrantRecordSchema } from '../src/spec.ts'
 import { describe, expect, it } from 'vitest'
 import {
   canonicalDigest,
@@ -437,17 +439,19 @@ function v5GitHubSyncRecord() {
 describe('Saki control-plane retained migrations', () => {
   it('keeps v8 table membership exact through Delivery and independent Dispatch admissions', () => {
     expect(sakiControlPlaneV8DomainSpec.version).toBe(8)
-    expect(sakiControlPlaneDomainSpec.version).toBe(10)
+    expect(sakiControlPlaneDomainSpec.version).toBe(11)
     expect(Object.keys(sakiControlPlaneDomainSpec.tables).sort()).toEqual([
       ...Object.keys(sakiControlPlaneV8DomainSpec.tables),
       'branch_deliveries',
       'branch_delivery_intents',
       'milestone_deliveries',
       'milestone_delivery_intents',
+      'model_accounts',
+      'model_account_intents',
     ].sort())
   })
 
-  it('keeps v8 Grants exact while current Grants admit the eight Delivery actions', () => {
+  it('keeps v8 Grants exact while v10 Grants admit the eight Delivery actions', () => {
     const deliveryActions = [
       'branch-delivery:save',
       'branch-delivery:push',
@@ -458,7 +462,7 @@ describe('Saki control-plane retained migrations', () => {
       'milestone-delivery:save',
       'milestone-delivery:finalize',
     ] as const
-    expect(HOST_OPERATOR_ACTIONS).toEqual([...V8_HOST_OPERATOR_ACTIONS, ...deliveryActions])
+    expect(V10_HOST_OPERATOR_ACTIONS).toEqual([...V8_HOST_OPERATOR_ACTIONS, ...deliveryActions])
     const v8Grant = {
       id: GRANT_ID,
       revision: 1,
@@ -519,7 +523,7 @@ describe('Saki control-plane retained migrations', () => {
 
     const migrated = sakiControlPlaneMigrationPlan.steps[6]!.migrate(v8)
 
-    expect(sakiControlPlaneMigrationPlan.current).toMatchObject({ name: 'saki_control_plane', version: 10 })
+    expect(sakiControlPlaneMigrationPlan.current).toMatchObject({ name: 'saki_control_plane', version: 11 })
     expect(sakiControlPlaneMigrationPlan.steps[6]).toMatchObject({
       from: { name: 'saki_control_plane', version: 8 },
       to: { name: 'saki_control_plane', version: 9 },
@@ -535,7 +539,7 @@ describe('Saki control-plane retained migrations', () => {
     )).toEqual({
       ...v8Grant,
       revision: v8Grant.revision + 1,
-      actions: [...HOST_OPERATOR_ACTIONS],
+      actions: [...V10_HOST_OPERATOR_ACTIONS],
     })
     expect(migrated.tables['grants']![OTHER_GRANT_ID]).toEqual(retainedGrant)
     for (const [table, spec] of Object.entries(sakiControlPlaneDomainSpec.tables)) {
@@ -599,7 +603,7 @@ describe('Saki control-plane retained migrations', () => {
     expect(sakiControlPlaneV6DomainSpec.version).toBe(6)
     expect(sakiControlPlaneV7DomainSpec.version).toBe(7)
     expect(sakiControlPlaneV8DomainSpec.version).toBe(8)
-    expect(sakiControlPlaneDomainSpec.version).toBe(10)
+    expect(sakiControlPlaneDomainSpec.version).toBe(11)
     expect(sakiControlPlaneMigrationPlan.steps[3]).toMatchObject({
       from: { name: 'saki_control_plane', version: 5 },
       to: { name: 'saki_control_plane', version: 6 },
@@ -821,7 +825,7 @@ describe('Saki control-plane retained migrations', () => {
     }).toThrow('deterministic bootstrap completion evidence')
   })
 
-  it('declares strict adjacent v2 through current v10 steps and keeps historical action vocabularies frozen', () => {
+  it('declares strict adjacent v2 through current v11 steps and keeps historical action vocabularies frozen', () => {
     expect(sakiControlPlaneV2DomainSpec.version).toBe(2)
     expect(sakiControlPlaneV3DomainSpec.version).toBe(3)
     expect(sakiControlPlaneV4DomainSpec.version).toBe(4)
@@ -829,8 +833,8 @@ describe('Saki control-plane retained migrations', () => {
     expect(sakiControlPlaneV6DomainSpec.version).toBe(6)
     expect(sakiControlPlaneV7DomainSpec.version).toBe(7)
     expect(sakiControlPlaneV8DomainSpec.version).toBe(8)
-    expect(sakiControlPlaneDomainSpec.version).toBe(10)
-    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(8)
+    expect(sakiControlPlaneDomainSpec.version).toBe(11)
+    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(9)
     expect(sakiControlPlaneMigrationPlan.steps[0]).toMatchObject({
       from: { name: 'saki_control_plane', version: 2 },
       to: { name: 'saki_control_plane', version: 3 },
@@ -892,6 +896,8 @@ describe('Saki control-plane retained migrations', () => {
         'branch_delivery_intents',
         'milestone_deliveries',
         'milestone_delivery_intents',
+        'model_accounts',
+        'model_account_intents',
       ].sort())
 
     const source = historicalSnapshot()
@@ -1951,5 +1957,27 @@ describe('Saki control-plane retained migrations', () => {
     expect(v4GitHubConfigurationIntentRecordSchema.safeParse({
       ...intent, payload: { ...intent.payload, intent: { ...intent.payload.intent, futureCurrentField: true } },
     }).success).toBe(false)
+  })
+})
+
+describe('Model Account state migration', () => {
+  it('preserves v10 tables and only extends the Host Operator grant', () => {
+    let snapshot: import('@deepseek-ai/dsh-storage-domain').DomainMigrationSnapshot = { global: null, tables: parsedHistoricalTables(historicalSnapshot()) }
+    for (const step of sakiControlPlaneMigrationPlan.steps.slice(0, -1)) snapshot = step.migrate(snapshot)
+    const before = structuredClone(snapshot)
+    const migrated = sakiControlPlaneMigrationPlan.steps.at(-1)!.migrate(snapshot)
+    expect(snapshot).toEqual(before)
+    expect(sakiControlPlaneV10DomainSpec.version).toBe(10)
+    expect(Object.keys(sakiControlPlaneV10DomainSpec.tables)).not.toContain('model_accounts')
+    expect(migrated.tables['model_accounts']).toEqual({})
+    expect(migrated.tables['model_account_intents']).toEqual({})
+    const previous = v10GrantRecordSchema.parse(before.tables['grants']![GRANT_ID])
+    expect(migrated.tables['grants']![GRANT_ID]).toEqual({
+      ...previous, revision: previous.revision + 1, actions: [...HOST_OPERATOR_ACTIONS],
+    })
+    expect(v10GrantRecordSchema.safeParse(migrated.tables['grants']![GRANT_ID]).success).toBe(false)
+    for (const [name, values] of Object.entries(before.tables)) {
+      if (name !== 'grants') expect(migrated.tables[name]).toEqual(values)
+    }
   })
 })

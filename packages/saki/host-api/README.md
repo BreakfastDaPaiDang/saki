@@ -79,6 +79,10 @@ Connection owns route trust, bounded JSON framing, correlation, cancellation, di
 
 The browser client uses same-origin credentials on every call. Logout and every Intent submission require the current request token. It exposes exact methods for selection inspection, Project-index, Development-Workspace, Changes, file-scoped Diff, Project Settings, Board, `queryMyWork`, `queryAttention`, Branch Delivery and Milestone View lookup, first registration, field-scoped GitHub synchronization configuration, structured Git and Work Item mutations, all six Branch Delivery transitions, both Milestone Delivery transitions, `giveWorkItemToAgent`, and `answerIntervention`; each method parses only its corresponding result schema. `queryMyWork()`, `queryAttention()`, `queryBoard(projectId, 'cached')`, `queryBranchDelivery(projectId, workItemId, 'cached')`, and `queryMilestoneView(projectId, milestoneId, 'cached')` are pure durable reads. The three refreshable queries' `interactive` policies request bounded refresh work while still returning only validated projections. Business denials remain typed successful RPC values, while cancellation, carrier failures, and schema mismatches reject through the fixed opaque Connection RPC error envelope.
 
+## Model account operations
+
+`queryModelSupply` and `submitModelAccount` carry safe account observations and replayable operator Intents. The Host revalidates access and model-supply grants; raw OAuth records and provider configuration never appear in the projection.
+
 ## Model Experience
 
 None, as the Host and browser adapters carry Saki access and Projection values without registering model-facing input.

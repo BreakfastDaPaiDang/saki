@@ -89,14 +89,14 @@ describe('saki-web-ui apply', () => {
     const { ctx, slots } = await bench()
     await ctx.plugin({ inject: [...inject], apply }).await()
     const navEntries = slots.entries('sidebar.primary.action')
-    expect(navEntries.map(entry => entry.options.id)).toEqual(['saki-work', 'saki-project'])
+    expect(navEntries.map(entry => entry.options.id)).toEqual(['saki-work', 'saki-project', 'saki-accounts'])
     const surfaceEntries = slots.entries('main')
-    expect(surfaceEntries.map(entry => entry.options.key)).toEqual(['saki:work', 'saki:project'])
+    expect(surfaceEntries.map(entry => entry.options.key)).toEqual(['saki:work', 'saki:project', 'saki:accounts'])
     expect(slots.entries('conversation.session.header.actions').map(entry => entry.options.id)).toEqual(['saki-project-return'])
     const returnFace = (slots.entries('conversation.session.header.actions')[0]!.inject as () => { openProject: () => void; hooks: { planning: unknown } })()
     expect(returnFace.hooks.planning).toBeDefined()
     returnFace.openProject()
-    expect(surfaceEntries.map(entry => (entry.inject as () => { page: string })().page)).toEqual(['work', 'project'])
+    expect(surfaceEntries.map(entry => (entry.inject as () => { page: string })().page)).toEqual(['work', 'project', 'accounts'])
   })
 
   it('reselects a Saki page after another plugin opens its panel', async () => {

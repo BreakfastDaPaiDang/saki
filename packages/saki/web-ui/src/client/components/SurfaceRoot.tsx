@@ -1,3 +1,4 @@
+import { ModelAccountsPage } from './ModelAccountsPage.tsx'
 /**
  * The elected Saki main surface: owns the access read for both pages and
  * renders its registered page. Authentication gates the
@@ -17,7 +18,7 @@ import { DeliveryPage } from './DeliveryPage.tsx'
 /** Full composed props for the Saki surface root. */
 export type SurfaceRootProps =
   PropsRuntime<'main'>
-  & { page: 'work' | 'project' }
+  & { page: 'work' | 'project' | 'accounts' }
   & InjectFace<SakiInjected>
   & PropsLocale<typeof NS>
 
@@ -27,6 +28,7 @@ export type SurfaceRootProps =
  * @returns the surface element.
  */
 export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeof NS> }) {
+  const accounts = props.useAccounts(snapshot => snapshot)
   const state = props.usePlanning(snapshot => snapshot)
   const work = props.useWork(snapshot => snapshot)
   const changes = props.useChanges(snapshot => snapshot)
@@ -37,6 +39,7 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
     return <AccessGate access={access} reload={() => { void props.planning.reloadAccess() }}
       t={props.t} exchange={props.exchangeBootstrap} />
   }
+  if (props.page === 'accounts') return <ModelAccountsPage state={accounts} actions={props.accounts} t={props.t} />
   if (props.page === 'work') {
     return <WorkPage state={work} actions={props.work} openProject={() => { props.nav.showProject() }}
       openBoard={(id) => { props.nav.selectProject(id); props.planning.navigate({ view: 'board' }) }}

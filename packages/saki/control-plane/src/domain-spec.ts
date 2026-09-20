@@ -1,5 +1,7 @@
 /** Current Saki control-plane domain assembly. @module @breakfastdapaidang/saki-control-plane/src/domain-spec */
 
+import type { ModelAccountProfileId } from '@breakfastdapaidang/saki-model-account'
+import { modelAccountRecordSchema, modelAccountIntentRecordSchema, type ModelAccountRecord, type ModelAccountIntentRecord } from './model-supply-spec.ts'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import {
   branchDeliveryIntentRecordSchema,
@@ -79,8 +81,10 @@ import type {
 /** Exact current Saki control-plane domain declaration. */
 export const sakiControlPlaneDomainSpec = defineDomain({
   name: 'saki_control_plane',
-  version: 10,
+  version: 11,
   tables: {
+    model_accounts: domainTable<ModelAccountProfileId, ModelAccountRecord>(modelAccountRecordSchema),
+    model_account_intents: domainTable<SakiControlIntentId, ModelAccountIntentRecord>(modelAccountIntentRecordSchema),
     control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),
     installations: domainTable<SakiInstallationId, InstallationRecord>(installationRecordSchema),
     hosts: domainTable<SakiHostId, HostRecord>(hostRecordSchema),

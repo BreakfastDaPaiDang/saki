@@ -1,3 +1,5 @@
+import { sakiModelAccountIntentSchema, sakiModelAccountResultSchema, sakiModelSupplyResultSchema } from './model-supply-wire.ts'
+export * from './model-supply-wire.ts'
 /** Browser-safe Saki Host API schemas and inferred wire values. @module @breakfastdapaidang/saki-host-api/wire */
 
 import { z } from 'zod'
@@ -255,6 +257,7 @@ const runTerminalSelectionSchema = z.object({ id: runTerminalIdSchema, offset: s
 
 /** Closed Project reads with only opaque Run and Terminal selectors. */
 export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('model-supply') }).strict(),
   z.object({ type: z.literal('my-work') }).strict(),
   z.object({ type: z.literal('attention') }).strict(),
   z.object({
@@ -647,6 +650,7 @@ export const sakiAnswerInterventionIntentSchema = z.object({
 
 /** Closed Control Intent request union. */
 export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
+  ...sakiModelAccountIntentSchema.options,
   sakiRegisterDevelopmentProjectIntentSchema,
   sakiConfigureGitHubSynchronizationIntentSchema,
   sakiStageFilesIntentSchema,
@@ -2861,6 +2865,7 @@ export const sakiProjectMappingResultSchema: z.ZodType<SakiQueryResult<'project-
 
 /** Union schema retained for callers that intentionally handle every query kind. */
 export const sakiQueryResultSchema: z.ZodType<SakiQueryResult> = z.union([
+  sakiModelSupplyResultSchema,
   sakiMyWorkResultSchema,
   sakiAttentionResultSchema,
   sakiInspectProjectSelectionResultSchema,
@@ -3431,6 +3436,7 @@ export const sakiAnswerInterventionResultSchema = z.union([
 
 /** Union schema retained for callers that intentionally handle every Control Intent result. */
 export const sakiIntentResultSchema = z.union([
+  sakiModelAccountResultSchema,
   sakiRegisterDevelopmentProjectResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiStageFilesResultSchema,

@@ -92,7 +92,7 @@ async function start(): Promise<RunningHost> {
     databasePath: join(directory, 'saki.sqlite'),
     installationId: INSTALLATION_ID,
     storageGenerationId: STORAGE_GENERATION_ID,
-    stateVersion: 10,
+    stateVersion: 11,
     createdByBuildId: BUILD_ID,
     promoteToReady: () => Promise.resolve(),
   })

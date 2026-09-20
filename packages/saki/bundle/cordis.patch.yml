@@ -135,6 +135,16 @@
       name: '@deepseek-ai/dsh-credentials-local'
       disabled: !!js process.platform === 'win32'
 
+    - id: saki-model-authorization
+      name: '@deepseek-ai/dsh-authorization'
+
+    - id: saki-model-accounts
+      name: '@breakfastdapaidang/saki-model-account'
+
+    - id: saki-model-account-codex
+      name: '@breakfastdapaidang/saki-model-account-codex'
+      disabled: !!js process.platform !== 'win32'
+
     - id: saki-github-app
       name: '@breakfastdapaidang/saki-github-app'
       inject:

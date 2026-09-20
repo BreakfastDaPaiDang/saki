@@ -4,6 +4,10 @@
 
 Saki 控制面独立于 agent（智能体）对话拥有产品状态。已实现接口建立一个稳定的本地 Installation、一个已登记的 Saki Host、一个具备当前 Host Operator Grant 的人类 Principal、一条带版本的 Installation Access 聚合记录、包含可恢复首次登记 Intent 的 Development Project Registry、面向已绑定 Project 的可恢复直接结构化 Git Intent、由 GitHub 支持的可恢复 Create/Move Work Item Intent，以及启动一个可恢复 Agent Run 的手动 Give-to-Agent Intent。版本化的置备所有者与各自带修订号的实体表会在启动中断后保留这些身份与 operation evidence。[Saki 后端架构](../saki/architecture/0.1.0-backend.zh.md)定义了更完整的控制面与执行面划分；本页是已实现 Cordis 服务的参考。
 
+## 模型账户
+
+`ModelAccountBinding` 固定一个档案、配置修订、路由、受保护凭据键及预期账户身份。`ModelAccountProvider` 提供配置解析、授权、安全检查与 LLM 适配器。[账户服务](../../packages/saki/model-account/README.zh.md) 拥有可撤销路由注册；控制平面拥有持久账户意图与投影。[Codex 实现](../../packages/saki/model-account-codex/README.zh.md) 拥有 OAuth、额度读取和账户专属 SSE 状态。
+
 ## Installation 访问
 
 [`saki-control-plane`](../../packages/saki/control-plane/README.zh.md) 通过 `storageDomain` 在 SQLite 中持久保存只含摘要的 Bootstrap Challenge 与 Browser Session 条目。bootstrap 交换在同一次比较并设置更新中消费一个状态为 `issued` 的挑战、撤销其他状态为 `issued` 的挑战，并创建一个状态为 `active` 的会话。只增不减的序号分配确定性条目 id，不可变的完成摘要会在终态详细记录清理后继续保留。每次启动具备权限的启动器都会签发新的 `initial-bootstrap` 或 `local-reauthentication` 挑战，因此 Cookie 过期、登出和响应丢失都能恢复，且不会重新开放首次完成记录。配置只接受一项准确的 HTTP(S) 回环 Origin。浏览器 Cookie 认证人类 Host Operator Principal；每项受保护操作仍会读取当前 Installation State Generation、Principal 生命周期与 Grant 权限。原始 bootstrap 与 Cookie 凭据只留在各自准确的启动器或 HTTP 载体位置，已认证的 Access Projection 仅携带后续状态变更所需的派生请求防伪令牌。
@@ -276,4 +280,49 @@ abstract activateAfterValidation(signal: AbortSignal): Promise<void>
 ```
 
 Source: [`packages/saki/control-plane/src/installation-state.ts`](../../packages/saki/control-plane/src/installation-state.ts)
+
+<a id="ctxsakimodelaccounts--modelaccountservice"></a>
+
+### `ctx.sakiModelAccounts` — `ModelAccountService`
+
+The provider registry owns reversible route registrations, never product selection.
+
+```ts cordis-catalog
+/**
+ * Register a provider for this plugin lifetime.
+ * @param provider - complete account implementation.
+ * @returns disposer that withdraws the implementation.
+ */
+register(provider: ModelAccountProvider): () => Promise<void>
+
+/**
+ * List available account implementations.
+ * @returns the currently registered implementations in registration order.
+ */
+list(): readonly ModelAccountProvider[]
+
+/**
+ * Resolve an implementation without falling back to another provider.
+ * @param id - exact registered provider identity.
+ * @returns provider or undefined while its plugin is absent.
+ */
+get(id: import('./types.ts').ModelAccountProviderId): ModelAccountProvider | undefined
+
+/**
+ * Observe whether an owned route still belongs to a live Provider registration.
+ * @param routeId - immutable account route identity.
+ * @returns true until the route or its Provider is disposed.
+ */
+isActive(routeId: import('./types.ts').ModelAccountRouteId): boolean
+
+/**
+ * Activate one immutable account route after verifying its current credential ownership.
+ * @param binding - exact account and configuration revision.
+ * @param signal - activation cancellation.
+ * @returns disposer withdrawing this route from new requests.
+ */
+async activate(binding: ModelAccountBinding, signal: AbortSignal): Promise<() => Promise<void>>
+```
+
+Source: [`packages/saki/model-account/src/index.ts`](../../packages/saki/model-account/src/index.ts)
 <!-- END GENERATED cordis-surface -->

@@ -80,6 +80,10 @@ Connection 负责路由信任校验、有界 JSON 封装、请求关联、取消
 浏览器客户端的每次调用都使用同源凭据。登出与每次 Intent 提交都需要当前请求令牌。客户端提供选择检查、Project-index、Development-Workspace、Changes、文件级 Diff、Project Settings、Board、`queryMyWork`、`queryAttention`、Branch Delivery 与 Milestone View 查询、首次登记、字段级 GitHub 同步配置、结构化 Git 与 Work Item mutation、全部六种 Branch Delivery transition、两种 Milestone Delivery transition、`giveWorkItemToAgent` 与 `answerIntervention` 的准确方法；每个方法只解析与自身对应的结果 schema。`queryMyWork()`、`queryAttention()`、`queryBoard(projectId, 'cached')`、`queryBranchDelivery(projectId, workItemId, 'cached')` 与 `queryMilestoneView(projectId, milestoneId, 'cached')` 都只读取持久状态。三项可刷新的 query 的 `interactive` 策略请求有界刷新，但仍只返回通过校验的 Projection。业务拒绝仍作为类型化的 RPC 成功值返回；取消、载体故障与 schema 校验不匹配则通过 Connection 固定且不透明的 RPC 错误信封拒绝 Promise。
 
 <a id="model-experience"></a>
+## 模型账户操作
+
+`queryModelSupply` 与 `submitModelAccount` 传输安全账户观测和可重放操作员意图。Host 重新校验访问权限及模型供应授权；投影不包含原始 OAuth 记录或提供者配置。
+
 ## 模型体验
 
 无。Host 与浏览器适配器传递 Saki 访问和 Projection 值，但不注册模型可见输入。

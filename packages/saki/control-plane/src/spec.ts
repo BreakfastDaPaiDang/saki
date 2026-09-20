@@ -252,8 +252,8 @@ export const V8_HOST_OPERATOR_ACTIONS = [
   'intervention:answer',
 ] as const
 
-/** Current Host Operator actions, including Branch and Milestone Delivery. */
-export const HOST_OPERATOR_ACTIONS = [
+/** Exact Host Operator actions retained for v9 and v10 product state. */
+export const V10_HOST_OPERATOR_ACTIONS = [
   ...V8_HOST_OPERATOR_ACTIONS,
   'branch-delivery:save',
   'branch-delivery:push',
@@ -263,6 +263,13 @@ export const HOST_OPERATOR_ACTIONS = [
   'branch-delivery:accept',
   'milestone-delivery:save',
   'milestone-delivery:finalize',
+] as const
+
+/** Host Operator actions for account inventory and configuration. */
+export const HOST_OPERATOR_ACTIONS = [
+  ...V10_HOST_OPERATOR_ACTIONS,
+  'model-supply:read',
+  'model-supply:manage',
 ] as const
 
 const grantRecordSharedShape = {
@@ -314,6 +321,15 @@ export const v8GrantRecordSchema = z.object({
 }).strict()
 
 /** Independently revisioned current Host Operator Grant entity. */
+export const v10GrantRecordSchema = z.object({
+  ...grantRecordSharedShape,
+  actions: z.array(z.enum(V10_HOST_OPERATOR_ACTIONS)),
+}).strict()
+
+/** Exact historical Grant for v9 and v10 state. */
+export type V10GrantRecord = z.infer<typeof v10GrantRecordSchema>
+
+/** Current independently revisioned Host Operator Grant. */
 export const grantRecordSchema = z.object({
   ...grantRecordSharedShape,
   actions: z.array(z.enum(HOST_OPERATOR_ACTIONS)),

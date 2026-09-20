@@ -8,6 +8,7 @@ import {
   CREDENTIAL_PROTECTION_LOCAL_USER_TRUST,
   credentialKey,
   credentialRef,
+  CREDENTIAL_PROTECTION_EPHEMERAL,
 } from '@deepseek-ai/dsh-credentials'
 import type { CredentialKey, CredentialRecord } from '@deepseek-ai/dsh-credentials'
 import WindowsDpapiCredentialProvider, { resolveSpec } from '../src/index.ts'
@@ -167,6 +168,21 @@ describe.runIf(process.platform !== 'win32')('Windows current-user DPAPI credent
 })
 
 describe.runIf(process.platform === 'win32')('Windows current-user DPAPI credentials', () => {
+  it('enforces the protection requirement before a record mutation and preserves it on reads', async () => {
+    const path = await tempStore()
+    const ctx = await boot(path)
+    const mutate = vi.fn(() => Promise.resolve({ kind: 'grant' as const, payload: { token: 'protected-fixture' } }))
+    await expect(ctx.credentials.modifyRecordProtected(CODEX, CREDENTIAL_PROTECTION_EPHEMERAL, mutate))
+      .rejects.toThrow('unsupported record protection requirement')
+    expect(mutate).not.toHaveBeenCalled()
+    await expect(ctx.credentials.readRecordProtected(CODEX, CREDENTIAL_PROTECTION_EPHEMERAL))
+      .rejects.toThrow('unsupported record protection requirement')
+    await expect(ctx.credentials.readRecordProtected(CODEX, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST)).resolves.toBeUndefined()
+    await ctx.credentials.modifyRecordProtected(CODEX, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST, mutate)
+    await expect(ctx.credentials.readRecordProtected(CODEX, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST))
+      .resolves.toEqual({ kind: 'grant', payload: { token: 'protected-fixture' } })
+    expect(await readFile(path, 'utf8')).not.toContain('protected-fixture')
+  })
   it('resolves the fixed document name beneath an explicit Harness home', async () => {
     const path = await tempStore()
     expect(resolveSpec({ path })).toEqual({ filename: path })
@@ -235,12 +251,10 @@ describe.runIf(process.platform === 'win32')('Windows current-user DPAPI credent
     await expect(ctx.credentials.describeRecord(CODEX)).resolves.toEqual({
       configured: true,
       kind: 'grant',
-      writable: true,
-    })
+      writable: true, protectionLevel: CREDENTIAL_PROTECTION_LOCAL_USER_TRUST })
     await expect(ctx.credentials.describeRecord(credentialKey('llm-pi-ai', 'missing'))).resolves.toEqual({
       configured: false,
-      writable: true,
-    })
+      writable: true, protectionLevel: CREDENTIAL_PROTECTION_LOCAL_USER_TRUST })
     const listed = await ctx.credentials.listRecords()
     expect(listed).toEqual([
       { key: BEDROCK, kind: 'api-key' },
@@ -737,8 +751,7 @@ describe.runIf(process.platform === 'win32')('Windows current-user DPAPI credent
     await expect(ctx.credentials.describeRecord(CODEX)).resolves.toEqual({
       configured: true,
       kind: 'grant',
-      writable: true,
-    })
+      writable: true, protectionLevel: CREDENTIAL_PROTECTION_LOCAL_USER_TRUST })
     await expect(ctx.credentials.listRecords()).resolves.toEqual([{ key: CODEX, kind: 'grant' }])
     const failure = await ctx.credentials.readRecord(CODEX)
       .then(() => undefined, (error: unknown) => error as Error)
@@ -957,7 +970,7 @@ describe.runIf(process.platform === 'win32')('Windows current-user DPAPI credent
     await fiber.dispose()
 
     expect(ctx.get('credentials')).toBeUndefined()
-    await expect(service.describeRecord(CODEX)).resolves.toEqual({ configured: true, kind: 'grant', writable: false })
+    await expect(service.describeRecord(CODEX)).resolves.toEqual({ configured: true, kind: 'grant', writable: false, protectionLevel: CREDENTIAL_PROTECTION_LOCAL_USER_TRUST })
     await expect(service.set(REF, 'late')).rejects.toThrow(/disposed/)
     await expect(service.unset(REF)).rejects.toThrow(/disposed/)
     await expect(service.modifyRecord(CODEX, () => Promise.resolve({ kind: 'grant', payload: { expires: 2 } })))

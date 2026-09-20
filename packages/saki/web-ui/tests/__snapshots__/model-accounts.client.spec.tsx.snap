@@ -1,0 +1,54 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`submits the advertised authorization method from the account page > available subscription authorization 1`] = `
+<DocumentFragment>
+  <section
+    class="_page_a8d48e"
+  >
+    <header
+      class="_header_a8d48e"
+    >
+      <div>
+        <h1>
+          模型账户
+        </h1>
+        <p>
+          连接订阅账户，查看额度，并明确选择启用的账户。
+        </p>
+      </div>
+      <button
+        type="button"
+      >
+        刷新
+      </button>
+    </header>
+    <section
+      class="_card_a8d48e"
+    >
+      <h2>
+        连接账户
+      </h2>
+      <label>
+        账户名称
+        <input
+          maxlength="200"
+          value=""
+        />
+      </label>
+      <div
+        class="_actions_a8d48e"
+      >
+        <button
+          disabled=""
+          type="button"
+        >
+          codex · 设备码登录
+        </button>
+      </div>
+    </section>
+    <p>
+      尚未连接模型账户。
+    </p>
+  </section>
+</DocumentFragment>
+`;
