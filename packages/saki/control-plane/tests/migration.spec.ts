@@ -439,7 +439,7 @@ function v5GitHubSyncRecord() {
 describe('Saki control-plane retained migrations', () => {
   it('keeps v8 table membership exact through Delivery and independent Dispatch admissions', () => {
     expect(sakiControlPlaneV8DomainSpec.version).toBe(8)
-    expect(sakiControlPlaneDomainSpec.version).toBe(11)
+    expect(sakiControlPlaneDomainSpec.version).toBe(12)
     expect(Object.keys(sakiControlPlaneDomainSpec.tables).sort()).toEqual([
       ...Object.keys(sakiControlPlaneV8DomainSpec.tables),
       'branch_deliveries',
@@ -448,6 +448,8 @@ describe('Saki control-plane retained migrations', () => {
       'milestone_delivery_intents',
       'model_accounts',
       'model_account_intents',
+      'agent_profile_model_routes',
+      'project_model_route_intents',
     ].sort())
   })
 
@@ -523,7 +525,7 @@ describe('Saki control-plane retained migrations', () => {
 
     const migrated = sakiControlPlaneMigrationPlan.steps[6]!.migrate(v8)
 
-    expect(sakiControlPlaneMigrationPlan.current).toMatchObject({ name: 'saki_control_plane', version: 11 })
+    expect(sakiControlPlaneMigrationPlan.current).toMatchObject({ name: 'saki_control_plane', version: 12 })
     expect(sakiControlPlaneMigrationPlan.steps[6]).toMatchObject({
       from: { name: 'saki_control_plane', version: 8 },
       to: { name: 'saki_control_plane', version: 9 },
@@ -603,7 +605,7 @@ describe('Saki control-plane retained migrations', () => {
     expect(sakiControlPlaneV6DomainSpec.version).toBe(6)
     expect(sakiControlPlaneV7DomainSpec.version).toBe(7)
     expect(sakiControlPlaneV8DomainSpec.version).toBe(8)
-    expect(sakiControlPlaneDomainSpec.version).toBe(11)
+    expect(sakiControlPlaneDomainSpec.version).toBe(12)
     expect(sakiControlPlaneMigrationPlan.steps[3]).toMatchObject({
       from: { name: 'saki_control_plane', version: 5 },
       to: { name: 'saki_control_plane', version: 6 },
@@ -825,7 +827,7 @@ describe('Saki control-plane retained migrations', () => {
     }).toThrow('deterministic bootstrap completion evidence')
   })
 
-  it('declares strict adjacent v2 through current v11 steps and keeps historical action vocabularies frozen', () => {
+  it('declares strict adjacent v2 through current v12 steps and keeps historical action vocabularies frozen', () => {
     expect(sakiControlPlaneV2DomainSpec.version).toBe(2)
     expect(sakiControlPlaneV3DomainSpec.version).toBe(3)
     expect(sakiControlPlaneV4DomainSpec.version).toBe(4)
@@ -833,8 +835,8 @@ describe('Saki control-plane retained migrations', () => {
     expect(sakiControlPlaneV6DomainSpec.version).toBe(6)
     expect(sakiControlPlaneV7DomainSpec.version).toBe(7)
     expect(sakiControlPlaneV8DomainSpec.version).toBe(8)
-    expect(sakiControlPlaneDomainSpec.version).toBe(11)
-    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(9)
+    expect(sakiControlPlaneDomainSpec.version).toBe(12)
+    expect(sakiControlPlaneMigrationPlan.steps).toHaveLength(10)
     expect(sakiControlPlaneMigrationPlan.steps[0]).toMatchObject({
       from: { name: 'saki_control_plane', version: 2 },
       to: { name: 'saki_control_plane', version: 3 },
@@ -898,6 +900,8 @@ describe('Saki control-plane retained migrations', () => {
         'milestone_delivery_intents',
         'model_accounts',
         'model_account_intents',
+        'agent_profile_model_routes',
+        'project_model_route_intents',
       ].sort())
 
     const source = historicalSnapshot()
@@ -1963,9 +1967,9 @@ describe('Saki control-plane retained migrations', () => {
 describe('Model Account state migration', () => {
   it('preserves v10 tables and only extends the Host Operator grant', () => {
     let snapshot: import('@deepseek-ai/dsh-storage-domain').DomainMigrationSnapshot = { global: null, tables: parsedHistoricalTables(historicalSnapshot()) }
-    for (const step of sakiControlPlaneMigrationPlan.steps.slice(0, -1)) snapshot = step.migrate(snapshot)
+    for (const step of sakiControlPlaneMigrationPlan.steps.slice(0, 8)) snapshot = step.migrate(snapshot)
     const before = structuredClone(snapshot)
-    const migrated = sakiControlPlaneMigrationPlan.steps.at(-1)!.migrate(snapshot)
+    const migrated = sakiControlPlaneMigrationPlan.steps[8]!.migrate(snapshot)
     expect(snapshot).toEqual(before)
     expect(sakiControlPlaneV10DomainSpec.version).toBe(10)
     expect(Object.keys(sakiControlPlaneV10DomainSpec.tables)).not.toContain('model_accounts')

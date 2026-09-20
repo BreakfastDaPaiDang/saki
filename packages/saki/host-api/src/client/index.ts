@@ -1,5 +1,8 @@
-import { sakiModelAccountResultSchema, sakiModelSupplyResultSchema, type SakiWireModelSupplyResult, type SakiWireModelAccountIntent, type SakiWireModelAccountResult } from '../model-supply-wire.ts'
 /** Browser client for the typed Saki Connection channel. @module @breakfastdapaidang/saki-host-api/client */
+
+import { sakiSwitchWorkSessionModelResultSchema, sakiProjectModelRouteResultSchema, sakiConfigureProjectModelRouteResultSchema } from '../model-routing-wire.ts'
+import type { SakiWireSwitchWorkSessionModelIntent, SakiWireSwitchWorkSessionModelResult, SakiWireProjectModelRouteResult, SakiWireConfigureProjectModelRouteIntent, SakiWireConfigureProjectModelRouteResult } from '../model-routing-wire.ts'
+import { sakiModelAccountResultSchema, sakiModelSupplyResultSchema, type SakiWireModelSupplyResult, type SakiWireModelAccountIntent, type SakiWireModelAccountResult } from '../model-supply-wire.ts'
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
@@ -116,6 +119,32 @@ export interface SakiHostClient {
    * @returns credential-free Model Account inventory.
    */
   queryModelSupply(signal?: AbortSignal): Promise<SakiWireModelSupplyResult>
+  /**
+   * Read a Project's versioned default model selection.
+   * @param projectId - selected Project.
+   * @param signal - read cancellation.
+   * @returns safe Profile and account attribution.
+   */
+  queryProjectModelRoute(projectId: SakiWireProjectId, signal?: AbortSignal): Promise<SakiWireProjectModelRouteResult>
+  /**
+   * Select an immutable successor Run within the current Work Session.
+   * @param intent - exact expected-revision selection.
+   * @param requestToken - current browser mutation token.
+   * @param signal - admission cancellation.
+   * @returns durable acknowledgement.
+   */
+  switchWorkSessionModel(intent: SakiWireSwitchWorkSessionModelIntent, requestToken: string,
+    signal?: AbortSignal): Promise<SakiWireSwitchWorkSessionModelResult>
+  /**
+   * Select the default account route for future Project dispatches.
+   * @param intent - exact expected-revision selection.
+   * @param requestToken - current browser mutation token.
+   * @param signal - admission cancellation.
+   * @returns durable acknowledgement.
+   */
+  configureProjectModelRoute(intent: SakiWireConfigureProjectModelRouteIntent, requestToken: string,
+    signal?: AbortSignal): Promise<SakiWireConfigureProjectModelRouteResult>
+
   /**
    * Submit or replay one immutable account operation.
    * @param intent - account mutation with its stable Intent id.
@@ -965,6 +994,27 @@ export class SakiHostClientService extends Service implements SakiHostClient {
     intent: SakiWireModelAccountIntent, requestToken: string, signal?: AbortSignal,
   ): Promise<SakiWireModelAccountResult> {
     return sakiModelAccountResultSchema.parse(await this.call('control/submit', intent, signal, { [REQUEST_TOKEN_HEADER]: requestToken }))
+  }
+
+  /** @inheritdoc */
+  async queryProjectModelRoute(projectId: SakiWireProjectId, signal?: AbortSignal): Promise<SakiWireProjectModelRouteResult> {
+    return sakiProjectModelRouteResultSchema.parse(await this.call('control/query', { type: 'project-model-route', projectId }, signal))
+  }
+
+  /** @inheritdoc */
+  async configureProjectModelRoute(
+    intent: SakiWireConfigureProjectModelRouteIntent, requestToken: string, signal?: AbortSignal,
+  ): Promise<SakiWireConfigureProjectModelRouteResult> {
+    return sakiConfigureProjectModelRouteResultSchema.parse(await this.call('control/submit', intent, signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken }))
+  }
+
+  /** @inheritdoc */
+  async switchWorkSessionModel(
+    intent: SakiWireSwitchWorkSessionModelIntent, requestToken: string, signal?: AbortSignal,
+  ): Promise<SakiWireSwitchWorkSessionModelResult> {
+    return sakiSwitchWorkSessionModelResultSchema.parse(await this.call('control/submit', intent, signal,
+      { [REQUEST_TOKEN_HEADER]: requestToken }))
   }
 
   private async call(

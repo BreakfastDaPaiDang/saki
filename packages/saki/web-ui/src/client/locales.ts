@@ -12,6 +12,23 @@ export const NS = 'saki'
 
 /** Simplified Chinese dictionary (authoritative). */
 export const zh = {
+  'modelSwitch.title': '切换此工作会话的模型',
+  'modelSwitch.help': '等待当前轮次和工具执行结束后，保留对话历史并建立新的 Run。原 Run 保留原账户和模型。',
+  'modelSwitch.save': '切换账户与模型',
+  'modelSwitch.source': '工作会话模型切换',
+  'runs.account': '账户身份',
+  'runs.accountRevision': '账户配置修订',
+  'runs.implementation': '供应商实现',
+  'modelRoute.title': '默认模型',
+  'modelRoute.version': '版本 {version}',
+  'modelRoute.help': '用于此项目之后创建的 Run；已有 Run 保留原账户和模型。',
+  'modelRoute.current': '当前默认',
+  'modelRoute.unconfigured': '尚未配置',
+  'modelRoute.choose': '账户与模型',
+  'modelRoute.placeholder': '请选择账户与模型',
+  'modelRoute.noAccounts': '请先在“模型账户”中连接并启用账户。',
+  'modelRoute.save': '保存默认模型',
+
   'accounts.reauthorize': '重新登录',
   'nav.accounts': '模型账户',
   'accounts.title': '模型账户',
@@ -613,6 +630,23 @@ export const zh = {
 
 /** English dictionary. */
 export const en: Record<SakiKey, string> = {
+  'modelSwitch.title': 'Switch this Work Session model',
+  'modelSwitch.help': 'After the current turn and its tools finish, preserve conversation history in a new Run. The previous Run keeps its account and model.',
+  'modelSwitch.save': 'Switch account and model',
+  'modelSwitch.source': 'Work Session model switch',
+  'runs.account': 'Account identity',
+  'runs.accountRevision': 'Account configuration revision',
+  'runs.implementation': 'Provider implementation',
+  'modelRoute.title': 'Default model',
+  'modelRoute.version': 'Version {version}',
+  'modelRoute.help': 'Used for future Runs in this Project. Existing Runs retain their account and model.',
+  'modelRoute.current': 'Current default',
+  'modelRoute.unconfigured': 'Not configured',
+  'modelRoute.choose': 'Account and model',
+  'modelRoute.placeholder': 'Select an account and model',
+  'modelRoute.noAccounts': 'Connect and activate an account in Model accounts first.',
+  'modelRoute.save': 'Save default model',
+
   'accounts.reauthorize': 'Sign in again',
   'nav.accounts': 'Model accounts',
   'accounts.title': 'Model accounts',

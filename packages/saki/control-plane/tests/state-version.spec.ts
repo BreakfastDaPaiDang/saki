@@ -28,13 +28,13 @@ const STORAGE_GENERATION_ID = 'storage-generation-00000000-0000-4000-8000-000000
 const BUILD_ID = 'saki-build-0.1.0-test' as SakiBuildId
 
 describe('Saki product state versions', () => {
-  it('seals one v11 storage generation without widening historical seals', () => {
+  it('seals one v12 storage generation without widening historical seals', () => {
     const seal = createStorageGenerationSeal(INSTALLATION_ID, STORAGE_GENERATION_ID, BUILD_ID)
     expect(seal).toEqual({
-      schemaVersion: 9,
+      schemaVersion: 10,
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 11,
+      stateVersion: 12,
       createdByBuildId: BUILD_ID,
     })
     expect(sakiStorageGenerationDomainSpec.tables.storage_generation.valueSchema.parse(seal)).toEqual(seal)

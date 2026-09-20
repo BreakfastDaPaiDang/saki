@@ -5442,7 +5442,7 @@ SHA-256: `7f5f2a8618c2ece530a18b1358b890fb57fb8c35705e47b66bff2296f8c6e889`
 
 SHA-256: `06d1a332e7706d74c25c59af16d5909b82df7d11a2695e565a7ec4f0b699d315`
 
-来源：[`packages/saki/execution-local/src/agent-run.ts:35`](../packages/saki/execution-local/src/agent-run.ts)
+来源：[`packages/saki/execution-local/src/agent-run.ts:38`](../packages/saki/execution-local/src/agent-run.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|

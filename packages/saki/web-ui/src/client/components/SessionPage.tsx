@@ -1,4 +1,5 @@
 /** Retained Work Sessions, Run evidence, and owner-scoped Terminal scrollback. */
+import type { ReactNode } from 'react'
 import { Button, CodeBlock } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SakiInjected } from '../index.ts'
@@ -11,6 +12,7 @@ type Copy = TranslateNS<typeof NS>
 type RunView = NonNullable<PlanningProject['run']['value']>
 /** Protected execution reads and ordinary navigation gestures. */
 export interface SessionPageProps {
+  modelSelection?: ReactNode
   project: PlanningProject
   actions: PlanningActions
   openSession: SakiInjected['openSession']
@@ -56,6 +58,8 @@ function Sessions({ project, actions, t }: Pick<SessionPageProps, 'project' | 'a
         <ul className={css.rows}>{session.runs.map(run => <li key={run.id}>
           <Button onClick={() => { actions.navigate({ view: 'run', agentRunId: run.id, workItemId: session.workItem.id, runReturnView: 'sessions', runTab: 'overview', dispatchAfter: null, terminal: null, runReferencesOpen: false }) }}>{t(run.id === session.assignment.currentAgentRunId ? 'runs.current' : 'runs.history')}</Button>
           <span>{t(`planning.state.${run.state}`)} · {time(run.updatedAt)}</span>
+          {run.account === null ? null : <span>{run.account.selection.model} · {run.account.accountIdentity}
+            {' · '}{t('modelRoute.version', { version: run.account.selection.configurationRevision })}</span>}
           <code>{run.id}</code>
         </li>)}</ul>
       </li>)}</ul>}
@@ -80,6 +84,7 @@ function RunDetails(props: SessionPageProps & { view: RunView }) {
       <Button variant="outline" onClick={() => { actions.navigate({ view: 'changes', workItemId: item.id, changesRunId: view.run.id, executionReturnView: 'run' }) }}>{t('changes.title')}</Button>
       <Button variant="outline" onClick={() => { actions.navigate({ view: 'delivery', workItemId: item.id, changesRunId: view.run.id, executionReturnView: 'run' }) }}>{t('delivery.title')}</Button>
     </div>
+    {props.modelSelection}
     <nav className={css.tabs} aria-label={t('runs.details')}>
       {(['overview', 'trace', 'terminal'] as const).map(tab => <Button key={tab} aria-current={project.address.runTab === tab ? 'page' : undefined} onClick={() => { actions.navigate({ runTab: tab }) }}>{t(`runs.tab.${tab}`)}</Button>)}
     </nav>
@@ -87,10 +92,15 @@ function RunDetails(props: SessionPageProps & { view: RunView }) {
       <dl className={css.facts}>
         <div><dt>{t('sessions.primary')}</dt><dd>{t(`planning.state.${view.workSession.state}`)}</dd></div>
         <div><dt>{t('runs.requestState')}</dt><dd>{t(`planning.state.${view.run.state}`)}</dd></div>
-        <div><dt>{t('runs.source')}</dt><dd>{t('runs.manual')}</dd></div>
+        <div><dt>{t('runs.source')}</dt><dd>{t(view.run.source.kind === 'model-switch' ? 'modelSwitch.source' : 'runs.manual')}</dd></div>
         <div><dt>{t('runs.actor')}</dt><dd><code>{view.run.source.principalId}</code></dd></div>
         <div><dt>{t('runs.profile')}</dt><dd>{t('runs.profileVersion', { id: view.run.profile.id, version: view.run.profile.version })}</dd></div>
         <div><dt>{t('runs.model')}</dt><dd>{view.run.profile.modelRoute.provider} / {view.run.profile.modelRoute.model}</dd></div>
+        {view.run.account === null ? null : <>
+          <div><dt>{t('runs.account')}</dt><dd>{view.run.account.accountIdentity}</dd></div>
+          <div><dt>{t('runs.accountRevision')}</dt><dd>{view.run.account.selection.configurationRevision}</dd></div>
+          <div><dt>{t('runs.implementation')}</dt><dd>{view.run.account.implementation.name} · {view.run.account.implementation.version}</dd></div>
+        </>}
         <div><dt>{t('runs.created')}</dt><dd>{time(view.run.createdAt)}</dd></div>
         <div><dt>{t('changes.observed')}</dt><dd>{time(view.observation.observedAt)}</dd></div>
         <div><dt>{t('delivery.workItemStatus')}</dt><dd>{item.status === null ? t('planning.unavailable') : t(`planning.status.${item.status}`)}</dd></div>

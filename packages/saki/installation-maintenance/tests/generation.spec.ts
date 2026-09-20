@@ -53,8 +53,8 @@ describe('closed Saki generation creation', () => {
 
     await materializeFreshSakiGeneration(databasePath, identity, signal)
 
-    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 11 }, signal))
-      .resolves.toMatchObject({ stateVersion: 11 })
+    await expect(readClosedProvisioningSakiState(databasePath, { ...identity, stateVersion: 12 }, signal))
+      .resolves.toMatchObject({ stateVersion: 12 })
   })
 
   it('migrates a different closed v2 database and materializes the current seal', async () => {
@@ -76,8 +76,8 @@ describe('closed Saki generation creation', () => {
 
     await migrateSakiGeneration(sourcePath, targetPath, identity, signal, undefined)
 
-    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 11 }, signal))
-      .resolves.toMatchObject({ stateVersion: 11 })
+    await expect(readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 12 }, signal))
+      .resolves.toMatchObject({ stateVersion: 12 })
   })
 
   it('migrates an exact retained v3 generation into current v11 state', async () => {
@@ -113,8 +113,8 @@ describe('closed Saki generation creation', () => {
 
     await migrateSakiGeneration(sourcePath, targetPath, identity, signal, undefined)
 
-    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 11 }, signal)
-    expect(current.stateVersion).toBe(11)
+    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 12 }, signal)
+    expect(current.stateVersion).toBe(12)
     expect(current.controlPlane.table('github_project_sync').size).toBe(0)
     expect(current.controlPlane.table('github_sync_configuration_intents').size).toBe(0)
     expect(current.controlPlane.table('git_operation_intents').size).toBe(0)
@@ -155,8 +155,8 @@ describe('closed Saki generation creation', () => {
 
     await migrateSakiGeneration(sourcePath, targetPath, identity, signal, undefined)
 
-    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 11 }, signal)
-    expect(current.stateVersion).toBe(11)
+    const current = await readClosedProvisioningSakiState(targetPath, { ...identity, stateVersion: 12 }, signal)
+    expect(current.stateVersion).toBe(12)
     expect(current.hostExecution.table('operations').size).toBe(0)
   })
 

@@ -96,6 +96,8 @@ Inspection 绝不创建、恢复或唤醒 Agent。`inspectInterventionOpening` �
 | `operationMaxIndexBytes` | `67108864` | 固定到每项新规划 Host Operation 的 index 与 pin 读取限制 |
 | `operationMaxReflogBytes` | `4194304` | 固定到每项新规划 Commit 的 reflog 读取限制 |
 
+Run 交接在完整轮次结束后通过 Agent maintenance 执行。它检查物理历史摘要与父 Session 元数据，创建或恢复空闲后继，并释放来源运行时。它拒绝已有排队输入的来源，以及在尚未发布的保留切点之后继续推进的来源。重启恢复同一后继，不会发送额外模型请求。
+
 <a id="model-experience"></a>
 ## 模型体验
 

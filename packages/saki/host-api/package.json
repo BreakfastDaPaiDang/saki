@@ -46,6 +46,7 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
+    "@deepseek-ai/dsh-api-session-controller": "workspace:^",
     "@breakfastdapaidang/saki-execution": "workspace:^",
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
     "@breakfastdapaidang/saki-github": "workspace:^",
@@ -53,6 +54,7 @@
     "@deepseek-ai/cordis": "workspace:^"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-api-session-controller": "workspace:^",
     "@deepseek-ai/dsh-brand": "workspace:^",
     "@breakfastdapaidang/saki-control-plane": "workspace:^",
     "@breakfastdapaidang/saki-execution": "workspace:^",

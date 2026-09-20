@@ -1,5 +1,10 @@
 /** Current Saki control-plane domain assembly. @module @breakfastdapaidang/saki-control-plane/src/domain-spec */
 
+import { runModelSwitchIntentRecordSchema, currentAgentRunRecordSchema as agentRunRecordSchema } from './run-model-switch-spec.ts'
+import type { RunModelSwitchIntentRecord, CurrentAgentRunRecord as AgentRunRecord } from './run-model-switch-spec.ts'
+import { agentProfileModelRouteRecordSchema, projectModelRouteIntentRecordSchema } from './model-routing-spec.ts'
+import type { AgentProfileModelRouteRecord, ProjectModelRouteIntentRecord } from './model-routing-spec.ts'
+import type { SakiAgentProfileId } from './types.ts'
 import type { ModelAccountProfileId } from '@breakfastdapaidang/saki-model-account'
 import { modelAccountRecordSchema, modelAccountIntentRecordSchema, type ModelAccountRecord, type ModelAccountIntentRecord } from './model-supply-spec.ts'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
@@ -21,7 +26,6 @@ import {
   CONTROL_STATE_KEY,
   DEVELOPMENT_PROJECT_REGISTRY_KEY,
   agentOperationIntentRecordSchema,
-  agentRunRecordSchema,
   bindingWriteAdmissionRecordSchema,
   controlStateRecordSchema,
   developmentProjectRegistryRecordSchema,
@@ -41,7 +45,6 @@ import {
   workAssignmentRecordSchema,
   workSessionRecordSchema,
   type AgentOperationIntentRecord,
-  type AgentRunRecord,
   type BindingWriteAdmissionRecord,
   type ControlStateRecord,
   type DevelopmentProjectRegistryRecord,
@@ -81,8 +84,11 @@ import type {
 /** Exact current Saki control-plane domain declaration. */
 export const sakiControlPlaneDomainSpec = defineDomain({
   name: 'saki_control_plane',
-  version: 11,
+  version: 12,
   tables: {
+    run_model_switch_intents: domainTable<SakiControlIntentId, RunModelSwitchIntentRecord>(runModelSwitchIntentRecordSchema),
+    agent_profile_model_routes: domainTable<SakiAgentProfileId, AgentProfileModelRouteRecord>(agentProfileModelRouteRecordSchema),
+    project_model_route_intents: domainTable<SakiControlIntentId, ProjectModelRouteIntentRecord>(projectModelRouteIntentRecordSchema),
     model_accounts: domainTable<ModelAccountProfileId, ModelAccountRecord>(modelAccountRecordSchema),
     model_account_intents: domainTable<SakiControlIntentId, ModelAccountIntentRecord>(modelAccountIntentRecordSchema),
     control_state: domainTable<typeof CONTROL_STATE_KEY, ControlStateRecord>(controlStateRecordSchema),

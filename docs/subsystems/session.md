@@ -1083,6 +1083,24 @@ A Session became visible to Session list consumers.
 
 Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/session-controller/src/types.ts)
 
+<a id="api-sessionauthorize-control--bail"></a>
+
+#### `api-session/authorize-control` — bail
+
+Let a Session owner reject generic execution control synchronously.
+
+```ts cordis-catalog
+/**
+ * Let a Session owner reject generic execution control synchronously.
+ * @mode bail
+ * @param request - exact Session and operation about to commit.
+ * @returns 'denied' to reject, or undefined to delegate to other owners.
+ */
+'api-session/authorize-control'(request: SessionControlRequest): 'denied' | undefined
+```
+
+Source: [`packages/api/session-controller/src/control-policy.ts`](../../packages/api/session-controller/src/control-policy.ts)
+
 <a id="api-sessionerror--emit"></a>
 
 #### `api-session/error` — emit

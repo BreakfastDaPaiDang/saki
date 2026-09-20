@@ -123,6 +123,8 @@ function currentControlSnapshot(): KvUnitSnapshot {
   return {
     global: null,
     tables: {
+      agent_profile_model_routes: {},
+      project_model_route_intents: {},
       model_accounts: {},
       model_account_intents: {},
       control_state: {
@@ -550,6 +552,8 @@ function v6ControlSnapshot(): KvUnitSnapshot {
   if (registry === undefined || typeof registry !== 'object') throw new Error('current Registry fixture is missing')
   const { agentProfiles: _agentProfiles, ...historicalRegistry } = registry as Record<string, unknown>
   const tables = { ...current.tables }
+  delete tables['agent_profile_model_routes']
+  delete tables['project_model_route_intents']
   delete tables['model_accounts']
   delete tables['model_account_intents']
   delete tables['agent_operation_intents']
@@ -813,7 +817,7 @@ describe('closed Saki state reads', () => {
     const state = await readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 11,
+      stateVersion: 12,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))
 
@@ -849,7 +853,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 11,
+      stateVersion: 12,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)
@@ -867,7 +871,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 11,
+      stateVersion: 12,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     await expect(readFile(path)).resolves.toEqual(before)
@@ -886,7 +890,7 @@ describe('closed Saki state reads', () => {
     await expect(readClosedProvisioningSakiState(path, {
       installationId: INSTALLATION_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
-      stateVersion: 11,
+      stateVersion: 12,
       createdByBuildId: BUILD_ID,
     }, AbortSignal.timeout(2_000))).rejects.toMatchObject({ code: 'recovery-required' })
     expect(await exactFiles(path)).toEqual(before)

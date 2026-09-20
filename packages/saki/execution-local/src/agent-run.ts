@@ -6,6 +6,7 @@ import {
   installModelSelection,
   type Agent,
   type AgentHandle,
+  type AgentSetup,
   type AgentRegistry,
   type PreStepDecision,
 } from '@deepseek-ai/dsh-agent'
@@ -14,6 +15,8 @@ import { freezeMessage, MessageId, type UserMessage } from '@deepseek-ai/dsh-llm
 import type { SessionEvent, SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import type {
+  ActiveHostProjectBinding,
+  StartAgentRunProfile,
   HostOperationCancellationReason,
   HostOperationFailure,
   HostOperationSnapshot,
@@ -79,7 +82,7 @@ type InputEvidence =
 type SessionEvidence =
   | { readonly kind: 'absent' }
   | { readonly kind: 'conflict' }
-  | { readonly kind: 'present'; readonly events: readonly SessionEvent[]; readonly meta: { readonly cwd?: string; readonly agentPreset?: string } }
+  | { readonly kind: 'present'; readonly events: readonly SessionEvent[]; readonly inheritedEventCount: number; readonly meta: { readonly cwd?: string; readonly agentPreset?: string; readonly parentSession?: SessionId } }
 
 /**
  * Advance one accepted StartAgentRun through durable planning, exact input
@@ -387,21 +390,7 @@ async function acquireAgent(
   const persisted = await inspectDurableSession(dependencies, sessionId, signal)
   if (persisted.kind === 'conflict') return { kind: 'conflict' }
   if (persisted.kind === 'present' && !sessionMatchesRequest(persisted, record)) return { kind: 'conflict' }
-  const setup = async (agentCtx: Context): Promise<void> => {
-    await dependencies.agentPresets.mount(agentCtx, profile.agentPresetId)
-    installModelSelection(agentCtx, {
-      current: { provider: profile.modelRoute.provider, model: profile.modelRoute.model },
-      assembled: undefined,
-    })
-    agentCtx.on('agent/pre-step', async (_request, next): Promise<PreStepDecision> => {
-      const decision = await next()
-      if (decision.kind === 'reject') return decision
-      return {
-        kind: 'enter',
-        messages: decision.messages.filter(message => !isWakeForRun(message, record.request.run.agentRunId)),
-      }
-    })
-  }
+  const setup = localAgentRunSetup(dependencies, profile, record.request.run.agentRunId)
   try {
     const handle = persisted.kind === 'present'
       ? await dependencies.agents.resume({
@@ -427,6 +416,33 @@ async function acquireAgent(
     if (dependencies.agents.get(sessionId) !== undefined) return { kind: 'conflict' }
     dependencies.ctx.logger.warn(`[saki-execution-local] Agent Run '${record.request.run.agentRunId}' is unavailable: ${safeErrorName(error)}`)
     return { kind: 'unavailable' }
+  }
+}
+
+/**
+ * Mount the exact Run profile and consume only its model-invisible delivery wakes.
+ * @param dependencies - owning Local Host capabilities.
+ * @param profile - immutable Agent Profile.
+ * @param agentRunId - owner of delivery wake messages.
+ * @returns creation or restoration setup for the Run.
+ */
+export function localAgentRunSetup(
+  dependencies: LocalAgentRunDependencies, profile: StartAgentRunProfile, agentRunId: SakiAgentRunId,
+): AgentSetup {
+  return async (agentCtx: Context): Promise<void> => {
+    await dependencies.agentPresets.mount(agentCtx, profile.agentPresetId)
+    installModelSelection(agentCtx, {
+      current: { provider: profile.modelRoute.provider, model: profile.modelRoute.model },
+      assembled: undefined,
+    })
+    agentCtx.on('agent/pre-step', async (_request, next): Promise<PreStepDecision> => {
+      const decision = await next()
+      if (decision.kind === 'reject') return decision
+      return {
+        kind: 'enter',
+        messages: decision.messages.filter(message => !isWakeForRun(message, agentRunId)),
+      }
+    })
   }
 }
 
@@ -463,7 +479,7 @@ export async function inspectDurableSession(
   if (await dependencies.sessionPersistence.stat(sessionId, { signal }) === undefined) return { kind: 'absent' }
   await using handle = await dependencies.sessionPersistence.open(sessionId, 'read', { signal })
   const { events } = await handle.read(0, undefined, { signal })
-  return { kind: 'present', events, meta: handle.header }
+  return { kind: 'present', events, meta: handle.header, inheritedEventCount: handle.inheritedEventCount }
 }
 
 function sessionMatchesRequest(
@@ -784,13 +800,19 @@ async function persistReconciledAgentRun(
   return reconciled
 }
 
-async function verifyAgentRunBinding(
+/**
+ * Recheck the registered workspace and physical Git directories before a Run effect.
+ * @param dependencies - filesystem, workspace, and identity capabilities.
+ * @param binding - captured resource identity.
+ * @param signal - verification lifetime.
+ * @returns after the exact resource is confirmed.
+ */
+export async function verifyLocalAgentRunBinding(
   dependencies: LocalAgentRunDependencies,
-  record: LocalHostAgentRunOperationRecord,
+  binding: ActiveHostProjectBinding,
   signal: AbortSignal,
 ): Promise<void> {
   const { fs, workspaces, config, identityReader } = dependencies.world
-  const binding = record.request.expected.binding
   const expected = binding.expectedInspection.trusted
   const resource = await inspectRepositoryResource(fs, expected.canonicalWorktreePath, config.inventoryMaxFileBytes, signal)
   if (resource.kind === 'unavailable') throw new RetryableMutationError('unavailable')
@@ -829,7 +851,7 @@ async function verifyAgentRunWorld(
   | { readonly kind: 'decided'; readonly result: LocalAgentRunAdvanceResult }
 > {
   try {
-    await verifyAgentRunBinding(dependencies, record, signal)
+    await verifyLocalAgentRunBinding(dependencies, record.request.expected.binding, signal)
     return { kind: 'verified' }
   } catch (error: unknown) {
     signal.throwIfAborted()

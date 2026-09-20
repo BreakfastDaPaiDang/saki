@@ -1,5 +1,9 @@
 /** Pure validation of opened current and exact B03 Saki state. @module @breakfastdapaidang/saki-control-plane/state-validation */
 
+import { validateRunModelSwitchRecords } from './run-model-switch-validation.ts'
+import type { RunModelSwitchIntentTable } from './run-model-switch.ts'
+import { validateCapturedModelRoute, validateModelRoutingRecords } from './model-routing-validation.ts'
+import { sakiControlPlaneV11DomainSpec } from './migration-v11-source.ts'
 import type { Domain, KvTable, TableValueOf } from '@deepseek-ai/dsh-storage-domain'
 import { validateAgentOperationsDurableState } from './agent-operations.ts'
 import { validateBranchDeliveryOperationsDurableState } from './branch-delivery.ts'
@@ -20,6 +24,7 @@ import {
 } from './projects.ts'
 import {
   CONTROL_STATE_KEY,
+  DEVELOPMENT_PROJECT_REGISTRY_KEY,
 } from './spec.ts'
 import type {
   ControlStateRecord,
@@ -121,8 +126,8 @@ export function validateDisjointControlIntentIds(
  * The operation performs synchronous reads only: it never writes, invokes Host or Workspace
  * capabilities, or changes the active Installation. The caller must exclusively own both
  * domains with no concurrent writers because cross-table reads are not internally serialized.
- * @param controlPlane - opened `saki_control_plane@9` candidate domain.
- * @param storageGeneration - opened `saki_storage_generation@7` candidate domain.
+ * @param controlPlane - opened `saki_control_plane@12` candidate domain.
+ * @param storageGeneration - opened `saki_storage_generation@10` candidate domain.
  * @param expectedInstallationId - Installation identity selected by maintenance metadata.
  * @param expectedStorageGenerationId - physical generation identity selected by maintenance metadata.
  * @param expectedCreatedByBuildId - generation.json build identity that the seal must repeat.
@@ -142,7 +147,17 @@ export function validateCurrentSakiState(
   ), expectedInstallationId)
   const accounts = validateModelSupplyRecords(controlPlane.table('model_accounts'), controlPlane.table('model_account_intents'),
     (actor) => { validateRegistrationActorReference(actor, foundation) })
-  validateProjects(controlPlane, foundation, accounts)
+  const routing = validateModelRoutingRecords(controlPlane.table('agent_profile_model_routes'),
+    controlPlane.table('project_model_route_intents'), controlPlane.table('development_project_registry').get(DEVELOPMENT_PROJECT_REGISTRY_KEY),
+    { profiles: controlPlane.table('model_accounts'), intents: controlPlane.table('model_account_intents') },
+    (actor) => { validateRegistrationActorReference(actor, foundation) })
+  const switches = validateRunModelSwitchRecords({ intents: controlPlane.table('run_model_switch_intents'),
+    runs: controlPlane.table('agent_runs'), sessions: controlPlane.table('work_sessions'),
+    assignments: controlPlane.table('work_assignments'), origins: controlPlane.table('agent_operation_intents') },
+  (actor) => { validateRegistrationActorReference(actor, foundation) })
+  for (const record of switches) validateCapturedModelRoute(record.accountRoute,
+    { profiles: controlPlane.table('model_accounts'), intents: controlPlane.table('model_account_intents') })
+  validateProjects(controlPlane, foundation, [...accounts, ...routing, ...switches], true, controlPlane.table('run_model_switch_intents'))
 }
 
 /**
@@ -159,6 +174,24 @@ export function validateSakiV10SourceState(
     controlPlane.table('principals'), controlPlane.table('grants'), controlPlane.table('installation_access'),
   ), expectedInstallationId)
   validateProjects(controlPlane, foundation)
+}
+
+/**
+ * Validate exact v11 account and product relationships before migration.
+ * @param controlPlane - structurally validated v11 domain with its original table set.
+ * @param expectedInstallationId - Installation identity selected by maintenance.
+ */
+export function validateSakiV11SourceState(
+  controlPlane: Domain<typeof sakiControlPlaneV11DomainSpec>,
+  expectedInstallationId: SakiInstallationId,
+): void {
+  const foundation = validateFoundationAndAccess(foundationRecords(
+    controlPlane.table('control_state'), controlPlane.table('installations'), controlPlane.table('hosts'),
+    controlPlane.table('principals'), controlPlane.table('grants'), controlPlane.table('installation_access'),
+  ), expectedInstallationId)
+  const accounts = validateModelSupplyRecords(controlPlane.table('model_accounts'), controlPlane.table('model_account_intents'),
+    (actor) => { validateRegistrationActorReference(actor, foundation) })
+  validateProjects(controlPlane, foundation, accounts)
 }
 
 /**
@@ -717,12 +750,15 @@ function validateProjects(
   }>, 'table'>,
   foundation: FoundationSnapshot,
   accountIntents: readonly { readonly id: SakiControlIntentId }[] = [],
+  allowModelSelection = false,
+  forkIntents?: Pick<RunModelSwitchIntentTable, 'entries' | 'get'>,
 ): void {
   const projects = validateDevelopmentProjectsDurableState(
     domain.table('development_project_registry'),
     domain.table('registration_intents'),
     value => value,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
+    allowModelSelection,
   )
   const projectExists = (projectId: SakiDevelopmentProjectId): boolean => (
     projects.registry?.projects.some(project => project.id === projectId) ?? false
@@ -802,6 +838,7 @@ function validateProjects(
     projects.registry,
     agentOtherIntentIds,
     (actor) => { validateRegistrationActorReference(actor, foundation) },
+    forkIntents,
   )
   validateDisjointControlIntentIds(
     accountIntents,

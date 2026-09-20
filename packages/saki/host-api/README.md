@@ -11,6 +11,8 @@ English | [中文](README.zh.md)
 
 Connect a browser to a local Saki Host for authenticated project, work-item, Agent Run, and delivery operations.
 
+The Host registers Session control policy for Saki-owned physical Sessions. Generic Conversation commands cannot change a Run’s model or activate a cold Run; Host recovery retains ownership of its exact Agent Profile and input evidence. The current Run accepts live prompts through Conversation. Historical Sessions and both sides of an unfinished switch reject generic execution commands. Disposing the Host API removes this policy listener.
+
 ## Table of Contents
 
 - [Use this package](#use-this-package)
@@ -69,6 +71,8 @@ Branch Delivery CI carries a `confirmedSummary` derived from the last-confirmed 
 Branch Delivery reviews carry a complete exact-pull-request fact with independent current source health. The Host wire admits raw review state for display but no acceptance authority, credential material, or partial provider page.
 
 The `delivery-workspace` query accepts the same Project, Work Item, and refresh fields as `branch-delivery`. Its result adds safe selection revisions, a nullable configured credential-manager id, complete PR association evidence, and six Host-derived action offers. No helper credentials or private installation references cross the wire. An unavailable Branch Delivery result may carry a pending receipt; transport unavailability does not establish terminal failure.
+
+`queryProjectModelRoute` returns the selected Project Profile and safe account attribution. `configureProjectModelRoute` submits an explicit account configuration revision and model at an expected Project revision. Run and Session responses retain account identity and implementation version; provider configuration and credential addresses are excluded from the wire.
 
 <a id="transport-responsibilities"></a>
 ## Transport responsibilities

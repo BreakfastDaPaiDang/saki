@@ -5,7 +5,7 @@ import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { CREDENTIAL_PROTECTION_LOCAL_USER_TRUST } from '@deepseek-ai/dsh-credentials'
 import ModelAccountService, { modelAccountProviderId } from '@breakfastdapaidang/saki-model-account'
 import type { ModelAccountBinding, ModelAccountIdentity, ModelAccountProvider, ModelAccountSnapshot } from '@breakfastdapaidang/saki-model-account'
-import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
+import { MemoryTable } from './model-account-memory-table.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ModelSupply } from '../src/model-supply.ts'
 import { modelAccountIntentSchema } from '../src/model-supply-spec.ts'
@@ -13,22 +13,6 @@ import type { ModelAccountIntentRecord, ModelAccountRecord } from '../src/model-
 import { controlIntentActorSchema } from '../src/spec.ts'
 import { validateModelSupplyRecords } from '../src/model-supply-validation.ts'
 
-class MemoryTable<K extends string, V> implements KvTable<K, V> {
-  readonly records = new Map<K, V>()
-  get size(): number { return this.records.size }
-  get(key: K): V | undefined { return this.records.get(key) }
-  entries(): IterableIterator<[K, V]> { return new Map(this.records).entries() }
-  keys(): IterableIterator<K> { return new Map(this.records).keys() }
-  async put(key: K, value: V): Promise<void> { this.records.set(key, structuredClone(value)) }
-  async delete(key: K): Promise<boolean> { return this.records.delete(key) }
-  async update(key: K, update: (current: V) => V): Promise<V> {
-    const current = this.records.get(key)
-    if (current === undefined) throw new Error('missing record')
-    const next = update(current)
-    await this.put(key, next)
-    return next
-  }
-}
 
 class FixtureAdapter extends LlmAdapter {
   async * stream(): AsyncIterable<StreamChunk> { throw new Error('not used by inventory tests') }
@@ -219,6 +203,33 @@ describe('durable account authorization', () => {
     await h.supply.providersChanged()
     expect(h.supply.projection().profiles[0]).toMatchObject({ desiredActive: true, effectiveActive: true })
     expect(h.login).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains resolved account attribution across display edits and refuses a missing model', async () => {
+    const h = await setup()
+    const signal = new AbortController().signal
+    const inspect = vi.spyOn(h.provider, 'inspect').getMockImplementation()!
+    vi.spyOn(h.provider, 'inspect').mockImplementation(async (binding, signal) => ({
+      ...await inspect(binding, signal), models: [{ provider: binding.routeId, id: 'fixture-model', name: 'Fixture' }],
+    }))
+    await h.supply.submit(request, actor, signal)
+    h.release.resolve(undefined)
+    await h.terminal()
+    const profile = h.supply.projection().profiles[0]!
+    await h.supply.submit(modelAccountIntentSchema.parse({ type: 'set-model-account-active',
+      intentId: 'intent-00000000-0000-4000-8000-000000000003', profileId: profile.id,
+      expectedRevision: profile.revision, active: true }), actor, signal)
+    const selection = { accountProfileId: profile.id, configurationRevision: profile.configurationRevision, model: 'fixture-model' }
+    const resolved = await h.supply.resolveSelection(selection, signal)
+    await h.supply.submit(modelAccountIntentSchema.parse({ type: 'rename-model-account',
+      intentId: 'intent-00000000-0000-4000-8000-000000000004', profileId: profile.id,
+      expectedRevision: profile.revision + 1, name: 'Renamed' }), actor, signal)
+    expect(await h.supply.resolveSelection(selection, signal)).toEqual(resolved)
+    expect(JSON.stringify(resolved)).not.toContain('credentialKey')
+    await expect(h.supply.resolveSelection({ ...selection, model: 'missing' }, signal)).rejects.toThrow('unavailable')
+    await h.unregister()
+    await expect(h.supply.resolveSelection(selection, signal)).rejects.toThrow('unavailable')
+    expect(resolved.provider).toBe(profile.routeId)
   })
 
   it('recovers a committed credential when its Provider mounts after startup', async () => {

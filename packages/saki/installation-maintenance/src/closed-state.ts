@@ -21,6 +21,7 @@ import {
   sakiControlPlaneV8DomainSpec,
   sakiControlPlaneV9DomainSpec,
   sakiControlPlaneV10DomainSpec,
+  sakiControlPlaneV11DomainSpec,
   sakiStorageGenerationDomainSpec,
   sakiStorageGenerationV1DomainSpec,
   sakiStorageGenerationV2DomainSpec,
@@ -30,6 +31,7 @@ import {
   sakiStorageGenerationV6DomainSpec,
   sakiStorageGenerationV7DomainSpec,
   sakiStorageGenerationV8DomainSpec,
+  sakiStorageGenerationV9DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationSealRecordSchema,
   storageGenerationV3SealRecordSchema,
@@ -38,9 +40,11 @@ import {
   storageGenerationV6SealRecordSchema,
   storageGenerationV7SealRecordSchema,
   storageGenerationV8SealRecordSchema,
+  storageGenerationV9SealRecordSchema,
   validateSakiV4SourceState,
   validateSakiV3SourceState,
   validateSakiV10SourceState,
+  validateSakiV11SourceState,
   type SakiBuildId,
   type SakiInstallationId,
   type SakiStorageGenerationId,
@@ -90,7 +94,7 @@ export interface ClosedProvisioningSakiStateExpectation extends ClosedCurrentSak
 /** Validated, detached current Saki state read from a closed SQLite generation. */
 export interface ClosedCurrentSakiState {
   /** Current product-state version. */
-  readonly stateVersion: 11
+  readonly stateVersion: 12
   /** Read-only facade over schema-validated `saki_control_plane@10` data. */
   readonly controlPlane: Domain<typeof currentControlSpec>
   /** Read-only facade over schema-validated `saki_host_execution@5` data. */
@@ -110,7 +114,7 @@ export interface ClosedCurrentSakiState {
 /** Structurally valid current-format state whose product provisioning may be incomplete. */
 export interface ClosedProvisioningSakiState {
   /** Current product-state version. */
-  readonly stateVersion: 11
+  readonly stateVersion: 12
   /** Read-only facade over schema-valid, possibly incomplete `saki_control_plane@10` data. */
   readonly controlPlane: Domain<typeof currentControlSpec>
   /** Read-only facade over schema-valid, possibly incomplete `saki_host_execution@5` data. */
@@ -291,6 +295,26 @@ export interface ClosedSakiV10State {
   readonly sourceArtifacts: SqliteArtifactSet
 }
 
+/** Structurally validated exact v11 state retained for adjacent migration. */
+export interface ClosedSakiV11State {
+  /** Historical product-state version. */
+  readonly stateVersion: 11
+  /** Read-only facade over schema-validated exact `saki_control_plane@11` data. */
+  readonly controlPlane: Domain<typeof sakiControlPlaneV11DomainSpec>
+  /** Read-only facade over schema-validated exact `saki_host_execution@5` data. */
+  readonly hostExecution: Domain<typeof sakiHostExecutionDomainSpec>
+  /** Read-only facade over schema-validated exact `saki_storage_generation@9` data. */
+  readonly storageGeneration: Domain<typeof sakiStorageGenerationV9DomainSpec>
+  /** Detached exact v11 control-plane data. */
+  readonly controlPlaneSnapshot: KvUnitSnapshot
+  /** Detached exact v11 Host Operation data retained into the v11 generation. */
+  readonly hostExecutionSnapshot: KvUnitSnapshot
+  /** Detached exact v11 generation seal. */
+  readonly storageGenerationSnapshot: KvUnitSnapshot
+  /** Exact source evidence proved unchanged after reading and validation. */
+  readonly sourceArtifacts: SqliteArtifactSet
+}
+
 interface DetachedDomain<S extends DomainSpec> {
   readonly domain: Domain<S>
   readonly snapshot: KvUnitSnapshot
@@ -348,6 +372,12 @@ interface DetachedV10Domains {
   readonly storageGeneration: DetachedDomain<typeof sakiStorageGenerationV8DomainSpec>
 }
 
+interface DetachedV11Domains {
+  readonly controlPlane: DetachedDomain<typeof sakiControlPlaneV11DomainSpec>
+  readonly hostExecution: DetachedDomain<typeof sakiHostExecutionDomainSpec>
+  readonly storageGeneration: DetachedDomain<typeof sakiStorageGenerationV9DomainSpec>
+}
+
 interface ClosedRead<T> {
   readonly value: T
   readonly sourceArtifacts: SqliteArtifactSet
@@ -386,7 +416,7 @@ export async function readClosedCurrentSakiState(
     }
   })
   return {
-    stateVersion: 11,
+    stateVersion: 12,
     ...result.value,
     sourceArtifacts: result.sourceArtifacts,
   }
@@ -419,7 +449,7 @@ export async function readClosedProvisioningSakiState(
     }
   })
   return {
-    stateVersion: 11,
+    stateVersion: 12,
     ...result.value,
     sourceArtifacts: result.sourceArtifacts,
   }
@@ -675,21 +705,25 @@ export async function readClosedSakiV9State(
  * @param databasePath - selected historical SQLite database path.
  * @param expected - identities and build identity selected by trusted manifests.
  * @param signal - caller cancellation observed during capture and every closed read.
+ * @param phase - trusted manifest phase; provisioning validates exact schemas and seal without requiring completed Foundation records.
  * @returns detached exact v10 state suitable for adjacent migration.
  */
 export async function readClosedSakiV10State(
   databasePath: string,
   expected: ClosedCurrentSakiStateExpectation,
   signal: AbortSignal,
+  phase: 'ready' | 'provisioning' = 'ready',
 ): Promise<ClosedSakiV10State> {
   const result = await withSourcePreservingBackend(databasePath, signal, async (backend) => {
     try {
       const domains = await readDetachedV10Domains(backend, signal)
       validateExpectedV10StorageGenerationSeal(domains.storageGeneration.domain, expected)
-      validateSakiV10SourceState(domains.controlPlane.domain, expected.installationId)
-      validateGitOperationLinks(domains.controlPlane.domain, domains.hostExecution.domain)
-      validateBranchDeliveryOperationLinks(domains.controlPlane.domain, domains.hostExecution.domain)
-      validateAgentOperationLinks(domains.controlPlane.domain, domains.hostExecution.domain)
+      if (phase === 'ready') {
+        validateSakiV10SourceState(domains.controlPlane.domain, expected.installationId)
+        validateGitOperationLinks(domains.controlPlane.domain, domains.hostExecution.domain)
+        validateBranchDeliveryOperationLinks(domains.controlPlane.domain, domains.hostExecution.domain)
+        validateAgentOperationLinks(domains.controlPlane.domain, domains.hostExecution.domain)
+      }
       return detachedCurrentDomainsResult(domains)
     } catch (error) {
       preserveCancellation(signal, error)
@@ -697,6 +731,39 @@ export async function readClosedSakiV10State(
     }
   })
   return { stateVersion: 10, ...result.value, sourceArtifacts: result.sourceArtifacts }
+}
+
+/**
+ * Read and validate exact historical v11 domains through SQLite frozen private copies.
+ * @param databasePath - selected historical SQLite database path.
+ * @param expected - identities and build identity selected by trusted manifests.
+ * @param signal - caller cancellation observed during capture and every closed read.
+ * @param phase - trusted manifest phase; provisioning validates exact schemas and seal without requiring completed Foundation records.
+ * @returns detached exact v11 state suitable for adjacent migration.
+ */
+export async function readClosedSakiV11State(
+  databasePath: string,
+  expected: ClosedCurrentSakiStateExpectation,
+  signal: AbortSignal,
+  phase: 'ready' | 'provisioning' = 'ready',
+): Promise<ClosedSakiV11State> {
+  const result = await withSourcePreservingBackend(databasePath, signal, async (backend) => {
+    try {
+      const domains = await readDetachedV11Domains(backend, signal)
+      validateExpectedV11StorageGenerationSeal(domains.storageGeneration.domain, expected)
+      if (phase === 'ready') {
+        validateSakiV11SourceState(domains.controlPlane.domain, expected.installationId)
+        validateGitOperationLinks(domains.controlPlane.domain, domains.hostExecution.domain)
+        validateBranchDeliveryOperationLinks(domains.controlPlane.domain, domains.hostExecution.domain)
+        validateAgentOperationLinks(domains.controlPlane.domain, domains.hostExecution.domain)
+      }
+      return detachedCurrentDomainsResult(domains)
+    } catch (error) {
+      preserveCancellation(signal, error)
+      throw recoveryFailure('selected historical v11 Saki generation is missing, malformed, or inconsistent', error)
+    }
+  })
+  return { stateVersion: 11, ...result.value, sourceArtifacts: result.sourceArtifacts }
 }
 
 async function readDetachedV5Domains(
@@ -780,6 +847,20 @@ async function readDetachedV10Domains(
     controlPlane: detachDomain(sakiControlPlaneV10DomainSpec, controlPlaneSnapshot),
     hostExecution: detachDomain(sakiHostExecutionDomainSpec, hostExecutionSnapshot),
     storageGeneration: detachDomain(sakiStorageGenerationV8DomainSpec, storageGenerationSnapshot),
+  }
+}
+
+async function readDetachedV11Domains(
+  backend: SqliteStorageBackend,
+  signal: AbortSignal,
+): Promise<DetachedV11Domains> {
+  const controlPlaneSnapshot = await readExactDomain(backend, sakiControlPlaneV11DomainSpec, signal)
+  const hostExecutionSnapshot = await readExactDomain(backend, sakiHostExecutionDomainSpec, signal)
+  const storageGenerationSnapshot = await readExactDomain(backend, sakiStorageGenerationV9DomainSpec, signal)
+  return {
+    controlPlane: detachDomain(sakiControlPlaneV11DomainSpec, controlPlaneSnapshot),
+    hostExecution: detachDomain(sakiHostExecutionDomainSpec, hostExecutionSnapshot),
+    storageGeneration: detachDomain(sakiStorageGenerationV9DomainSpec, storageGenerationSnapshot),
   }
 }
 
@@ -1068,6 +1149,22 @@ function validateExpectedV10StorageGenerationSeal(
     || seal.storageGenerationId !== expected.storageGenerationId
     || seal.createdByBuildId !== expected.createdByBuildId) {
     throw new Error('historical v10 Saki storage-generation seal disagrees with selected generation metadata')
+  }
+}
+
+function validateExpectedV11StorageGenerationSeal(
+  domain: Domain<typeof sakiStorageGenerationV9DomainSpec>,
+  expected: ClosedCurrentSakiStateExpectation,
+): void {
+  const entries = [...domain.table('storage_generation').entries()]
+  if (entries.length !== 1 || entries[0]?.[0] !== STORAGE_GENERATION_KEY) {
+    throw new Error('historical v11 Saki storage-generation seal is not the required singleton')
+  }
+  const seal = storageGenerationV9SealRecordSchema.parse(entries[0][1])
+  if (seal.installationId !== expected.installationId
+    || seal.storageGenerationId !== expected.storageGenerationId
+    || seal.createdByBuildId !== expected.createdByBuildId) {
+    throw new Error('historical v11 Saki storage-generation seal disagrees with selected generation metadata')
   }
 }
 

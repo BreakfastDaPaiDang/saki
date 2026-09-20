@@ -412,7 +412,7 @@ describe('Saki serving Installation scope', () => {
     })
 
     await expect(readInstallationManifest(installationRoot, signal)).resolves.toMatchObject({
-      value: { phase: 'ready', stateVersion: 11 },
+      value: { phase: 'ready', stateVersion: 12 },
     })
   })
 
@@ -424,7 +424,7 @@ describe('Saki serving Installation scope', () => {
     const signal = AbortSignal.timeout(10_000)
     const published = await publishSelectedGeneration(
       installationRoot,
-      11,
+      12,
       'ready',
       async (databasePath, activeSignal) => {
         await migrateSakiGeneration(sourcePath, databasePath, {
@@ -574,7 +574,7 @@ describe('Saki serving Installation scope', () => {
         const otherRoot = await root()
         await publishSelectedGeneration(
           otherRoot,
-          11,
+          12,
           'ready',
           async (databasePath) => {
             await writeFile(databasePath, 'unsupported')
@@ -609,7 +609,7 @@ describe('Saki serving Installation scope', () => {
       const signal = AbortSignal.timeout(5_000)
       const published = await publishSelectedGeneration(
         installationRoot,
-        11,
+        12,
         'provisioning',
         async (databasePath, activeSignal) => {
           await materializeFreshSakiGeneration(databasePath, {
@@ -850,7 +850,7 @@ describe('Saki serving Installation scope', () => {
     const signal = AbortSignal.timeout(5_000)
     await publishSelectedGeneration(
       installationRoot,
-      12,
+      13,
       'ready',
       async (databasePath) => {
         await writeFile(databasePath, 'unsupported')

@@ -1,5 +1,6 @@
 /** Agent activation, composition, and model-selection policy owned by API Session. */
 
+import { assertSessionControl } from './control-policy.ts'
 import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
@@ -186,6 +187,7 @@ export class ApiSessionAgentController {
   ): Promise<ApiSessionAgentResult> {
     const live = this.liveAgent(sessionId)
     if (live !== undefined) return live
+    assertSessionControl(this.ctx, sessionId, 'resume')
     const attached = this.ctx.sessions.get(sessionId)
     if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, undefined)) {
       return { error: apiSessionSubagentOwnershipError(sessionId) }
@@ -246,6 +248,7 @@ export class ApiSessionAgentController {
             }
             return live
           }
+          assertSessionControl(this.ctx, sessionId, 'resume')
           const attached = this.ctx.sessions.get(sessionId)
           if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, undefined)) {
             throw new ApiSessionSubagentOwnership(sessionId)
@@ -324,6 +327,7 @@ export class ApiSessionAgentController {
    * @param selection - validated selection to record and apply.
    */
   selectForNextRequest(agent: Agent, selection: AgentModelSelection): void {
+    assertSessionControl(this.ctx, agent.id, 'model-selection')
     agent.session.append('model/selection', selection)
     this.selectionFor(agent).current = selection
   }
@@ -430,7 +434,7 @@ export class ApiSessionAgentController {
     return (await this.ctx.agents.resume({
       resumeSessionId: sessionId,
       agentOptions: this.agentOptions(),
-      setup: composition.setup,
+      setup: this.controlledSetup(sessionId, composition.setup),
     })).agent
   }
 
@@ -440,6 +444,7 @@ export class ApiSessionAgentController {
     checkPersistedIdentity: boolean,
     presetId: string | undefined,
   ): Promise<Agent> {
+    assertSessionControl(this.ctx, sessionId, 'resume')
     const attached = this.ctx.sessions.get(sessionId)
     const live = this.ctx.agents.get(sessionId)
     if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, live)) {
@@ -462,7 +467,7 @@ export class ApiSessionAgentController {
         return (await this.ctx.agents.resume({
           resumeSessionId: sessionId,
           agentOptions: this.agentOptions(),
-          setup: composition.setup,
+          setup: this.controlledSetup(sessionId, composition.setup),
         })).agent
       } catch (error: unknown) {
         if (!(error instanceof SessionQueryError)
@@ -483,8 +488,18 @@ export class ApiSessionAgentController {
         cwd,
         ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
       },
-      setup: composition.setup,
+      setup: this.controlledSetup(sessionId, composition.setup),
     })).agent
+  }
+
+  private controlledSetup(sessionId: SessionId, setup: AgentSetup): AgentSetup {
+    return async (agentCtx, agent) => {
+      const prepared = await setup(agentCtx, agent)
+      return { commit: () => {
+        assertSessionControl(this.ctx, sessionId, 'resume')
+        prepared?.commit()
+      } }
+    }
   }
 
   private agentOptions(): AgentOptions {

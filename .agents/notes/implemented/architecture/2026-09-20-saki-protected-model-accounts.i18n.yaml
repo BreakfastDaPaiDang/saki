@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-20-saki-protected-model-accounts.md
-2026-09-20-saki-protected-model-accounts.md: 82425a4441e48405c81628402ad01289c3dca336
-2026-09-20-saki-protected-model-accounts.zh.md: e7ab03efb9cf563cfdd61c1cc96e71fc6d7b6702
+2026-09-20-saki-protected-model-accounts.md: 0e4d0bec6c9f48d3f9d5ca892ed439d690318212
+2026-09-20-saki-protected-model-accounts.zh.md: 547a23cefb92a32580567000fd15d7fc1b022a64

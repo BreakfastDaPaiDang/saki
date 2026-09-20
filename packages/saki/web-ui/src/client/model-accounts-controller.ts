@@ -3,21 +3,26 @@ import { z } from 'zod'
 import { defineStore, notifySubscribers } from '@deepseek-ai/dsh-client-store'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import type { SakiHostClient } from '@breakfastdapaidang/saki-host-api/client'
-import { sakiModelAccountIntentSchema } from '@breakfastdapaidang/saki-host-api/wire'
-import type { SakiWireModelAccountIntent, SakiWireModelSupplyResult, SakiWireProjectionCursor } from '@breakfastdapaidang/saki-host-api/wire'
+import { sakiModelAccountIntentSchema, sakiSwitchWorkSessionModelIntentSchema, sakiConfigureProjectModelRouteIntentSchema } from '@breakfastdapaidang/saki-host-api/wire'
+import type { SakiWireSwitchWorkSessionModelIntent, SakiWireModelAccountIntent, SakiWireModelSupplyResult, SakiWireProjectionCursor, SakiWireConfigureProjectModelRouteIntent, SakiWireProjectModelRouteResult, SakiWireProjectId } from '@breakfastdapaidang/saki-host-api/wire'
 import type { PlanningController } from './planning-controller.ts'
 
 type Supply = Extract<SakiWireModelSupplyResult, { ok: true }>['projection']
-type Draft = SakiWireModelAccountIntent extends infer I ? I extends SakiWireModelAccountIntent ? Omit<I, 'intentId'> : never : never
-type Pending = Record<string, Record<string, SakiWireModelAccountIntent>>
-const pendingSchema = z.record(z.string(), z.record(z.string(), sakiModelAccountIntentSchema))
+type SelectionIntent = SakiWireSwitchWorkSessionModelIntent | SakiWireModelAccountIntent | SakiWireConfigureProjectModelRouteIntent
+const selectionIntentSchema = z.union([
+  sakiSwitchWorkSessionModelIntentSchema, sakiModelAccountIntentSchema, sakiConfigureProjectModelRouteIntentSchema,
+])
+type Draft = SelectionIntent extends infer I ? I extends SelectionIntent ? Omit<I, 'intentId'> : never : never
+type Pending = Record<string, Record<string, SelectionIntent>>
+const pendingSchema = z.record(z.string(), z.record(z.string(), selectionIntentSchema))
 
 /** Projected inventory plus local transport state; credentials are never browser state. */
 export interface ModelAccountsSnapshot {
   readonly supply: Supply | null
   readonly loading: boolean
   readonly failure: 'denied' | 'unavailable' | 'conflict' | null
-  readonly pending: readonly SakiWireModelAccountIntent[]
+  readonly pending: readonly SelectionIntent[]
+  readonly projectRoute: Extract<SakiWireProjectModelRouteResult, { ok: true }>['projection'] | null
 }
 
 /** Explicit account gestures exposed to the pure page. */
@@ -27,7 +32,7 @@ export interface ModelAccountsActions {
   /** @param draft - user-selected account operation without an allocated Intent id. */
   submit(draft: Draft): Promise<void>
   /** @param intent - exact unacknowledged request retained before its first send. */
-  retry(intent: SakiWireModelAccountIntent): Promise<void>
+  retry(intent: SelectionIntent): Promise<void>
 }
 
 /** One browser's account inventory; the Host owns accepted authorization lifetimes. */
@@ -42,12 +47,13 @@ export class ModelAccountsController implements ModelAccountsActions {
         const parsed = z.object({ byPrincipal: pendingSchema }).strict().safeParse(input)
         state.byPrincipal = parsed.success ? parsed.data.byPrincipal : {}
       },
-      save: (state: { byPrincipal: Pending }, principal: string, value: Record<string, SakiWireModelAccountIntent>) => {
+      save: (state: { byPrincipal: Pending }, principal: string, value: Record<string, SelectionIntent>) => {
         state.byPrincipal[principal] = value
       },
     },
   }).create()
-  private snapshot: ModelAccountsSnapshot = { supply: null, loading: false, failure: null, pending: [] }
+  private snapshot: ModelAccountsSnapshot = { supply: null, loading: false, failure: null, pending: [], projectRoute: null }
+  private projectId: SakiWireProjectId | undefined
   private principal: string | undefined
   private token: string | undefined
   private unsubscribe: (() => void) | undefined
@@ -56,8 +62,8 @@ export class ModelAccountsController implements ModelAccountsActions {
   private readonly sending = new Set<string>()
 
   constructor(
-    private readonly api: Pick<SakiHostClient, 'queryModelSupply' | 'submitModelAccount' | 'watchProjections'>,
-    private readonly access: Pick<PlanningController, 'getSnapshot' | 'subscribe' | 'reloadAccess'>,
+    private readonly api: Pick<SakiHostClient, 'queryModelSupply' | 'submitModelAccount' | 'watchProjections' | 'queryProjectModelRoute' | 'configureProjectModelRoute' | 'switchWorkSessionModel'>,
+    private readonly access: Pick<PlanningController, 'getSnapshot' | 'subscribe' | 'reloadAccess' | 'navigate'>,
   ) {
     this.pending.actions.hydrate(this.pending.store.getSnapshot())
   }
@@ -72,13 +78,23 @@ export class ModelAccountsController implements ModelAccountsActions {
   dispose = (): void => { this.lifetime.abort(); this.authority.abort(); this.unsubscribe?.(); this.listeners.clear() }
 
   private syncAccess = (): void => {
-    const access = this.access.getSnapshot().access
+    const snapshot = this.access.getSnapshot()
+    const access = snapshot.access
+    const projectId = snapshot.project?.id
     const auth = access !== null && access !== 'unavailable' && access.kind === 'authenticated' ? access : undefined
-    if (this.principal === auth?.principal.id && this.token === auth?.requestToken) return
+    if (this.principal === auth?.principal.id && this.token === auth?.requestToken) {
+      if (this.projectId !== projectId) {
+        this.projectId = projectId
+        this.publish({ projectRoute: null })
+        void this.refresh()
+      }
+      return
+    }
+    this.projectId = projectId
     this.authority.abort(); this.authority = new AbortController()
     this.watching = undefined
     this.principal = auth?.principal.id; this.token = auth?.requestToken
-    this.publish({ supply: null, failure: null, loading: false })
+    this.publish({ supply: null, projectRoute: null, failure: null, loading: false })
     if (auth !== undefined) this.startWatch()
   }
 
@@ -95,8 +111,14 @@ export class ModelAccountsController implements ModelAccountsActions {
     const signal = AbortSignal.any([read.signal, this.authority.signal, this.lifetime.signal])
     this.publish({ loading: true })
     try {
-      const result = await this.api.queryModelSupply(signal)
-      if (!signal.aborted) this.publish(result.ok ? { supply: result.projection, loading: false, failure: null }
+      const projectId = this.projectId
+      const [result, route] = await Promise.all([
+        this.api.queryModelSupply(signal),
+        projectId === undefined ? undefined : this.api.queryProjectModelRoute(projectId, signal),
+      ])
+      if (!signal.aborted) this.publish({ projectRoute: route?.ok ? route.projection : null })
+      if (!signal.aborted) this.publish(result.ok ? { supply: result.projection, loading: false, failure: route !== undefined && !route.ok
+        ? route.reason === 'denied' ? 'denied' : 'unavailable' : null }
         : { supply: null, loading: false, failure: result.reason })
       if (!signal.aborted && result.ok) this.startWatch()
     } catch {
@@ -129,12 +151,12 @@ export class ModelAccountsController implements ModelAccountsActions {
 
   /** @inheritdoc */
   submit = async (draft: Draft): Promise<void> => {
-    const intent = sakiModelAccountIntentSchema.parse({ ...draft, intentId: `intent-${randomUUID()}` })
+    const intent = selectionIntentSchema.parse({ ...draft, intentId: `intent-${randomUUID()}` })
     await this.retry(intent)
   }
 
   /** @inheritdoc */
-  retry = async (intent: SakiWireModelAccountIntent): Promise<void> => {
+  retry = async (intent: SelectionIntent): Promise<void> => {
     const principal = this.principal; const token = this.token
     if (principal === undefined || token === undefined || this.sending.has(intent.intentId)) return
     const signal = AbortSignal.any([this.authority.signal, this.lifetime.signal])
@@ -142,15 +164,24 @@ export class ModelAccountsController implements ModelAccountsActions {
     this.pending.actions.save(principal, { ...pending, [intent.intentId]: intent })
     this.sending.add(intent.intentId); this.publish({ failure: null })
     try {
-      const result = await this.api.submitModelAccount(intent, token, signal)
+      const result = intent.type === 'switch-work-session-model'
+        ? await this.api.switchWorkSessionModel(intent, token, signal)
+        : intent.type === 'configure-project-model-route'
+          ? await this.api.configureProjectModelRoute(intent, token, signal)
+          : await this.api.submitModelAccount(intent, token, signal)
       if (signal.aborted) return
-      if (result.ok) {
+      if ((!result.ok && result.reason === 'conflict') || (result.ok && (intent.type !== 'switch-work-session-model'
+        || result.receipt.state !== 'reconciliation-required' && result.receipt.state !== 'accepted'))) {
         const remaining = Object.fromEntries(Object.entries(this.pending.store.getSnapshot().byPrincipal[principal] ?? {})
           .filter(([id]) => id !== intent.intentId))
         this.pending.actions.save(principal, remaining)
       }
+      if (intent.type === 'switch-work-session-model' && result.ok && result.receipt.state === 'completed'
+        && 'agentRunId' in result.receipt && this.access.getSnapshot().project?.id === intent.projectId) {
+        this.access.navigate({ view: 'run', agentRunId: result.receipt.agentRunId, dispatchAfter: null, terminal: null })
+      }
       await this.refresh()
-      this.publish({ failure: result.ok ? null : result.reason })
+      this.publish({ failure: result.ok ? result.receipt.state === 'failed' || result.receipt.state === 'reconciliation-required' ? 'unavailable' : null : result.reason })
     } catch {
       if (!signal.aborted) this.publish({ failure: 'unavailable' })
     } finally { this.sending.delete(intent.intentId) }

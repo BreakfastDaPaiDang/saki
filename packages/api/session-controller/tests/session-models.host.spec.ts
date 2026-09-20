@@ -16,8 +16,7 @@ import type {
   LlmModelReasoningInfo, LlmProviderInfo, LlmResolvedModelInfo, StreamChunk,
   UserMessage,
 } from '@deepseek-ai/dsh-llm'
-import SessionStore from '@deepseek-ai/dsh-session'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionPromptRequest, SessionRequestId } from '../src/types.ts'
 import { ApiSessionAgentController } from '../src/agent.ts'
 import { buildModelCatalog } from '../src/catalog.ts'
@@ -158,6 +157,60 @@ function currentSelection(ctx: Context, sessionId: SessionId) {
 }
 
 describe('Web session model selection', () => {
+  it('refuses generic activation of a cold owner-controlled Session before reading or resuming it', async () => {
+    const { ctx } = await harness()
+    try {
+      const sessionId = SessionId('owned-cold-session')
+      const remote = createSessionTestRemote(ctx, { cwd: '/tmp', defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }) })
+      const resume = vi.spyOn(ctx.agents, 'resume')
+      const observe = vi.spyOn(ctx.sessionQuery, 'observeSession')
+      ctx.on('api-session/authorize-control', request => request.sessionId === sessionId ? 'denied' : undefined)
+      expect(await remote.prompt(promptRequest({ sessionId, mode: 'queue', content: [{ type: 'text', text: 'continue' }] })))
+        .toMatchObject({ ok: false, error: { code: 'session/agent-busy', details: { reason: 'owner-controlled' } } })
+      expect(resume).not.toHaveBeenCalled()
+      expect(observe).not.toHaveBeenCalled()
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('rejects an owner-controlled model change without logging or saving the selection', async () => {
+    const { ctx, sessionId, agent } = await harness()
+    try {
+      const remote = createSessionTestRemote(ctx, {
+        defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }), cwd: '/tmp',
+      })
+      const save = vi.spyOn(ctx.agentDefaultModel, 'saveSelection')
+      const dispose = ctx.on('api-session/authorize-control', request =>
+        request.sessionId === sessionId && request.action === 'model-selection' ? 'denied' : undefined)
+      expect(await remote.selectModel({ sessionId, provider: 'deepseek-official', model: 'deepseek-reasoner' }))
+        .toMatchObject({ ok: false, error: { code: 'session/agent-busy', details: { reason: 'owner-controlled' } } })
+      expect(agent.session.snapshotEvents().filter(event => event.type === 'model/selection')).toEqual([])
+      expect(save).not.toHaveBeenCalled()
+      dispose()
+      expect(await remote.selectModel({ sessionId, provider: 'deepseek-official', model: 'deepseek-reasoner' }))
+        .toMatchObject({ ok: true })
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('rechecks owner policy after asynchronous prompt content admission', async () => {
+    const { ctx, sessionId, agent } = await harness()
+    try {
+      let blocked = false
+      const followup = vi.fn()
+      Object.assign(agent, { followup })
+      const remote = createSessionTestRemote(ctx, {
+        defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }), cwd: '/tmp',
+      })
+      ctx.on('api-session/authorize-control', request => request.action === 'prompt' && blocked ? 'denied' : undefined)
+      vi.spyOn(ctx.attachments, 'admitPromptContent').mockImplementationOnce(async () => {
+        blocked = true
+        return [{ type: 'text', text: 'continue' }]
+      })
+      expect(await remote.prompt(promptRequest({ sessionId, mode: 'queue', content: [{ type: 'text', text: 'continue' }] })))
+        .toMatchObject({ ok: false, error: { code: 'session/agent-busy', details: { reason: 'owner-controlled' } } })
+      expect(followup).not.toHaveBeenCalled()
+    } finally { await ctx.fiber.dispose() }
+  })
+
   it('validates an ordered image batch before persisting any member', async () => {
     const { ctx, agent, sessionId } = await harness()
     const validateImage = vi.fn((_input: { data: Uint8Array }) => Promise.resolve())

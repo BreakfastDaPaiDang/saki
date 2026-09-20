@@ -11,6 +11,8 @@ kind: "package-reference"
 
 将浏览器连接到本地 Saki Host，执行经过认证的项目、Work Item、Agent Run 和交付操作。
 
+Host 为 Saki 拥有的物理 Session 注册控制策略。通用 Conversation 命令不能修改 Run 的模型或激活冷 Run；Host 恢复继续负责精确的 Agent Profile 与输入证据。当前 Run 可通过 Conversation 接收输入。历史 Session 与未完成切换两侧的 Session 拒绝通用执行命令。Host API 释放时会移除该策略监听器。
+
 ## 目录
 
 - [使用本包](#use-this-package)
@@ -69,6 +71,8 @@ Branch Delivery CI 会携带根据 last-confirmed 准确 Commit fact 派生的 `
 Branch Delivery review 携带完整的精确 pull-request fact，并具有独立的当前 source health。Host wire 接纳用于展示的原始 review state，但不接纳验收权限、credential material 或部分 provider page。
 
 `delivery-workspace` 查询接受与 `branch-delivery` 相同的 Project、Work Item 和 refresh 字段。其结果补充安全的选择修订、可空的已配置凭据管理器 id、完整 PR 关联证据，以及六项由 Host 推导的操作建议。凭据内容与私有 Installation 引用不进入传输。不可用的 Branch Delivery 结果可以携带 pending 回执；传输不可用不代表终态失败。
+
+`queryProjectModelRoute` 返回项目选中的 Profile 与安全账户归属。`configureProjectModelRoute` 按预期项目修订提交明确的账户配置修订与模型。Run 和 Session 响应保留账户身份与实现版本；供应商配置及凭据地址不进入传输数据。
 
 <a id="transport-responsibilities"></a>
 ## 传输职责

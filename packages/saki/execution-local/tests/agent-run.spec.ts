@@ -11,7 +11,7 @@ import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import AgentPresets from '@deepseek-ai/dsh-agent-presets'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import LlmRuntime, { freezeMessage, LlmAdapter } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage, freezeMessage, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import TerminalSessionService, { type TerminalBackendSession, type TerminalSessionStatus } from '@deepseek-ai/dsh-terminal'
 import type { TurnEndReason } from '@deepseek-ai/dsh-session'
@@ -33,6 +33,8 @@ import {
   canonicalDigest,
   computeProjectInspectionFingerprint,
   type ActiveHostProjectBinding,
+  type AgentRunForkPlan,
+  type ForkAgentRunRequest,
   type HostOperationAdmissionSource,
   type SakiAgentProfileId,
   type SakiAgentRunId,
@@ -2313,6 +2315,98 @@ describe('LocalSakiHostExecution StartAgentRun', () => {
     expect(restarted.adapter.requests).toHaveLength(0)
   }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
 })
+
+describe('LocalSakiHostExecution Run fork', () => {
+  it('inherits completed history without a model call, then uses the successor model for new input', async () => {
+    const test = await forkSource([stopResponse('continued')])
+    const retain = vi.fn(async (_plan: AgentRunForkPlan) => {})
+    const plan = await test.harness.execution.forkAgentRun(test.request, undefined, retain, test.signal)
+    const child = test.harness.context.agents.get(test.request.target.sessionId)
+    expect(child).toBeDefined()
+    if (child === undefined) throw new Error('successor missing')
+    expect(retain).toHaveBeenCalledExactlyOnceWith(plan)
+    expect(test.harness.context.agents.get(SESSION_ID)).toBeUndefined()
+    expect(child.status).toBe('idle')
+    expect(await test.harness.execution.observeAgentRun({ type: 'forked-agent-run', request: test.request, plan }, null, test.signal))
+      .toMatchObject({ session: { state: 'confirmed', runtime: 'idle' } })
+    expect(test.harness.adapter.requests).toHaveLength(1)
+    expect(child.session.header.parentSession).toBe(SESSION_ID)
+    expect(child.session.snapshotEvents().slice(0, plan.inheritedEventCount)).toEqual(test.history)
+    child.followup(createUserMessage({ content: [{ type: 'text', text: 'Continue with the selected model.' }], source: { kind: 'user' } }))
+    await child.whenIdle()
+    expect(test.harness.adapter.requests).toHaveLength(2)
+    expect(test.harness.adapter.requests[1]).toMatchObject({ model: 'successor-model' })
+    expect(test.harness.adapter.requests[1]?.messages.some(message => message.role === 'assistant')).toBe(true)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+
+  it('replays a retained cut after lost preparation acknowledgement without preparing another cut', async () => {
+    const test = await forkSource()
+    let retained: AgentRunForkPlan | undefined
+    await expect(test.harness.execution.forkAgentRun(test.request, undefined, async (plan) => {
+      retained = plan
+      throw new Error('acknowledgement lost')
+    }, test.signal)).rejects.toThrow('acknowledgement lost')
+    expect(test.harness.context.agents.get(test.request.target.sessionId)).toBeUndefined()
+    const retain = vi.fn(async (_plan: AgentRunForkPlan) => {})
+    expect(await test.harness.execution.forkAgentRun(test.request, retained, retain, test.signal)).toEqual(retained)
+    expect(retain).not.toHaveBeenCalled()
+    expect(test.harness.adapter.requests).toHaveLength(1)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+
+  it('restores the same successor after restart without activating the source or sending input', async () => {
+    const test = await forkSource()
+    const plan = await test.harness.execution.forkAgentRun(test.request, undefined, async () => {}, test.signal)
+    await disposeContext(test.harness.context)
+    const restarted = await mountAgentRunHarness(test.world, [])
+    const retain = vi.fn(async (_plan: AgentRunForkPlan) => {})
+    expect(await restarted.execution.forkAgentRun(test.request, plan, retain, test.signal)).toEqual(plan)
+    expect(retain).not.toHaveBeenCalled()
+    expect(restarted.context.agents.get(SESSION_ID)).toBeUndefined()
+    expect(restarted.context.agents.get(test.request.target.sessionId)?.status).toBe('idle')
+    expect(restarted.adapter.requests).toHaveLength(0)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+
+  it('rejects changed source input at publication and leaves it available to the source', async () => {
+    const test = await forkSource([stopResponse('source accepted the racing input')])
+    let retained: AgentRunForkPlan | undefined
+    const source = test.harness.context.agents.get(SESSION_ID)!
+    await expect(test.harness.execution.forkAgentRun(test.request, undefined, async (plan) => {
+      retained = plan
+      source.followup(createUserMessage({ content: [{ type: 'text', text: 'Racing input' }], source: { kind: 'user' } }))
+    }, test.signal)).rejects.toThrow('pending input')
+    await source.whenIdle()
+    expect(test.harness.context.agents.get(test.request.target.sessionId)).toBeUndefined()
+    expect(test.harness.adapter.requests).toHaveLength(2)
+    expect(test.harness.adapter.requests[1]?.model).not.toBe('successor-model')
+    await disposeContext(test.harness.context)
+    const restarted = await mountAgentRunHarness(test.world, [])
+    await expect(restarted.execution.forkAgentRun(test.request, retained, async () => {}, test.signal))
+      .rejects.toThrow('advanced beyond its retained history cut')
+    expect(restarted.context.agents.get(test.request.target.sessionId)).toBeUndefined()
+    expect(restarted.adapter.requests).toHaveLength(0)
+  }, REAL_GIT_AGENT_RUN_TIMEOUT_MS)
+})
+
+async function forkSource(responses: StreamChunk[][] = []) {
+  const world = await createAgentRunWorld()
+  const harness = await mountAgentRunHarness(world, [stopResponse('original completed'), ...responses])
+  const signal = new AbortController().signal
+  const binding = await activeBinding(harness.execution, harness.repository, signal)
+  const initial = await startAgentRunRequest(harness.execution, binding, signal)
+  const prepared = await harness.execution.prepareOperation(initial, accepted(90), signal)
+  if (!prepared.ok) throw new Error('source admission failed')
+  await harness.execution.startOperation(prepared.preparation.operation, prepared.acceptance, signal)
+  const source = harness.context.agents.get(SESSION_ID)!
+  await source.whenIdle()
+  await harness.context.sessions.flush(source.session)
+  const request: ForkAgentRunRequest = { binding, workSessionId: WORK_SESSION_ID,
+    source: { agentRunId: AGENT_RUN_ID, sessionId: SESSION_ID, profile: initial.run.profile },
+    target: { agentRunId: 'agent-run-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as SakiAgentRunId,
+      sessionId: 'session-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' as typeof SESSION_ID,
+      profile: { ...initial.run.profile, id: 'agent-profile-cccccccc-cccc-4ccc-8ccc-cccccccccccc' as SakiAgentProfileId,
+        version: 2, modelRoute: { provider: 'test-provider', model: 'successor-model' } } } }
+  return { world, harness, signal, request, history: source.session.snapshotEvents() }
+}
 
 describe('LocalSakiHostExecution Run observation', () => {
   async function preparedRun(responses: StreamChunk[][] = [], config: Partial<Config> = {}) {

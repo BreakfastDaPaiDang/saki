@@ -3,7 +3,7 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import {
-  agentRunRecordSchema,
+  currentAgentRunRecordSchema,
   agentRunV1RecordSchema,
   agentRunV2RecordSchema,
   bindingWriteAdmissionV3RecordSchema,
@@ -14,7 +14,7 @@ import {
   sakiControlPlaneDomainSpec,
   sakiStorageGenerationDomainSpec,
   validateCurrentSakiState,
-  type AgentRunRecord,
+  type CurrentAgentRunRecord,
   type AgentRunV1Record,
   type BindingWriteAdmissionV3Record,
   type ExecutionDispatchRecord,
@@ -86,7 +86,7 @@ type HistoricalAgentHostOperationRecord = Extract<
   LocalHostOperationRecordV2 | LocalHostOperationRecordV3,
   { readonly request: { readonly type: 'start-agent-run' } }
 >
-type LinkedAgentRunRecord = AgentRunRecord | AgentRunV1Record
+type LinkedAgentRunRecord = CurrentAgentRunRecord | AgentRunV1Record
 type LinkedExecutionDispatchRecord = ExecutionDispatchRecord | ExecutionDispatchV1Record | ExecutionDispatchV2Record
 type LinkedAgentHostOperationRecord = AgentHostOperationRecord | HistoricalAgentHostOperationRecord
 
@@ -576,7 +576,7 @@ export function validateAgentOperationLinks(
   validateAgentOperationLinksWithSchemas(
     controlPlane,
     hostExecution,
-    agentRunRecordSchema,
+    currentAgentRunRecordSchema,
     executionDispatchRecordSchema,
   )
 }
@@ -676,7 +676,7 @@ function validateAgentOperationLinksWithSchemas(
   }
 
   for (const run of runs.values()) {
-    if (run.state !== 'running') continue
+    if (run.state !== 'running' || run.schemaVersion === 3 && run.dispatchIds.length === 0) continue
     const matching = run.dispatchIds.some((dispatchId) => {
       const dispatch = dispatches.get(dispatchId)
       const operation = operations.get(dispatchId)

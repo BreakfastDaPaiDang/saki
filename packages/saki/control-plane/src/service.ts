@@ -1,3 +1,7 @@
+import { RunModelSwitches, type RunModelSwitchIntentTable } from './run-model-switch.ts'
+import { switchWorkSessionModelIntentSchema } from './run-model-switch-spec.ts'
+import { ModelRouting, type AgentProfileModelRouteTable, type ProjectModelRouteIntentTable } from './model-routing.ts'
+import { configureProjectModelRouteIntentSchema } from './model-routing-spec.ts'
 import type {} from '@breakfastdapaidang/saki-model-account'
 import { ModelSupply, type ModelAccountIntentTable, type ModelAccountTable } from './model-supply.ts'
 import { modelAccountIntentSchema } from './model-supply-spec.ts'
@@ -346,6 +350,13 @@ export interface SakiAgentInterventions {
 
 /** Control-plane operations used by trusted Consumers. */
 export interface SakiControlPlaneModule {
+  /**
+   * Read physical Session execution ownership for Host control admission.
+   * @param sessionId - physical Session identity received by a Host integration.
+   * @returns current, historical, or transitioning ownership; undefined for an ordinary Session.
+   */
+  sessionControlState(sessionId: import('@breakfastdapaidang/saki-execution').SessionId): 'owned' | 'historical' | 'transitioning' | undefined
+
   /** Access lifecycle separated from Control Intent authority. */
   readonly access: SakiAccess
   /** Local clear-secret launcher channel. */
@@ -452,6 +463,11 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   })
 
   private modelSupply!: ModelSupply
+  private runModelSwitches!: RunModelSwitches
+  private runModelSwitchIntents!: RunModelSwitchIntentTable
+  private modelRouting!: ModelRouting
+  private agentProfileModelRoutes!: AgentProfileModelRouteTable
+  private projectModelRouteIntents!: ProjectModelRouteIntentTable
   private modelAccountIntents!: ModelAccountIntentTable
   private modelAccountProfiles!: ModelAccountTable
   private controlStateTable!: ControlStateTable
@@ -630,6 +646,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ? error
         : new Error('opening Saki storage-generation state failed', { cause: error })
     }
+    this.agentProfileModelRoutes = domain.table('agent_profile_model_routes')
+    this.projectModelRouteIntents = domain.table('project_model_route_intents')
     this.modelAccountIntents = domain.table('model_account_intents')
     this.modelAccountProfiles = domain.table('model_accounts')
     this.modelSupply = new ModelSupply({
@@ -641,9 +659,11 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       lifetime: this.lifetime.signal,
     })
     const modelSupplyForDisposal = this.modelSupply
+    let modelRoutingForDisposal: ModelRouting | undefined
     let gitOperationsForDisposal: GitOperations | undefined
     let workItemOperationsForDisposal: GitHubWorkItemOperations | undefined
     let branchDeliveryOperationsForDisposal: BranchDeliveryOperations | undefined
+    let runModelSwitchesForDisposal: RunModelSwitches | undefined
     let agentOperationsForDisposal: AgentOperations | undefined
     this.ctx.effect(() => async () => {
       this.operationAdmissionOpen = false
@@ -653,6 +673,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ...this.activeOperations,
         ...this.intentOperationTails.values(),
         modelSupplyForDisposal.dispose(),
+        modelRoutingForDisposal?.dispose() ?? Promise.resolve(),
+        runModelSwitchesForDisposal?.dispose() ?? Promise.resolve(),
         gitOperationsForDisposal?.dispose() ?? Promise.resolve(),
         workItemOperationsForDisposal?.dispose() ?? Promise.resolve(),
         branchDeliveryOperationsForDisposal?.dispose() ?? Promise.resolve(),
@@ -681,6 +703,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     this.workAssignmentTable = domain.table('work_assignments')
     this.workSessionTable = domain.table('work_sessions')
     this.agentRunTable = domain.table('agent_runs')
+    this.runModelSwitchIntents = domain.table('run_model_switch_intents')
     this.executionDispatchTable = domain.table('execution_dispatches')
     this.interventionRequestTable = domain.table('intervention_requests')
     this.branchDeliveryTable = domain.table('branch_deliveries')
@@ -738,6 +761,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         },
         ensureBindingWriteAdmission: binding => this.gitOperations.ensureBindingWriteAdmission(binding),
       })
+      this.modelRouting = new ModelRouting({
+        profiles: this.agentProfileModelRoutes, intents: this.projectModelRouteIntents,
+        projects: this.projects, supply: this.modelSupply,
+        authorityCurrent: actor => this.intentAuthorityCurrent(actor, 'model-supply:manage'),
+        lifetime: this.lifetime.signal,
+        notifyChanged: () => { this.notify(['project-model-route', 'project-index', 'project-settings', 'board']) },
+      })
+      modelRoutingForDisposal = this.modelRouting
       const projects = this.projects.validateDurableState()
       this.githubSynchronization = new GitHubProjectSynchronization({
         syncTable: this.githubProjectSyncTable,
@@ -882,7 +913,14 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         ...gitOperations.intents.map(intent => intent.id),
         ...branchDeliveries.intents.map(intent => intent.id),
       ]))
+      this.runModelSwitches = new RunModelSwitches({ intents: this.runModelSwitchIntents, runs: this.agentRunTable,
+        sessions: this.workSessionTable, assignments: this.workAssignmentTable, origins: this.agentOperationIntentTable,
+        projects: this.projects, supply: this.modelSupply, execution: this.ctx.sakiHostExecution,
+        authorityCurrent: actor => this.intentAuthorityCurrent(actor, 'model-supply:manage'),
+        notifyChanged: () => { this.notify(['my-work', 'attention', 'board']) }, lifetime: this.lifetime.signal })
+      runModelSwitchesForDisposal = this.runModelSwitches
       this.agentOperations = new AgentOperations({
+        forkIntents: this.runModelSwitchIntents,
         intentTable: this.agentOperationIntentTable,
         assignmentTable: this.workAssignmentTable,
         workSessionTable: this.workSessionTable,
@@ -894,7 +932,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         mutationContext: projectId => this.githubSynchronization.mutationContext(projectId),
         authorityCurrent: (actor, action) => this.intentAuthorityCurrent(actor, action),
         validateActorReference: (actor) => { this.validateRegistrationActorReference(actor) },
-        resolveModelRoute: async (route, signal) => {
+        resolveModelRoute: async (route, signal, profile) => {
+          await this.modelRouting.validateAdmission(profile, signal)
           const llm = this.ctx.get('llm')
           if (llm === undefined) throw new Error('Saki Agent dispatch requires an LLM runtime')
           await llm.resolveModelInfo(route.provider, route.model, signal)
@@ -914,6 +953,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
         projects.registry,
       )
       validateDisjointControlIntentIds(
+        [...this.runModelSwitchIntents.entries()].map(([, intent]) => ({ id: intent.id })),
+        [...this.projectModelRouteIntents.entries()].map(([, intent]) => ({ id: intent.id })),
         [...this.modelAccountIntents.entries()].map(([, intent]) => ({ id: intent.id })),
         projects.intents,
         githubSynchronization.intents,
@@ -938,6 +979,7 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       await this.modelSupply.recover()
       await this.reconcileAccess(Date.now())
       await this.projects.initializeValidated(projects, this.lifetime.signal)
+      await this.modelRouting.recover()
       const disposeHostOperationChanges = this.ctx.sakiHostExecution.onChanged(
         (change) => {
           this.gitOperations.hostChanged(change)
@@ -947,7 +989,9 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       )
       this.ctx.effect(() => disposeHostOperationChanges, 'saki-control-plane.hostOperationChanges')
       await this.gitOperations.initializeValidated(gitOperations)
+      await this.runModelSwitches.restoreCompleted()
       await this.agentOperations.initializeValidated(agentOperations)
+      await this.runModelSwitches.recover()
       await this.githubSynchronization.initializeValidated(githubSynchronization, this.lifetime.signal)
       await this.githubWorkItemOperations.initializeValidated(workItems)
       await this.branchDeliveryOperations.initializeValidated(branchDeliveries)
@@ -1022,6 +1066,12 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   ): Promise<SakiQueryResult> {
     signal.throwIfAborted()
     switch (query.type) {
+      case 'project-model-route': {
+        if (!this.authorized(authentication, 'project-settings:read')
+          || !this.authorized(authentication, 'model-supply:read')) return { ok: false, reason: 'denied' }
+        const projection = this.modelRouting.projectProjection(query.projectId)
+        return projection === undefined ? { ok: false, reason: 'not-found' } : { ok: true, projection }
+      }
       case 'model-supply': {
         if (!this.authorized(authentication, 'model-supply:read')) return { ok: false, reason: 'denied' }
         return { ok: true, projection: this.modelSupply.projection() }
@@ -1214,9 +1264,13 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
           observedAt: Date.now(), session: { state: 'unavailable', reason: 'not-started' },
           terminals: { state: 'unavailable', reason: 'owner-not-live' },
         }
-        if (dispatch?.preparation !== undefined) {
+        const fork = run.schemaVersion === 3 ? this.runModelSwitchIntents.get(run.forkIntentId) : undefined
+        const observationRequest = fork?.plan !== undefined
+          ? { type: 'forked-agent-run' as const, request: fork.hostRequest, plan: fork.plan }
+          : dispatch?.preparation === undefined ? undefined : { ...dispatch.preparation.operation, type: 'start-agent-run' as const }
+        if (observationRequest !== undefined) {
           try {
-            observation = await this.ctx.sakiHostExecution.observeAgentRun({ ...dispatch.preparation.operation, type: 'start-agent-run' }, query.terminal, signal)
+            observation = await this.ctx.sakiHostExecution.observeAgentRun(observationRequest, query.terminal, signal)
           } catch {
             signal.throwIfAborted()
             observation = { observedAt: Date.now(), session: { state: 'unavailable', reason: 'read-failed' },
@@ -1369,7 +1423,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   }
 
   private sessionViewRecords(): SessionViewRecords {
-    return { sessions: this.workSessionTable, assignments: this.workAssignmentTable, runs: this.agentRunTable,
+    return { modelRoutes: this.agentProfileModelRoutes, sessions: this.workSessionTable,
+      assignments: this.workAssignmentTable, runs: this.agentRunTable,
       intents: this.agentOperationIntentTable, dispatches: this.executionDispatchTable, interventions: this.interventionRequestTable }
   }
 
@@ -1599,7 +1654,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
     assert(resource !== undefined, 'An active Project binding must have a Registry resource')
     // The Registry schema requires a current inspection for every active Binding.
     const selection = (resource.currentInspection as ProjectSelectionInspection).projection
+    const selectedRoute = this.modelRouting.projectProjection(project.id)
+    assert(selectedRoute !== undefined, 'An active Project must have a model selection projection')
     return { available: true, launch: {
+      account: selectedRoute.profile.account,
       profileId: profile.id, profileVersion: profile.version,
       provider: profile.modelRouteRequest.provider, model: profile.modelRouteRequest.model,
       bindingId: resource.id, bindingRevision: resource.revision,
@@ -1615,6 +1673,24 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   ): Promise<SakiIntentReceipt<I['type']>> {
     let result: Promise<SakiIntentReceipt>
     switch (intent.type) {
+      case 'switch-work-session-model': {
+        const parsed = switchWorkSessionModelIntentSchema.parse(intent)
+        result = this.runOwnedOperation(signal, operationSignal => this.enqueueIntentOperation(parsed.intentId, async () => {
+          if (!this.authorized(authentication, 'model-supply:manage')) return { ok: false, reason: 'denied' }
+          if (this.hasControlIntentConflict(parsed.intentId, 'run-model-switch')) return { ok: false, reason: 'conflict' }
+          return this.runModelSwitches.submit(parsed, this.currentControlIntentActor(), operationSignal)
+        }))
+        break
+      }
+      case 'configure-project-model-route': {
+        const parsed = configureProjectModelRouteIntentSchema.parse(intent)
+        result = this.runOwnedOperation(signal, operationSignal => this.enqueueIntentOperation(parsed.intentId, async () => {
+          if (!this.authorized(authentication, 'model-supply:manage')) return { ok: false, reason: 'denied' }
+          if (this.hasControlIntentConflict(parsed.intentId, 'model-routing')) return { ok: false, reason: 'conflict' }
+          return this.modelRouting.submit(parsed, this.currentControlIntentActor(), operationSignal)
+        }))
+        break
+      }
       case 'authorize-model-account':
       case 'set-model-account-active':
       case 'rename-model-account':
@@ -1853,6 +1929,8 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
   private hasControlIntentConflict(
     intentId: SakiControlIntentId,
     owner:
+      | 'run-model-switch'
+      | 'model-routing'
       | 'model-account'
       | 'registration'
       | 'github-synchronization'
@@ -1863,7 +1941,9 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
       | 'agent-operation'
       | 'intervention',
   ): boolean {
-    return (owner !== 'model-account' && this.modelAccountIntents.get(intentId) !== undefined)
+    return (owner !== 'run-model-switch' && this.runModelSwitchIntents.get(intentId) !== undefined)
+      || (owner !== 'model-routing' && this.projectModelRouteIntents.get(intentId) !== undefined)
+      || (owner !== 'model-account' && this.modelAccountIntents.get(intentId) !== undefined)
       || (owner !== 'registration' && this.requireRegistrationIntentTable().get(intentId) !== undefined)
       || (owner !== 'github-synchronization'
         && this.requireGitHubSynchronizationConfigurationIntentTable().get(intentId) !== undefined)
@@ -2799,6 +2879,10 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   private requireWorkSessionTable(): WorkSessionTable {
     return this.workSessionTable
+  }
+
+  sessionControlState(sessionId: import('@breakfastdapaidang/saki-execution').SessionId): 'owned' | 'historical' | 'transitioning' | undefined {
+    return this.runModelSwitches.sessionControlState(sessionId)
   }
 
   private requireAgentRunTable(): AgentRunTable {

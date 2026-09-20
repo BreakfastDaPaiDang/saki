@@ -1,6 +1,9 @@
-import type { ModelAccountIntent, ModelAccountIntentResult, ModelSupplyProjection } from './model-supply-spec.ts'
 /** Public Saki control-plane value types. @module @breakfastdapaidang/saki-control-plane/types */
 
+import type { SwitchWorkSessionModelIntent, SwitchWorkSessionModelResult } from './run-model-switch-spec.ts'
+import type { ConfigureProjectModelRouteIntent, ProjectModelRouteProjection } from './model-routing-spec.ts'
+import type { ProjectModelRouteResult } from './model-routing.ts'
+import type { ModelAccountIntent, ModelAccountIntentResult, ModelSupplyProjection } from './model-supply-spec.ts'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import type {
@@ -895,6 +898,7 @@ export type SakiMyWorkGroup =
 
 /** Browser-safe execution choices shown before the operator authorizes a manual run. */
 export interface SakiAgentLaunchSummary {
+  readonly account: ProjectModelRouteProjection['profile']['account']
   readonly profileId: SakiAgentProfileId
   readonly profileVersion: number
   readonly provider: string
@@ -1114,6 +1118,12 @@ export interface SakiProjectSettingsProjection {
 
 /** Control-plane Projection query map. */
 export interface SakiQueryMap {
+  readonly 'project-model-route': {
+    readonly request: { readonly type: 'project-model-route'; readonly projectId: SakiDevelopmentProjectId }
+    readonly projection: ProjectModelRouteProjection
+    readonly failure: 'denied' | 'not-found' | 'unavailable'
+  }
+
   readonly 'model-supply': {
     readonly request: { readonly type: 'model-supply' }
     readonly projection: ModelSupplyProjection
@@ -1364,6 +1374,8 @@ type SakiWorkItemIntent = CreateWorkItemIntent | MoveWorkItemIntent
 
 /** Control-plane Intent request map. */
 export interface SakiIntentMap {
+  readonly 'switch-work-session-model': SwitchWorkSessionModelIntent
+  readonly 'configure-project-model-route': ConfigureProjectModelRouteIntent
   readonly 'authorize-model-account': Extract<ModelAccountIntent, { readonly type: 'authorize-model-account' }>
   readonly 'set-model-account-active': Extract<ModelAccountIntent, { readonly type: 'set-model-account-active' }>
   readonly 'rename-model-account': Extract<ModelAccountIntent, { readonly type: 'rename-model-account' }>
@@ -1803,6 +1815,8 @@ export type SakiAnswerInterventionIntentReceipt =
 
 /** Intent-correlated receipt result map. */
 export interface SakiIntentReceiptMap {
+  readonly 'switch-work-session-model': SwitchWorkSessionModelResult
+  readonly 'configure-project-model-route': ProjectModelRouteResult
   readonly 'authorize-model-account': ModelAccountIntentResult
   readonly 'set-model-account-active': ModelAccountIntentResult
   readonly 'rename-model-account': ModelAccountIntentResult
@@ -1874,6 +1888,7 @@ export type SakiIntentReceipt<K extends keyof SakiIntentReceiptMap = keyof SakiI
 
 /** Projection key invalidated after a committed access or authority change. */
 export type SakiProjectionKey =
+  | 'project-model-route'
   | 'model-supply'
   | 'access'
   | 'my-work'

@@ -1,3 +1,8 @@
+import { RunModelSwitches } from '../src/run-model-switch.ts'
+import type { RunModelSwitchIntentTable } from '../src/run-model-switch.ts'
+import { switchWorkSessionModelIntentSchema } from '../src/run-model-switch-spec.ts'
+import type { RunModelSwitchIntentRecord } from '../src/run-model-switch-spec.ts'
+import { resolvedAccountModelRouteSchema } from '../src/model-routing-spec.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
@@ -4625,7 +4630,8 @@ describe('retained Session and Run views', () => {
     session: { state: 'confirmed', runtime: 'not-live', activity: { state: 'failed', turn: 1, endedAt: 90 } },
     terminals: { state: 'unavailable', reason: 'owner-not-live' },
   }
-  const records = (test: Harness): SessionViewRecords => ({ sessions: test.sessions.records, assignments: test.assignments.records,
+  const records = (test: Harness): SessionViewRecords => ({ modelRoutes: new Map(), sessions: test.sessions.records,
+    assignments: test.assignments.records,
     runs: test.runs.records, intents: test.intents.records, dispatches: test.dispatches.records,
     interventions: test.interventions.records,
   })
@@ -4783,6 +4789,10 @@ class TestAcceptance extends HostOperationAcceptance {
 }
 
 class FakeAgentExecution extends SakiHostExecution {
+  override async forkAgentRun(): Promise<import('@breakfastdapaidang/saki-execution').AgentRunForkPlan> {
+    throw new Error('Fork is not configured by this fixture')
+  }
+
   async observeAgentRun(): Promise<never> { throw new Error('Run observation is not configured in this fixture') }
 
   readonly pushCredentialHelper = undefined
@@ -5181,7 +5191,7 @@ interface EligibilityState {
   githubReadFailure: 'issue-detail' | 'branch-safety' | undefined
 }
 
-function harness(): Harness {
+function harness(forkIntents?: RunModelSwitchIntentTable): Harness {
   const board = SAKI_BOARD_PROJECTION_FIXTURES.confirmedStaleFailure.confirmed
   const active = SAKI_PROJECT_SETTINGS_PROJECTION_FIXTURES.activated.synchronization.active
   const item = board?.items[0]
@@ -5326,6 +5336,7 @@ function harness(): Harness {
   const createOperations = (): AgentOperations => {
     const candidate = new AgentOperations({
       intentTable: intents,
+      ...(forkIntents === undefined ? {} : { forkIntents }),
       assignmentTable: assignments,
       workSessionTable: sessions,
       agentRunTable: runs,
@@ -5677,3 +5688,153 @@ function sameRequest(left: StartAgentRunHostOperationRequest, right: StartAgentR
   return canonicalDigest('saki/test-agent-host-request-equality/v1', left)
     === canonicalDigest('saki/test-agent-host-request-equality/v1', right)
 }
+
+
+describe('Work Session model succession', () => {
+  async function setup() {
+    const switches = new MemoryTable<SakiControlIntentId, RunModelSwitchIntentRecord>()
+    const h = harness(switches)
+    await h.operations.submit(intent(), actor(), new AbortController().signal)
+    const source = only(h.runs)
+    const origin = only(h.intents)
+    const request = switchWorkSessionModelIntentSchema.parse({ type: 'switch-work-session-model',
+      intentId: 'intent-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', projectId: source.projectId,
+      workSessionId: source.workSessionId, expectedWorkSessionRevision: 0, expectedAgentRunId: source.id,
+      selection: { accountProfileId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', configurationRevision: 1, model: 'next-model' } })
+    type Options = ConstructorParameters<typeof RunModelSwitches>[0]
+    const resolveSelection = vi.fn<Options['supply']['resolveSelection']>(async selection => resolvedAccountModelRouteSchema.parse({
+      selection, provider: `saki-account-${selection.accountProfileId}-${selection.configurationRevision}`,
+      accountIdentity: 'fixture-account', implementation: { name: 'fixture', version: '1' }, configuration: {},
+    }))
+    const fork = vi.fn<Options['execution']['forkAgentRun']>(async (_request, retained, retain) => {
+      const plan = retained ?? { inheritedEventCount: 10, historyDigest: 'a'.repeat(64) }
+      if (retained === undefined) await retain(plan)
+      return plan
+    })
+    const options: Options = { intents: switches, origins: h.intents, runs: h.runs, sessions: h.sessions,
+      assignments: h.assignments, projects: { currentActiveBinding: () => ({ registryRevision: h.registry.revision,
+        projectId: source.projectId, projectRevision: 0, binding: origin.hostRequest.expected.binding }) },
+      supply: { resolveSelection }, execution: { forkAgentRun: fork }, authorityCurrent: () => h.authorityCurrent,
+      notifyChanged: () => {}, lifetime: new AbortController().signal }
+    return { h, switches, source, request, options, resolveSelection, fork, controller: new RunModelSwitches(options),
+      signal: new AbortController().signal }
+  }
+
+  it('keeps one Work Session, preserves source attribution, and coalesces exact retries', async () => {
+    const f = await setup()
+    const original = structuredClone(f.source)
+    const results = await Promise.all([
+      f.controller.submit(f.request, actor(), f.signal), f.controller.submit(f.request, actor(), f.signal),
+    ])
+    expect(results[0]).toEqual(results[1])
+    expect(results[0]).toMatchObject({ ok: true, receipt: { state: 'completed' } })
+    expect(f.fork).toHaveBeenCalledTimes(1)
+    expect(f.resolveSelection).toHaveBeenCalledTimes(2)
+    expect(f.options.runs.get(original.id)).toEqual(original)
+    const session = only(f.h.sessions)
+    expect(session.agentRunIds).toHaveLength(2)
+    expect(session.revision).toBe(1)
+    expect(only(f.h.assignments).agentRunId).toBe(session.agentRunIds[1])
+    expect(f.controller.sessionControlState(original.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'])).toBe('historical')
+    const successor = f.options.runs.get(session.agentRunIds[1]!)!
+    expect(f.controller.sessionControlState(successor.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'])).toBe('owned')
+    expect(successor).toMatchObject({ schemaVersion: 3, dispatchIds: [], profile: { modelRoute: { model: 'next-model' } } })
+    expect(successor).not.toHaveProperty('hostResult')
+    expect(f.h.operations.validateDurableState(new Set(), f.h.registry).runningAgentRuns).toHaveLength(0)
+    await f.controller.dispose()
+  })
+
+  it('repairs an interrupted Session publication from the retained history cut', async () => {
+    const f = await setup()
+    vi.spyOn(f.h.sessions, 'update').mockRejectedValueOnce(new Error('storage unavailable'))
+    expect(await f.controller.submit(f.request, actor(), f.signal)).toMatchObject({ ok: true, receipt: { state: 'reconciliation-required' } })
+    expect(f.controller.sessionControlState(f.source.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'])).toBe('transitioning')
+    f.h.operations.validateDurableState(new Set(), f.h.registry)
+    await f.controller.dispose()
+    const recovered = new RunModelSwitches(f.options)
+    await recovered.recover()
+    expect(f.switches.get(f.request.intentId)?.state).toBe('completed')
+    expect(f.resolveSelection).toHaveBeenCalledTimes(2)
+    expect(f.fork.mock.calls[1]?.[1]).toEqual(f.switches.get(f.request.intentId)?.plan)
+    f.h.operations.validateDurableState(new Set(), f.h.registry)
+    await recovered.restoreCompleted()
+    expect(f.fork).toHaveBeenCalledTimes(3)
+    await recovered.dispose()
+  })
+
+  it('rejects an account changed while waiting without publishing a successor', async () => {
+    const f = await setup()
+    f.resolveSelection.mockRejectedValueOnce(new Error('unavailable'))
+    expect(await f.controller.submit(f.request, actor(), f.signal)).toEqual({ ok: false, reason: 'unavailable' })
+    expect(f.switches.size).toBe(0)
+    const resolve = f.resolveSelection.getMockImplementation()!
+    f.resolveSelection.mockImplementationOnce(resolve).mockImplementationOnce(async (...args) => ({ ...await resolve(...args),
+      implementation: { name: 'fixture', version: '2' } }))
+    expect(await f.controller.submit(f.request, actor(), f.signal)).toMatchObject({ ok: true, receipt: { state: 'failed' } })
+    expect(f.h.runs.size).toBe(1)
+    expect(f.controller.sessionControlState(f.source.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'])).toBe('owned')
+    f.h.operations.validateDurableState(new Set(), f.h.registry)
+    await f.controller.dispose()
+  })
+
+  it('rejects broken retained succession identities before recovery', async () => {
+    const f = await setup()
+    await f.controller.submit(f.request, actor(), f.signal)
+    const record = f.switches.get(f.request.intentId)!
+    const variants = [
+      { ...record, request: { ...record.request, expectedWorkSessionRevision: 1 } },
+      { ...record, hostRequest: { ...record.hostRequest, target: { ...record.hostRequest.target,
+        profile: { ...record.hostRequest.target.profile, version: 99 } } } },
+      { ...record, plan: undefined },
+      { ...record, accountRoute: { ...record.accountRoute, accountIdentity: 'different-owner' as typeof record.accountRoute.accountIdentity } },
+    ]
+    for (const value of variants) {
+      await f.switches.put(record.id, value)
+      expect(() => f.h.operations.validateDurableState(new Set(), f.h.registry)).toThrow()
+    }
+    await f.switches.put(record.id, record)
+    f.h.operations.validateDurableState(new Set(), f.h.registry)
+    await f.controller.dispose()
+  })
+
+  it('answers an Intervention in the successor Run and restores its delivered answer', async () => {
+    const f = await setup()
+    await f.controller.submit(f.request, actor(), f.signal)
+    const successorId = only(f.h.assignments).agentRunId
+    const successor = f.options.runs.get(successorId)!
+    const requested = await f.h.operations.requestIntervention({ sessionId: successor.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
+      toolCallId: ToolCallId('successor_needs_operator'), prompt: 'Choose a path.' }, f.signal)
+    expect(requested.ok).toBe(true)
+    if (!requested.ok) throw new Error('Intervention was rejected')
+    expect(await f.h.operations.finalizeInterventionOpening(requested.interventionId, f.signal)).toBe('open')
+    f.h.operations.validateDurableState(new Set(), f.h.registry)
+    const open = f.h.interventions.get(requested.interventionId)!
+    f.h.execution.beginNextOperation()
+    expect(await f.h.operations.answerIntervention({ type: 'answer-intervention',
+      intentId: 'intent-dddddddd-dddd-4ddd-8ddd-dddddddddddd' as SakiControlIntentId,
+      interventionId: open.id, expectedInterventionRevision: open.revision, answer: { kind: 'text', text: 'Use path A.' } }, actor(), f.signal))
+      .toMatchObject({ ok: true, receipt: { state: 'resolved' } })
+    expect(f.options.runs.get(successorId)).toMatchObject({ state: 'running', profile: successor.profile })
+    f.h.restart()
+    const recovered = f.h.operations.validateDurableState(new Set(), f.h.registry)
+    expect(recovered.runningAgentRuns).toHaveLength(1)
+    await f.h.operations.initializeValidated(recovered)
+    expect(f.options.runs.get(successorId)?.sessionId).toBe(successor.sessionId)
+    await f.controller.dispose()
+  })
+
+  it('rejects a competing switch and does not rewind a completed switch on replay', async () => {
+    const f = await setup()
+    await f.controller.submit(f.request, actor(), f.signal)
+    const competing = switchWorkSessionModelIntentSchema.parse({ ...f.request, intentId: 'intent-cccccccc-cccc-4ccc-8ccc-cccccccccccc' })
+    expect(await f.controller.submit(competing, actor(), f.signal)).toEqual({ ok: false, reason: 'conflict' })
+    const next = { ...competing, expectedWorkSessionRevision: 1, expectedAgentRunId: only(f.h.assignments).agentRunId }
+    expect(await f.controller.submit(next, actor(), f.signal)).toMatchObject({ ok: true, receipt: { state: 'completed' } })
+    const assignment = structuredClone(only(f.h.assignments))
+    await f.controller.submit(f.request, actor(), f.signal)
+    expect(only(f.h.assignments)).toEqual(assignment)
+    expect(only(f.h.sessions).agentRunIds).toHaveLength(3)
+    f.h.operations.validateDurableState(new Set(), f.h.registry)
+    await f.controller.dispose()
+  })
+})

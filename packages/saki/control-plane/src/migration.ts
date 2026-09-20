@@ -1,3 +1,4 @@
+import { sakiControlPlaneV11DomainSpec } from './migration-v11-source.ts'
 /** Historical schemas and pure Saki control-plane migration. @module @breakfastdapaidang/saki-control-plane/src/migration */
 
 import { z } from 'zod'
@@ -1260,7 +1261,7 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
     },
     {
       from: sakiControlPlaneV10DomainSpec,
-      to: sakiControlPlaneDomainSpec,
+      to: sakiControlPlaneV11DomainSpec,
       migrate: snapshot => ({
         global: snapshot.global,
         tables: {
@@ -1273,6 +1274,14 @@ export const sakiControlPlaneMigrationPlan = defineDomainMigrations({
           model_accounts: {},
           model_account_intents: {},
         },
+      }),
+    },
+    {
+      from: sakiControlPlaneV11DomainSpec,
+      to: sakiControlPlaneDomainSpec,
+      migrate: snapshot => ({
+        global: snapshot.global,
+        tables: { ...snapshot.tables, agent_profile_model_routes: {}, project_model_route_intents: {}, run_model_switch_intents: {} },
       }),
     },
   ],

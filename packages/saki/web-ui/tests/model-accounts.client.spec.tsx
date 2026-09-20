@@ -2,11 +2,12 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import { sakiModelSupplyResultSchema } from '@breakfastdapaidang/saki-host-api/wire'
+import { sakiSwitchWorkSessionModelIntentSchema, sakiSwitchWorkSessionModelResultSchema, sakiModelSupplyResultSchema, sakiProjectModelRouteResultSchema, sakiConfigureProjectModelRouteIntentSchema, sakiConfigureProjectModelRouteResultSchema } from '@breakfastdapaidang/saki-host-api/wire'
 import { ModelAccountsController } from '../src/client/model-accounts-controller.ts'
 import { ModelAccountsPage } from '../src/client/components/ModelAccountsPage.tsx'
+import { ProjectModelSelection } from '../src/client/components/ProjectModelSelection.tsx'
 import { NS, zh } from '../src/client/locales.ts'
-import { planningFixture } from './planning-fixture.client.ts'
+import { planningFixture, PROJECT_ID } from './planning-fixture.client.ts'
 
 const owners: Array<{ dispose(): void }> = []
 beforeEach(() => { localStorage.clear() })
@@ -23,6 +24,12 @@ async function setup() {
   await planning.start()
   type Api = ConstructorParameters<typeof ModelAccountsController>[0]
   const api = {
+    queryProjectModelRoute: vi.fn<Api['queryProjectModelRoute']>().mockResolvedValue(sakiProjectModelRouteResultSchema.parse({ ok: true, projection: {
+      type: 'project-model-route', projectId: PROJECT_ID, projectRevision: 0, profile: {
+        id: 'agent-profile-00000000-0000-4000-8000-000000000001', version: 1, agentPresetId: 'development',
+        provider: null, model: null, account: null } } })),
+    switchWorkSessionModel: vi.fn<Api['switchWorkSessionModel']>().mockResolvedValue({ ok: false, reason: 'unavailable' }),
+    configureProjectModelRoute: vi.fn<Api['configureProjectModelRoute']>().mockResolvedValue({ ok: false, reason: 'unavailable' }),
     queryModelSupply: vi.fn<Api['queryModelSupply']>().mockResolvedValue(result),
     submitModelAccount: vi.fn<Api['submitModelAccount']>().mockImplementation(async intent => ({ ok: true,
       receipt: { intentId: intent.intentId, state: 'accepted', profileId: null } })),
@@ -85,4 +92,64 @@ it('imports the named settings connection without accepting credential material 
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Relay/ })) })
   expect(h.api.submitModelAccount.mock.calls[0]?.[0]).toMatchObject({ type: 'authorize-model-account',
     providerId: 'api', method: 'relay', name: 'My relay', configuration: { connection: 'relay' } })
+})
+
+it('retains the selected account revision when a Project default acknowledgement is lost', async () => {
+  const h = await setup()
+  const intent = sakiConfigureProjectModelRouteIntentSchema.parse({ type: 'configure-project-model-route',
+    intentId: 'intent-00000000-0000-4000-8000-000000000005', projectId: PROJECT_ID, expectedProjectRevision: 0,
+    selection: { accountProfileId: '00000000-0000-4000-8000-000000000006', configurationRevision: 2, model: 'chosen-model' } })
+  h.api.configureProjectModelRoute.mockRejectedValueOnce(new Error('acknowledgement lost'))
+  await h.controller.retry(intent)
+  expect(h.controller.getSnapshot().pending).toEqual([intent])
+  const page = render(<ProjectModelSelection projectId={PROJECT_ID} state={h.controller.getSnapshot()} actions={h.controller} t={t} />)
+  expect(page.asFragment()).toMatchSnapshot('pending Project model selection')
+  expect(screen.getByRole('button', { name: zh['modelRoute.save'] }).hasAttribute('disabled')).toBe(true)
+  expect(screen.getByText(zh['modelRoute.noAccounts'])).toBeTruthy()
+  h.api.configureProjectModelRoute.mockResolvedValueOnce(sakiConfigureProjectModelRouteResultSchema.parse({ ok: true,
+    receipt: { intentId: intent.intentId, state: 'completed', profileId: 'agent-profile-00000000-0000-4000-8000-000000000005' } }))
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: zh['accounts.retry'] })) })
+  expect(h.api.configureProjectModelRoute.mock.calls.map(call => call[0])).toEqual([intent, intent])
+  expect(h.api.submitModelAccount).not.toHaveBeenCalled()
+  expect(h.controller.getSnapshot().pending).toEqual([])
+})
+
+
+it('retains a pending switch through reconciliation and navigates only after exact completion', async () => {
+  const h = await setup()
+  const intent = sakiSwitchWorkSessionModelIntentSchema.parse({ type: 'switch-work-session-model',
+    intentId: 'intent-00000000-0000-4000-8000-000000000007', projectId: PROJECT_ID,
+    workSessionId: 'work-session-00000000-0000-4000-8000-000000000008', expectedWorkSessionRevision: 2,
+    expectedAgentRunId: 'agent-run-00000000-0000-4000-8000-000000000009',
+    selection: { accountProfileId: '00000000-0000-4000-8000-000000000006', configurationRevision: 2, model: 'chosen-model' } })
+  const receipt = sakiSwitchWorkSessionModelResultSchema.parse({ ok: true, receipt: { intentId: intent.intentId,
+    state: 'reconciliation-required', agentRunId: 'agent-run-00000000-0000-4000-8000-000000000007',
+    sessionId: 'session-00000000-0000-4000-8000-000000000007' } })
+  const navigate = vi.spyOn(h.planning.controller, 'navigate')
+  h.api.switchWorkSessionModel.mockRejectedValueOnce(new Error('ack lost')).mockResolvedValueOnce(receipt)
+  await h.controller.retry(intent)
+  await h.controller.retry(intent)
+  expect(h.controller.getSnapshot().pending).toEqual([intent])
+  expect(navigate).not.toHaveBeenCalled()
+  const page = render(<ProjectModelSelection projectId={PROJECT_ID} workSession={intent}
+    state={h.controller.getSnapshot()} actions={h.controller} t={t} />)
+  expect(page.asFragment()).toMatchSnapshot('pending Work Session model switch')
+  expect(screen.getByRole('button', { name: zh['modelSwitch.save'] }).hasAttribute('disabled')).toBe(true)
+  if (!receipt.ok) throw new Error('missing receipt')
+  h.api.switchWorkSessionModel.mockResolvedValueOnce({ ok: true, receipt: { ...receipt.receipt, state: 'completed' } })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: zh['accounts.retry'] })) })
+  expect(h.api.switchWorkSessionModel.mock.calls.map(call => call[0])).toEqual([intent, intent, intent])
+  expect(h.controller.getSnapshot().pending).toEqual([])
+  expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ view: 'run', agentRunId: receipt.receipt.agentRunId }))
+})
+
+
+it('releases a rejected stale revision so the operator can select again', async () => {
+  const h = await setup()
+  h.api.configureProjectModelRoute.mockResolvedValueOnce({ ok: false, reason: 'conflict' })
+  await h.controller.retry(sakiConfigureProjectModelRouteIntentSchema.parse({ type: 'configure-project-model-route',
+    intentId: 'intent-00000000-0000-4000-8000-000000000005', projectId: PROJECT_ID, expectedProjectRevision: 0,
+    selection: { accountProfileId: '00000000-0000-4000-8000-000000000006', configurationRevision: 1, model: 'chosen-model' } }))
+  expect(h.controller.getSnapshot().pending).toEqual([])
+  expect(h.controller.getSnapshot().failure).toBe('conflict')
 })

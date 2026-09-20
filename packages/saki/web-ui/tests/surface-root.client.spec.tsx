@@ -72,7 +72,7 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
     planning: controller,
     accounts: { refresh: vi.fn(), submit: vi.fn(), retry: vi.fn() },
     useAccounts: (select: (state: ModelAccountsSnapshot) => unknown) =>
-      select({ supply: null, loading: false, failure: null, pending: [] }),
+      select({ supply: null, projectRoute: null, loading: false, failure: null, pending: [] }),
     work,
     changes,
     delivery,

@@ -8,6 +8,8 @@ import type { ModelAccountProfileId, ModelAccountService } from '@breakfastdapai
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type { ControlIntentActor } from './spec.ts'
 import type { SakiControlIntentId } from './types.ts'
+import { resolvedAccountModelRouteSchema } from './model-routing-spec.ts'
+import type { AccountModelSelection, ResolvedAccountModelRoute } from './model-routing-spec.ts'
 import { enqueueKeyedOperation } from './keyed-operation.ts'
 import { modelAccountBindingSchema, modelAccountRecordSchema, modelAccountSnapshotSchema } from './model-supply-spec.ts'
 import type {
@@ -62,6 +64,38 @@ export class ModelSupply {
         .map(([, intent]) => ({ intentId: intent.id, profileId: intent.profileId,
           state: intent.state, progress: intent.progress })),
     }
+  }
+
+  /**
+   * Capture a selected account revision after checking its current protected credential and catalog.
+   * @param selection - exact account configuration and model chosen by the operator.
+   * @param signal - admission lifetime, before any model request begins.
+   * @returns detached route attribution with no credential address or material.
+   */
+  async resolveSelection(selection: AccountModelSelection, signal: AbortSignal): Promise<ResolvedAccountModelRoute> {
+    return await enqueueKeyedOperation(this.operations, selection.accountProfileId, async () => {
+      signal.throwIfAborted()
+      const profile = this.options.profiles.get(selection.accountProfileId)
+      const accounts = this.options.accounts()
+      const provider = profile === undefined ? undefined : accounts?.get(profile.binding.providerId)
+      if (this.closed || this.options.lifetime.aborted || profile === undefined || !profile.connected || !profile.desiredActive
+        || profile.binding.revision !== selection.configurationRevision || provider === undefined
+        || !isDeepStrictEqual(provider.implementation, profile.implementation)
+        || !accounts?.isActive(profile.binding.routeId)) throw new Error('Selected account route is unavailable')
+      const snapshot = modelAccountSnapshotSchema.parse(await provider.inspect(profile.binding, signal))
+      signal.throwIfAborted()
+      const usage = snapshot.usage.state === 'available' ? snapshot.usage : profile.lastConfirmedUsage
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- Provider inspection can outlive disposal or cancellation.
+      if (this.closed || this.options.lifetime.aborted || accounts.get(profile.binding.providerId) !== provider
+        || !accounts.isActive(profile.binding.routeId) || snapshot.authentication !== 'authorized'
+        || snapshot.protectionLevel !== profile.binding.requiredProtection || snapshot.identity !== profile.binding.accountIdentity
+        || snapshot.identity === null || snapshot.health === 'unavailable' || snapshot.entitlement === 'denied'
+        || !snapshot.models.some(model => model.id === selection.model)
+        || usage?.windows.some(window => window.blocksRequests && window.remaining === 0
+          && (window.resetsAt === null || window.resetsAt > Date.now()))) throw new Error('Selected account model is unavailable')
+      return resolvedAccountModelRouteSchema.parse({ selection, provider: profile.binding.routeId,
+        accountIdentity: snapshot.identity, implementation: profile.implementation, configuration: profile.binding.configuration })
+    })
   }
 
   /**

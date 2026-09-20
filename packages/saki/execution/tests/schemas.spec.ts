@@ -1943,6 +1943,10 @@ describe('InheritedChangeBaseline schemas', () => {
 
   it('constructs a Host Execution provider through the service seam', async () => {
     class TestExecution extends SakiHostExecution {
+      override async forkAgentRun(): Promise<import('@breakfastdapaidang/saki-execution').AgentRunForkPlan> {
+        throw new Error('Fork is not configured by this fixture')
+      }
+
       async observeAgentRun(): Promise<never> { throw new Error('Run observation is not configured in this fixture') }
 
       readonly pushCredentialHelper = undefined

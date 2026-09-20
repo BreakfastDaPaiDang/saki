@@ -62,6 +62,13 @@ Control-plane operations used by trusted Consumers.
 
 ```ts cordis-catalog
 /**
+ * Read physical Session execution ownership for Host control admission.
+ * @param sessionId - physical Session identity received by a Host integration.
+ * @returns current, historical, or transitioning ownership; undefined for an ordinary Session.
+ */
+sessionControlState(sessionId: import('@breakfastdapaidang/saki-execution').SessionId): 'owned' | 'historical' | 'transitioning' | undefined
+
+/**
  * Read trusted local Installation and current Host identities.
  * @returns stable independent identities.
  */
@@ -95,6 +102,8 @@ submit<I extends SakiIntent>( authentication: SakiAuthenticationContext, intent:
  */
 onChanged(listener: (keys: readonly SakiProjectionKey[]) => void): SakiChangedDisposer
 ```
+
+Types: [SessionId](core.zh.md)
 
 Source: [`packages/saki/control-plane/src/service.ts`](../../packages/saki/control-plane/src/service.ts)
 
@@ -200,7 +209,7 @@ abstract inspectInterventionOpening( request: InspectInterventionOpeningRequest,
  * @param signal - required caller lifetime and cancellation.
  * @returns independent Session and Terminal observations without Host authority material.
  */
-abstract observeAgentRun( operation: HostOperationReference<'start-agent-run'>, terminal: AgentRunTerminalSelection | null, signal: AbortSignal, ): Promise<AgentRunObservation>
+abstract observeAgentRun( operation: HostOperationReference<'start-agent-run'> | { readonly type: 'forked-agent-run'; readonly request: ForkAgentRunRequest; readonly plan: AgentRunForkPlan }, terminal: AgentRunTerminalSelection | null, signal: AbortSignal, ): Promise<AgentRunObservation>
 
 /**
  * Durably create or replay one inert Host Operation before any external
@@ -233,6 +242,17 @@ abstract startOperation<K extends HostOperationKind>( operation: HostOperationRe
  * @throws when the operation, request, physical Session evidence, or live Agent conflicts or is unavailable.
  */
 abstract resumeAgentRun( operation: HostOperationReference<'start-agent-run'>, request: StartAgentRunHostOperationRequest, signal: AbortSignal, ): Promise<void>
+
+/**
+ * Fork or restore an explicitly selected successor without sending model input.
+ * The Consumer excludes new source input before calling and retains the exact plan before publication.
+ * @param request - source and successor identities with immutable profiles and resource identity.
+ * @param plan - retained fork plan, absent only before the first prepared history cut.
+ * @param retainPlan - durably acknowledge the exact history cut before any successor publication.
+ * @param signal - operation lifetime; cancellation does not discard a retained plan.
+ * @returns the exact plan after the successor is durable and the source runtime is retired.
+ */
+abstract forkAgentRun( request: ForkAgentRunRequest, plan: AgentRunForkPlan | undefined, retainPlan: (plan: AgentRunForkPlan) => Promise<void>, signal: AbortSignal, ): Promise<AgentRunForkPlan>
 
 /**
  * Inspect and recover one durable Host Operation without starting a new external effect.

@@ -762,6 +762,28 @@ export interface StartAgentRunProfile {
   }
 }
 
+/** Immutable Run identities and configuration for a model-idle history fork. */
+export interface ForkAgentRunRequest {
+  readonly binding: ActiveHostProjectBinding
+  readonly workSessionId: SakiWorkSessionId
+  readonly source: {
+    readonly agentRunId: SakiAgentRunId
+    readonly sessionId: SessionId
+    readonly profile: StartAgentRunProfile
+  }
+  readonly target: {
+    readonly agentRunId: SakiAgentRunId
+    readonly sessionId: SessionId
+    readonly profile: StartAgentRunProfile
+  }
+}
+
+/** Exact completed history selected before publishing the successor Session. */
+export interface AgentRunForkPlan {
+  readonly inheritedEventCount: number
+  readonly historyDigest: string
+}
+
 /** Prepare one exact durable input for a Saki Agent Run. */
 export interface StartAgentRunHostOperationRequest {
   readonly type: 'start-agent-run'

@@ -72,7 +72,7 @@ export interface Config {
 
 Depends on: [`GitCredentialHelperId`](../packages/saki/execution/src/index.ts)
 
-Source: [`packages/saki/execution-local/src/index.ts:139`](../packages/saki/execution-local/src/index.ts)
+Source: [`packages/saki/execution-local/src/index.ts:142`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 
@@ -121,7 +121,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/host-api/src/index.ts:74`](../packages/saki/host-api/src/index.ts)
+Source: [`packages/saki/host-api/src/index.ts:76`](../packages/saki/host-api/src/index.ts)
 
 <a id="breakfastdapaidangsaki-tool-intervention"></a>
 
@@ -343,7 +343,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/api/session-controller/src/index.ts:71`](../packages/api/session-controller/src/index.ts)
+来源：[`packages/api/session-controller/src/index.ts:72`](../packages/api/session-controller/src/index.ts)
 
 <a id="deepseek-aidsh-api-settings-controller"></a>
 

@@ -1451,6 +1451,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Control-plane operations used by trusted Consumers.',
     methods: [
       {
+        signature: 'sessionControlState(sessionId: import(\'@breakfastdapaidang/saki-execution\').SessionId): \'owned\' | \'historical\' | \'transitioning\' | undefined',
+        description: 'Read physical Session execution ownership for Host control admission.',
+        parameters: [{ name: 'sessionId', description: 'physical Session identity received by a Host integration.' }],
+        returns: 'current, historical, or transitioning ownership; undefined for an ordinary Session.',
+      },
+      {
         signature: 'readonly access: SakiAccess',
         description: 'Access lifecycle separated from Control Intent authority.',
         parameters: [],
@@ -1563,7 +1569,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'whether the opening is absent, incomplete, exactly confirmed, or conflicting.',
       },
       {
-        signature: 'abstract observeAgentRun( operation: HostOperationReference<\'start-agent-run\'>, terminal: AgentRunTerminalSelection | null, signal: AbortSignal, ): Promise<AgentRunObservation>',
+        signature: 'abstract observeAgentRun( operation: HostOperationReference<\'start-agent-run\'> | { readonly type: \'forked-agent-run\'; readonly request: ForkAgentRunRequest; readonly plan: AgentRunForkPlan }, terminal: AgentRunTerminalSelection | null, signal: AbortSignal, ): Promise<AgentRunObservation>',
         description: 'Read durable Session accounting and current Terminal facts for an already-owned Run. This does not restore, wake, cancel, or submit input to its Agent.',
         parameters: [{ name: 'operation', description: 'exact StartAgentRun operation retained by the control plane.' }, { name: 'terminal', description: 'optional owner-scoped bounded scrollback selection.' }, { name: 'signal', description: 'required caller lifetime and cancellation.' }],
         returns: 'independent Session and Terminal observations without Host authority material.',
@@ -1586,6 +1592,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'operation', description: 'exact succeeded StartAgentRun Host Operation reference.' }, { name: 'request', description: 'complete immutable request retained by the validated control plane.' }, { name: 'signal', description: 'required startup lifetime and cancellation.' }],
         returns: 'after the matching live Agent handle has been restored for the exact Session.',
         throws: ['when the operation, request, physical Session evidence, or live Agent conflicts or is unavailable.'],
+      },
+      {
+        signature: 'abstract forkAgentRun( request: ForkAgentRunRequest, plan: AgentRunForkPlan | undefined, retainPlan: (plan: AgentRunForkPlan) => Promise<void>, signal: AbortSignal, ): Promise<AgentRunForkPlan>',
+        description: 'Fork or restore an explicitly selected successor without sending model input. The Consumer excludes new source input before calling and retains the exact plan before publication.',
+        parameters: [{ name: 'request', description: 'source and successor identities with immutable profiles and resource identity.' }, { name: 'plan', description: 'retained fork plan, absent only before the first prepared history cut.' }, { name: 'retainPlan', description: 'durably acknowledge the exact history cut before any successor publication.' }, { name: 'signal', description: 'operation lifetime; cancellation does not discard a retained plan.' }],
+        returns: 'the exact plan after the successor is durable and the source runtime is retired.',
       },
       {
         signature: 'abstract inspectOperation<K extends HostOperationKind>( operation: HostOperationReference<K>, signal: AbortSignal, ): Promise<HostOperationSnapshot<K>>',
@@ -1628,7 +1640,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'abstract readonly stateVersion: 11',
+        signature: 'abstract readonly stateVersion: 12',
         description: 'State-format version selected by the Installation manifest.',
         parameters: [],
       },
@@ -3557,6 +3569,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'summary', description: 'initial list row for the Session.' }],
   },
   {
+    name: 'api-session/authorize-control',
+    mode: 'bail',
+    signature: '\'api-session/authorize-control\'(request: SessionControlRequest): \'denied\' | undefined',
+    summary: 'Let a Session owner reject generic execution control synchronously.',
+    description: 'Let a Session owner reject generic execution control synchronously.',
+    parameters: [{ name: 'request', description: 'exact Session and operation about to commit.' }],
+  },
+  {
     name: 'api-session/error',
     mode: 'emit',
     signature: '\'api-session/error\'(sessionId: SessionId, message: string): void',
@@ -4057,8 +4077,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface AgentPresetRow {\n    readonly id: string;\n    readonly trust: PresetTrust;\n    readonly isDefault: boolean;\n    readonly name?: string;\n    readonly description?: string;\n    readonly broken?: string;\n}',
   },
   {
+    name: 'AgentProfileModelRouteRecord',
+    declaration: 'export type AgentProfileModelRouteRecord = z.infer<typeof agentProfileModelRouteRecordSchema>;',
+  },
+  {
     name: 'AgentResolver',
     declaration: 'export type AgentResolver = (sessionId: SessionId) => Promise<Agent>;',
+  },
+  {
+    name: 'AgentRunForkPlan',
+    declaration: 'export interface AgentRunForkPlan {\n    readonly inheritedEventCount: number;\n    readonly historyDigest: string;\n}',
   },
   {
     name: 'AgentRunObservation',
@@ -4367,6 +4395,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ConfigureGitHubSynchronizationIntent',
     declaration: 'export interface ConfigureGitHubSynchronizationIntent {\n    readonly type: \'configure-github-synchronization\';\n    readonly intentId: SakiControlIntentId;\n    readonly projectId: SakiDevelopmentProjectId;\n    readonly expectedSynchronizationRevision: number;\n    readonly patch: GitHubSynchronizationConfigurationPatch;\n}',
+  },
+  {
+    name: 'ConfigureProjectModelRouteIntent',
+    declaration: 'export type ConfigureProjectModelRouteIntent = z.infer<typeof configureProjectModelRouteIntentSchema>;',
   },
   {
     name: 'ConfinedArgv',
@@ -4759,6 +4791,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'FinishReasonMap',
     declaration: 'export interface FinishReasonMap {\n    \'stop\': {\n        kind: \'stop\';\n    };\n    \'tool-calls\': {\n        kind: \'tool-calls\';\n    };\n    \'max-tokens\': {\n        kind: \'max-tokens\';\n    };\n    \'aborted\': {\n        kind: \'aborted\';\n        failure: LlmFailure;\n    };\n    \'error\': {\n        kind: \'error\';\n        failure: LlmFailure;\n    };\n}',
+  },
+  {
+    name: 'ForkAgentRunRequest',
+    declaration: 'export interface ForkAgentRunRequest {\n    readonly binding: ActiveHostProjectBinding;\n    readonly workSessionId: SakiWorkSessionId;\n    readonly source: {\n        readonly agentRunId: SakiAgentRunId;\n        readonly sessionId: SessionId;\n        readonly profile: StartAgentRunProfile;\n    };\n    readonly target: {\n        readonly agentRunId: SakiAgentRunId;\n        readonly sessionId: SessionId;\n        readonly profile: StartAgentRunProfile;\n    };\n}',
   },
   {
     name: 'FsDirEntry',
@@ -6045,6 +6081,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ProjectionSnapshot {\n    asOfSeq: SessionSeqCursor;\n    values: Partial<SessionProjectionMap>;\n}',
   },
   {
+    name: 'ProjectModelRouteIntentRecord',
+    declaration: 'export type ProjectModelRouteIntentRecord = z.infer<typeof projectModelRouteIntentRecordSchema>;',
+  },
+  {
+    name: 'ProjectModelRouteProjection',
+    declaration: 'export interface ProjectModelRouteProjection {\n    readonly type: \'project-model-route\';\n    readonly projectId: ConfigureProjectModelRouteIntent[\'projectId\'];\n    readonly projectRevision: number;\n    readonly profile: {\n        readonly id: AgentProfileModelRouteRecord[\'id\'];\n        readonly version: number;\n        readonly agentPresetId: string;\n        readonly provider: string | null;\n        readonly model: string | null;\n        readonly account: Omit<ResolvedAccountModelRoute, \'configuration\'> | null;\n    };\n}',
+  },
+  {
+    name: 'ProjectModelRouteResult',
+    declaration: 'export type ProjectModelRouteResult = {\n    readonly ok: true;\n    readonly receipt: {\n        readonly intentId: SakiControlIntentId;\n        readonly state: ProjectModelRouteIntentRecord[\'state\'];\n        readonly profileId: SakiAgentProfileId;\n    };\n} | {\n    readonly ok: false;\n    readonly reason: \'denied\' | \'conflict\' | \'unavailable\';\n};',
+  },
+  {
     name: 'ProjectSelectionInspection',
     declaration: 'export interface ProjectSelectionInspection {\n    readonly projection: ProjectSelectionProjection;\n    readonly trusted: TrustedProjectSelectionObservation;\n}',
   },
@@ -6221,6 +6269,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type RequestRunOutcome = \'approved\' | \'completed\' | \'rejected\' | \'cancelled\' | \'failed\';',
   },
   {
+    name: 'ResolvedAccountModelRoute',
+    declaration: 'export type ResolvedAccountModelRoute = z.infer<typeof resolvedAccountModelRouteSchema>;',
+  },
+  {
     name: 'ResolvedAlwaysRetryPolicy',
     declaration: 'export interface ResolvedAlwaysRetryPolicy extends ResolvedRetryBackoff {\n    readonly mode: \'always\';\n}',
   },
@@ -6251,6 +6303,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ResumeAgentOptions',
     declaration: 'export interface ResumeAgentOptions {\n    readonly resumeSessionId: SessionId;\n    readonly parentAgent?: Agent;\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
+  },
+  {
+    name: 'RunModelSwitchIntentRecord',
+    declaration: 'export type RunModelSwitchIntentRecord = z.infer<typeof runModelSwitchIntentRecordSchema>;',
   },
   {
     name: 'RunnerFailureRule',
@@ -6294,7 +6350,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiAgentLaunchSummary',
-    declaration: 'export interface SakiAgentLaunchSummary {\n    readonly profileId: SakiAgentProfileId;\n    readonly profileVersion: number;\n    readonly provider: string;\n    readonly model: string;\n    readonly bindingId: SakiResourceBindingId;\n    readonly bindingRevision: number;\n    readonly displayLocation: string;\n    readonly inheritedChangeEntryCount: number;\n}',
+    declaration: 'export interface SakiAgentLaunchSummary {\n    readonly account: ProjectModelRouteProjection[\'profile\'][\'account\'];\n    readonly profileId: SakiAgentProfileId;\n    readonly profileVersion: number;\n    readonly provider: string;\n    readonly model: string;\n    readonly bindingId: SakiResourceBindingId;\n    readonly bindingRevision: number;\n    readonly displayLocation: string;\n    readonly inheritedChangeEntryCount: number;\n}',
   },
   {
     name: 'SakiAgentProfileId',
@@ -6393,10 +6449,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SakiHostId = Branded<\'SakiHostId\'>;',
   },
   {
-    name: 'SakiInspectProjectSelectionQuery',
-    declaration: 'export interface SakiInspectProjectSelectionQuery {\n    readonly type: \'inspect-project-selection\';\n    readonly hostId: SakiHostId;\n    readonly directoryLocator: string;\n}',
-  },
-  {
     name: 'SakiInstallationIdentity',
     declaration: 'export interface SakiInstallationIdentity {\n    readonly installationId: SakiInstallationId;\n    readonly hostId: SakiHostId;\n}',
   },
@@ -6406,7 +6458,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiIntentMap',
-    declaration: 'export interface SakiIntentMap {\n    readonly \'authorize-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'authorize-model-account\';\n    }>;\n    readonly \'set-model-account-active\': Extract<ModelAccountIntent, {\n        readonly type: \'set-model-account-active\';\n    }>;\n    readonly \'rename-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'rename-model-account\';\n    }>;\n    readonly \'refresh-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'refresh-model-account\';\n    }>;\n    readonly \'disconnect-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'disconnect-model-account\';\n    }>;\n    readonly \'cancel-model-authorization\': Extract<ModelAccountIntent, {\n        readonly type: \'cancel-model-authorization\';\n    }>;\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n    readonly \'create-work-item\': CreateWorkItemIntent;\n    readonly \'move-work-item\': MoveWorkItemIntent;\n    readonly \'save-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'save-branch-delivery\';\n    }>;\n    readonly \'push-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'push-branch-delivery\';\n    }>;\n    readonly \'create-branch-deliv /* …truncated — full shape in source */',
+    declaration: 'export interface SakiIntentMap {\n    readonly \'switch-work-session-model\': SwitchWorkSessionModelIntent;\n    readonly \'configure-project-model-route\': ConfigureProjectModelRouteIntent;\n    readonly \'authorize-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'authorize-model-account\';\n    }>;\n    readonly \'set-model-account-active\': Extract<ModelAccountIntent, {\n        readonly type: \'set-model-account-active\';\n    }>;\n    readonly \'rename-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'rename-model-account\';\n    }>;\n    readonly \'refresh-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'refresh-model-account\';\n    }>;\n    readonly \'disconnect-model-account\': Extract<ModelAccountIntent, {\n        readonly type: \'disconnect-model-account\';\n    }>;\n    readonly \'cancel-model-authorization\': Extract<ModelAccountIntent, {\n        readonly type: \'cancel-model-authorization\';\n    }>;\n    readonly \'register-development-project\': RegisterDevelopmentProjectIntent;\n    readonly \'configure-github-synchronization\': ConfigureGitHubSynchronizationIntent;\n    readonly \'stage-files\': StageFilesIntent;\n    readonly \'unstage-files\': UnstageFilesIntent;\n    readonly \'create-commit\': CreateCommitIntent;\n    readonly \'create-work-item\': CreateWorkItemIntent;\n    readonly \'move-work-item\': MoveWorkItemIntent;\n    readonly \'save-branch-delivery\': Extract<BranchDeliveryIntent, {\n        readonly type: \'save-branch-delivery\';\n    }>;\n    r /* …truncated — full shape in source */',
   },
   {
     name: 'SakiIntentReceipt',
@@ -6414,7 +6466,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SakiIntentReceiptMap',
-    declaration: 'export interface SakiIntentReceiptMap {\n    readonly \'authorize-model-account\': ModelAccountIntentResult;\n    readonly \'set-model-account-active\': ModelAccountIntentResult;\n    readonly \'rename-model-account\': ModelAccountIntentResult;\n    readonly \'refresh-model-account\': ModelAccountIntentResult;\n    readonly \'disconnect-model-account\': ModelAccountIntentResult;\n    readonly \'cancel-model-authorization\': ModelAccountIntentResult;\n    readonly \'register-development-project\': {\n        readonly ok: true;\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'confirmed\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'denied\';\n        readonly receipt?: never;\n    } | {\n        readonly ok: false;\n        readonly reason: \'unavailable\';\n        readonly receipt?: Extract<SakiRegistrationReceipt, {\n            readonly state: \'prepared\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'conflict\';\n        readonly receipt?: Extract<SakiRegistrationReceipt, {\n            readonly state: \'conflict\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'failure\';\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'failure\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'reconciliation-required\';\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'reconciliation-require /* …truncated — full shape in source */',
+    declaration: 'export interface SakiIntentReceiptMap {\n    readonly \'switch-work-session-model\': SwitchWorkSessionModelResult;\n    readonly \'configure-project-model-route\': ProjectModelRouteResult;\n    readonly \'authorize-model-account\': ModelAccountIntentResult;\n    readonly \'set-model-account-active\': ModelAccountIntentResult;\n    readonly \'rename-model-account\': ModelAccountIntentResult;\n    readonly \'refresh-model-account\': ModelAccountIntentResult;\n    readonly \'disconnect-model-account\': ModelAccountIntentResult;\n    readonly \'cancel-model-authorization\': ModelAccountIntentResult;\n    readonly \'register-development-project\': {\n        readonly ok: true;\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'confirmed\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'denied\';\n        readonly receipt?: never;\n    } | {\n        readonly ok: false;\n        readonly reason: \'unavailable\';\n        readonly receipt?: Extract<SakiRegistrationReceipt, {\n            readonly state: \'prepared\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'conflict\';\n        readonly receipt?: Extract<SakiRegistrationReceipt, {\n            readonly state: \'conflict\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reason: \'failure\';\n        readonly receipt: Extract<SakiRegistrationReceipt, {\n            readonly state: \'failure\';\n        }>;\n    } | {\n        readonly ok: false;\n        readonly reas /* …truncated — full shape in source */',
   },
   {
     name: 'SakiInterventionAnswerMessageSource',
@@ -6445,20 +6497,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SakiMyWorkQuery {\n    readonly type: \'my-work\';\n}',
   },
   {
-    name: 'SakiProjectIndexQuery',
-    declaration: 'export interface SakiProjectIndexQuery {\n    readonly type: \'project-index\';\n}',
-  },
-  {
     name: 'SakiProjectionKey',
-    declaration: 'export type SakiProjectionKey = \'model-supply\' | \'access\' | \'my-work\' | \'attention\' | \'project-index\' | \'development-workspace\' | \'project-changes\' | \'project-settings\' | \'board\' | \'branch-delivery\' | \'milestone-view\';',
-  },
-  {
-    name: 'SakiProjectSelectionInspectionProjection',
-    declaration: 'export interface SakiProjectSelectionInspectionProjection {\n    readonly type: \'inspect-project-selection\';\n    readonly result: {\n        readonly ok: true;\n        readonly selection: ProjectSelectionProjection;\n    } | Extract<InspectProjectSelectionResult, {\n        readonly ok: false;\n    }>;\n}',
+    declaration: 'export type SakiProjectionKey = \'project-model-route\' | \'model-supply\' | \'access\' | \'my-work\' | \'attention\' | \'project-index\' | \'development-workspace\' | \'project-changes\' | \'project-settings\' | \'board\' | \'branch-delivery\' | \'milestone-view\';',
   },
   {
     name: 'SakiQueryMap',
-    declaration: 'export interface SakiQueryMap {\n    readonly \'model-supply\': {\n        readonly request: {\n            readonly type: \'model-supply\';\n        };\n        readonly projection: ModelSupplyProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-mapping\': {\n        readonly request: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n        };\n        readonly projection: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n            readonly synchronizationRevision: number;\n            readonly canConfigure: boolean;\n            readonly choices: GitHubProjectFieldsFact;\n        };\n        readonly failure: \'denied\' | \'unavailable\' | \'not-found\';\n    };\n    readonly \'my-work\': {\n        readonly request: SakiMyWorkQuery;\n        readonly projection: SakiMyWorkProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly attention: {\n        readonly request: SakiAttentionQuery;\n        readonly projection: SakiAttentionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'inspect-project-selection\': {\n        readonly request: SakiInspectProjectSelectionQuery;\n        readonly projection: SakiProjectSelectionInspectionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-index\': {\n        readonly request: SakiProjectIndexQuery;\n        readonly /* …truncated — full shape in source */',
+    declaration: 'export interface SakiQueryMap {\n    readonly \'project-model-route\': {\n        readonly request: {\n            readonly type: \'project-model-route\';\n            readonly projectId: SakiDevelopmentProjectId;\n        };\n        readonly projection: ProjectModelRouteProjection;\n        readonly failure: \'denied\' | \'not-found\' | \'unavailable\';\n    };\n    readonly \'model-supply\': {\n        readonly request: {\n            readonly type: \'model-supply\';\n        };\n        readonly projection: ModelSupplyProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'project-mapping\': {\n        readonly request: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n        };\n        readonly projection: {\n            readonly type: \'project-mapping\';\n            readonly projectId: SakiDevelopmentProjectId;\n            readonly synchronizationRevision: number;\n            readonly canConfigure: boolean;\n            readonly choices: GitHubProjectFieldsFact;\n        };\n        readonly failure: \'denied\' | \'unavailable\' | \'not-found\';\n    };\n    readonly \'my-work\': {\n        readonly request: SakiMyWorkQuery;\n        readonly projection: SakiMyWorkProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly attention: {\n        readonly request: SakiAttentionQuery;\n        readonly projection: SakiAttentionProjection;\n        readonly failure: \'denied\' | \'unavailable\';\n    };\n    readonly \'i /* …truncated — full shape in source */',
   },
   {
     name: 'SakiQueryResult',
@@ -6627,6 +6671,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionControlFrame',
     declaration: 'export type SessionControlFrame = {\n    readonly type: \'baseline\';\n    readonly value: SessionControlBaseline;\n} | {\n    readonly type: \'queue\';\n    readonly sessionId: SessionId;\n    readonly items: readonly SessionQueuedItem[];\n} | {\n    readonly type: \'jobs\';\n    readonly sessionId: SessionId;\n    readonly jobs: readonly SessionJob[];\n} | ({\n    readonly type: \'projection\';\n} & SessionProjectionUpdate);',
+  },
+  {
+    name: 'SessionControlRequest',
+    declaration: 'export interface SessionControlRequest {\n    readonly sessionId: SessionId;\n    readonly action: \'resume\' | \'model-selection\' | \'prompt\' | \'queue\' | \'cancel\';\n}',
   },
   {
     name: 'SessionCreateRequest',
@@ -7451,6 +7499,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SurfaceOp',
     declaration: 'export type SurfaceOp = \'append\' | {\n    op: \'replace\';\n    startSeq: SessionSeq;\n    endSeq: SessionSeq;\n};',
+  },
+  {
+    name: 'SwitchWorkSessionModelIntent',
+    declaration: 'export type SwitchWorkSessionModelIntent = z.infer<typeof switchWorkSessionModelIntentSchema>;',
+  },
+  {
+    name: 'SwitchWorkSessionModelResult',
+    declaration: 'export type SwitchWorkSessionModelResult = {\n    readonly ok: true;\n    readonly receipt: {\n        readonly intentId: SwitchWorkSessionModelIntent[\'intentId\'];\n        readonly state: RunModelSwitchIntentRecord[\'state\'];\n        readonly agentRunId: RunModelSwitchIntentRecord[\'hostRequest\'][\'target\'][\'agentRunId\'];\n        readonly sessionId: RunModelSwitchIntentRecord[\'hostRequest\'][\'target\'][\'sessionId\'];\n    };\n} | {\n    readonly ok: false;\n    readonly reason: \'denied\' | \'conflict\' | \'unavailable\';\n};',
   },
   {
     name: 'SystemMessage',

@@ -1,5 +1,124 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`retains a pending switch through reconciliation and navigates only after exact completion > pending Work Session model switch 1`] = `
+<DocumentFragment>
+  <section
+    class="_card_a8d48e"
+  >
+    <h2>
+      切换此工作会话的模型
+    </h2>
+    <p>
+      等待当前轮次和工具执行结束后，保留对话历史并建立新的 Run。原 Run 保留原账户和模型。
+    </p>
+    <p
+      role="alert"
+    >
+      服务暂不可用，请刷新或重试。
+    </p>
+    <label>
+      账户与模型
+      <select>
+        <option
+          value=""
+        >
+          请选择账户与模型
+        </option>
+      </select>
+    </label>
+    <p>
+      请先在“模型账户”中连接并启用账户。
+    </p>
+    <div
+      class="_actions_a8d48e"
+    >
+      <button
+        disabled=""
+        type="button"
+      >
+        切换账户与模型
+      </button>
+      <button
+        type="button"
+      >
+        刷新
+      </button>
+    </div>
+    <div>
+      <p>
+        尚未收到确认；重试会继续同一次操作。
+      </p>
+      <button
+        type="button"
+      >
+        重试
+      </button>
+    </div>
+  </section>
+</DocumentFragment>
+`;
+
+exports[`retains the selected account revision when a Project default acknowledgement is lost > pending Project model selection 1`] = `
+<DocumentFragment>
+  <section
+    class="_card_a8d48e"
+  >
+    <h2>
+      默认模型
+    </h2>
+    <p>
+      用于此项目之后创建的 Run；已有 Run 保留原账户和模型。
+    </p>
+    <p>
+      当前默认: 尚未配置
+    </p>
+    <p
+      role="alert"
+    >
+      服务暂不可用，请刷新或重试。
+    </p>
+    <label>
+      账户与模型
+      <select>
+        <option
+          value=""
+        >
+          请选择账户与模型
+        </option>
+      </select>
+    </label>
+    <p>
+      请先在“模型账户”中连接并启用账户。
+    </p>
+    <div
+      class="_actions_a8d48e"
+    >
+      <button
+        disabled=""
+        type="button"
+      >
+        保存默认模型
+      </button>
+      <button
+        type="button"
+      >
+        刷新
+      </button>
+    </div>
+    <div>
+      <p>
+        尚未收到确认；重试会继续同一次操作。
+      </p>
+      <button
+        type="button"
+      >
+        重试
+      </button>
+    </div>
+  </section>
+</DocumentFragment>
+`;
+
 exports[`submits the advertised authorization method from the account page > available subscription authorization 1`] = `
 <DocumentFragment>
   <section

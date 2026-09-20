@@ -1,9 +1,10 @@
 /** Read-only planning views assembled from confirmed GitHub and durable Saki records. */
+import type { CurrentAgentRunRecord as AgentRunRecord } from './run-model-switch-spec.ts'
 import type { GitHubIssueDetailFact, GitHubMilestoneId } from '@breakfastdapaidang/saki-github'
 import type { SessionId, SakiAgentRunId, SakiWorkSessionId, SakiControlIntentId } from '@breakfastdapaidang/saki-execution'
 import type { BranchDeliveryProjection } from './branch-delivery.ts'
 import { projectMilestoneDelivery, type MilestoneDeliveryProjection, type MilestoneDeliveryRecord } from './milestone-delivery.ts'
-import type { AgentRunRecord, GitHubWorkItemIntentRecord, InterventionRequestRecord, WorkAssignmentRecord } from './spec.ts'
+import type { GitHubWorkItemIntentRecord, InterventionRequestRecord, WorkAssignmentRecord } from './spec.ts'
 import type {
   SakiBoardProjection,
   SakiBoardWorkItemId,

@@ -5440,7 +5440,7 @@ Sources: [`packages/llm/llm/src/types.ts:445`](../packages/llm/llm/src/types.ts)
 
 SHA-256: `06d1a332e7706d74c25c59af16d5909b82df7d11a2695e565a7ec4f0b699d315`
 
-Sources: [`packages/saki/execution-local/src/agent-run.ts:35`](../packages/saki/execution-local/src/agent-run.ts)
+Sources: [`packages/saki/execution-local/src/agent-run.ts:38`](../packages/saki/execution-local/src/agent-run.ts)
 
 | Property | Presence | Type |
 |---|---|---|

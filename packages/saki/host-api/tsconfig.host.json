@@ -7,11 +7,13 @@
   },
   "files": [
     "src/model-supply-wire.ts",
+    "src/model-routing-wire.ts",
     "src/index.ts",
     "src/projection-changes.ts",
     "src/wire.ts"
   ],
   "references": [
+    { "path": "../../api/session-controller/tsconfig.host.json" },
     { "path": "../../util/brand" },
     {
       "path": "../../../vendor/cosmokit"

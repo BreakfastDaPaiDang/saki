@@ -1,5 +1,6 @@
 /** Saki Installation control plane and local Access interface. @module @breakfastdapaidang/saki-control-plane */
 
+export type { SwitchWorkSessionModelIntent, SwitchWorkSessionModelResult } from './run-model-switch-spec.ts'
 export { SakiControlPlaneService } from './service.ts'
 export type {
   SakiProjectSessionsQuery, SakiProjectSessionsProjection, SakiAgentRunViewQuery, SakiAgentRunViewProjection,
@@ -128,6 +129,7 @@ export {
   sakiStorageGenerationV6DomainSpec,
   sakiStorageGenerationV7DomainSpec,
   sakiStorageGenerationV8DomainSpec,
+  sakiStorageGenerationV9DomainSpec,
   STORAGE_GENERATION_KEY,
   storageGenerationSealRecordSchema,
   storageGenerationV1SealRecordSchema,
@@ -138,6 +140,7 @@ export {
   storageGenerationV6SealRecordSchema,
   storageGenerationV7SealRecordSchema,
   storageGenerationV8SealRecordSchema,
+  storageGenerationV9SealRecordSchema,
 } from './state-version.ts'
 export type {
   StorageGenerationSealRecord,
@@ -152,6 +155,7 @@ export type {
 export {
   validateCurrentSakiState,
   validateSakiV10SourceState,
+  validateSakiV11SourceState,
   validateSakiV2SourceState,
   validateSakiV3SourceState,
   validateSakiV4SourceState,
@@ -328,3 +332,10 @@ declare module '@deepseek-ai/cordis' {
 export { default } from './service.ts'
 
 export type { ModelAccountIntent, ModelAccountIntentResult, ModelSupplyProjection } from './model-supply-spec.ts'
+export { sakiControlPlaneV11DomainSpec } from './migration-v11-source.ts'
+export type { AccountModelSelection, ProjectModelRouteProjection, ConfigureProjectModelRouteIntent } from './model-routing-spec.ts'
+export type { ProjectModelRouteResult } from './model-routing.ts'
+
+/** Current Run records include history-forked successors. */
+export { currentAgentRunRecordSchema } from './run-model-switch-spec.ts'
+export type { CurrentAgentRunRecord } from './run-model-switch-spec.ts'

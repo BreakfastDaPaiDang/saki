@@ -30,6 +30,7 @@ export {
   readClosedSakiV8State,
   readClosedSakiV9State,
   readClosedSakiV10State,
+  readClosedSakiV11State,
 } from './closed-state.ts'
 export type {
   ClosedCurrentSakiState,

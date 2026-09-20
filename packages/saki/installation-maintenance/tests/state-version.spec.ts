@@ -16,8 +16,8 @@ import {
 import { sakiStateCapability } from '../src/state-version.ts'
 
 describe('Saki product state capability', () => {
-  it('retains exact v2-v10 readers and makes only complete v11 writable', () => {
-    expect(sakiStateCapability.readable.map(spec => spec.version)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+  it('retains exact v2-v11 readers and makes only complete v12 writable', () => {
+    expect(sakiStateCapability.readable.map(spec => spec.version)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
     expect(sakiStateCapability.resolveReadable(1)).toBeUndefined()
     expect(sakiStateCapability.resolveReadable(2)?.domains.map(domain => [domain.name, domain.version])).toEqual([
       ['saki_control_plane', 2],
@@ -79,7 +79,11 @@ describe('Saki product state capability', () => {
     expect(sakiStateCapability.resolveReadable(11)?.domains.map(domain => [domain.name, domain.version])).toEqual([
       ['saki_control_plane', 11], ['saki_host_execution', 5], ['saki_storage_generation', 9],
     ])
-    expect(sakiStateCapability.writable.version).toBe(11)
+    expect(sakiStateCapability.resolveReadable(12)?.domains.map(domain => [domain.name, domain.version])).toEqual([
+      ['saki_control_plane', 12], ['saki_host_execution', 5], ['saki_storage_generation', 10],
+    ])
+    expect(sakiStateCapability.resolveReadable(13)).toBeUndefined()
+    expect(sakiStateCapability.writable.version).toBe(12)
     expect(sakiStateCapability.writable.controlPlane).toBe(sakiControlPlaneDomainSpec)
     expect(sakiStateCapability.writable.hostExecution).toBe(sakiHostExecutionDomainSpec)
     expect(sakiStateCapability.writable.storageGeneration).toBe(sakiStorageGenerationDomainSpec)

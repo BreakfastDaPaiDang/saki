@@ -79,6 +79,10 @@ Each confirmation freezes one request. Response loss, pending receipts, and reco
 
 The Accounts page starts browser or device-code authorization and displays Host-owned progress. It supports explicit refresh, activation, deactivation, renaming, and disconnection. Unknown usage remains distinct from measured zero; the last confirmed allowance retains its observation time. Unacknowledged gestures persist per Principal and retry with the same Intent id.
 
+The Project workspace selects a default from enabled account models. Saving creates a new Agent Profile for future Runs and retains existing Run selections. A lost acknowledgement retries the exact account revision and Project revision. Run details show the retained account identity, configuration revision, and provider implementation.
+
+The current Run page offers explicit account and model selection for its Work Session. Pending requests retain their expected Session revision and account configuration for exact retry. Completion opens the successor Run; history views keep each Run’s original model and account attribution.
+
 ## Model Experience
 
 Indirectly, through confirmed Give-to-Agent and Intervention-answer Intents whose durable Session input, model routing, and execution belong to the Agent runtime.

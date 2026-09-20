@@ -327,6 +327,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   MessageFeedbackVersionConflict: 'feedback.md',
   UserMessage: 'session.md',
   ApiSessionAgentResult: 'session.md',
+  SessionControlRequest: 'session.md',
   PreStepDecision: 'core.md',
   PreStepContext: 'core.md',
   RequestErrorAction: 'core.md',
@@ -763,6 +764,8 @@ export const FOUNDATION_TYPE_NAMES: ReadonlySet<string> = new Set([
 
 /** Project types deliberately documented outside the subsystems catalog. */
 export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
+  AgentRunForkPlan: 'private Saki Host execution — packages/saki/execution/README.md',
+  ForkAgentRunRequest: 'private Saki Host execution — packages/saki/execution/README.md',
   McpResourceProvider: 'scoped resource provider is owned by packages/mcp/mcp-resources/README.md',
   'z.ZodType': 'Zod response validation API is owned by https://zod.dev/packages/zod',
   Socket: 'Node.js byte stream API is owned by https://nodejs.org/api/net.html#class-netsocket',
