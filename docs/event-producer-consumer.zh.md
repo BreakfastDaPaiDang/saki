@@ -25,8 +25,9 @@
 | `agent/turn-stopping` | `serial` | [`packages/core/agent/src/runtime-types.ts:381`](../packages/core/agent/src/runtime-types.ts) | [`agent-loop`](../packages/core/agent-loop) (`serial`) | [`hooks-claude-code`](../packages/hooks/hooks-claude-code), [`hooks-codex`](../packages/hooks/hooks-codex) |
 | `api-session/activity` | `emit` | [`packages/api/session-controller/src/types.ts:601`](../packages/api/session-controller/src/types.ts) | `session-controller` (`emit`) | `remotes` |
 | `api-session/added` | `emit` | [`packages/api/session-controller/src/types.ts:581`](../packages/api/session-controller/src/types.ts) | `session-controller` (`emit`) | `remotes` |
-| `api-session/authorize-control` | `bail` | [`packages/api/session-controller/src/control-policy.ts:21`](../packages/api/session-controller/src/control-policy.ts) | `session-controller` (`bail`) | `host-api` |
+| `api-session/authorize-control` | `bail` | [`packages/api/session-controller/src/control-policy.ts:30`](../packages/api/session-controller/src/control-policy.ts) | `session-controller` (`bail`) | `host-api` |
 | `api-session/error` | `emit` | [`packages/api/session-controller/src/types.ts:608`](../packages/api/session-controller/src/types.ts) | `session-controller` (`emit`) | `remotes` |
+| `api-session/initial-model-selection` | `bail` | [`packages/api/session-controller/src/control-policy.ts:22`](../packages/api/session-controller/src/control-policy.ts) | `session-controller` (`bail`) | `host-api` |
 | `api-session/removed` | `emit` | [`packages/api/session-controller/src/types.ts:587`](../packages/api/session-controller/src/types.ts) | `session-controller` (`emit`) | `remotes` |
 | `api-session/status` | `emit` | [`packages/api/session-controller/src/types.ts:594`](../packages/api/session-controller/src/types.ts) | `session-controller` (`emit`) | `remotes` |
 | `approval/request` | `waterfall` | [`packages/interaction/user-approval/src/types.ts:85`](../packages/interaction/user-approval/src/types.ts) | [`user-approval`](../packages/interaction/user-approval) (`waterfall`) | [`acp`](../packages/acp/acp), `remotes` |

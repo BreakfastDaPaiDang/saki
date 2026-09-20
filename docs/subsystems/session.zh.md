@@ -1125,6 +1125,26 @@ Types: [SessionId](core.zh.md)
 
 Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/session-controller/src/types.ts)
 
+<a id="api-sessioninitial-model-selection--bail"></a>
+
+#### `api-session/initial-model-selection` — bail
+
+Select a deployment-owned route once for a newly created ordinary Session.
+
+```ts cordis-catalog
+/**
+ * Select a deployment-owned route once for a newly created ordinary Session.
+ * @mode bail
+ * @param request - new Session identity and its resolved working directory.
+ * @returns a selection to record before publication, or undefined to retain the deployment default.
+ */
+'api-session/initial-model-selection'(request: { readonly sessionId: SessionId; readonly cwd: string }): ModelSelection | undefined
+```
+
+Types: [ModelSelection](core.zh.md) · [SessionId](core.zh.md)
+
+Source: [`packages/api/session-controller/src/control-policy.ts`](../../packages/api/session-controller/src/control-policy.ts)
+
 <a id="api-sessionremoved--emit"></a>
 
 #### `api-session/removed` — emit

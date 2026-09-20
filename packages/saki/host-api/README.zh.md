@@ -25,6 +25,8 @@ Host 为 Saki 拥有的物理 Session 注册控制策略。通用 Conversation �
 <a id="use-this-package"></a>
 ## 使用本包
 
+已注册项目中的新普通聊天通过 `api-session/initial-model-selection` 使用项目默认模型，无需关联 GitHub Issue。Session Controller 只记录一次路由；修改项目默认值不会改变已有聊天的路由。尚未选择默认模型的项目拒绝创建聊天。Host API 释放时会移除此监听器。
+
 Saki 私有双侧 Host API 把控制面适配到共享 Connection 载体。Host 入口注册由 Saki 拥有的 `/saki` 逻辑通道；`./client` 入口在浏览器上下文注册 `ctx.sakiHostClient`。`./wire` 包含两侧共用、适用于浏览器的严格 schema。
 
 <a id="endpoints"></a>

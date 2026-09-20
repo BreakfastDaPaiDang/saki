@@ -24,6 +24,8 @@ Project defaults resolve an exact account configuration before publishing a new 
 
 Saki-owned Sessions reject generic model selection and cold activation through the Session Controller’s synchronous owner policy. The check runs at mutation commit points and Agent publication, so asynchronous preparation cannot outlive a change of execution ownership. Physical history remains readable. Only the current Run accepts live prompts; historical and transitioning Sessions reject generic execution commands. This keeps generic Conversation controls from bypassing immutable Run attribution.
 
+Ordinary chats remain independent of GitHub Issues and Saki Runs. Creation captures the registered Project's default route in `model/selection` before publication; retry and recovery retain the recorded choice. Resolving the Project default on every request would silently change accounts after a Project edit, so the initial-selection hook runs only for new Sessions. Unconfigured Projects reject creation rather than borrowing another deployment default.
+
 ## Alternatives considered
 
 **Mount the entire community subscription bundle.** This would import account UI, routing, optional external-Agent integration, and credential-storage assumptions beyond the required capability. The maintained public usage helper deletes owned quota parsing without transferring product authority.

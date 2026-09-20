@@ -351,6 +351,14 @@ export interface SakiAgentInterventions {
 /** Control-plane operations used by trusted Consumers. */
 export interface SakiControlPlaneModule {
   /**
+   * Read the Project default for a new ordinary chat in its registered Workspace.
+   * @param cwd - canonical directory resolved by the Workspace-backed Session create request.
+   * @returns the retained route, or undefined when this directory has no registered Project.
+   * @throws when the registered Project has no default model.
+   */
+  initialConversationModel(cwd: string): { readonly provider: string; readonly model: string } | undefined
+
+  /**
    * Read physical Session execution ownership for Host control admission.
    * @param sessionId - physical Session identity received by a Host integration.
    * @returns current, historical, or transitioning ownership; undefined for an ordinary Session.
@@ -2883,6 +2891,18 @@ export class SakiControlPlaneService extends Service implements SakiControlPlane
 
   sessionControlState(sessionId: import('@breakfastdapaidang/saki-execution').SessionId): 'owned' | 'historical' | 'transitioning' | undefined {
     return this.runModelSwitches.sessionControlState(sessionId)
+  }
+
+  initialConversationModel(cwd: string): { readonly provider: string; readonly model: string } | undefined {
+    const registry = this.projects.registry()
+    const binding = registry.resourceBindings.find(candidate => this.ctx.workspaceRegistry.get(candidate.workspaceId)?.path === cwd)
+    if (binding === undefined) return undefined
+    const project = registry.projects.find(candidate => candidate.id === binding.projectId)
+    if (project === undefined) throw new Error('Conversation Workspace has no Project')
+    const profile = registry.agentProfiles.find(candidate => candidate.id === project.defaultAgentProfileId)
+    if (profile === undefined) throw new Error('Conversation Project has no Agent Profile')
+    if (profile.modelRouteRequest === null) throw new Error('Select a default model for the Conversation Project before creating a Session')
+    return { ...profile.modelRouteRequest }
   }
 
   private requireAgentRunTable(): AgentRunTable {

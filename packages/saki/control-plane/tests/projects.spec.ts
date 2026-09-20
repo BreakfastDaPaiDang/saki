@@ -6282,6 +6282,10 @@ it('retains a selected account Profile across Project registration validation an
     const registered = await harness.control.submit(harness.authentication, intent(
       'intent-10101010-1010-4010-8010-101010101010', 'Model selection', repo, 0, selection), signal)
     if (!registered.ok) throw new Error('registration failed')
+    const canonicalRepo = await realpath(repo)
+    expect(harness.ctx.sakiControlPlane.initialConversationModel(durable.root)).toBeUndefined()
+    expect(() => harness.ctx.sakiControlPlane.initialConversationModel(canonicalRepo))
+      .toThrow('Select a default model')
     const authorized = await harness.control.submit(harness.authentication, {
       type: 'authorize-model-account', intentId: sakiControlIntentIdSchema.parse('intent-10101010-1010-4010-8010-101010101011'),
       providerId: modelAccountProviderId('fixture'), name: 'Fixture', method: 'device_code',
@@ -6303,7 +6307,10 @@ it('retains a selected account Profile across Project registration validation an
     const selected = await harness.control.query(harness.authentication, query, signal)
     expect(selected).toMatchObject({ ok: true, projection: { projectRevision: 1,
       profile: { version: 2, model: 'fixture-model', account: { selection: request.selection } } } })
+    const initialModel = harness.ctx.sakiControlPlane.initialConversationModel(canonicalRepo)
+    expect(initialModel).toEqual({ provider: profile.binding.routeId, model: 'fixture-model' })
     harness = await harness.restartControlPlane()
+    expect(harness.ctx.sakiControlPlane.initialConversationModel(canonicalRepo)).toEqual(initialModel)
     expect(await harness.control.query(harness.authentication, query, signal)).toEqual(selected)
     expect(await harness.control.submit(harness.authentication, request, signal)).toEqual(result)
   } finally { await harness.close(); await unregister() }

@@ -86,6 +86,7 @@ const configSchema = z.object({ changeWaitMs: z.number().int().min(1).max(2_147_
  * @param config - maximum invalidation wait before a heartbeat.
  */
 export function apply(ctx: Context, config: Config = {}): void {
+  ctx.on('api-session/initial-model-selection', ({ cwd }) => ctx.sakiControlPlane.initialConversationModel(cwd))
   ctx.on('api-session/authorize-control', ({ sessionId, action }) => {
     const ownership = ctx.sakiControlPlane.sessionControlState(sessionId)
     if (ownership === 'transitioning' || ownership === 'historical'

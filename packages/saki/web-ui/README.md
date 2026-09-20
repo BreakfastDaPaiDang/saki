@@ -77,6 +77,8 @@ Each confirmation freezes one request. Response loss, pending receipts, and reco
 <a id="model-experience"></a>
 ## Manage model accounts
 
+New Session opens a direct chat in the selected Project without requiring a GitHub Issue. New chats capture the Project default model; changing that default leaves existing chats on their recorded route.
+
 The Accounts page starts browser or device-code authorization and displays Host-owned progress. It supports explicit refresh, activation, deactivation, renaming, and disconnection. Unknown usage remains distinct from measured zero; the last confirmed allowance retains its observation time. Unacknowledged gestures persist per Principal and retry with the same Intent id.
 
 The Project workspace selects a default from enabled account models. Saving creates a new Agent Profile for future Runs and retains existing Run selections. A lost acknowledgement retries the exact account revision and Project revision. Run details show the retained account identity, configuration revision, and provider implementation.

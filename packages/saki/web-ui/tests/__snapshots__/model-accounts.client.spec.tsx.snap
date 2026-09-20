@@ -67,7 +67,7 @@ exports[`retains the selected account revision when a Project default acknowledg
       默认模型
     </h2>
     <p>
-      用于此项目之后创建的 Run；已有 Run 保留原账户和模型。
+      用于此项目的新聊天和新任务；已有聊天和任务保留原账户与模型。
     </p>
     <p>
       当前默认: 尚未配置

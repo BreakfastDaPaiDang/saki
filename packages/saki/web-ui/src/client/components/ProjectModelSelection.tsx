@@ -7,7 +7,7 @@ import type { NS } from '../locales.ts'
 import css from './ModelAccountsPage.module.css'
 
 /**
- * Render the selected Project's model default without changing existing Runs.
+ * Render the Project default for new chats and Runs without changing existing selections.
  * @param props - selected Project, observed accounts, durable actions and localized copy.
  * @returns Project model settings and exact-request retries.
  */

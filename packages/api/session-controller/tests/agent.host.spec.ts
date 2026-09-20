@@ -298,6 +298,44 @@ describe('ApiSession model selection', () => {
 })
 
 describe('ApiSession create or adoption', () => {
+  it('records a Project-owned initial route once and preserves it when creation is retried', async () => {
+    const { ctx, agents } = await harness()
+    const cwd = mkdtempSync(join(tmpdir(), 'dsh-session-project-model-'))
+    tempDirs.push(cwd)
+    let selected = { provider: 'account-first', model: 'first-model' }
+    const resolve = vi.fn(() => selected)
+    const unregister = ctx.on('api-session/initial-model-selection', resolve)
+    const meta = header('project-model-create', cwd)
+    vi.spyOn(ctx.agents, 'create').mockImplementation(async (options) => {
+      const created = agent(ctx, meta)
+      const prepared = await options.setup?.(ctx, created)
+      prepared?.commit()
+      ctx.agents.register(created)
+      return { agent: created, dispose: () => Promise.resolve() }
+    })
+    const created = await agents.ensureSession(meta.id, cwd, false)
+    expect(agents.selectionFor(created).current).toEqual(selected)
+    expect(ctx.sessionProjections.stateOf(created.session, 'modelSelection'))
+      .toEqual({ lastUsed: null, pending: selected })
+    selected = { provider: 'account-second', model: 'second-model' }
+    expect(await agents.ensureSession(meta.id, cwd, false)).toBe(created)
+    expect(agents.selectionFor(created).current.provider).toBe('account-first')
+    expect(resolve).toHaveBeenCalledExactlyOnceWith({ sessionId: meta.id, cwd })
+    unregister()
+    expect(ctx.bail('api-session/initial-model-selection', { sessionId: meta.id, cwd })).toBeUndefined()
+  })
+
+  it('does not publish a new Session when its Project rejects initial model selection', async () => {
+    const { ctx, agents } = await harness()
+    const cwd = mkdtempSync(join(tmpdir(), 'dsh-session-project-unconfigured-'))
+    tempDirs.push(cwd)
+    ctx.on('api-session/initial-model-selection', () => { throw new Error('Project model is unconfigured') })
+    const create = vi.spyOn(ctx.agents, 'create')
+    await expect(agents.ensureSession(SessionId('unconfigured-project'), cwd, false))
+      .rejects.toThrow('Project model is unconfigured')
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('shares one in-flight creation between concurrent callers', async () => {
     const { ctx, agents } = await harness()
     const cwd = mkdtempSync(join(tmpdir(), 'dsh-session-controller-concurrent-'))
@@ -377,6 +415,8 @@ describe('ApiSession create or adoption', () => {
 
   it('resumes a matching persisted identity and preserves its selected preset', async () => {
     const { ctx, agents } = await harness()
+    const resolve = vi.fn(() => { throw new Error('Project defaults must not retarget a restored Session') })
+    ctx.on('api-session/initial-model-selection', resolve)
     const meta = { ...header('stored'), agentPreset: 'minimal' }
     const events = [{
       type: 'agent-preset/selected',
@@ -411,6 +451,7 @@ describe('ApiSession create or adoption', () => {
 
     await expect(agents.ensureSession(meta.id, '/workspace', true, 'minimal')).resolves.toBe(resumed)
     expect(resume).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: meta.id }))
+    expect(resolve).not.toHaveBeenCalled()
   })
 
   it('rejects an ownership race before resume and a persisted cwd conflict', async () => {

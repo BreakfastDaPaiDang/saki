@@ -62,6 +62,14 @@ Control-plane operations used by trusted Consumers.
 
 ```ts cordis-catalog
 /**
+ * Read the Project default for a new ordinary chat in its registered Workspace.
+ * @param cwd - canonical directory resolved by the Workspace-backed Session create request.
+ * @returns the retained route, or undefined when this directory has no registered Project.
+ * @throws when the registered Project has no default model.
+ */
+initialConversationModel(cwd: string): { readonly provider: string; readonly model: string } | undefined
+
+/**
  * Read physical Session execution ownership for Host control admission.
  * @param sessionId - physical Session identity received by a Host integration.
  * @returns current, historical, or transitioning ownership; undefined for an ordinary Session.

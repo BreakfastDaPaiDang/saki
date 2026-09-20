@@ -481,14 +481,22 @@ export class ApiSessionAgentController {
       throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
     }
     const composition = await this.composeAgent(presetId)
+    const initialSelection = this.ctx.bail('api-session/initial-model-selection', { sessionId, cwd })
+    const setup: AgentSetup = async (agentCtx, agent) => {
+      const prepared = await composition.setup(agentCtx, agent)
+      return { commit: () => {
+        prepared?.commit()
+        if (initialSelection !== undefined) this.selectForNextRequest(agent, initialSelection)
+      } }
+    }
     return (await this.ctx.agents.create({
       sessionId,
-      agentOptions: this.agentOptions(),
+      agentOptions: initialSelection ?? this.agentOptions(),
       meta: {
         cwd,
         ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
       },
-      setup: this.controlledSetup(sessionId, composition.setup),
+      setup: this.controlledSetup(sessionId, setup),
     })).agent
   }
 

@@ -1451,6 +1451,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Control-plane operations used by trusted Consumers.',
     methods: [
       {
+        signature: 'initialConversationModel(cwd: string): { readonly provider: string; readonly model: string } | undefined',
+        description: 'Read the Project default for a new ordinary chat in its registered Workspace.',
+        parameters: [{ name: 'cwd', description: 'canonical directory resolved by the Workspace-backed Session create request.' }],
+        returns: 'the retained route, or undefined when this directory has no registered Project.',
+        throws: ['when the registered Project has no default model.'],
+      },
+      {
         signature: 'sessionControlState(sessionId: import(\'@breakfastdapaidang/saki-execution\').SessionId): \'owned\' | \'historical\' | \'transitioning\' | undefined',
         description: 'Read physical Session execution ownership for Host control admission.',
         parameters: [{ name: 'sessionId', description: 'physical Session identity received by a Host integration.' }],
@@ -3583,6 +3590,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'One Agent failed outside a durable turn position.',
     description: 'One Agent failed outside a durable turn position.',
     parameters: [{ name: 'sessionId', description: 'Agent and Session identity.' }, { name: 'message', description: 'user-safe failure chain.' }],
+  },
+  {
+    name: 'api-session/initial-model-selection',
+    mode: 'bail',
+    signature: '\'api-session/initial-model-selection\'(request: { readonly sessionId: SessionId; readonly cwd: string }): ModelSelection | undefined',
+    summary: 'Select a deployment-owned route once for a newly created ordinary Session.',
+    description: 'Select a deployment-owned route once for a newly created ordinary Session.',
+    parameters: [{ name: 'request', description: 'new Session identity and its resolved working directory.' }],
   },
   {
     name: 'api-session/removed',

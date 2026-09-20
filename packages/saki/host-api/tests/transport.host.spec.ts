@@ -1378,6 +1378,9 @@ it('keeps Saki Run recovery and model changes under their owner and removes the 
   try {
     const owned = 'session-owned' as import('@breakfastdapaidang/saki-execution').SessionId
     const ordinary = 'session-ordinary' as import('@breakfastdapaidang/saki-execution').SessionId
+    vi.spyOn(host.context.sakiControlPlane, 'initialConversationModel').mockReturnValue({ provider: 'account-route', model: 'selected' })
+    expect(host.context.bail('api-session/initial-model-selection', { sessionId: ordinary, cwd: '/project' }))
+      .toEqual({ provider: 'account-route', model: 'selected' })
     vi.spyOn(host.context.sakiControlPlane, 'sessionControlState').mockImplementation(sessionId => sessionId === owned
       ? 'owned' : undefined)
     for (const action of ['resume', 'model-selection'] as const) {
@@ -1386,6 +1389,7 @@ it('keeps Saki Run recovery and model changes under their owner and removes the 
     }
     expect(host.context.bail('api-session/authorize-control', { sessionId: owned, action: 'prompt' })).toBeUndefined()
     await host.disposeApi()
+    expect(host.context.bail('api-session/initial-model-selection', { sessionId: ordinary, cwd: '/project' })).toBeUndefined()
     expect(host.context.bail('api-session/authorize-control', { sessionId: owned, action: 'model-selection' })).toBeUndefined()
   } finally { await host.close() }
 })

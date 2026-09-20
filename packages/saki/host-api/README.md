@@ -25,6 +25,8 @@ The Host registers Session control policy for Saki-owned physical Sessions. Gene
 <a id="use-this-package"></a>
 ## Use this package
 
+New ordinary chats in a registered Project use its default model through `api-session/initial-model-selection`, without requiring a GitHub Issue. The Session Controller records the route once; changing the Project default does not retarget existing chats. Projects without a selected default reject chat creation. Disposing the Host API removes this listener.
+
 The private dual-face Saki Host API adapts the control plane to the shared Connection carrier. The Host entry registers the Saki-owned `/saki` logical channel; the `./client` entry registers `ctx.sakiHostClient` in a browser context. `./wire` contains strict browser-safe schemas shared by both faces.
 
 <a id="endpoints"></a>

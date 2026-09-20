@@ -26,6 +26,8 @@ Session 的拥有者可以注册同步 `api-session/authorize-control` bail 事�
 <a id="use-this-package"></a>
 ## 使用本包
 
+部署可以通过同步 `api-session/initial-model-selection` bail 事件，根据解析后的工作目录为新建普通 Session 选择路由。控制器会在发布 Agent 前记录该选择。接纳已运行实例、恢复持久化会话和分叉均保留原选择，不查询此事件；事件抛出异常时会在发布前拒绝创建。
+
 历史页与 follow opening 快照为每个持久 Session 事件携带一条 `{ type: 'event', event: SessionWireEvent }` record。Client 把每条已接受 record 保留为一个持久 `SessionEventLikeEntry`；Assistant token 边界保留在 `assistant/message` 或 `assistant/attempt` 的紧凑流内。工具参数、结果内容、失败信息和 `tool/result.data.meta` 原样通过；控制器不解析工具定义、不运行展示转换器，也不附加 UI 数据。
 
 Client journal 在发布 follow 快照、live entry 或历史页之前验证精确的 V3 事件 envelope。它复用浏览器安全的 Session validator，检查必需的 surface marker、精确的 replacement endpoint、更早且唯一的 source seq、内嵌 Assistant 提供方元数据、request header 可选字段的省略规则以及工具错误一致性。无效 record 直接失败，不删除字段或归一化；范围成员与来源存在性仍由 Host 的持久日志检查。

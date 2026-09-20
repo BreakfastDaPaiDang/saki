@@ -68,6 +68,8 @@ Board mapping 只使用已配置的 GitHub node id。已配置 Repository 中匹
 <a id="access-and-control-operations"></a>
 ## 访问与控制操作
 
+`initialConversationModel` 为普通聊天解析已注册 Workspace 所属项目的默认模型。项目尚未选择模型时会拒绝；目录不属于已注册项目时不覆盖默认值。Host API 仅在创建新 Session 时提供这一选择。
+
 规划读取的所有权保留在 Host。`work-item-view` 将当前完整 Board 与定向确认结果关联到持久 Assignment、Run、Intervention、Branch Delivery、已配置 Milestone 及最近 32 条活动引用。完整 Issue 正文的读取可独立失败，并在等待 GitHub 后重新检查 Provider 挂载、准确 Issue 身份、当前 Board 指纹与权限。`project-milestones` 按 Milestone id 分页列出已配置交付摘要；`project-mapping` 在准确同步修订号下发现全部现有字段选项，并报告当前配置权限。字段发现与正文读取均不会发布 Board checkpoint。
 
 `SakiAccess` 读取封闭的 Access Projection、交换启动器机密值，并登出当前 Browser Session。Bootstrap 与登出只能修改 Installation Access。主模块暴露稳定的 Installation 与 Host 身份标识；只读的项目选择检查、Project-index、Development-Workspace、Changes、Diff、Board、Project Settings、My Work、Attention、`branch-delivery` 与 `milestone-view` 查询；持久化的 `register-development-project`、`configure-github-synchronization`、StageFiles、UnstageFiles、CreateCommit、`CreateWorkItem`、`MoveWorkItem`、`save-branch-delivery`、`push-branch-delivery`、`create-branch-delivery-pull-request`、`associate-branch-delivery-pull-request`、`mark-branch-delivery-in-review`、`accept-branch-delivery`、`save-milestone-delivery`、`finalize-milestone-delivery`、`give-work-item-to-agent` 与 `answer-intervention` Intent；以及提交后的 Projection 失效通知。Changes 只发布仓库级 eligibility 与封闭原因，不替浏览器选择文件；每次 StageFiles 或 UnstageFiles 提交都携带自己的 selection，并用新鲜观察重新校验。Cached Board query 与两项 Principal-scoped work query 都是纯持久读取。Interactive Board query 会持久请求一条高优先级扫描，并在不等待 GitHub 的情况下返回当前 Projection。仅写入 Intent 阶段不会使 Project 视图失效；Registry、write admission、Host Operation、Work Item、Agent operation、Intervention 或同步更新提交后会使受影响视图失效。一个失效通知 listener 失败时，系统只发出固定且不含凭据的诊断，不会阻止后续 listener 运行；每项注册仍可独立 dispose（资源释放）。

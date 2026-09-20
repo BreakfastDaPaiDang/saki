@@ -3,6 +3,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 
 /** One operation that can activate or change a Session's execution. */
 export interface SessionControlRequest {
@@ -12,6 +13,14 @@ export interface SessionControlRequest {
 
 declare module '@deepseek-ai/cordis' {
   interface Events {
+    /**
+     * Select a deployment-owned route once for a newly created ordinary Session.
+     * @mode bail
+     * @param request - new Session identity and its resolved working directory.
+     * @returns a selection to record before publication, or undefined to retain the deployment default.
+     */
+    'api-session/initial-model-selection'(request: { readonly sessionId: SessionId; readonly cwd: string }): ModelSelection | undefined
+
     /**
      * Let a Session owner reject generic execution control synchronously.
      * @mode bail
