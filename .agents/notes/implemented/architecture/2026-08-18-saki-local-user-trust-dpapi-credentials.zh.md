@@ -28,7 +28,7 @@ Windows 提供方报告来源 `windows-dpapi-current-user` 和 Credential Protec
 
 ## Saki 组合
 
-在 Windows 上，`@breakfastdapaidang/saki-bundle` 会装配该提供方与 Product GitHub App。GitHub 同步配置只持久化 private key 的 `CredentialRef`；Product App 的每次读取与扫描都会在认证前调用 `resolveRequired(ref, 'local-user-trust')`，并把解析后的值限制在该 operation 内。值缺失或 Credential Protection Level 不同时，会产生有界 `auth-unavailable` 失败。目前仍没有 Provider Account Profile 实现、Codex 或 Kimi 授权完成流程及派发准入消费方装配该提供方；Host 替换也不会创建 Intervention Request，产品界面也不会暴露凭据健康状态。Saki 0.1.0 的这些剩余义务继续遵守相同的 operation 边界与安全观测要求。
+在 Windows 上，Saki 组合包将本提供者与 Product GitHub App 及[受保护模型账户](2026-09-20-saki-protected-model-accounts.zh.md) 一同加载。GitHub 读取要求受保护引用；Codex 授权和刷新要求受保护记录事务。Host 替换与组织共享保留各自的恢复及隔离义务。
 
 组织共享同样不属于本次实现。`local-user-trust` 不足以保护供其他组织成员使用的 Host 账号；该能力需要运行于独立 OS 安全身份下的 Credential Broker 或外部机密管理器、经过认证的操作路径，以及证明 Agent 执行无法恢复原始值的对抗性验证。
 

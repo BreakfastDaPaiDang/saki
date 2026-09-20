@@ -25,11 +25,11 @@ Register an existing directory as a Development Project, plan its GitHub Work It
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount this plugin in a composition that also carries the shell roster and the `/saki` Host API; the two sidebar entries then open the Saki pages.
+Mount this plugin in a composition that also carries the shell roster and the `/saki` Host API; the three sidebar entries then open the Saki pages.
 
-- `sidebar.primary.action`: entries `saki-work` and `saki-project` render the two primary destinations under New Session, rail-aware through the owner `wide` flag.
-- `main`: two root-scoped keyed entries (`saki:work` / `saki:project`) render the Saki pages. The reserved `conversation` entry stays mounted while hidden, preserving its unfinished draft and viewing state.
-- The navigation store publishes through `ctx.layout.selectPanel` after both main entries are registered. Saki sidebar entries select their panel on every click; their active state follows `usePanelInfo`. The persisted `saki.navigation` value restores the Saki page on reload.
+- `sidebar.primary.action`: entries `saki-work`, `saki-project`, and `saki-accounts` render the three primary destinations under New Session, rail-aware through the owner `wide` flag.
+- `main`: three root-scoped keyed entries (`saki:work` / `saki:project` / `saki:accounts`) render the Saki pages. The reserved `conversation` entry stays mounted while hidden, preserving its unfinished draft and viewing state.
+- The navigation store publishes through `ctx.layout.selectPanel` after all main entries are registered. Saki sidebar entries select their panel on every click; their active state follows `usePanelInfo`. The persisted `saki.navigation` value restores the Saki page on reload.
 - A user-driven Session navigation reported by the Workspace navigation face (`uiWorkspace.onSessionNavigation`: a sidebar Session row, New Session, or fork open) clears the surface, handing the center column back to the Conversation; elections with no gesture behind them — the shell's startup Workspace auto-connect and the persisted-selection restore — never evict an elected page, so a restored 项目 page survives them, mid-registration included.
 
 Directory edits supersede pending inspections. Registration disables path edits until the submitted Intent settles; a conflict requires refreshed registry revision and inspection evidence before confirmation becomes available again.
@@ -75,6 +75,16 @@ Refresh delivery evidence to discover an existing open PR matching the exact Com
 Each confirmation freezes one request. Response loss, pending receipts, and reconciliation retain that request across reloads and Work Item navigation; Recover original request replays its original id, revisions, and text. A Project permits one unacknowledged delivery request at a time, and a pending Changes operation also blocks new delivery gestures. A successful acceptance receipt does not replace the separately read Work Item status.
 
 <a id="model-experience"></a>
+## Manage model accounts
+
+New Session opens a direct chat in the selected Project without requiring a GitHub Issue. New chats capture the Project default model; changing that default leaves existing chats on their recorded route.
+
+The Accounts page starts browser or device-code authorization and displays Host-owned progress. It supports explicit refresh, activation, deactivation, renaming, and disconnection. Unknown usage remains distinct from measured zero; the last confirmed allowance retains its observation time. Unacknowledged gestures persist per Principal and retry with the same Intent id.
+
+The Project workspace selects a default from enabled account models. Saving creates a new Agent Profile for future Runs and retains existing Run selections. A lost acknowledgement retries the exact account revision and Project revision. Run details show the retained account identity, configuration revision, and provider implementation.
+
+The current Run page offers explicit account and model selection for its Work Session. Pending requests retain their expected Session revision and account configuration for exact retry. Completion opens the successor Run; history views keep each Run’s original model and account attribution.
+
 ## Model Experience
 
 Indirectly, through confirmed Give-to-Agent and Intervention-answer Intents whose durable Session input, model routing, and execution belong to the Agent runtime.

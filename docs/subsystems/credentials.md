@@ -209,6 +209,15 @@ abstract unset(ref: CredentialRef): Promise<void>
 abstract readRecord(key: CredentialKey): Promise<CredentialRecord | undefined>
 
 /**
+ * Read a record only when this provider guarantees the requested protection on that read.
+ * Providers without a protected record implementation refuse before returning material.
+ * @param _key - record owned by the requesting integration.
+ * @param _required - exact protection level required by the account.
+ * @returns the protected record, or undefined when absent.
+ */
+readRecordProtected(_key: CredentialKey, _required: CredentialProtectionLevel): Promise<CredentialRecord | undefined>
+
+/**
  * Describe one record for configuration surfaces without exposing its value.
  * @param key - the record to describe.
  * @returns presence, discriminant, and writability.
@@ -237,6 +246,15 @@ abstract listRecords(): Promise<readonly CredentialRecordEntry[]>
  * @returns the record after the write, or the current one when `mutate` declined.
  */
 abstract modifyRecord( key: CredentialKey, mutate: (current: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>, ): Promise<CredentialRecord | undefined>
+
+/**
+ * Serialize a record mutation while guaranteeing protection of both the read and committed replacement.
+ * @param _key - owned credential record address.
+ * @param _required - exact protection required throughout the transaction.
+ * @param _mutate - receives the current record and returns a replacement, or undefined to leave it unchanged.
+ * @returns committed record; unsupported providers reject without invoking the mutation.
+ */
+modifyRecordProtected( _key: CredentialKey, _required: CredentialProtectionLevel, _mutate: (current: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>, ): Promise<CredentialRecord | undefined>
 
 /**
  * Remove one record; removing an absent record is a no-op.

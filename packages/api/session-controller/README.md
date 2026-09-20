@@ -10,6 +10,8 @@ English | [中文](README.zh.md)
 
 `@deepseek-ai/dsh-api-session-controller` owns the Host `ctx.sessionController` service and the generated Client `session`, `skills`, and `fileReferences` Remote namespaces. It serves Session lifecycle and history, the Host-generation model catalog, workspace-path opening, user-invocable skill discovery, and Agent-scoped file references. Use it through API Gateway when a Client needs operations addressed by a Session.
 
+Session owners can register the synchronous `api-session/authorize-control` bail event and return `denied` to reject generic activation, model selection, prompt delivery, queue mutation, or cancellation with `session/agent-busy`. Commands check the policy at their execution commit point, after asynchronous preparation; activation also checks immediately before publishing an Agent. Read-only history stays available.
+
 ## Table of Contents
 
 - [Use this package](#use-this-package)
@@ -23,6 +25,8 @@ English | [中文](README.zh.md)
 
 <a id="use-this-package"></a>
 ## Use this package
+
+Deployments can supply the synchronous `api-session/initial-model-selection` bail event to select a new ordinary Session's route from its resolved working directory. The controller records the selection before Agent publication. Live adoption, persisted resume, and fork retain their existing selection without consulting this event; an exception rejects creation before publication.
 
 History pages and follow opening snapshots carry one `{ type: 'event', event: SessionWireEvent }` record per durable Session event. The Client retains each accepted record as one durable `SessionEventLikeEntry`; Assistant token boundaries remain inside the compact stream on `assistant/message` or `assistant/attempt`. Tool arguments, result content, failures, and `tool/result.data.meta` pass through unchanged; the controller does not resolve a Tool definition, run a presenter, or attach UI data.
 

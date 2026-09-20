@@ -1,5 +1,10 @@
 /** Browser-safe Saki Host API schemas and inferred wire values. @module @breakfastdapaidang/saki-host-api/wire */
 
+import { sakiModelRouteAttributionSchema, sakiProjectModelRouteResultSchema } from './model-routing-wire.ts'
+import { sakiSwitchWorkSessionModelIntentSchema, sakiSwitchWorkSessionModelResultSchema, sakiConfigureProjectModelRouteIntentSchema, sakiConfigureProjectModelRouteResultSchema } from './model-routing-wire.ts'
+export * from './model-routing-wire.ts'
+import { sakiModelAccountIntentSchema, sakiModelAccountResultSchema, sakiModelSupplyResultSchema } from './model-supply-wire.ts'
+export * from './model-supply-wire.ts'
 import { z } from 'zod'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { SakiRunTerminalId } from '@breakfastdapaidang/saki-execution'
@@ -255,6 +260,8 @@ const runTerminalSelectionSchema = z.object({ id: runTerminalIdSchema, offset: s
 
 /** Closed Project reads with only opaque Run and Terminal selectors. */
 export const sakiQueryRequestSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('project-model-route'), projectId }).strict(),
+  z.object({ type: z.literal('model-supply') }).strict(),
   z.object({ type: z.literal('my-work') }).strict(),
   z.object({ type: z.literal('attention') }).strict(),
   z.object({
@@ -647,6 +654,9 @@ export const sakiAnswerInterventionIntentSchema = z.object({
 
 /** Closed Control Intent request union. */
 export const sakiIntentRequestSchema = z.discriminatedUnion('type', [
+  sakiSwitchWorkSessionModelIntentSchema,
+  sakiConfigureProjectModelRouteIntentSchema,
+  ...sakiModelAccountIntentSchema.options,
   sakiRegisterDevelopmentProjectIntentSchema,
   sakiConfigureGitHubSynchronizationIntentSchema,
   sakiStageFilesIntentSchema,
@@ -1777,6 +1787,7 @@ const actionOfferSchema = z.discriminatedUnion('type', [
     expectedRemoteFingerprint: boardRemoteFingerprint,
     reason: safeAgentDisplayText(200),
     launch: z.object({
+      account: sakiModelRouteAttributionSchema.nullable(),
       profileId: sakiAgentProfileIdSchema, profileVersion: z.number().int().positive(),
       provider: safeAgentDisplayText(200), model: safeAgentDisplayText(200),
       bindingId, bindingRevision: revision,
@@ -2759,7 +2770,7 @@ const workSessionSummarySchema = z.object({
   }).strict(),
   assignment: z.object({ id: assignmentId, state: z.enum(['assigned', 'active', 'canceled', 'reconciliation-required']), ownerPrincipalId: principalId, currentAgentRunId: sakiAgentRunIdSchema }).strict(),
   runs: z.array(z.object({ id: sakiAgentRunIdSchema, sessionId: sakiAgentRunSessionId,
-    state: runAdmissionStateSchema, createdAt: safeInteger, updatedAt: safeInteger,
+    state: runAdmissionStateSchema, account: sakiModelRouteAttributionSchema.nullable(), createdAt: safeInteger, updatedAt: safeInteger,
   }).strict()
     .refine(value => value.updatedAt >= value.createdAt, 'Run timestamps are not monotonic')).min(1).max(32),
   createdAt: safeInteger, updatedAt: safeInteger,
@@ -2817,7 +2828,8 @@ export const sakiAgentRunViewResultSchema: z.ZodType<SakiQueryResult<'agent-run-
   z.object({ ok: z.literal(true), projection: z.object({
     type: z.literal('agent-run-view'), projectId, workSession: workSessionSummarySchema,
     run: z.object({ id: sakiAgentRunIdSchema, revision, sessionId: sakiAgentRunSessionId, state: runAdmissionStateSchema,
-      source: z.object({ kind: z.literal('manual-give-to-agent'), intentId, principalId }).strict(),
+      source: z.object({ kind: z.enum(['manual-give-to-agent', 'model-switch']), intentId, principalId }).strict(),
+      account: sakiModelRouteAttributionSchema.nullable(),
       profile: z.object({ id: sakiAgentProfileIdSchema, version: positiveRevision, agentPresetId,
         modelRoute: z.object({ provider: safeAgentDisplayText(200), model: safeAgentDisplayText(200) }).strict(),
       }).strict(), createdAt: safeInteger, updatedAt: safeInteger,
@@ -2832,6 +2844,11 @@ export const sakiAgentRunViewResultSchema: z.ZodType<SakiQueryResult<'agent-run-
     const run = value.workSession.runs.find(run => run.id === value.run.id)
     if (run?.sessionId !== value.run.sessionId || run.state !== value.run.state || value.run.updatedAt < value.run.createdAt) {
       context.addIssue({ code: 'custom', message: 'Run disagrees with its Work Session or timestamps', path: ['run'] })
+    }
+    const account = value.run.account
+    if (account !== null && (account.provider !== value.run.profile.modelRoute.provider
+      || account.selection.model !== value.run.profile.modelRoute.model)) {
+      context.addIssue({ code: 'custom', message: 'Run differs from its retained account route', path: ['run', 'account'] })
     }
     if (new Set(value.dispatches.map(dispatch => dispatch.id)).size !== value.dispatches.length
       || value.nextDispatch !== null && value.nextDispatch !== value.dispatches.at(-1)?.id) {
@@ -2861,6 +2878,8 @@ export const sakiProjectMappingResultSchema: z.ZodType<SakiQueryResult<'project-
 
 /** Union schema retained for callers that intentionally handle every query kind. */
 export const sakiQueryResultSchema: z.ZodType<SakiQueryResult> = z.union([
+  sakiProjectModelRouteResultSchema,
+  sakiModelSupplyResultSchema,
   sakiMyWorkResultSchema,
   sakiAttentionResultSchema,
   sakiInspectProjectSelectionResultSchema,
@@ -3431,6 +3450,9 @@ export const sakiAnswerInterventionResultSchema = z.union([
 
 /** Union schema retained for callers that intentionally handle every Control Intent result. */
 export const sakiIntentResultSchema = z.union([
+  sakiSwitchWorkSessionModelResultSchema,
+  sakiConfigureProjectModelRouteResultSchema,
+  sakiModelAccountResultSchema,
   sakiRegisterDevelopmentProjectResultSchema,
   sakiConfigureGitHubSynchronizationResultSchema,
   sakiStageFilesResultSchema,

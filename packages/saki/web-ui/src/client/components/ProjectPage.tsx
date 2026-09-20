@@ -6,6 +6,7 @@
  * semantics, and never reads paths or parses Git output itself.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   SakiWireAccessProjection,
@@ -22,6 +23,7 @@ import css from './ProjectPage.module.css'
 
 /** Props for the 项目 page. */
 export interface ProjectPageProps {
+  modelSelection?: ReactNode
   openBoard?: () => void
   showRegisteredWorkspace?: () => void
   access: Extract<SakiWireAccessProjection, { kind: 'authenticated' }>
@@ -100,6 +102,7 @@ export function ProjectPage(props: ProjectPageProps) {
   if (props.projectId !== null) {
     return (
       <WorkspaceView
+        modelSelection={props.modelSelection}
         openBoard={props.openBoard}
         projectId={props.projectId}
         index={index}
@@ -193,6 +196,7 @@ export function ProjectPage(props: ProjectPageProps) {
 
 /** The Development Workspace of one selected Project. */
 function WorkspaceView(props: {
+  modelSelection?: ReactNode
   openBoard?: (() => void) | undefined
   projectId: SakiWireProjectId
   index: IndexState
@@ -243,6 +247,7 @@ function WorkspaceView(props: {
           </button>
         </div>
       </div>
+      {props.modelSelection}
       {workspace.phase === 'loading' ? <p className={css.hint}>{t('workspace.loading')}</p> : null}
       {workspace.phase === 'offline' ? (
         <div className={css.notice} role="alert">

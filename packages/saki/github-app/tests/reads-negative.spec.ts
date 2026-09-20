@@ -168,7 +168,7 @@ function repositoryNode(overrides: Readonly<Record<string, unknown>> = {}): Reco
   return {
     __typename: 'Repository',
     id: REPOSITORY_ID,
-    databaseId: REPOSITORY_DATABASE_ID,
+    databaseId: Number(REPOSITORY_DATABASE_ID),
     nameWithOwner: 'BreakfastDaPaiDang/saki',
     visibility: 'PUBLIC',
     url: 'https://github.com/BreakfastDaPaiDang/saki',
@@ -191,7 +191,7 @@ function issueNode(overrides: Readonly<Record<string, unknown>> = {}): Record<st
     title: 'Publish a read-only Board',
     url: 'https://github.com/BreakfastDaPaiDang/saki/issues/27',
     updatedAt: '2026-08-26T08:01:00Z',
-    repository: { id: REPOSITORY_ID, databaseId: REPOSITORY_DATABASE_ID },
+    repository: { id: REPOSITORY_ID, databaseId: Number(REPOSITORY_DATABASE_ID) },
     ...overrides,
   }
 }
@@ -217,6 +217,18 @@ function invoke<T>(operation: () => Promise<T>): Promise<T> {
 describe('exact GitHub read rejection paths', () => {
   afterEach(() => { vi.restoreAllMocks() })
 
+  it.each([null, '4242', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an invalid Repository database id from GraphQL: %s',
+    async (databaseId) => {
+      useSession(repositoryResponse({ databaseId }))
+      await expect(readRepository(REPOSITORY_REQUEST, 'key', CONFIG, new AbortController().signal, new InstallationPriorityQueue()))
+        .rejects.toThrow()
+      useSession(graphql({ node: issueNode({ repository: { id: REPOSITORY_ID, databaseId } }), rateLimit: RATE_LIMIT }))
+      await expect(readIssue(ISSUE_REQUEST, 'key', CONFIG, new AbortController().signal, new InstallationPriorityQueue()))
+        .rejects.toThrow()
+    },
+  )
+
   it('rejects missing and mismatched exact Issue identities', async () => {
     useSession(graphql({ node: null, rateLimit: RATE_LIMIT }))
     await expect(invoke(() => readIssue(ISSUE_REQUEST, 'key', CONFIG, new AbortController().signal, new InstallationPriorityQueue())))
@@ -226,11 +238,11 @@ describe('exact GitHub read rejection paths', () => {
     await expect(invoke(() => readIssue(ISSUE_REQUEST, 'key', CONFIG, new AbortController().signal, new InstallationPriorityQueue())))
       .rejects.toMatchObject({ failure: { code: 'invalid-external-response', operation: 'issue' } })
 
-    useSession(graphql({ node: issueNode({ repository: { id: 'R_other', databaseId: REPOSITORY_DATABASE_ID } }), rateLimit: RATE_LIMIT }))
+    useSession(graphql({ node: issueNode({ repository: { id: 'R_other', databaseId: Number(REPOSITORY_DATABASE_ID) } }), rateLimit: RATE_LIMIT }))
     await expect(invoke(() => readIssue(ISSUE_REQUEST, 'key', CONFIG, new AbortController().signal, new InstallationPriorityQueue())))
       .rejects.toMatchObject({ failure: { code: 'invalid-external-response', operation: 'issue' } })
 
-    useSession(graphql({ node: issueNode({ repository: { id: REPOSITORY_ID, databaseId: '4243' } }), rateLimit: RATE_LIMIT }))
+    useSession(graphql({ node: issueNode({ repository: { id: REPOSITORY_ID, databaseId: 4243 } }), rateLimit: RATE_LIMIT }))
     await expect(invoke(() => readIssue(ISSUE_REQUEST, 'key', CONFIG, new AbortController().signal, new InstallationPriorityQueue())))
       .rejects.toMatchObject({ failure: { code: 'invalid-external-response', operation: 'issue' } })
   })
@@ -262,7 +274,7 @@ describe('exact GitHub read rejection paths', () => {
     await expect(readRepository(REPOSITORY_REQUEST, 'key', CONFIG, new AbortController().signal, new InstallationPriorityQueue()))
       .rejects.toThrow('GitHub returned a different Repository identity')
 
-    useSession(repositoryResponse({ databaseId: '4243' }))
+    useSession(repositoryResponse({ databaseId: 4243 }))
     await expect(readRepository(REPOSITORY_REQUEST, 'key', CONFIG, new AbortController().signal, new InstallationPriorityQueue()))
       .rejects.toThrow('GitHub returned a different Repository identity')
   })

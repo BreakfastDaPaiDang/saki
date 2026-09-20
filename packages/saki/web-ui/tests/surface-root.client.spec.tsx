@@ -11,6 +11,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { useSyncExternalStore } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SakiWireAccessProjection } from '@breakfastdapaidang/saki-host-api/wire'
+import type { ModelAccountsSnapshot } from '../src/client/model-accounts-controller.ts'
 import { SakiSurfaceRoot } from '../src/client/components/SurfaceRoot.tsx'
 import * as ProjectPageModule from '../src/client/components/ProjectPage.tsx'
 import * as PlanningPageModule from '../src/client/components/PlanningPage.tsx'
@@ -69,6 +70,9 @@ function bench(readAccess: () => Promise<SakiWireAccessProjection>, matched: { p
     nav: navigation.actions,
     useNavigation,
     planning: controller,
+    accounts: { refresh: vi.fn(), submit: vi.fn(), retry: vi.fn() },
+    useAccounts: (select: (state: ModelAccountsSnapshot) => unknown) =>
+      select({ supply: null, projectRoute: null, loading: false, failure: null, pending: [] }),
     work,
     changes,
     delivery,

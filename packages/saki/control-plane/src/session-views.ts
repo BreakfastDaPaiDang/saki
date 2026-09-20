@@ -1,16 +1,18 @@
 /** Bounded Session destinations and safe Run evidence joined from durable control-plane records. */
+import type { CurrentAgentRunRecord as AgentRunRecord } from './run-model-switch-spec.ts'
 import type {
   AgentRunObservation, AgentRunTerminalSelection, HostOperationId, SessionId,
   SakiAgentRunId, SakiControlIntentId, SakiExecutionDispatchId, SakiWorkSessionId,
 } from '@breakfastdapaidang/saki-execution'
 import type {
-  AgentOperationIntentRecord, AgentRunRecord, ExecutionDispatchRecord, InterventionRequestRecord,
+  AgentOperationIntentRecord, ExecutionDispatchRecord, InterventionRequestRecord,
   WorkAssignmentRecord, WorkSessionRecord,
 } from './spec.ts'
 import type {
   SakiBoardProjection, SakiBoardStatus, SakiBoardWorkItemId, SakiDevelopmentProjectId,
   SakiInterventionRequestProjection, SakiPrincipalId, SakiWorkAssignmentId,
 } from './types.ts'
+import type { AgentProfileModelRouteRecord, ResolvedAccountModelRoute } from './model-routing-spec.ts'
 import { planningWorkItem, SAKI_PLANNING_REFERENCE_LIMIT } from './planning-views.ts'
 
 /** One Project's stable-id-ordered Session page, optionally restricted to a Work Item. */
@@ -54,6 +56,7 @@ export interface SakiWorkSessionSummary {
   readonly runs: readonly {
     readonly id: SakiAgentRunId
     readonly sessionId: SessionId
+    readonly account: Omit<ResolvedAccountModelRoute, 'configuration'> | null
     readonly state: AgentRunRecord['state']
     readonly createdAt: number
     readonly updatedAt: number
@@ -96,8 +99,9 @@ export interface SakiAgentRunViewProjection {
     readonly id: SakiAgentRunId
     readonly revision: number
     readonly sessionId: SessionId
+    readonly account: Omit<ResolvedAccountModelRoute, 'configuration'> | null
     readonly state: AgentRunRecord['state']
-    readonly source: { readonly kind: 'manual-give-to-agent'; readonly intentId: SakiControlIntentId; readonly principalId: SakiPrincipalId }
+    readonly source: { readonly kind: 'manual-give-to-agent' | 'model-switch'; readonly intentId: SakiControlIntentId; readonly principalId: SakiPrincipalId }
     readonly profile: AgentRunRecord['profile']
     readonly createdAt: number
     readonly updatedAt: number
@@ -113,6 +117,7 @@ export interface SakiAgentRunViewProjection {
 type Table<K, V> = Pick<ReadonlyMap<K, V>, 'get' | 'entries'>
 /** Validated tables sampled together when a protected query assembles its response. */
 export interface SessionViewRecords {
+  readonly modelRoutes: Table<AgentProfileModelRouteRecord['id'], AgentProfileModelRouteRecord>
   readonly sessions: Table<SakiWorkSessionId, WorkSessionRecord>
   readonly assignments: Table<SakiWorkAssignmentId, WorkAssignmentRecord>
   readonly runs: Table<SakiAgentRunId, AgentRunRecord>
@@ -125,6 +130,12 @@ function required<K, V>(table: Table<K, V>, id: K): V {
   const value = table.get(id)
   if (value === undefined) throw new Error('Saki Session view is missing a validated durable relationship')
   return value
+}
+
+function accountAttribution(run: AgentRunRecord, records: SessionViewRecords): Omit<ResolvedAccountModelRoute, 'configuration'> | null {
+  const route = run.schemaVersion === 3 ? run.accountRoute : records.modelRoutes.get(run.profile.id)?.route
+  return route === undefined ? null : { selection: structuredClone(route.selection), provider: route.provider,
+    accountIdentity: route.accountIdentity, implementation: { ...route.implementation } }
 }
 
 function sessionSummary(session: WorkSessionRecord, records: SessionViewRecords, board: SakiBoardProjection): SakiWorkSessionSummary {
@@ -140,7 +151,8 @@ function sessionSummary(session: WorkSessionRecord, records: SessionViewRecords,
     },
     runs: session.agentRunIds.map((id) => {
       const run = required(records.runs, id)
-      return { id: run.id, sessionId: run.sessionId as SessionId, state: run.state, createdAt: run.createdAt, updatedAt: run.updatedAt }
+      return { id: run.id, sessionId: run.sessionId as SessionId, account: accountAttribution(run, records),
+        state: run.state, createdAt: run.createdAt, updatedAt: run.updatedAt }
     }),
     createdAt: session.createdAt, updatedAt: session.updatedAt,
   }
@@ -202,8 +214,10 @@ export function agentRunView(
     .map(({ id, revision, kind, state, targetPrincipalId, requiredAnswer, createdAt, updatedAt, returnAddress }) =>
       ({ id, revision, kind, state: state as SakiInterventionRequestProjection['state'], targetPrincipalId, requiredAnswer, createdAt, updatedAt, returnAddress }))
   return { type: 'agent-run-view', projectId: query.projectId, workSession: sessionSummary(session, records, board),
-    run: { id: run.id, revision: run.revision, sessionId: run.sessionId as SessionId, state: run.state,
-      source: { kind: 'manual-give-to-agent', intentId: run.intentId, principalId: intent.payload.actor.principalId },
+    run: { id: run.id, revision: run.revision, sessionId: run.sessionId as SessionId,
+      account: accountAttribution(run, records), state: run.state,
+      source: { kind: run.schemaVersion === 3 ? 'model-switch' : 'manual-give-to-agent',
+        intentId: run.schemaVersion === 3 ? run.forkIntentId : run.intentId, principalId: intent.payload.actor.principalId },
       profile: run.profile, createdAt: run.createdAt, updatedAt: run.updatedAt },
     observation, dispatches, interventions, earlierInterventions: matchingInterventions.length > interventions.length,
     // oxlint-disable-next-line typescript/no-non-null-assertion -- A continuation requires a full positive-capacity page.

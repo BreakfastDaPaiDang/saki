@@ -142,6 +142,8 @@ const handle = await ctx.agents.create({
 
 -----
 
+循环构建的 `GenerateOptions` 保留 `sessionId`，并在 `turn` 中携带已记录的 `turn/start` 轮次号。适配器可将它们用作模型不可见的传输身份；没有轮次的辅助请求不继承对话轮次状态。
+
 <a id="model-experience"></a>
 ## 模型体验
 

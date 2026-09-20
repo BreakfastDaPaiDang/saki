@@ -1,3 +1,6 @@
+import type {} from '@deepseek-ai/dsh-api-session-controller'
+import { sakiSwitchWorkSessionModelResultSchema, sakiProjectModelRouteResultSchema, sakiConfigureProjectModelRouteResultSchema } from './model-routing-wire.ts'
+import { sakiModelAccountResultSchema, sakiModelSupplyResultSchema } from './model-supply-wire.ts'
 /** Host half of the typed Saki `/saki` Connection channel. @module @breakfastdapaidang/saki-host-api */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -83,6 +86,13 @@ const configSchema = z.object({ changeWaitMs: z.number().int().min(1).max(2_147_
  * @param config - maximum invalidation wait before a heartbeat.
  */
 export function apply(ctx: Context, config: Config = {}): void {
+  ctx.on('api-session/initial-model-selection', ({ cwd }) => ctx.sakiControlPlane.initialConversationModel(cwd))
+  ctx.on('api-session/authorize-control', ({ sessionId, action }) => {
+    const ownership = ctx.sakiControlPlane.sessionControlState(sessionId)
+    if (ownership === 'transitioning' || ownership === 'historical'
+      || (ownership === 'owned' && (action === 'resume' || action === 'model-selection'))) return 'denied'
+    return undefined
+  })
   const resolved = configSchema.parse(config)
   const changes = new ProjectionChanges()
   ctx.effect(() => ctx.sakiControlPlane.onChanged(() => { changes.invalidate() }))
@@ -226,6 +236,8 @@ async function query(
     case 'board': {
       return reply({ ok: true, value: sakiBoardResultSchema.parse(result) })
     }
+    case 'project-model-route': return reply({ ok: true, value: sakiProjectModelRouteResultSchema.parse(result) })
+    case 'model-supply': return reply({ ok: true, value: sakiModelSupplyResultSchema.parse(result) })
     case 'project-mapping': return reply({ ok: true, value: sakiProjectMappingResultSchema.parse(result) })
     case 'work-item-view': return reply({ ok: true, value: sakiWorkItemViewResultSchema.parse(result) })
     case 'project-sessions': return reply({ ok: true, value: sakiProjectSessionsResultSchema.parse(result) })
@@ -327,6 +339,23 @@ async function authenticatedMutation(
       case 'give-work-item-to-agent': {
         const result = await controlPlane.submit(authentication, operation.intent, signal)
         return reply({ ok: true, value: sakiGiveWorkItemToAgentResultSchema.parse(result) })
+      }
+      case 'switch-work-session-model': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiSwitchWorkSessionModelResultSchema.parse(result) })
+      }
+      case 'configure-project-model-route': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiConfigureProjectModelRouteResultSchema.parse(result) })
+      }
+      case 'authorize-model-account':
+      case 'set-model-account-active':
+      case 'rename-model-account':
+      case 'refresh-model-account':
+      case 'disconnect-model-account':
+      case 'cancel-model-authorization': {
+        const result = await controlPlane.submit(authentication, operation.intent, signal)
+        return reply({ ok: true, value: sakiModelAccountResultSchema.parse(result) })
       }
       case 'answer-intervention': {
         const result = await controlPlane.submit(authentication, operation.intent, signal)

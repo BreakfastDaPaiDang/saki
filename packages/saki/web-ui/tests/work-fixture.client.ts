@@ -18,7 +18,7 @@ export const MY_WORK = sakiMyWorkResultSchema.parse({ ok: true, projection: { ty
   project: { id: PROJECT_ID, title: 'Project Alpha' }, workItem: { id: ITEM.id, title: ITEM.title, issueNumber: ITEM.issueNumber, status: ITEM.status, updatedAt: ITEM.updatedAt },
   group: 'ready-to-start', returnAddress: { kind: 'work-item', projectId: PROJECT_ID, workItemId: ITEM.id }, recommendation: {
     available: true, offer: { type: 'give-work-item-to-agent', projectId: PROJECT_ID, workItemId: ITEM.id, expectedProjectRevision: 2, expectedRemoteFingerprint: ITEM.remoteFingerprint, reason: 'ready-for-agent', launch: {
-      profileId: 'agent-profile-0a1b2c3d-0000-4000-8000-000000000001', profileVersion: 1, provider: 'deepseek', model: 'deepseek-chat', bindingId: 'binding-0a1b2c3d-0000-4000-8000-000000000001', bindingRevision: 1, displayLocation: 'alpha', inheritedChangeEntryCount: 2,
+      account: null, profileId: 'agent-profile-0a1b2c3d-0000-4000-8000-000000000001', profileVersion: 1, provider: 'deepseek', model: 'deepseek-chat', bindingId: 'binding-0a1b2c3d-0000-4000-8000-000000000001', bindingRevision: 1, displayLocation: 'alpha', inheritedChangeEntryCount: 2,
     } },
   },
 }] } })

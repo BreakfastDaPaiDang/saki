@@ -165,6 +165,10 @@ Read these pages when the package-level contract is not enough. They move from t
 
 -----
 
+## Protected durable records
+
+`readRecordProtected` and `modifyRecordProtected` require an exact protection level before exposing or mutating a grant. Providers without this capability reject these methods; metadata inspection alone cannot authorize a protected read.
+
 <a id="model-experience"></a>
 ## Model Experience
 

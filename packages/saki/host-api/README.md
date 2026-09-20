@@ -11,6 +11,8 @@ English | [中文](README.zh.md)
 
 Connect a browser to a local Saki Host for authenticated project, work-item, Agent Run, and delivery operations.
 
+The Host registers Session control policy for Saki-owned physical Sessions. Generic Conversation commands cannot change a Run’s model or activate a cold Run; Host recovery retains ownership of its exact Agent Profile and input evidence. The current Run accepts live prompts through Conversation. Historical Sessions and both sides of an unfinished switch reject generic execution commands. Disposing the Host API removes this policy listener.
+
 ## Table of Contents
 
 - [Use this package](#use-this-package)
@@ -22,6 +24,8 @@ Connect a browser to a local Saki Host for authenticated project, work-item, Age
 
 <a id="use-this-package"></a>
 ## Use this package
+
+New ordinary chats in a registered Project use its default model through `api-session/initial-model-selection`, without requiring a GitHub Issue. The Session Controller records the route once; changing the Project default does not retarget existing chats. Projects without a selected default reject chat creation. Disposing the Host API removes this listener.
 
 The private dual-face Saki Host API adapts the control plane to the shared Connection carrier. The Host entry registers the Saki-owned `/saki` logical channel; the `./client` entry registers `ctx.sakiHostClient` in a browser context. `./wire` contains strict browser-safe schemas shared by both faces.
 
@@ -70,6 +74,8 @@ Branch Delivery reviews carry a complete exact-pull-request fact with independen
 
 The `delivery-workspace` query accepts the same Project, Work Item, and refresh fields as `branch-delivery`. Its result adds safe selection revisions, a nullable configured credential-manager id, complete PR association evidence, and six Host-derived action offers. No helper credentials or private installation references cross the wire. An unavailable Branch Delivery result may carry a pending receipt; transport unavailability does not establish terminal failure.
 
+`queryProjectModelRoute` returns the selected Project Profile and safe account attribution. `configureProjectModelRoute` submits an explicit account configuration revision and model at an expected Project revision. Run and Session responses retain account identity and implementation version; provider configuration and credential addresses are excluded from the wire.
+
 <a id="transport-responsibilities"></a>
 ## Transport responsibilities
 
@@ -78,6 +84,10 @@ The `delivery-workspace` query accepts the same Project, Work Item, and refresh 
 Connection owns route trust, bounded JSON framing, correlation, cancellation, disposal, and JSON Content-Type. The `/saki` registration requires `Cache-Control: no-store` and the fixed opaque error on the Connection channel, so those policies also cover failures before the Host adapter runs. The Host adapter reads Cookie, Origin, and `x-saki-request-token` only from Connection's trusted request metadata. It asks the control plane's Host-only resolver for an AuthenticationContext and consumes the opaque post-commit cookie handoff. Neither AuthenticationContext nor raw cookie material enters browser JSON.
 
 The browser client uses same-origin credentials on every call. Logout and every Intent submission require the current request token. It exposes exact methods for selection inspection, Project-index, Development-Workspace, Changes, file-scoped Diff, Project Settings, Board, `queryMyWork`, `queryAttention`, Branch Delivery and Milestone View lookup, first registration, field-scoped GitHub synchronization configuration, structured Git and Work Item mutations, all six Branch Delivery transitions, both Milestone Delivery transitions, `giveWorkItemToAgent`, and `answerIntervention`; each method parses only its corresponding result schema. `queryMyWork()`, `queryAttention()`, `queryBoard(projectId, 'cached')`, `queryBranchDelivery(projectId, workItemId, 'cached')`, and `queryMilestoneView(projectId, milestoneId, 'cached')` are pure durable reads. The three refreshable queries' `interactive` policies request bounded refresh work while still returning only validated projections. Business denials remain typed successful RPC values, while cancellation, carrier failures, and schema mismatches reject through the fixed opaque Connection RPC error envelope.
+
+## Model account operations
+
+`queryModelSupply` and `submitModelAccount` carry safe account observations and replayable operator Intents. The Host revalidates access and model-supply grants; raw OAuth records and provider configuration never appear in the projection.
 
 ## Model Experience
 

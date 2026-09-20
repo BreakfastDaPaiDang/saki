@@ -28,6 +28,8 @@ import type {
   ReadProjectDiffRequest,
   ReadProjectDiffResult,
   StartAgentRunHostOperationRequest,
+  ForkAgentRunRequest,
+  AgentRunForkPlan,
 } from './types.ts'
 
 export { canonicalDigest, compareCanonicalText, exactBytesDigest } from './canonical.ts'
@@ -149,6 +151,8 @@ export {
   startAgentRunInputMessageV2Schema,
   startAgentRunMessageSourceSchema,
   startAgentRunProfileSchema,
+  forkAgentRunRequestSchema,
+  agentRunForkPlanSchema,
   unstageFilesHostOperationRequestSchema,
   unstageFilesHostOperationResultSchema,
   sakiResourceBindingIdSchema,
@@ -278,6 +282,8 @@ export type {
   StageFilesHostOperationRequest,
   StageFilesHostOperationResult,
   StartAgentRunHostOperationRequest,
+  ForkAgentRunRequest,
+  AgentRunForkPlan,
   StartAgentRunHostOperationRequestV2,
   StartAgentRunHostOperationRequestV3,
   StartAgentRunHostOperationResult,
@@ -392,7 +398,7 @@ export abstract class SakiHostExecution extends Service {
    * @returns independent Session and Terminal observations without Host authority material.
    */
   abstract observeAgentRun(
-    operation: HostOperationReference<'start-agent-run'>,
+    operation: HostOperationReference<'start-agent-run'> | { readonly type: 'forked-agent-run'; readonly request: ForkAgentRunRequest; readonly plan: AgentRunForkPlan },
     terminal: AgentRunTerminalSelection | null,
     signal: AbortSignal,
   ): Promise<AgentRunObservation>
@@ -440,6 +446,22 @@ export abstract class SakiHostExecution extends Service {
     request: StartAgentRunHostOperationRequest,
     signal: AbortSignal,
   ): Promise<void>
+
+  /**
+   * Fork or restore an explicitly selected successor without sending model input.
+   * The Consumer excludes new source input before calling and retains the exact plan before publication.
+   * @param request - source and successor identities with immutable profiles and resource identity.
+   * @param plan - retained fork plan, absent only before the first prepared history cut.
+   * @param retainPlan - durably acknowledge the exact history cut before any successor publication.
+   * @param signal - operation lifetime; cancellation does not discard a retained plan.
+   * @returns the exact plan after the successor is durable and the source runtime is retired.
+   */
+  abstract forkAgentRun(
+    request: ForkAgentRunRequest,
+    plan: AgentRunForkPlan | undefined,
+    retainPlan: (plan: AgentRunForkPlan) => Promise<void>,
+    signal: AbortSignal,
+  ): Promise<AgentRunForkPlan>
 
   /**
    * Inspect and recover one durable Host Operation without starting a new external effect.

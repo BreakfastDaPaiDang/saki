@@ -126,6 +126,9 @@ function Confirmation(props: WorkPageProps & { offer: WorkOffer }) {
     {offer.type === 'give-work-item-to-agent' ? <>
       <p>{t('work.launchProfile', { profile: offer.launch.profileId, version: offer.launch.profileVersion })}</p>
       <p>{t('work.launchRoute', { provider: offer.launch.provider, model: offer.launch.model })}</p>
+      {offer.launch.account === null ? null : <p>{t('runs.account')}: {offer.launch.account.accountIdentity}
+        {' · '}{t('runs.accountRevision')}: {offer.launch.account.selection.configurationRevision}
+        {' · '}{offer.launch.account.implementation.name} {offer.launch.account.implementation.version}</p>}
       <p>{t('work.launchBinding', { location: offer.launch.displayLocation, version: offer.launch.bindingRevision })}</p>
       <p>{t('work.launchChanges', { count: offer.launch.inheritedChangeEntryCount })}</p>
       <p className={css.detail}>{t('work.launchLimits')}</p>

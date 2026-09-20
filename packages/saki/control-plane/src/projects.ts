@@ -1,6 +1,7 @@
 /** Development Project Registry, registration recovery, and Projections. @module @breakfastdapaidang/saki-control-plane/projects */
 
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import {
@@ -165,6 +166,7 @@ export interface DevelopmentProjectsOptions {
  * @param intentTable - Read-only registration Intent table.
  * @param parseIntent - Version-specific parser for one already-opened Intent record.
  * @param validateActorReference - Version-specific Actor reference validator.
+ * @param allowModelSelection - Whether this generation permits attributed Project default changes.
  * @returns detached validated state ordered for deterministic recovery.
  */
 export function validateDevelopmentProjectsDurableState<
@@ -175,6 +177,7 @@ export function validateDevelopmentProjectsDurableState<
   intentTable: ReadonlyTable<SakiControlIntentId, I>,
   parseIntent: (value: I) => I,
   validateActorReference: (actor: I['payload']['actor']) => void,
+  allowModelSelection = false,
 ): ValidatedDevelopmentProjectsState<I> {
   const registryEntries = [...registryTable.entries()]
   const intentEntries = [...intentTable.entries()]
@@ -195,7 +198,7 @@ export function validateDevelopmentProjectsDurableState<
   if (registry === undefined && intents.length > 0) {
     throw new Error('Saki registration Intents exist without the Project Registry')
   }
-  if (registry !== undefined) validateCrossRecords(registry, intents)
+  if (registry !== undefined) validateCrossRecords(registry, intents, allowModelSelection)
   return {
     registry,
     intents: intents.toSorted((left, right) =>
@@ -217,6 +220,7 @@ export class DevelopmentProjects {
       this.options.intentTable,
       value => registrationIntentRecordSchema.parse(value),
       (actor) => { this.options.validateActorReference(actor) },
+      true,
     )
   }
 
@@ -304,6 +308,41 @@ export class DevelopmentProjects {
     const record = this.options.registryTable.get(DEVELOPMENT_PROJECT_REGISTRY_KEY)
     if (record === undefined) throw new Error('Saki Development Project Registry is absent')
     return validateRegistry(record)
+  }
+
+  /**
+   * Append an immutable Agent Profile and select it for future Project dispatches.
+   * @param profile - preallocated Profile owned by a durable model selection Intent.
+   * @param expectedProjectRevision - Project revision observed when the selection was admitted.
+   * @param mayPublish - current authority checked inside the Registry transaction.
+   * @returns publication, denial, or a changed Project revision.
+   */
+  async selectAgentProfile(
+    profile: AgentProfileRecord, expectedProjectRevision: number, mayPublish: () => boolean,
+  ): Promise<'selected' | 'denied' | 'conflict'> {
+    let result: 'selected' | 'denied' | 'conflict' = 'selected'
+    await this.options.registryTable.update(DEVELOPMENT_PROJECT_REGISTRY_KEY, (currentValue) => {
+      const registry = validateRegistry(currentValue)
+      const retained = registry.agentProfiles.find(candidate => candidate.id === profile.id)
+      if (retained !== undefined) {
+        if (!isDeepStrictEqual(retained, profile)) {
+          throw new Error('Agent Profile identity is already assigned')
+        }
+        return registry
+      }
+      if (!mayPublish()) { result = 'denied'; return registry }
+      const project = registry.projects.find(candidate => candidate.id === profile.projectId)
+      if (project === undefined || project.revision !== expectedProjectRevision) { result = 'conflict'; return registry }
+      const previous = registry.agentProfiles.find(candidate => candidate.id === project.defaultAgentProfileId)
+      if (previous === undefined || profile.version !== previous.version + 1 || profile.agentPresetId !== previous.agentPresetId) {
+        throw new Error('Agent Profile does not succeed the selected version')
+      }
+      return validateRegistry({ ...registry, revision: registry.revision + 1,
+        agentProfiles: [...registry.agentProfiles, profile],
+        projects: registry.projects.map(candidate => candidate.id === project.id
+          ? { ...candidate, revision: candidate.revision + 1, defaultAgentProfileId: profile.id } : candidate) })
+    })
+    return result
   }
 
   /**
@@ -648,7 +687,7 @@ export class DevelopmentProjects {
           registryRevision,
         }],
       })
-      validateCrossRecords(next, intentSnapshot)
+      validateCrossRecords(next, intentSnapshot, true)
       return next
     })
     return {
@@ -719,7 +758,7 @@ export class DevelopmentProjects {
           revision: registry.revision + 1,
           resourceBindings,
         })
-        validateCrossRecords(next, intentSnapshot)
+        validateCrossRecords(next, intentSnapshot, true)
         return next
       })
     }
@@ -849,6 +888,7 @@ function validateRegistry(value: DevelopmentProjectRegistryRecord): DevelopmentP
 function validateCrossRecords(
   registry: DevelopmentProjectRegistryRecord,
   intentValues: readonly RegistrationIntentInvariant[],
+  allowModelSelection: boolean,
 ): void {
   const intents = new Map(intentValues.map(value => [value.id, value] as const))
   for (const mapping of registry.intentMappings) {
@@ -869,7 +909,8 @@ function validateCrossRecords(
     const binding = registry.resourceBindings.find(candidate =>
       candidate.id === mapping.resourceBindingId) as ResourceBindingRecord
     if (project.projectTitle !== intent.payload.intent.projectTitle
-      || project.revision !== 0
+      || (!allowModelSelection && project.revision !== 0)
+      || project.revision > registry.revision - mapping.registryRevision
       || binding.hostId !== intent.payload.intent.hostId
       || binding.workspaceId !== intent.workspaceId
       || !canonicalEqual('saki/registration-inspection/exact/v1', binding.registrationInspection, intent.inspection)

@@ -87,6 +87,10 @@ The adapter clears its temporary plaintext and ciphertext `Buffer` copies. JavaS
 
 Only trusted Host plugins should receive the raw credential service. Safe observations carry references or record addresses plus the documented safe fields, never plaintext or ciphertext. `credentials.set` is the named write-only Host API exception: plaintext crosses the wire in its request and is never echoed in a response. This package registers no Agent tool, Projection, Session event, export record, or model context containing credential material, and its diagnostics omit input and stored bytes. Excluding credential material from process crash collection and portable exports remains an obligation of the application composition.
 
+## Protected record transactions
+
+Protected reads and mutations accept only `local-user-trust`. Mutations retain the existing document transaction across a refresh callback, so concurrent account inspections cannot overwrite a rotated refresh token. Safe record descriptions include the protection level even when the key is absent.
+
 ## Model Experience
 
 Indirectly, through consumers of `ctx.credentials`: a resolved value may authorize a provider operation, while that consumer owns every model-visible effect. This package registers no prompt, tool, or model context.

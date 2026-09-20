@@ -35,7 +35,7 @@ import type {
   GitHubPullRequestReviewsReadRequest,
 } from '@breakfastdapaidang/saki-github'
 import type { ResolvedConfig } from './index.ts'
-import { queryGraphql } from './graphql.ts'
+import { graphqlNumericRepositoryDatabaseIdSchema, queryGraphql } from './graphql.ts'
 import type { InstallationPriorityQueue } from './priority-queue.ts'
 import { parseNextLinkTarget } from './rest-link.ts'
 import {
@@ -54,7 +54,7 @@ const rateLimitSchema = z.object({
 }).loose()
 const pageInfoSchema = z.object({ hasNextPage: z.boolean(), endCursor: z.string().min(1).nullable() }).loose()
 const repositoryIdentitySchema = z.object({
-  id: z.string().min(1), databaseId: z.union([z.string(), z.number().int().positive()]),
+  id: z.string().min(1), databaseId: graphqlNumericRepositoryDatabaseIdSchema,
 }).loose()
 const pullRequestNodeSchema = z.object({
   __typename: z.literal('PullRequest'), id: z.string().min(1),
@@ -177,7 +177,7 @@ query SakiPullRequestAssociation($repositoryId: ID!, $headRef: String!, $baseRef
   node(id: $repositoryId) {
     __typename
     ... on Repository {
-      id databaseId: fullDatabaseId owner { id }
+      id databaseId owner { id }
       pullRequests(headRefName: $headRef, baseRefName: $baseRef, states: [OPEN], first: $first, after: $after) {
         totalCount pageInfo { hasNextPage endCursor }
         nodes {
@@ -195,10 +195,10 @@ query SakiMilestone($milestoneId: ID!, $first: Int!, $after: String) {
   node(id: $milestoneId) {
     __typename
     ... on Milestone {
-      id number state title description dueOn url updatedAt repository { id databaseId: fullDatabaseId owner { id } }
+      id number state title description dueOn url updatedAt repository { id databaseId owner { id } }
       issues(first: $first, after: $after) {
         totalCount pageInfo { hasNextPage endCursor }
-        nodes { id number state title url updatedAt repository { id databaseId: fullDatabaseId } }
+        nodes { id number state title url updatedAt repository { id databaseId } }
       }
     }
   }

@@ -1,5 +1,10 @@
 /** Recoverable manual Work Item assignment, Dispatch, and Agent Run ownership. */
 
+import { validateRunModelSwitchRecords } from './run-model-switch-validation.ts'
+import { agentRunRecordSchema as historicalAgentRunRecordSchema } from './spec.ts'
+import type { RunModelSwitchIntentTable } from './run-model-switch.ts'
+import { currentAgentRunRecordSchema as agentRunRecordSchema } from './run-model-switch-spec.ts'
+import type { CurrentAgentRunRecord as AgentRunRecord } from './run-model-switch-spec.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
@@ -33,7 +38,6 @@ import { enqueueKeyedOperation } from './keyed-operation.ts'
 import type { DevelopmentProjects } from './projects.ts'
 import {
   agentOperationIntentRecordSchema,
-  agentRunRecordSchema,
   executionDispatchRecordSchema,
   workAssignmentRecordSchema,
   workSessionRecordSchema,
@@ -43,7 +47,6 @@ import {
 import type {
   AgentOperationIntentRecord,
   AgentProfileRecord,
-  AgentRunRecord,
   ControlIntentActor,
   DevelopmentProjectRegistryRecord,
   ExecutionDispatchRecord,
@@ -105,6 +108,7 @@ type ClaimedExecutionDispatch = ExecutionDispatchRecord & {
 }
 
 interface AgentOperationsOptions {
+  readonly forkIntents?: RunModelSwitchIntentTable
   readonly intentTable: AgentOperationIntentTable
   readonly assignmentTable: WorkAssignmentTable
   readonly workSessionTable: WorkSessionTable
@@ -119,6 +123,7 @@ interface AgentOperationsOptions {
   readonly resolveModelRoute: (
     route: NonNullable<AgentProfileRecord['modelRouteRequest']>,
     signal: AbortSignal,
+    profile: AgentProfileRecord,
   ) => Promise<void>
   readonly claimTtlMs: number
   readonly notifyChanged: () => void
@@ -188,6 +193,7 @@ export class AgentOperations {
       registry,
       otherIntentIds,
       this.options.validateActorReference,
+      this.options.forkIntents,
     )
   }
 
@@ -292,7 +298,7 @@ export class AgentOperations {
       const eligibility = await this.resolveEligibility(intent, signal)
       if (!eligibility.ok) return eligibility.result
       try {
-        await this.options.resolveModelRoute(eligibility.profile.modelRouteRequest, signal)
+        await this.options.resolveModelRoute(eligibility.profile.modelRouteRequest, signal, eligibility.profile)
       } catch {
         signal.throwIfAborted()
         return { ok: false, reason: 'unavailable', detail: 'model-route-unavailable' }
@@ -350,25 +356,26 @@ export class AgentOperations {
         const assignment = this.requireAssignment(run.assignmentId)
         const workSession = this.requireWorkSession(run.workSessionId)
         const origin = this.requireIntent(run.intentId)
-        const initialDispatchId = run.dispatchIds[0] as SakiExecutionDispatchId
-        const latestDispatchId = run.dispatchIds.at(-1) as SakiExecutionDispatchId
+        const initialDispatchId = run.dispatchIds[0]
+        const latestDispatchId = run.dispatchIds.at(-1)
         if (workSession.state !== 'open' || assignment.agentRunId !== run.id
         || assignment.primaryWorkSessionId !== run.workSessionId) {
           return { ok: false, reason: 'unavailable' }
         }
-        const initialDispatch = this.requireDispatch(initialDispatchId)
-        const latestDispatch = this.requireDispatch(latestDispatchId)
+        const initialDispatch = initialDispatchId === undefined ? undefined : this.requireDispatch(initialDispatchId)
+        const latestDispatch = latestDispatchId === undefined ? undefined : this.requireDispatch(latestDispatchId)
         const acceptedInitialPublication = run.state === 'starting'
         && assignment.state === 'assigned'
         && origin.phase === 'dispatching'
         && run.dispatchIds.length === 1
-        && initialDispatch.state === 'accepted'
+        && initialDispatch?.state === 'accepted'
         && dispatchMatchesIntent(initialDispatch, origin)
         const deliveredRun = run.state === 'running'
         && (((assignment.state === 'assigned' || assignment.state === 'active')
           && origin.phase === 'dispatching')
           || (assignment.state === 'active' && origin.phase === 'started'))
-        && dispatchHasExactSucceededRun(latestDispatch, run)
+        && (dispatchHasExactSucceededRun(latestDispatch, run) || (run.schemaVersion === 3 && run.dispatchIds.length === 0
+          && this.options.forkIntents?.get(run.forkIntentId)?.state === 'completed'))
         const interventions = [...this.options.interventionTable.entries()]
           .map(([, value]) => interventionRequestRecordSchema.parse(value))
         const predecessor = interventions.find((candidate): candidate is Extract<
@@ -376,8 +383,8 @@ export class AgentOperations {
           { readonly state: 'answered' }
         > => candidate.state === 'answered'
         && candidate.owner.agentRunId === run.id
-        && candidate.answer.dispatchId === latestDispatch.id)
-        const acceptedAnswerPublication = predecessor !== undefined
+        && candidate.answer.dispatchId === latestDispatch?.id)
+        const acceptedAnswerPublication = predecessor !== undefined && latestDispatch !== undefined
         && assignment.state === 'active'
         && origin.phase === 'started'
         && latestDispatch.state === 'accepted'
@@ -463,7 +470,7 @@ export class AgentOperations {
       if (intervention.state !== 'opening') return 'open'
       let run = this.requireRun(intervention.owner.agentRunId)
       const evidence: InterventionOpeningEvidence = await this.options.execution.inspectInterventionOpening({
-        hostId: this.requireDispatch(run.dispatchIds[0] as SakiExecutionDispatchId).hostId,
+        hostId: this.requireIntent(run.intentId).hostRequest.expected.binding.hostId,
         sessionId: intervention.cause.sessionId as StartAgentRunHostOperationRequest['run']['sessionId'],
         callId: intervention.cause.toolCallId,
         interventionId,
@@ -1883,6 +1890,7 @@ function dispatchMatchesAdmissionExpectation(
  * @param registry - validated Project Registry, or absence before provisioning.
  * @param otherIntentIds - Control Intent ids already owned by other durable families.
  * @param validateActorReference - validator for retained Actor attribution.
+ * @param forkIntents - current model-switch evidence; absent for historical manual-only generations.
  * @returns the accepted Intents in deterministic recovery order.
  */
 export function validateAgentOperationsDurableState(
@@ -1895,6 +1903,7 @@ export function validateAgentOperationsDurableState(
   registry: DevelopmentProjectRegistryRecord | undefined,
   otherIntentIds: ReadonlySet<SakiControlIntentId>,
   validateActorReference: (actor: ControlIntentActor) => void,
+  forkIntents?: Pick<RunModelSwitchIntentTable, 'entries' | 'get'>,
 ): ValidatedAgentOperationsState {
   const intents = [...intentTable.entries()].map(([key, value]) => {
     const intent = agentOperationIntentRecordSchema.parse(value)
@@ -1903,6 +1912,8 @@ export function validateAgentOperationsDurableState(
     validateActorReference(intent.payload.actor)
     return intent
   })
+  if (forkIntents !== undefined) validateRunModelSwitchRecords({ intents: forkIntents, runs: agentRunTable, sessions: workSessionTable,
+    assignments: assignmentTable, origins: intentTable }, validateActorReference)
   const interventions = parseTable(interventionTable, interventionRequestRecordSchema, 'Intervention Request')
   const intentIds = new Set<SakiControlIntentId>(intents.map(intent => intent.id))
   const answerIntentIds = new Set<SakiControlIntentId>()
@@ -1938,7 +1949,7 @@ export function validateAgentOperationsDurableState(
   const intentById = new Map(intents.map(intent => [intent.id, intent]))
   const assignments = parseTable(assignmentTable, workAssignmentRecordSchema, 'Work Assignment')
   const sessions = parseTable(workSessionTable, workSessionRecordSchema, 'Work Session')
-  const runs = parseTable(agentRunTable, agentRunRecordSchema, 'Agent Run')
+  const runs = parseTable(agentRunTable, forkIntents === undefined ? historicalAgentRunRecordSchema : agentRunRecordSchema, 'Agent Run')
   const dispatches = parseTable(dispatchTable, executionDispatchRecordSchema, 'Execution Dispatch')
   const assignmentById = new Map(assignments.map(value => [value.id, value]))
   const sessionById = new Map(sessions.map(value => [value.id, value]))
@@ -1974,10 +1985,10 @@ export function validateAgentOperationsDurableState(
     const session = children[1] as WorkSessionRecord | undefined
     const run = children[2] as AgentRunRecord | undefined
     const dispatch = children[3] as ExecutionDispatchRecord | undefined
-    if (assignment !== undefined && !assignmentMatchesIntent(assignment, intent)) {
+    if (assignment !== undefined && !assignmentMatchesIntent(assignment, intent, forkIntents !== undefined)) {
       throw new Error('Saki Work Assignment disagrees with its Agent operation Intent')
     }
-    if (session !== undefined && !workSessionMatchesIntent(session, intent)) {
+    if (session !== undefined && !workSessionMatchesIntent(session, intent, forkIntents !== undefined)) {
       throw new Error('Saki Work Session disagrees with its Agent operation Intent')
     }
     if (run !== undefined && !agentRunMatchesIntent(run, intent)) {
@@ -2023,18 +2034,22 @@ export function validateAgentOperationsDurableState(
   }
   for (const assignment of assignments) {
     const intent = intentById.get(assignment.intentId)
-    if (intent === undefined || !assignmentMatchesIntent(assignment, intent)) {
+    if (intent === undefined || !assignmentMatchesIntent(assignment, intent, forkIntents !== undefined)) {
       throw new Error('orphan or mismatched Work Assignment')
     }
   }
   for (const session of sessions) {
     const intent = intentById.get(session.intentId)
-    if (intent === undefined || !workSessionMatchesIntent(session, intent)) {
+    if (intent === undefined || !workSessionMatchesIntent(session, intent, forkIntents !== undefined)) {
       throw new Error('orphan or mismatched Work Session')
     }
   }
   for (const run of runs) {
     const intent = intentById.get(run.intentId)
+    if (run.schemaVersion === 3) {
+      if (forkIntents?.get(run.forkIntentId)?.hostRequest.target.agentRunId !== run.id) throw new Error('Forked Run lacks its owning model switch')
+      continue
+    }
     if (intent === undefined || !agentRunMatchesIntent(run, intent)) {
       throw new Error('orphan or mismatched Agent Run')
     }
@@ -2170,7 +2185,7 @@ export function validateAgentOperationsDurableState(
       throw new Error('Saki Agent Run has a mismatched or absent Execution Dispatch')
     }
     const dispatchSequence = run.dispatchIds.map(id => dispatchById.get(id))
-    for (const dispatch of dispatchSequence.slice(1)) {
+    for (const dispatch of dispatchSequence.slice(run.schemaVersion === 3 ? 0 : 1)) {
       if (dispatch === undefined) continue
       const intervention = answeredInterventionByDispatchId.get(dispatch.id)
       if (intervention === undefined) {
@@ -2182,7 +2197,7 @@ export function validateAgentOperationsDurableState(
     const latestAnswer = answeredInterventionByDispatchId.get(latestDispatchId)
     const expectedInputPlan = latestAnswer !== undefined
       ? latestAnswer.answer.inputPlan
-      : {
+      : run.schemaVersion === 3 ? undefined : {
         messageId: intent.hostRequest.run.input.id,
         payloadDigest: intent.hostRequest.source.payloadDigest,
       }
@@ -2190,6 +2205,7 @@ export function validateAgentOperationsDurableState(
       throw new Error('Saki Agent Run current input plan disagrees with its ordered Dispatches')
     }
     if ((run.state === 'running' || run.state === 'waiting')
+      && !(run.schemaVersion === 3 && run.dispatchIds.length === 0)
       && !dispatchHasExactSucceededRun(latestDispatch, run)) {
       throw new Error('running Saki Agent Run lacks its exact succeeded Dispatch evidence')
     }
@@ -2225,7 +2241,8 @@ export function validateAgentOperationsDurableState(
     }
   }
   const runningAgentRuns = runs
-    .filter(run => run.state === 'running')
+    .filter(run => run.state === 'running' && assignmentById.get(run.assignmentId)?.agentRunId === run.id
+      && run.dispatchIds.length > 0)
     .toSorted(byCreatedAtThenId)
     .map((run) => {
       const dispatchId = run.dispatchIds.at(-1) as SakiExecutionDispatchId
@@ -2259,6 +2276,7 @@ function byCreatedAtThenId<T extends { readonly id: string; readonly createdAt: 
 function assignmentMatchesIntent(
   assignment: WorkAssignmentRecord,
   intent: AgentOperationIntentRecord,
+  allowSuccessors = false,
 ): boolean {
   return assignment.id === intent.assignmentId
     && assignment.intentId === intent.id
@@ -2266,20 +2284,21 @@ function assignmentMatchesIntent(
     && assignment.workItemId === intent.payload.intent.workItemId
     && assignment.ownerPrincipalId === intent.payload.actor.principalId
     && assignment.primaryWorkSessionId === intent.workSessionId
-    && assignment.agentRunId === intent.agentRunId
+    && (allowSuccessors || assignment.agentRunId === intent.agentRunId)
     && assignment.createdAt === intent.createdAt
 }
 
 function workSessionMatchesIntent(
   session: WorkSessionRecord,
   intent: AgentOperationIntentRecord,
+  allowSuccessors = false,
 ): boolean {
   return session.id === intent.workSessionId
     && session.intentId === intent.id
     && session.assignmentId === intent.assignmentId
     && session.projectId === intent.payload.intent.projectId
     && session.workItemId === intent.payload.intent.workItemId
-    && isDeepStrictEqual(session.agentRunIds, [intent.agentRunId])
+    && (allowSuccessors ? session.agentRunIds[0] === intent.agentRunId : isDeepStrictEqual(session.agentRunIds, [intent.agentRunId]))
     && session.createdAt === intent.createdAt
 }
 

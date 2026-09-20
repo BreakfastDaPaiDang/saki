@@ -4,6 +4,10 @@ English | [中文](saki.zh.md)
 
 The Saki control plane owns product state independently from agent conversations. Its implemented surface establishes one stable local Installation, one enrolled Host, one human Principal with a current Host Operator Grant, one versioned Installation Access aggregate, a revisioned Development Project Registry with recoverable first-registration Intents, recoverable direct structured-Git Intents for bound Projects, recoverable GitHub-backed Create/Move Work Item Intents, and a manual Give-to-Agent Intent that starts one recoverable Agent Run. A versioned provisioning owner and independently revisioned entity tables retain those identities and operation evidence across interrupted startup. The [Saki backend architecture](../saki/architecture/0.1.0-backend.md) defines the wider control-plane and execution-plane split; this page is the reference for the implemented Cordis service.
 
+## Model Accounts
+
+`ModelAccountBinding` fixes one Profile, configuration revision, route, protected credential key, and expected account identity. `ModelAccountProvider` supplies configuration resolution, authorization, safe inspection, and an LLM adapter. The [account service](../../packages/saki/model-account/README.md) owns reversible route registrations; the control plane owns durable account Intents and projections. The [Codex implementation](../../packages/saki/model-account-codex/README.md) owns OAuth, allowance reads, and account-local SSE state.
+
 ## Installation access
 
 [`saki-control-plane`](../../packages/saki/control-plane/README.md) persists digest-only Bootstrap Challenge and Browser Session entries in SQLite through `storageDomain`. A bootstrap exchange consumes one issued challenge, revokes the other issued challenges, and creates one active session in the same compare-and-set update. Monotonic ordinals allocate deterministic entry ids, and an immutable completion summary survives terminal-detail cleanup. Every privileged launcher startup issues a new initial-bootstrap or local-reauthentication challenge, so cookie expiry, logout, and a lost response recover without reopening initial completion. Configuration accepts only an exact HTTP(S) loopback Origin. The browser cookie authenticates the human Host Operator Principal; every protected operation still reads the current Installation generation, Principal lifecycle, and Grant authority. Raw bootstrap and cookie credentials remain in their exact launcher or HTTP carrier locations, while the authenticated Access Projection carries only the derived request-forgery token required for later mutations.
@@ -58,6 +62,21 @@ Control-plane operations used by trusted Consumers.
 
 ```ts cordis-catalog
 /**
+ * Read the Project default for a new ordinary chat in its registered Workspace.
+ * @param cwd - canonical directory resolved by the Workspace-backed Session create request.
+ * @returns the retained route, or undefined when this directory has no registered Project.
+ * @throws when the registered Project has no default model.
+ */
+initialConversationModel(cwd: string): { readonly provider: string; readonly model: string } | undefined
+
+/**
+ * Read physical Session execution ownership for Host control admission.
+ * @param sessionId - physical Session identity received by a Host integration.
+ * @returns current, historical, or transitioning ownership; undefined for an ordinary Session.
+ */
+sessionControlState(sessionId: import('@breakfastdapaidang/saki-execution').SessionId): 'owned' | 'historical' | 'transitioning' | undefined
+
+/**
  * Read trusted local Installation and current Host identities.
  * @returns stable independent identities.
  */
@@ -91,6 +110,8 @@ submit<I extends SakiIntent>( authentication: SakiAuthenticationContext, intent:
  */
 onChanged(listener: (keys: readonly SakiProjectionKey[]) => void): SakiChangedDisposer
 ```
+
+Types: [SessionId](core.md)
 
 Source: [`packages/saki/control-plane/src/service.ts`](../../packages/saki/control-plane/src/service.ts)
 
@@ -196,7 +217,7 @@ abstract inspectInterventionOpening( request: InspectInterventionOpeningRequest,
  * @param signal - required caller lifetime and cancellation.
  * @returns independent Session and Terminal observations without Host authority material.
  */
-abstract observeAgentRun( operation: HostOperationReference<'start-agent-run'>, terminal: AgentRunTerminalSelection | null, signal: AbortSignal, ): Promise<AgentRunObservation>
+abstract observeAgentRun( operation: HostOperationReference<'start-agent-run'> | { readonly type: 'forked-agent-run'; readonly request: ForkAgentRunRequest; readonly plan: AgentRunForkPlan }, terminal: AgentRunTerminalSelection | null, signal: AbortSignal, ): Promise<AgentRunObservation>
 
 /**
  * Durably create or replay one inert Host Operation before any external
@@ -229,6 +250,17 @@ abstract startOperation<K extends HostOperationKind>( operation: HostOperationRe
  * @throws when the operation, request, physical Session evidence, or live Agent conflicts or is unavailable.
  */
 abstract resumeAgentRun( operation: HostOperationReference<'start-agent-run'>, request: StartAgentRunHostOperationRequest, signal: AbortSignal, ): Promise<void>
+
+/**
+ * Fork or restore an explicitly selected successor without sending model input.
+ * The Consumer excludes new source input before calling and retains the exact plan before publication.
+ * @param request - source and successor identities with immutable profiles and resource identity.
+ * @param plan - retained fork plan, absent only before the first prepared history cut.
+ * @param retainPlan - durably acknowledge the exact history cut before any successor publication.
+ * @param signal - operation lifetime; cancellation does not discard a retained plan.
+ * @returns the exact plan after the successor is durable and the source runtime is retired.
+ */
+abstract forkAgentRun( request: ForkAgentRunRequest, plan: AgentRunForkPlan | undefined, retainPlan: (plan: AgentRunForkPlan) => Promise<void>, signal: AbortSignal, ): Promise<AgentRunForkPlan>
 
 /**
  * Inspect and recover one durable Host Operation without starting a new external effect.
@@ -276,4 +308,69 @@ abstract activateAfterValidation(signal: AbortSignal): Promise<void>
 ```
 
 Source: [`packages/saki/control-plane/src/installation-state.ts`](../../packages/saki/control-plane/src/installation-state.ts)
+
+<a id="ctxsakimodelaccounts--modelaccountservice"></a>
+
+### `ctx.sakiModelAccounts` — `ModelAccountService`
+
+The provider registry owns reversible route registrations, never product selection.
+
+```ts cordis-catalog
+/**
+ * Register a provider for this plugin lifetime.
+ * @param provider - complete account implementation.
+ * @returns disposer that withdraws the implementation.
+ */
+register(provider: ModelAccountProvider): () => Promise<void>
+
+/**
+ * List available account implementations.
+ * @returns the currently registered implementations in registration order.
+ */
+list(): readonly ModelAccountProvider[]
+
+/**
+ * Resolve an implementation without falling back to another provider.
+ * @param id - exact registered provider identity.
+ * @returns provider or undefined while its plugin is absent.
+ */
+get(id: import('./types.ts').ModelAccountProviderId): ModelAccountProvider | undefined
+
+/**
+ * Observe whether an owned route still belongs to a live Provider registration.
+ * @param routeId - immutable account route identity.
+ * @returns true until the route or its Provider is disposed.
+ */
+isActive(routeId: import('./types.ts').ModelAccountRouteId): boolean
+
+/**
+ * Activate one immutable account route after verifying its current credential ownership.
+ * @param binding - exact account and configuration revision.
+ * @param signal - activation cancellation.
+ * @returns disposer withdrawing this route from new requests.
+ */
+async activate(binding: ModelAccountBinding, signal: AbortSignal): Promise<() => Promise<void>>
+```
+
+Source: [`packages/saki/model-account/src/index.ts`](../../packages/saki/model-account/src/index.ts)
+
+<a id="saki-model-accounts-events"></a>
+
+### `saki-model-accounts/*` events
+
+<a id="saki-model-accountschanged--emit"></a>
+
+#### `saki-model-accounts/changed` — emit
+
+Account implementations or their available connection methods changed.
+
+```ts cordis-catalog
+/**
+ * Account implementations or their available connection methods changed.
+ * @mode emit
+ */
+'saki-model-accounts/changed'(): void
+```
+
+Source: [`packages/saki/model-account/src/index.ts`](../../packages/saki/model-account/src/index.ts)
 <!-- END GENERATED cordis-surface -->

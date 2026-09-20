@@ -1087,6 +1087,24 @@ A Session became visible to Session list consumers.
 
 Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/session-controller/src/types.ts)
 
+<a id="api-sessionauthorize-control--bail"></a>
+
+#### `api-session/authorize-control` — bail
+
+Let a Session owner reject generic execution control synchronously.
+
+```ts cordis-catalog
+/**
+ * Let a Session owner reject generic execution control synchronously.
+ * @mode bail
+ * @param request - exact Session and operation about to commit.
+ * @returns 'denied' to reject, or undefined to delegate to other owners.
+ */
+'api-session/authorize-control'(request: SessionControlRequest): 'denied' | undefined
+```
+
+Source: [`packages/api/session-controller/src/control-policy.ts`](../../packages/api/session-controller/src/control-policy.ts)
+
 <a id="api-sessionerror--emit"></a>
 
 #### `api-session/error` — emit
@@ -1106,6 +1124,26 @@ One Agent failed outside a durable turn position.
 Types: [SessionId](core.zh.md)
 
 Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/session-controller/src/types.ts)
+
+<a id="api-sessioninitial-model-selection--bail"></a>
+
+#### `api-session/initial-model-selection` — bail
+
+Select a deployment-owned route once for a newly created ordinary Session.
+
+```ts cordis-catalog
+/**
+ * Select a deployment-owned route once for a newly created ordinary Session.
+ * @mode bail
+ * @param request - new Session identity and its resolved working directory.
+ * @returns a selection to record before publication, or undefined to retain the deployment default.
+ */
+'api-session/initial-model-selection'(request: { readonly sessionId: SessionId; readonly cwd: string }): ModelSelection | undefined
+```
+
+Types: [ModelSelection](core.zh.md) · [SessionId](core.zh.md)
+
+Source: [`packages/api/session-controller/src/control-policy.ts`](../../packages/api/session-controller/src/control-policy.ts)
 
 <a id="api-sessionremoved--emit"></a>
 

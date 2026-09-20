@@ -3,6 +3,8 @@
  * renders its registered page. Authentication gates the
  * pages; nothing Projection-backed renders before it resolves.
  */
+
+import { ModelAccountsPage } from './ModelAccountsPage.tsx'
 import type { InjectFace, PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SakiInjected } from '../index.ts'
 import { NS } from '../locales.ts'
@@ -10,6 +12,7 @@ import { AccessGate } from './AccessGate.tsx'
 import { WorkPage } from './WorkPage.tsx'
 import { PlanningPage } from './PlanningPage.tsx'
 import { ProjectPage } from './ProjectPage.tsx'
+import { ProjectModelSelection } from './ProjectModelSelection.tsx'
 import { ChangesPage } from './ChangesPage.tsx'
 import { SessionPage } from './SessionPage.tsx'
 import { DeliveryPage } from './DeliveryPage.tsx'
@@ -17,7 +20,7 @@ import { DeliveryPage } from './DeliveryPage.tsx'
 /** Full composed props for the Saki surface root. */
 export type SurfaceRootProps =
   PropsRuntime<'main'>
-  & { page: 'work' | 'project' }
+  & { page: 'work' | 'project' | 'accounts' }
   & InjectFace<SakiInjected>
   & PropsLocale<typeof NS>
 
@@ -27,6 +30,7 @@ export type SurfaceRootProps =
  * @returns the surface element.
  */
 export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeof NS> }) {
+  const accounts = props.useAccounts(snapshot => snapshot)
   const state = props.usePlanning(snapshot => snapshot)
   const work = props.useWork(snapshot => snapshot)
   const changes = props.useChanges(snapshot => snapshot)
@@ -37,14 +41,21 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
     return <AccessGate access={access} reload={() => { void props.planning.reloadAccess() }}
       t={props.t} exchange={props.exchangeBootstrap} />
   }
+  if (props.page === 'accounts') return <ModelAccountsPage state={accounts} actions={props.accounts} t={props.t} />
   if (props.page === 'work') {
     return <WorkPage state={work} actions={props.work} openProject={() => { props.nav.showProject() }}
       openBoard={(id) => { props.nav.selectProject(id); props.planning.navigate({ view: 'board' }) }}
       openItem={(projectId, id) => { props.nav.selectProject(projectId); props.planning.openItem(id) }} t={props.t} />
   }
   if (state.project?.address.view === 'sessions' || state.project?.address.view === 'run') {
-    return <SessionPage project={state.project} actions={props.planning} openSession={props.openSession}
-      openWork={props.nav.showWork} offline={state.offline} t={props.t} />
+    const run = state.project.run.value
+    const selectable = !state.offline && run !== null && run.workSession.state === 'open'
+      && run.workSession.assignment.currentAgentRunId === run.run.id && run.run.state === 'running'
+    return <SessionPage modelSelection={selectable ? <ProjectModelSelection key={run.run.id} projectId={state.project.id}
+      workSession={{ workSessionId: run.workSession.id, expectedWorkSessionRevision: run.workSession.revision,
+        expectedAgentRunId: run.run.id }} state={accounts} actions={props.accounts} t={props.t} /> : null}
+    project={state.project} actions={props.planning} openSession={props.openSession}
+    openWork={props.nav.showWork} offline={state.offline} t={props.t} />
   }
   if (state.project?.address.view === 'delivery') {
     return <DeliveryPage project={state.project} state={delivery} actions={props.delivery}
@@ -60,6 +71,8 @@ export function SakiSurfaceRoot(props: SurfaceRootProps & { t: TranslateNS<typeo
   }
   return (
     <ProjectPage
+      modelSelection={projectId === null ? null : <ProjectModelSelection key={projectId} projectId={projectId}
+        state={accounts} actions={props.accounts} t={props.t} />}
       showRegisteredWorkspace={() => { props.planning.navigate({ view: 'workspace' }) }}
       openBoard={() => { props.planning.navigate({ view: 'board' }) }}
       access={access}

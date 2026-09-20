@@ -233,7 +233,7 @@ describe('delivery GitHub response boundaries', () => {
 })
 
 function repository() {
-  return { __typename: 'Repository', id: String(repositoryId), databaseId: '4242',
+  return { __typename: 'Repository', id: String(repositoryId), databaseId: 4242,
     nameWithOwner: 'BreakfastDaPaiDang/saki', visibility: 'PUBLIC',
     url: 'https://github.com/BreakfastDaPaiDang/saki', updatedAt: date, owner: { id: profile.accountId } }
 }

@@ -15,8 +15,11 @@ packages:
   - python/sdk-runtime
 
 overrides:
-  '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
-  '@deepseek-ai/schemastery': 'link:vendor/schemastery'
+  # The account provider imports the usage helper without its optional external Agent runtime.
+  'dsh-codex-subscription>@deepseek-ai/dsh-sdk-protocol': '-'
+  'dsh-codex-subscription>@deepseek-ai/dsh-subagent-codex': '-'
+  '@deepseek-ai/cosmokit': 'workspace:*'
+  '@deepseek-ai/schemastery': 'workspace:*'
   # VitePress 1.6.4 supports the patched Vite 6 development server.
   'vitepress@1.6.4>vite': 6.4.3
 

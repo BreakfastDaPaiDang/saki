@@ -49,7 +49,8 @@
     "@deepseek-ai/dsh-storage-domain": "workspace:^",
     "@deepseek-ai/dsh-timeout": "workspace:^",
     "@deepseek-ai/dsh-workspace": "workspace:^",
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:^",
+    "@breakfastdapaidang/saki-model-account": "workspace:^"
   },
   "devDependencies": {
     "@breakfastdapaidang/saki-execution": "workspace:^",
@@ -67,6 +68,7 @@
     "@deepseek-ai/dsh-subprocess-local": "workspace:^",
     "@deepseek-ai/dsh-timeout": "workspace:^",
     "@deepseek-ai/dsh-workspace": "workspace:^",
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:^",
+    "@breakfastdapaidang/saki-model-account": "workspace:^"
   }
 }

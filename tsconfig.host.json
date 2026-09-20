@@ -144,6 +144,9 @@
     "scripts/client-bundle-purity.spec.ts"
   ],
   "references": [
+    { "path": "./packages/saki/model-account-codex" },
+    { "path": "./packages/saki/model-account-api" },
+    { "path": "./packages/saki/model-account" },
     { "path": "./packages/browser-use/browser-use" },
     { "path": "./packages/experimental/browser-use-runtime" },
     { "path": "./packages/experimental/browser-use-playwright-mcp" },

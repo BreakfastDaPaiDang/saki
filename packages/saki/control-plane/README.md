@@ -33,7 +33,7 @@ The private Saki control-plane module owns local Installation provisioning, Inst
 
 The versioned `control_state` provisioning owner records only stable child references and a `provisioning` or `ready` phase. Its Installation id must equal the maintenance-verified active Installation, including before interrupted provisioning resumes. Independently revisioned `installations`, `hosts`, `principals`, and `grants` tables retain entity lifecycle and history under branded ids. Every current identity uses its kind-specific prefix plus canonical UUID text; physical storage generations use `storage-generation-`. The exact v2 migration input alone retains historical `installation-generation-` fields. Principal kind is the closed `human | automation` discriminant. Provisioning creates one human Host Operator and validates that referenced kind on every startup; unrelated automation Principals are valid records, but provisioning creates no automation Grant. The Installation selects its current Local Host without owning storage-generation selection. Startup first validates every retained provisioning, access, Project, Binding, and Intent record without writes or external effects; only a wholly valid inventory may be reconciled or resumed.
 
-The retained migration chain reads exact state versions 2 through 9 and produces current v10 records. Historical schemas remain frozen. The v9-to-v10 step preserves Run, Session, input, and Host evidence, moves Agent admission credentials onto each Execution Dispatch, and clears Agent-owned Binding reservations. Direct Git and Branch Push reservations retain their existing recovery semantics.
+The retained migration chain reads exact state versions 2 through 11 and produces current v12 records. Historical schemas remain frozen. The v11-to-v12 step adds immutable Agent Profile account resolutions and replayable Project model-selection Intents without changing retained Run or Session records. The v10-to-v11 step adds account tables and the Host Operator model-supply grants without rewriting Run or Session evidence. The v9-to-v10 step preserves Run, Session, input, and Host evidence, moves Agent admission credentials onto each Execution Dispatch, and clears Agent-owned Binding reservations. Direct Git and Branch Push reservations retain their existing recovery semantics.
 
 `installation_access` is one versioned aggregate containing revisioned Bootstrap Challenge and Browser Session entries. Their ids append `:challenge:<ordinal>` or `:session:<ordinal>` to the owning Access id with a canonical decimal ordinal. Monotonic challenge and session ordinals produce deterministic entry ids; each verifier digest is bound to its entry id. Every successful exchange uses one expected-revision update to consume the selected challenge, revoke other issued challenges, and insert exactly one session. The aggregate retains an immutable initial-bootstrap completion summary even after detailed terminal entries are removed, and cleanup never lowers either ordinal high-water mark.
 
@@ -63,8 +63,12 @@ Board mapping uses only configured GitHub node ids. Matching Issue items from th
 
 Only domain-separated bootstrap and cookie digests are durable. Raw bootstrap secrets, raw cookie credentials, derived request tokens, and independent request-forgery secrets are absent from storage. Terminal challenge and session entries remain monotonic and are removed only after `terminalRetentionMs`.
 
+Project model selection captures an active account configuration revision, model, account identity, provider implementation, and safe provider configuration. Each successful selection appends an Agent Profile and advances the Project revision atomically; existing Runs retain their original Profile. Exact retries retain the resolved selection, and startup repairs publication acknowledgements without resolving another account. New dispatch admission rejects missing or changed account routes. Run and Session views expose account attribution without provider configuration or credential addresses.
+
 <a id="access-and-control-operations"></a>
 ## Access and control operations
+
+`initialConversationModel` resolves a registered Workspace's Project default for an ordinary chat. It rejects a Project without a selected model and returns no override for directories outside registered Projects. The Host API supplies this selection only when creating a new Session.
 
 Planning reads keep ownership on the Host. `work-item-view` joins the current complete Board and targeted confirmations with durable Assignments, Runs, Interventions, Branch Delivery, configured Milestones, and the latest 32 activity references. Its complete Issue body read fails independently and rechecks the Provider attachment, exact Issue identity, current Board fingerprint, and authority after awaiting GitHub. `project-milestones` pages configured delivery summaries by Milestone id; `project-mapping` discovers complete existing field choices at an exact synchronization revision and reports the current configuration permission. Neither field discovery nor a body read publishes a Board checkpoint.
 
@@ -98,6 +102,12 @@ The bootstrap exchange requires the exact configured loopback Origin. Configurat
 | `targetedPendingPollIntervalMs` | 300000 ms (5 minutes) | Interval between provider-scoped targeted pending passes |
 
 `project-sessions` pages retained Work Sessions independently of current Board membership. `agent-run-view` joins the selected Run’s frozen source and Profile, bounded Dispatch and Intervention history, and read-only Host observations. The query requires current `board:read` authority before and after awaited Host work. Admission state and latest DSH execution outcome remain separate; a failed model turn does not mutate Work Item status. Current blocking Interventions remain visible alongside bounded recent history.
+
+## Model accounts
+
+Model Supply owns replayable authorization, refresh, rename, activation, disconnection, and cancellation Intents. Profiles retain a stable identity, immutable account-route revisions, protected credential references, implementation identity, and last confirmed usage. Login runs under Host ownership after admission; browser disconnection does not cancel it. Restart inspects the protected destination rather than repeating login. Only authorized matching records can publish a Profile. The typed Host projection excludes credential addresses and configuration.
+
+A Work Session can switch its account and model at a completed turn boundary. The switch retains the exact history cut, publishes an immutable successor Run, and advances the Assignment without changing the Project default. Exact retries and restart repair interrupted publication; a conflicting history cut stays blocked for reconciliation.
 
 ## Model Experience
 

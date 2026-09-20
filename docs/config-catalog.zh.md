@@ -72,7 +72,7 @@ export interface Config {
 
 Depends on: [`GitCredentialHelperId`](../packages/saki/execution/src/index.ts)
 
-Source: [`packages/saki/execution-local/src/index.ts:139`](../packages/saki/execution-local/src/index.ts)
+Source: [`packages/saki/execution-local/src/index.ts:142`](../packages/saki/execution-local/src/index.ts)
 
 <a id="breakfastdapaidangsaki-github-app"></a>
 
@@ -121,7 +121,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/saki/host-api/src/index.ts:73`](../packages/saki/host-api/src/index.ts)
+Source: [`packages/saki/host-api/src/index.ts:76`](../packages/saki/host-api/src/index.ts)
 
 <a id="breakfastdapaidangsaki-tool-intervention"></a>
 
@@ -343,7 +343,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/api/session-controller/src/index.ts:71`](../packages/api/session-controller/src/index.ts)
+来源：[`packages/api/session-controller/src/index.ts:72`](../packages/api/session-controller/src/index.ts)
 
 <a id="deepseek-aidsh-api-settings-controller"></a>
 
@@ -3733,6 +3733,9 @@ export interface Config {
 这些插件通过 `cordis.yml` 中不含 `config:` 块的条目加载；它们未声明任何配置接口。
 
 - `@breakfastdapaidang/saki-bundle` ([`packages/saki/bundle/src/index.ts`](../packages/saki/bundle/src/index.ts))
+- `@breakfastdapaidang/saki-model-account` — 需要 `llm` ([`packages/saki/model-account/src/index.ts`](../packages/saki/model-account/src/index.ts))
+- `@breakfastdapaidang/saki-model-account-api` — 需要 `sakiModelAccounts` · `credentials` · `settings` ([`packages/saki/model-account-api/src/index.ts`](../packages/saki/model-account-api/src/index.ts))
+- `@breakfastdapaidang/saki-model-account-codex` — 需要 `sakiModelAccounts` · `credentials` · `authorization` · `sessions` ([`packages/saki/model-account-codex/src/index.ts`](../packages/saki/model-account-codex/src/index.ts))
 - `@breakfastdapaidang/saki-web-ui` ([`packages/saki/web-ui/src/index.ts`](../packages/saki/web-ui/src/index.ts))
 - `@deepseek-ai/dsh-acp-app` — 需要 `cmdlineArgs`（[`packages/bundle/acp-app/src/index.ts`](../packages/bundle/acp-app/src/index.ts)）
 - `@deepseek-ai/dsh-agent`（[`packages/core/agent/src/index.ts`](../packages/core/agent/src/index.ts)）

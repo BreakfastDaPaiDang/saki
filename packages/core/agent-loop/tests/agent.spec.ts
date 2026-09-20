@@ -112,6 +112,20 @@ describe('Agent', () => {
     expect(adapter.requests).toHaveLength(1)
   })
 
+  it('attributes model requests to the logged Session turn across followups', async () => {
+    const adapter = new MockAdapter([textResponse('first'), textResponse('second')])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('turn-attribution'), { provider: 'mock', model: 'mock' })
+    send(agent, 'first')
+    await agent.whenIdle()
+    send(agent, 'second')
+    await agent.whenIdle()
+    const turns = agent.session.snapshotEvents().filter(event => event.type === 'turn/start').map(event => event.data.turn)
+    expect(adapter.requests.map(request => ({ sessionId: request.sessionId, turn: request.turn })))
+      .toEqual(turns.map(turn => ({ sessionId: agent.session.id, turn })))
+    expect(turns).toEqual([1, 2])
+  })
+
   it('emits one running and idle transition for one completed turn', async () => {
     const ctx = await harness(new MockAdapter([textResponse('ok')]))
     const agent = await ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })

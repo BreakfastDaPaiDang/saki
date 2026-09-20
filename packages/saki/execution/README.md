@@ -77,6 +77,8 @@ An Intervention answer uses a new Dispatch and stable MessageId but retains the 
 
 `observeAgentRun` accepts an exact `start-agent-run` operation reference and an optional opaque Terminal selection. It separately reports physical Session history, recent consumed-work outcome, live Agent state, and bounded owner-scoped Terminal output. It creates no Agent, wake, model request, or terminal process. Unavailable evidence remains explicit; Host input-delivery success is independent of model completion.
 
+`forkAgentRun` waits for a quiescent source, asks its Consumer to retain the history cut, and publishes the exact successor without new model input. The Consumer excludes incoming source commands during succession. Read-only observation accepts either retained dispatch evidence or the exact fork request and cut.
+
 ## Model Experience
 
 ### Host execution values and Agent Run input

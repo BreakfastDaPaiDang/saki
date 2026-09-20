@@ -1,5 +1,6 @@
 /** Local Host provider for Saki inspection and structured Git operations. @module @breakfastdapaidang/saki-execution-local */
 
+import { forkLocalAgentRun } from './agent-run-fork.ts'
 import { constants as bufferConstants } from 'node:buffer'
 import { isDeepStrictEqual } from 'node:util'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -20,6 +21,8 @@ import {
   SakiHostExecution,
 } from '@breakfastdapaidang/saki-execution'
 import type {
+  AgentRunForkPlan,
+  ForkAgentRunRequest,
   AgentRunObservation,
   AgentRunTerminalSelection,
   ActiveHostProjectBinding,
@@ -282,6 +285,15 @@ export class LocalSakiHostExecution extends SakiHostExecution {
     }, binding, request, fused))
   }
 
+  override async forkAgentRun(
+    request: ForkAgentRunRequest, plan: AgentRunForkPlan | undefined,
+    retainPlan: (plan: AgentRunForkPlan) => Promise<void>, signal: AbortSignal,
+  ): Promise<AgentRunForkPlan> {
+    const fused = AbortSignal.any([signal, this.lifetime.signal])
+    fused.throwIfAborted()
+    return await this.track(forkLocalAgentRun(this.agentRunDependencies(), request, plan, retainPlan, fused))
+  }
+
   override async inspectInterventionOpening(
     request: InspectInterventionOpeningRequest,
     signal: AbortSignal,
@@ -292,16 +304,16 @@ export class LocalSakiHostExecution extends SakiHostExecution {
   }
 
   override async observeAgentRun(
-    operation: HostOperationReference<'start-agent-run'>,
+    operation: HostOperationReference<'start-agent-run'> | { readonly type: 'forked-agent-run'; readonly request: ForkAgentRunRequest; readonly plan: AgentRunForkPlan },
     terminal: AgentRunTerminalSelection | null,
     signal: AbortSignal,
   ): Promise<AgentRunObservation> {
     const fused = AbortSignal.any([signal, this.lifetime.signal])
     fused.throwIfAborted()
-    const record = this.requireOperation(operation)
+    const record = operation.type === 'forked-agent-run' ? operation : this.requireOperation(operation) as LocalHostAgentRunOperationRecord
     return await this.track(observeLocalAgentRun(
       { ...this.agentRunDependencies(), terminalGenerations: this.terminalGenerations },
-      record as LocalHostAgentRunOperationRecord, terminal, this.config, fused,
+      record, terminal, this.config, fused,
     ))
   }
 

@@ -16,7 +16,7 @@ import type {
   GitHubPullRequestFact,
 } from '@breakfastdapaidang/saki-github'
 import type { ResolvedConfig } from './index.ts'
-import { queryGraphql } from './graphql.ts'
+import { graphqlNumericRepositoryDatabaseIdSchema, queryGraphql } from './graphql.ts'
 import { GitHubOperationSession } from './operation-session.ts'
 import type { InstallationPriorityQueue } from './priority-queue.ts'
 import { parseNextLinkTarget } from './rest-link.ts'
@@ -25,12 +25,12 @@ const REPOSITORY_QUERY = `
 query SakiPullRequestCreateRepository($repositoryId: ID!) {
   repository: node(id: $repositoryId) {
     __typename
-    ... on Repository { id databaseId: fullDatabaseId nameWithOwner owner { id } }
+    ... on Repository { id databaseId nameWithOwner owner { id } }
   }
 }`
 const repositoryDataSchema = z.object({ repository: z.object({
   __typename: z.literal('Repository'), id: z.string().min(1),
-  databaseId: z.union([z.string(), z.number().int().positive()]),
+  databaseId: graphqlNumericRepositoryDatabaseIdSchema,
   nameWithOwner: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u).max(201),
   owner: z.object({ id: z.string().min(1) }).loose(),
 }).loose().nullable() }).loose()

@@ -45,7 +45,7 @@ const LATER_DISPATCH_ID = 'dispatch-dddddddd-dddd-4ddd-8ddd-dddddddddddd' as Sak
 const OTHER_INTERVENTION_ID = 'intervention-cccccccc-cccc-4ccc-8ccc-cccccccccccc' as SakiInterventionRequestId
 
 const LAUNCH = {
-  profileId: 'agent-profile-11111111-1111-4111-8111-111111111111', profileVersion: 1,
+  account: null, profileId: 'agent-profile-11111111-1111-4111-8111-111111111111', profileVersion: 1,
   provider: 'deepseek', model: 'deepseek-chat', bindingId: 'binding-11111111-1111-4111-8111-111111111111',
   bindingRevision: 1, displayLocation: 'saki', inheritedChangeEntryCount: 0,
 } as SakiAgentLaunchSummary

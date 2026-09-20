@@ -114,7 +114,7 @@ const readyItem = {
       expectedProjectRevision: 2,
       expectedRemoteFingerprint: REMOTE_FINGERPRINT,
       reason: 'ready',
-      launch: { profileId: 'agent-profile-11111111-1111-4111-8111-111111111111', profileVersion: 1, provider: 'deepseek', model: 'deepseek-chat', bindingId: 'binding-11111111-1111-4111-8111-111111111111', bindingRevision: 1, displayLocation: 'saki', inheritedChangeEntryCount: 0 },
+      launch: { account: null, profileId: 'agent-profile-11111111-1111-4111-8111-111111111111', profileVersion: 1, provider: 'deepseek', model: 'deepseek-chat', bindingId: 'binding-11111111-1111-4111-8111-111111111111', bindingRevision: 1, displayLocation: 'saki', inheritedChangeEntryCount: 0 },
     },
   },
 } as const

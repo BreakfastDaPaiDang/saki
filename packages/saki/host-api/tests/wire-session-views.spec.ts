@@ -12,6 +12,22 @@ const terminals = { state: 'confirmed', items: [terminal], more: false, selected
 const terminalResult = { ...result, projection: { ...run, observation: { ...run.observation, terminals } } }
 
 describe('Session and Run query wire', () => {
+  it('retains account attribution while rejecting a substituted route or provider configuration', () => {
+    const account = { selection: { accountProfileId: '00000000-0000-4000-8000-000000000006', configurationRevision: 2,
+      model: 'chosen-model' }, provider: 'saki-account-00000000-0000-4000-8000-000000000006-2',
+    accountIdentity: 'fixture-account', implementation: { name: 'fixture', version: '1' } }
+    const attributed = { ...run, workSession: { ...run.workSession,
+      runs: run.workSession.runs.map(item => ({ ...item, account })) },
+    run: { ...run.run, account, profile: { ...run.run.profile,
+      modelRoute: { provider: account.provider, model: account.selection.model } } } }
+    expect(sakiAgentRunViewResultSchema.parse({ ok: true, projection: attributed })).toEqual({ ok: true, projection: attributed })
+    for (const changed of [{ ...account, configuration: { private: true } },
+      { ...account, provider: 'saki-account-00000000-0000-4000-8000-000000000006-3' },
+      { ...account, selection: { ...account.selection, model: 'substituted-model' } }]) {
+      expect(sakiAgentRunViewResultSchema.safeParse({ ok: true, projection: { ...attributed,
+        run: { ...attributed.run, account: changed } } }).success).toBe(false)
+    }
+  })
   it('accepts bounded cursor addresses and rejects client-supplied authority or commands', () => {
     for (const query of [sessionQuery, runQuery, { ...sessionQuery, workItemId: run.workSession.workItem.id, after: run.workSession.id },
       { ...runQuery, afterDispatch: run.dispatches[0]!.id, terminal: { id: terminalId, offset: 80 } }]) {

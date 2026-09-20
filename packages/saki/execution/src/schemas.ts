@@ -1224,6 +1224,23 @@ export const startAgentRunProfileSchema: z.ZodType<StartAgentRunProfile> = z.obj
   }).strict(),
 }).strict()
 
+/** Exact source and successor identities for a model-idle history fork. */
+export const forkAgentRunRequestSchema = z.object({
+  binding: activeHostProjectBindingSchema,
+  workSessionId: sakiWorkSessionIdSchema,
+  source: z.object({ agentRunId: sakiAgentRunIdSchema, sessionId: startAgentRunSessionIdSchema,
+    profile: startAgentRunProfileSchema }).strict(),
+  target: z.object({ agentRunId: sakiAgentRunIdSchema, sessionId: startAgentRunSessionIdSchema,
+    profile: startAgentRunProfileSchema }).strict(),
+}).strict().refine(value => value.source.agentRunId !== value.target.agentRunId && value.source.sessionId !== value.target.sessionId,
+  'Run fork must allocate new Run and Session identities')
+
+/** Durable identity of the exact inherited Session prefix. */
+export const agentRunForkPlanSchema = z.object({
+  inheritedEventCount: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  historyDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+}).strict()
+
 function refineStartAgentRunRequestRelations(
   value: Pick<StartAgentRunHostOperationRequest, 'source' | 'run'>,
   context: z.RefinementCtx,

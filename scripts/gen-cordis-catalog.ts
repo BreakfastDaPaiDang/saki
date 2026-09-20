@@ -95,6 +95,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   sandboxPolicy: 'sandbox.md',
   sakiControlPlane: 'saki.md',
   sakiGitHub: 'saki.md',
+  sakiModelAccounts: 'saki.md',
   sakiHostExecution: 'saki.md',
   sakiInstallationState: 'saki.md',
   ssh: 'ssh.md',
@@ -219,6 +220,7 @@ export const EVENT_SCOPE_PAGE: Record<string, string> = {
   'permission-presets': 'permission-presets.md',
   'session': 'session.md',
   'settings': 'settings.md',
+  'saki-model-accounts': 'saki.md',
   'skills': 'skills.md',
   'subagent': 'subagent.md',
   'system-prompt': 'system-prompt.md',
@@ -259,6 +261,8 @@ export const EVENT_WALK_EXEMPTIONS: Record<string, string> = {
  * appear on more than one page.
  */
 export const LINK_MAP: Readonly<Record<string, string>> = {
+  ModelAccountProvider: 'saki.md',
+  ModelAccountBinding: 'saki.md',
   BrowserUseProviderName: 'browser-use.md',
   ComputerUseProviderName: 'computer-use.md',
   Agent: 'core.md',
@@ -323,6 +327,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   MessageFeedbackVersionConflict: 'feedback.md',
   UserMessage: 'session.md',
   ApiSessionAgentResult: 'session.md',
+  SessionControlRequest: 'session.md',
   PreStepDecision: 'core.md',
   PreStepContext: 'core.md',
   RequestErrorAction: 'core.md',
@@ -759,6 +764,8 @@ export const FOUNDATION_TYPE_NAMES: ReadonlySet<string> = new Set([
 
 /** Project types deliberately documented outside the subsystems catalog. */
 export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
+  AgentRunForkPlan: 'private Saki Host execution — packages/saki/execution/README.md',
+  ForkAgentRunRequest: 'private Saki Host execution — packages/saki/execution/README.md',
   McpResourceProvider: 'scoped resource provider is owned by packages/mcp/mcp-resources/README.md',
   'z.ZodType': 'Zod response validation API is owned by https://zod.dev/packages/zod',
   Socket: 'Node.js byte stream API is owned by https://nodejs.org/api/net.html#class-netsocket',

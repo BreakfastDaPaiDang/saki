@@ -96,6 +96,8 @@ Numeric fields resolve to positive integers. The optional credential adapter ena
 | `operationMaxIndexBytes` | `67108864` | Index and pin read limit frozen into each newly planned Host Operation |
 | `operationMaxReflogBytes` | `4194304` | Reflog read limit frozen into each newly planned Commit |
 
+Run succession executes under Agent maintenance after the complete turn settles. It checks the physical history digest and parent Session metadata, creates or restores an idle successor, and retires the source runtime. It rejects queued source input and a source that advanced beyond an unpublished retained cut. Restart restores the same successor without sending another model request.
+
 ## Model Experience
 
 ### Local Host inspection and Agent start

@@ -59,6 +59,7 @@ interface RunningHost {
   readonly context: Context
   readonly origin: string
   readonly directory: string
+  readonly disposeApi: () => Promise<void>
   readonly close: () => Promise<void>
 }
 
@@ -92,7 +93,7 @@ async function start(): Promise<RunningHost> {
     databasePath: join(directory, 'saki.sqlite'),
     installationId: INSTALLATION_ID,
     storageGenerationId: STORAGE_GENERATION_ID,
-    stateVersion: 10,
+    stateVersion: 12,
     createdByBuildId: BUILD_ID,
     promoteToReady: () => Promise.resolve(),
   })
@@ -116,9 +117,10 @@ async function start(): Promise<RunningHost> {
     terminalRetentionMs: 86_400_000,
     cookieName: 'saki_session',
   })
-  await context.plugin(SakiHostApi)
+  const api = await context.plugin(SakiHostApi)
   return {
     context,
+    disposeApi: async () => { await api.dispose() },
     origin,
     directory,
     close: async () => {
@@ -1369,4 +1371,25 @@ describe('Saki /saki Host transport', () => {
     expect(failedLogout.response.headers.get('set-cookie')).toBeNull()
     await host.close()
   })
+})
+
+it('keeps Saki Run recovery and model changes under their owner and removes the policy on disposal', async () => {
+  const host = await start()
+  try {
+    const owned = 'session-owned' as import('@breakfastdapaidang/saki-execution').SessionId
+    const ordinary = 'session-ordinary' as import('@breakfastdapaidang/saki-execution').SessionId
+    vi.spyOn(host.context.sakiControlPlane, 'initialConversationModel').mockReturnValue({ provider: 'account-route', model: 'selected' })
+    expect(host.context.bail('api-session/initial-model-selection', { sessionId: ordinary, cwd: '/project' }))
+      .toEqual({ provider: 'account-route', model: 'selected' })
+    vi.spyOn(host.context.sakiControlPlane, 'sessionControlState').mockImplementation(sessionId => sessionId === owned
+      ? 'owned' : undefined)
+    for (const action of ['resume', 'model-selection'] as const) {
+      expect(host.context.bail('api-session/authorize-control', { sessionId: owned, action })).toBe('denied')
+      expect(host.context.bail('api-session/authorize-control', { sessionId: ordinary, action })).toBeUndefined()
+    }
+    expect(host.context.bail('api-session/authorize-control', { sessionId: owned, action: 'prompt' })).toBeUndefined()
+    await host.disposeApi()
+    expect(host.context.bail('api-session/initial-model-selection', { sessionId: ordinary, cwd: '/project' })).toBeUndefined()
+    expect(host.context.bail('api-session/authorize-control', { sessionId: owned, action: 'model-selection' })).toBeUndefined()
+  } finally { await host.close() }
 })

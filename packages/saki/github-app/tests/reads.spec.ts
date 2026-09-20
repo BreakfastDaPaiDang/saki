@@ -74,7 +74,7 @@ describe('Saki Product GitHub App exact reads', () => {
               title: 'Publish a read-only Board',
               url: 'https://github.com/BreakfastDaPaiDang/saki/issues/27',
               updatedAt: '2026-08-26T08:01:00Z',
-              repository: { id: repositoryId, databaseId: '4242' },
+              repository: { id: repositoryId, databaseId: 4_242 },
             },
             rateLimit,
           } })
@@ -100,7 +100,7 @@ describe('Saki Product GitHub App exact reads', () => {
             node: {
               __typename: 'Repository',
               id: repositoryId,
-              databaseId: '4242',
+              databaseId: 4_242,
               nameWithOwner: 'BreakfastDaPaiDang/saki',
               visibility: 'PUBLIC',
               url: 'https://github.com/BreakfastDaPaiDang/saki',

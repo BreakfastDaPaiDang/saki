@@ -1,3 +1,8 @@
+import ModelAccountService, { modelAccountProviderId } from '@breakfastdapaidang/saki-model-account'
+import { CREDENTIAL_PROTECTION_LOCAL_USER_TRUST } from '@deepseek-ai/dsh-credentials'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { ModelAccountIdentity } from '@breakfastdapaidang/saki-model-account'
+import { sakiControlIntentIdSchema } from '../src/ids.ts'
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -16,7 +21,7 @@ import WorkspaceRegistry, {
 } from '@deepseek-ai/dsh-workspace'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import SakiGitFixtureSubprocess from '../../../../scripts/fixtures/saki-git-subprocess.ts'
-import LlmRuntime, { ToolCallId } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { ToolCallId, LlmAdapter } from '@deepseek-ai/dsh-llm'
 import LocalSakiHostExecution from '@breakfastdapaidang/saki-execution-local'
 import {
   computeGitHubProjectBoardFingerprint,
@@ -6246,4 +6251,67 @@ describe('Development Project registration', { timeout: process.platform === 'wi
       await restarted.fiber.dispose()
     }
   })
+})
+
+
+it('retains a selected account Profile across Project registration validation and restart', { timeout: process.platform === 'win32' ? 180_000 : 60_000 }, async () => {
+  const durable = await paths()
+  const repo = await repository(durable.root, 'model-selection')
+  const ctx = await context(durable)
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(ModelAccountService)
+  class SelectionAdapter extends LlmAdapter {
+    async * stream(): AsyncIterable<import('@deepseek-ai/dsh-llm').StreamChunk> {
+      throw new Error('Project selection must not send model requests')
+    }
+  }
+  const unregister = ctx.sakiModelAccounts.register({
+    id: modelAccountProviderId('fixture'), implementation: { name: 'fixture', version: '1' },
+    methods: [{ id: 'device_code', kind: 'device-code' }], resolveConfiguration: value => ({ ...value }),
+    authorize: async () => {},
+    inspect: async binding => ({ authentication: 'authorized', health: 'available',
+      entitlement: 'unknown', identity: brandString<ModelAccountIdentity>('fixture-account'), protectionLevel: CREDENTIAL_PROTECTION_LOCAL_USER_TRUST,
+      observedAt: 1, usage: { state: 'unsupported', source: 'fixture', observedAt: 1 },
+      models: [{ provider: binding.routeId, id: 'fixture-model', name: 'Fixture' }] }),
+    createAdapter: () => ({ adapter: new SelectionAdapter(), dispose: () => {} }),
+  })
+  let harness = await mountControlPlane(ctx)
+  const signal = new AbortController().signal
+  try {
+    const selection = await inspected(harness, repo)
+    const registered = await harness.control.submit(harness.authentication, intent(
+      'intent-10101010-1010-4010-8010-101010101010', 'Model selection', repo, 0, selection), signal)
+    if (!registered.ok) throw new Error('registration failed')
+    const canonicalRepo = await realpath(repo)
+    expect(harness.ctx.sakiControlPlane.initialConversationModel(durable.root)).toBeUndefined()
+    expect(() => harness.ctx.sakiControlPlane.initialConversationModel(canonicalRepo))
+      .toThrow('Select a default model')
+    const authorized = await harness.control.submit(harness.authentication, {
+      type: 'authorize-model-account', intentId: sakiControlIntentIdSchema.parse('intent-10101010-1010-4010-8010-101010101011'),
+      providerId: modelAccountProviderId('fixture'), name: 'Fixture', method: 'device_code',
+    }, signal)
+    if (!authorized.ok || authorized.receipt.profileId === null) throw new Error('account admission failed')
+    const profileId = authorized.receipt.profileId
+    await vi.waitFor(() => { expect(liveSakiDomain(ctx).table('model_accounts').get(profileId)?.connected).toBe(true) })
+    const profile = liveSakiDomain(ctx).table('model_accounts').get(profileId)!
+    await harness.control.submit(harness.authentication, { type: 'set-model-account-active',
+      intentId: sakiControlIntentIdSchema.parse('intent-10101010-1010-4010-8010-101010101012'),
+      profileId, expectedRevision: profile.revision, active: true }, signal)
+    const request = { type: 'configure-project-model-route' as const,
+      intentId: sakiControlIntentIdSchema.parse('intent-10101010-1010-4010-8010-101010101013'),
+      projectId: registered.receipt.projectId, expectedProjectRevision: 0,
+      selection: { accountProfileId: profileId, configurationRevision: 1, model: 'fixture-model' } }
+    const result = await harness.control.submit(harness.authentication, request, signal)
+    expect(result).toMatchObject({ ok: true, receipt: { state: 'completed' } })
+    const query = { type: 'project-model-route' as const, projectId: request.projectId }
+    const selected = await harness.control.query(harness.authentication, query, signal)
+    expect(selected).toMatchObject({ ok: true, projection: { projectRevision: 1,
+      profile: { version: 2, model: 'fixture-model', account: { selection: request.selection } } } })
+    const initialModel = harness.ctx.sakiControlPlane.initialConversationModel(canonicalRepo)
+    expect(initialModel).toEqual({ provider: profile.binding.routeId, model: 'fixture-model' })
+    harness = await harness.restartControlPlane()
+    expect(harness.ctx.sakiControlPlane.initialConversationModel(canonicalRepo)).toEqual(initialModel)
+    expect(await harness.control.query(harness.authentication, query, signal)).toEqual(selected)
+    expect(await harness.control.submit(harness.authentication, request, signal)).toEqual(result)
+  } finally { await harness.close(); await unregister() }
 })

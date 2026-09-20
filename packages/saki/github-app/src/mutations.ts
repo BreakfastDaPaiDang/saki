@@ -17,7 +17,7 @@ import type {
   GitHubProjectItemStatusSetRequest,
 } from '@breakfastdapaidang/saki-github'
 import type { ResolvedConfig } from './index.ts'
-import { queryGraphql } from './graphql.ts'
+import { graphqlNumericRepositoryDatabaseIdSchema, queryGraphql } from './graphql.ts'
 import { GitHubOperationSession } from './operation-session.ts'
 import type { InstallationPriorityQueue } from './priority-queue.ts'
 
@@ -127,7 +127,7 @@ mutation SakiPullRequestCreate(
     clientMutationId
     pullRequest {
       id number state title body headRefName headRefOid baseRefName
-      repository { id databaseId: fullDatabaseId owner { id } }
+      repository { id databaseId owner { id } }
     }
   }
 }`
@@ -193,7 +193,7 @@ const pullRequestCreateDataSchema = z.object({
     pullRequest: z.object({
       id: z.string().min(1), number: z.number().int().positive(), state: z.literal('OPEN'),
       title: z.string(), body: z.string(), headRefName: z.string(), headRefOid: z.string(), baseRefName: z.string(),
-      repository: z.object({ id: z.string().min(1), databaseId: z.union([z.string(), z.number().int().positive()]),
+      repository: z.object({ id: z.string().min(1), databaseId: graphqlNumericRepositoryDatabaseIdSchema,
         owner: z.object({ id: z.string().min(1) }).loose() }).loose(),
     }).loose(),
   }).loose(),

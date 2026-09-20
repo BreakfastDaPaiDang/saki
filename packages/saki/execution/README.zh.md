@@ -77,6 +77,8 @@ Intervention answer 使用新的 Dispatch 与稳定 MessageId，但保留所属 
 
 `observeAgentRun` 接受精确的 `start-agent-run` operation 引用及可选的不透明 Terminal 选择。它分别报告物理 Session 历史、最近已消费工作的执行结果、活跃 Agent 状态及有界的所属 Terminal 输出。读取不会创建 Agent、wake、模型请求或终端进程。不可用证据保持明确；Host 输入投递成功与模型完成相互独立。
 
+`forkAgentRun` 等待来源静止，要求 Consumer 持久保存历史切点，然后发布精确后继而不提交新的模型输入。Consumer 在交接期间阻止来源接收新命令。只读观测接受保留的派发证据，或精确分叉请求与切点。
+
 <a id="model-experience"></a>
 ## 模型体验
 

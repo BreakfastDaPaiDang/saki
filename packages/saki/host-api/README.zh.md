@@ -11,6 +11,8 @@ kind: "package-reference"
 
 将浏览器连接到本地 Saki Host，执行经过认证的项目、Work Item、Agent Run 和交付操作。
 
+Host 为 Saki 拥有的物理 Session 注册控制策略。通用 Conversation 命令不能修改 Run 的模型或激活冷 Run；Host 恢复继续负责精确的 Agent Profile 与输入证据。当前 Run 可通过 Conversation 接收输入。历史 Session 与未完成切换两侧的 Session 拒绝通用执行命令。Host API 释放时会移除该策略监听器。
+
 ## 目录
 
 - [使用本包](#use-this-package)
@@ -22,6 +24,8 @@ kind: "package-reference"
 
 <a id="use-this-package"></a>
 ## 使用本包
+
+已注册项目中的新普通聊天通过 `api-session/initial-model-selection` 使用项目默认模型，无需关联 GitHub Issue。Session Controller 只记录一次路由；修改项目默认值不会改变已有聊天的路由。尚未选择默认模型的项目拒绝创建聊天。Host API 释放时会移除此监听器。
 
 Saki 私有双侧 Host API 把控制面适配到共享 Connection 载体。Host 入口注册由 Saki 拥有的 `/saki` 逻辑通道；`./client` 入口在浏览器上下文注册 `ctx.sakiHostClient`。`./wire` 包含两侧共用、适用于浏览器的严格 schema。
 
@@ -70,6 +74,8 @@ Branch Delivery review 携带完整的精确 pull-request fact，并具有独立
 
 `delivery-workspace` 查询接受与 `branch-delivery` 相同的 Project、Work Item 和 refresh 字段。其结果补充安全的选择修订、可空的已配置凭据管理器 id、完整 PR 关联证据，以及六项由 Host 推导的操作建议。凭据内容与私有 Installation 引用不进入传输。不可用的 Branch Delivery 结果可以携带 pending 回执；传输不可用不代表终态失败。
 
+`queryProjectModelRoute` 返回项目选中的 Profile 与安全账户归属。`configureProjectModelRoute` 按预期项目修订提交明确的账户配置修订与模型。Run 和 Session 响应保留账户身份与实现版本；供应商配置及凭据地址不进入传输数据。
+
 <a id="transport-responsibilities"></a>
 ## 传输职责
 
@@ -80,6 +86,10 @@ Connection 负责路由信任校验、有界 JSON 封装、请求关联、取消
 浏览器客户端的每次调用都使用同源凭据。登出与每次 Intent 提交都需要当前请求令牌。客户端提供选择检查、Project-index、Development-Workspace、Changes、文件级 Diff、Project Settings、Board、`queryMyWork`、`queryAttention`、Branch Delivery 与 Milestone View 查询、首次登记、字段级 GitHub 同步配置、结构化 Git 与 Work Item mutation、全部六种 Branch Delivery transition、两种 Milestone Delivery transition、`giveWorkItemToAgent` 与 `answerIntervention` 的准确方法；每个方法只解析与自身对应的结果 schema。`queryMyWork()`、`queryAttention()`、`queryBoard(projectId, 'cached')`、`queryBranchDelivery(projectId, workItemId, 'cached')` 与 `queryMilestoneView(projectId, milestoneId, 'cached')` 都只读取持久状态。三项可刷新的 query 的 `interactive` 策略请求有界刷新，但仍只返回通过校验的 Projection。业务拒绝仍作为类型化的 RPC 成功值返回；取消、载体故障与 schema 校验不匹配则通过 Connection 固定且不透明的 RPC 错误信封拒绝 Promise。
 
 <a id="model-experience"></a>
+## 模型账户操作
+
+`queryModelSupply` 与 `submitModelAccount` 传输安全账户观测和可重放操作员意图。Host 重新校验访问权限及模型供应授权；投影不包含原始 OAuth 记录或提供者配置。
+
 ## 模型体验
 
 无。Host 与浏览器适配器传递 Saki 访问和 Projection 值，但不注册模型可见输入。

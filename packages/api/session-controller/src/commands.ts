@@ -1,5 +1,6 @@
 /** Session commands whose activation policy is explicit at each Remote method. */
 
+import { assertSessionControl } from './control-policy.ts'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -356,6 +357,7 @@ export class SessionCommandController {
             { sessionId: agent.id },
           )
         }
+        assertSessionControl(this.ctx, agent.id, 'prompt')
         using binding = this.ctx.fileUploads.bindPrompt(agent, admission.receiptIds, request.requestId)
         if (request.mode === 'steer') agent.steer(message)
         else agent.followup(message)
@@ -460,6 +462,7 @@ export class SessionCommandController {
     if (request.action.kind === 'steer' && (target !== 'next-turn' || agent.status !== 'running')) {
       throw new RemoteError('session/steer-unavailable', 'current turn no longer accepts steering', { itemId: request.itemId })
     }
+    assertSessionControl(this.ctx, agent.id, 'queue')
     switch (request.action.kind) {
       case 'edit':
         agent.inbox.replace(request.itemId, freezeMessage<UserMessage>({
@@ -503,6 +506,7 @@ export class SessionCommandController {
     if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
       throw apiSessionSubagentOwnershipError(request.sessionId)
     }
+    assertSessionControl(this.ctx, agent.id, 'cancel')
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     return { accepted: true }
   }

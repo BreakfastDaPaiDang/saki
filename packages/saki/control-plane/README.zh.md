@@ -33,7 +33,7 @@ Saki 私有控制面模块拥有本地 Installation 置备、Installation Access
 
 版本化的 `control_state` 置备所有者只记录稳定的子记录引用，以及 `provisioning` 或 `ready` 阶段。其 Installation id 必须与维护层验证的活跃 Installation 相同；被中断的置备恢复前也会执行这项校验。`installations`、`hosts`、`principals` 与 `grants` 表按品牌类型 id 保留各自带修订号的实体生命周期和历史。每个当前标识均由类型专属前缀与规范 UUID 文本组成；物理 storage generation 使用 `storage-generation-`。只有精确的 v2 迁移输入会保留历史 `installation-generation-` 字段。Principal 类型采用封闭的 `human | automation` 判别字段。置备流程会创建一名人类 Host Operator，并在每次启动时校验所引用 Principal 的类型；无关的自动化 Principal 是合法记录，但置备流程不会创建自动化 Grant。Installation 只选择当前本地 Saki Host，不拥有 storage generation 的选择权。启动时会先以纯读取方式校验全部置备、访问、Project、Binding 与 Intent 记录；只有完整库存均有效，系统才会协调或恢复任何状态。
 
-保留的迁移链读取精确的 v2 至 v9 状态，并生成当前 v10 记录。历史 schema 保持冻结。v9-to-v10 步骤保留 Run、Session、输入与 Host 证据，把 Agent 准入凭据记录到各自的 Execution Dispatch，并清除 Agent 持有的 Binding 预留。直接 Git 与 Branch Push 预留保留原有恢复语义。
+保留的迁移链读取精确的 v2 至 v11 状态，并生成当前 v12 记录。历史 schema 保持冻结。v11-to-v12 步骤添加不可变的 Agent Profile 账户解析记录与可重放的项目模型选择 Intent，不改变保留的 Run 或 Session 记录。 v10-to-v11 步骤添加账户表与 Host Operator 的模型供应权限，不改写 Run 或 Session 证据。v9-to-v10 步骤保留 Run、Session、输入与 Host 证据，把 Agent 准入凭据记录到各自的 Execution Dispatch，并清除 Agent 持有的 Binding 预留。直接 Git 与 Branch Push 预留保留原有恢复语义。
 
 `installation_access` 是一条版本化聚合记录，包含带修订号的 Bootstrap Challenge 与 Browser Session 条目。其 id 在所属 Access id 后追加 `:challenge:<ordinal>` 或 `:session:<ordinal>` 与规范十进制序号。只增不减的挑战序号和会话序号生成确定性条目 id，每个校验摘要都绑定其条目 id。每次成功交换都会执行一次带预期修订号的更新：消费选中的挑战、撤销其他状态为 `issued` 的挑战，并插入恰好一个会话。即使详细终态条目已经清理，该聚合仍保留不可变的首次 bootstrap 完成摘要；清理不会降低两类序号的高水位。
 
@@ -63,8 +63,12 @@ Board mapping 只使用已配置的 GitHub node id。已配置 Repository 中匹
 
 只有经过域分离的 bootstrap 哈希摘要与 Cookie 哈希摘要会持久化。原始 bootstrap 机密值、原始 Cookie 凭据、派生请求令牌和独立的请求防伪机密值都不会进入存储。Bootstrap Challenge 与 Browser Session 条目的终态转换保持单调，且只有经过 `terminalRetentionMs` 后才会删除。
 
+项目模型选择固定启用账户的配置修订、模型、账户身份、供应商实现与安全的供应商配置。每次成功选择会原子追加 Agent Profile 并递增项目修订；已有 Run 保留原 Profile。原请求重试保留已解析选择，启动时修复发布回执而不重新选择账户。新派发准入拒绝缺失或发生变化的账户路由。Run 与 Session 视图展示账户归属，不暴露供应商配置或凭据地址。
+
 <a id="access-and-control-operations"></a>
 ## 访问与控制操作
+
+`initialConversationModel` 为普通聊天解析已注册 Workspace 所属项目的默认模型。项目尚未选择模型时会拒绝；目录不属于已注册项目时不覆盖默认值。Host API 仅在创建新 Session 时提供这一选择。
 
 规划读取的所有权保留在 Host。`work-item-view` 将当前完整 Board 与定向确认结果关联到持久 Assignment、Run、Intervention、Branch Delivery、已配置 Milestone 及最近 32 条活动引用。完整 Issue 正文的读取可独立失败，并在等待 GitHub 后重新检查 Provider 挂载、准确 Issue 身份、当前 Board 指纹与权限。`project-milestones` 按 Milestone id 分页列出已配置交付摘要；`project-mapping` 在准确同步修订号下发现全部现有字段选项，并报告当前配置权限。字段发现与正文读取均不会发布 Board checkpoint。
 
@@ -100,6 +104,12 @@ Bootstrap 交换要求准确匹配配置的回环 Origin。配置只接受主机
 `project-sessions` 对保留的 Work Session 分页，不依赖当前 Board 成员关系。`agent-run-view` 组合所选 Run 固定的来源与 Profile、有界 Dispatch 和 Intervention 历史及只读 Host 观察。查询在等待 Host 工作前后均要求当前 `board:read` 权限。准入状态与最近 DSH 执行结果分别保留；模型轮次失败不会修改 Work Item 状态。当前阻塞 Intervention 与有界近期历史一起保持可见。
 
 <a id="model-experience"></a>
+## 模型账户
+
+Model Supply 拥有可重放的授权、刷新、重命名、激活、断开和取消意图。档案保留稳定身份、不可变账户路由修订、受保护凭据引用、实现身份和上次确认额度。登录在准入后由 Host 拥有；浏览器断线不会取消登录。重启检查受保护目标，不会重复发起登录。只有已授权且匹配的记录才能发布档案。类型化 Host 投影不包含凭据地址和配置。
+
+Work Session 可在完整轮次结束后切换账户和模型。切换保留精确历史切点，发布不可变的后继 Run，并更新 Assignment，而不修改项目默认模型。精确重试与重启可修复中断的发布；历史切点冲突时保持阻塞并要求对账。
+
 ## 模型体验
 
 无，因为该模块只会固定由 Host 拥有的 payload，不注册模型侧工具、prompt section 或 Session event。

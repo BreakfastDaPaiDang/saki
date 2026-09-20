@@ -5,6 +5,7 @@ import {
   CREDENTIAL_PROTECTION_LOCAL_USER_TRUST,
   credentialProtectionLevel,
   credentialRef,
+  credentialKey,
   isCredentialKeySegment,
 } from '../src/index.ts'
 import type { CredentialRef } from '../src/index.ts'
@@ -55,6 +56,22 @@ describe('credentialProtectionLevel', () => {
 })
 
 describe('the credentials seam through the memory provider', () => {
+  it('refuses protected record operations when the provider has not implemented them', async () => {
+    const ctx = await boot()
+    try {
+      const key = credentialKey('test', 'account')
+      await expect(ctx.credentials.readRecordProtected(key, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST))
+        .rejects.toThrow('does not support protected record reads')
+      let called = false
+      await expect(ctx.credentials.modifyRecordProtected(key, CREDENTIAL_PROTECTION_LOCAL_USER_TRUST, async () => {
+        called = true
+        return undefined
+      })).rejects.toThrow('does not support protected record mutations')
+      expect(called).toBe(false)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
   it('requires the resolved value to carry the requested protection level', async () => {
     const ctx = await boot({ DEEPSEEK_API_KEY: 'sk-seeded' })
 

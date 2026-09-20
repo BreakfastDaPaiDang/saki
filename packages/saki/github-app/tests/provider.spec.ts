@@ -351,14 +351,15 @@ describe('Saki Product GitHub App provider', () => {
       if (pathname === '/graphql') {
         const body = JSON.parse(await request.text()) as { query?: unknown; variables?: unknown }
         expect(body.query).toEqual(expect.stringContaining('query SakiRepository'))
-        expect(body.query).toEqual(expect.stringContaining('databaseId: fullDatabaseId'))
+        expect(body.query).toEqual(expect.stringContaining('databaseId'))
+        expect(body.query).not.toEqual(expect.stringContaining('fullDatabaseId'))
         expect(body.variables).toEqual({ repositoryId: 'R_kgDOBoundRepository' })
         return json({
           data: {
             node: {
               __typename: 'Repository',
               id: 'R_kgDOBoundRepository',
-              databaseId: '4242',
+              databaseId: 4_242,
               nameWithOwner: 'BreakfastDaPaiDang/saki',
               visibility: 'PUBLIC',
               url: 'https://github.com/BreakfastDaPaiDang/saki',

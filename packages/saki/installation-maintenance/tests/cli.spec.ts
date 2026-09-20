@@ -144,7 +144,7 @@ describe('Saki maintenance CLI', () => {
           databasePath: resolve('hidden-generation.sqlite'),
         },
         sourceVersion: 2 as const,
-        targetVersion: 10 as const,
+        targetVersion: 12 as const,
       })),
     } satisfies SakiMaintenanceOperations
     const signal = new AbortController().signal
@@ -171,7 +171,7 @@ describe('Saki maintenance CLI', () => {
       backupId: BACKUP_ID,
       storageGenerationId: STORAGE_GENERATION_ID,
       sourceVersion: 2,
-      targetVersion: 10,
+      targetVersion: 12,
     })
     expect(operations.backup).toHaveBeenCalledWith(backupCommand.options, signal)
     expect(operations.verify).toHaveBeenCalledWith(verifyCommand.options, BACKUP_ID, signal)

@@ -12,7 +12,7 @@ export interface SakiNavEntryInjected {
   /** Open this entry's surface. */
   open: () => void
   /** The entry's own surface, for active-state projection. */
-  sakiSurface: 'work' | 'project'
+  sakiSurface: 'work' | 'project' | 'accounts'
 }
 
 /** Full composed props for a Saki primary navigation entry. */
@@ -28,7 +28,7 @@ export type SakiNavEntryProps =
  */
 export function SakiNavEntry(props: SakiNavEntryProps & { t: TranslateNS<typeof NS> }) {
   const active = props.usePanelInfo(info => info.activePanelId === `saki:${props.sakiSurface}`)
-  const label = props.t(props.sakiSurface === 'work' ? 'nav.work' : 'nav.project')
+  const label = props.t(props.sakiSurface === 'accounts' ? 'nav.accounts' : props.sakiSurface === 'work' ? 'nav.work' : 'nav.project')
   return (
     <button
       type="button"

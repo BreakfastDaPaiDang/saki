@@ -6,12 +6,15 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-terminal'
 import type {
   AgentRunObservation,
+  ForkAgentRunRequest,
+  AgentRunForkPlan,
   AgentRunSessionActivity,
   AgentRunSessionObservation,
   AgentRunTerminalObservation,
   AgentRunTerminalSelection,
   SakiRunTerminalId,
 } from '@breakfastdapaidang/saki-execution'
+import { canonicalDigest } from '@breakfastdapaidang/saki-execution'
 import { inspectDurableSession, type LocalAgentRunDependencies } from './agent-run.ts'
 import type { LocalHostAgentRunOperationRecord } from './operation-state.ts'
 
@@ -37,12 +40,15 @@ type Dependencies = Pick<LocalAgentRunDependencies, 'agents' | 'handles' | 'sess
  */
 export async function observeLocalAgentRun(
   dependencies: Dependencies,
-  record: LocalHostAgentRunOperationRecord,
+  record: LocalHostAgentRunOperationRecord | { readonly type: 'forked-agent-run'; readonly request: ForkAgentRunRequest; readonly plan: AgentRunForkPlan },
   terminal: AgentRunTerminalSelection | null,
   limits: RunObservationLimits,
   signal: AbortSignal,
 ): Promise<AgentRunObservation> {
-  const sessionId = record.request.run.sessionId
+  const fork = 'type' in record ? record : undefined
+  const run = 'type' in record ? record.request.target : record.request.run
+  const binding = 'type' in record ? record.request.binding : record.request.expected.binding
+  const sessionId = run.sessionId
   let session: AgentRunSessionObservation
   try {
     const evidence = await inspectDurableSession(dependencies, sessionId, signal)
@@ -50,8 +56,11 @@ export async function observeLocalAgentRun(
     const live = dependencies.agents.get(sessionId)
     if (evidence.kind === 'conflict'
       || live !== undefined && dependencies.handles.get(sessionId)?.agent !== live
-      || evidence.kind === 'present' && (evidence.meta.cwd !== record.request.expected.binding.expectedInspection.trusted.canonicalWorktreePath
-        || evidence.meta.agentPreset !== record.request.run.profile.agentPresetId)) {
+      || evidence.kind === 'present' && (evidence.meta.cwd !== binding.expectedInspection.trusted.canonicalWorktreePath
+        || evidence.meta.agentPreset !== run.profile.agentPresetId
+        || fork !== undefined && (evidence.meta.parentSession !== fork.request.source.sessionId
+          || evidence.inheritedEventCount !== fork.plan.inheritedEventCount
+          || canonicalDigest('saki/agent-run-fork-history/v1', evidence.events.slice(0, fork.plan.inheritedEventCount)) !== fork.plan.historyDigest))) {
       session = { state: 'unavailable', reason: 'evidence-conflict' }
     } else if (evidence.kind === 'absent') {
       session = { state: 'unavailable', reason: 'missing' }
