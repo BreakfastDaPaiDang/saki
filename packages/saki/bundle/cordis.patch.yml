@@ -122,6 +122,9 @@
 
     - id: saki-execution-local
       name: '@breakfastdapaidang/saki-execution-local'
+      config:
+        inventoryMaxCaptureMs: 120000
+        baselineMaxCaptureMs: 120000
 
     - id: saki-credentials
       name: '@deepseek-ai/dsh-credentials-windows-dpapi'

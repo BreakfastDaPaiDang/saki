@@ -66,6 +66,12 @@ describe('Saki bundle package', () => {
       ['saki-execution-local', '@breakfastdapaidang/saki-execution-local'],
       ['saki-credentials', '@deepseek-ai/dsh-credentials-windows-dpapi'],
       ['saki-connection-credentials', '@deepseek-ai/dsh-credentials-local'],
+      ['saki-model-authorization', '@deepseek-ai/dsh-authorization'],
+      ['saki-model-accounts', '@breakfastdapaidang/saki-model-account'],
+      ['saki-model-account-codex', '@breakfastdapaidang/saki-model-account-codex'],
+      ['saki-model-settings', '@deepseek-ai/dsh-settings-file'],
+      ['saki-api-models', '@deepseek-ai/dsh-llm-pi-ai'],
+      ['saki-model-account-api', '@breakfastdapaidang/saki-model-account-api'],
       ['saki-github-app', '@breakfastdapaidang/saki-github-app'],
       ['typert', '@deepseek-ai/dsh-typert-registry'],
       ['typert-loader', '@deepseek-ai/dsh-typert-loader'],
@@ -91,6 +97,7 @@ describe('Saki bundle package', () => {
       ['ui-sidebar', '@deepseek-ai/dsh-client-ui-sidebar'],
       ['ui-settings', '@deepseek-ai/dsh-client-ui-settings'],
       ['ui-settings-general', '@deepseek-ai/dsh-client-ui-settings-general'],
+      ['ui-settings-models', '@deepseek-ai/dsh-client-ui-settings-models'],
       ['ui-conversation', '@deepseek-ai/dsh-client-ui-conversation'],
       ['ui-sidebar-right', '@deepseek-ai/dsh-client-ui-sidebar-right'],
       ['ui-workspace', '@deepseek-ai/dsh-client-ui-workspace'],
@@ -139,6 +146,10 @@ describe('Saki bundle package', () => {
       workspaceRoot: { __jsExpr: 'process.cwd()' },
     })
     expect(insert.find(entry => entry.id === 'approval')?.config).toEqual({ policy: 'never' })
+    expect(insert.find(entry => entry.id === 'saki-execution-local')?.config).toEqual({
+      inventoryMaxCaptureMs: 120_000,
+      baselineMaxCaptureMs: 120_000,
+    })
     expect(insert.find(entry => entry.id === 'pwsh-sandbox')?.disabled).toEqual({
       __jsExpr: "process.platform !== 'win32'",
     })

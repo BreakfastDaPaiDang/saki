@@ -29,6 +29,8 @@ Saki 私有组合根。它在 [`dsh.bundle`](package.json) 中声明 [`cordis.pa
 
 Connection 激活会等待控制面完成恢复。因此浏览器重连不能在 Local Host 建立 Agent 所有权前，通过通用 Conversation API 恢复保留的 Session。Development Agent 的 Intervention 工具可在恢复期间注册，只在请求或 opening 最终确认时解析控制面。
 
+组合通过 `inventoryMaxCaptureMs` 和 `baselineMaxCaptureMs` 为每轮仓库观察与继承基线配置 120 秒，涵盖托管 Git 进程启动和文件采集。检查需要两轮观察；登记在绑定 Workspace 前会重新验证。每轮观察都可能因目录变化或超限而拒绝登记。
+
 在 POSIX 上，Connection 通过 `dsh-credentials-local` 将浏览器会话签名记录存储在 harness home 中，保护等级为 `plaintext`。Product GitHub App 在该平台保持禁用；它要求的 `local-user-trust` 由 Windows DPAPI 组合提供。
 
 在仓库根目录运行：

@@ -29,6 +29,8 @@ On Windows the composition also mounts the current-user DPAPI credential Provide
 
 Connection activation waits for the control plane to finish recovery. Browser reconnects therefore cannot restore a retained Session through the generic Conversation API before the Local Host establishes its Agent ownership. The Development Agent's Intervention tool can register during recovery and resolves the control plane only for requests or opening finalization.
 
+The composition allows 120 seconds per repository observation and inherited baseline through `inventoryMaxCaptureMs` and `baselineMaxCaptureMs`, including managed Git process startup and file capture. Inspection takes two observations; registration revalidates them before binding the Workspace. Each observation can reject a changing directory or exceed its limit.
+
 On POSIX, Connection stores its browser-session signing record through `dsh-credentials-local` in the harness home, with `plaintext` protection. The Product GitHub App remains disabled there; its `local-user-trust` requirement belongs to the Windows DPAPI composition.
 
 From the repository root, run:
