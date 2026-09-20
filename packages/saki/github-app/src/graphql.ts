@@ -7,7 +7,6 @@ import {
   githubIssueId,
   githubProjectOptionId,
   githubRepositoryDatabaseId,
-  githubRepositoryDatabaseIdSchema,
   githubRepositoryId,
 } from '@breakfastdapaidang/saki-github'
 import type {
@@ -93,10 +92,10 @@ export const graphqlSingleSelectFieldValuesSchema = z.object({
   pageInfo: graphqlPageInfoSchema,
 }).loose()
 
-/** Common GraphQL Repository fields admitted by Product App reads. */
+/** GraphQL Repository fields with numeric database identity before provider-neutral branding. */
 export const graphqlRepositoryNodeSchema = z.object({
   id: z.string().min(1),
-  databaseId: githubRepositoryDatabaseIdSchema,
+  databaseId: graphqlNumericRepositoryDatabaseIdSchema,
   nameWithOwner: z.string().min(3),
   visibility: z.enum(['PUBLIC', 'PRIVATE', 'INTERNAL']),
   url: z.url(),
@@ -123,10 +122,7 @@ export const graphqlIssueNodeSchema = z.object({
   title: z.string().min(1),
   url: z.url(),
   updatedAt: z.iso.datetime(),
-  repository: z.object({
-    id: z.string().min(1),
-    databaseId: githubRepositoryDatabaseIdSchema,
-  }).loose(),
+  repository: graphqlNumericRepositoryIdentitySchema,
 }).loose()
 
 /** Common Issue fields with the owned numeric Repository identity used by mutation inspections. */

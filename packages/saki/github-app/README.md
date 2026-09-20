@@ -40,6 +40,8 @@ The provider rejects a changed installation account, suspension, missing or exce
 <a id="reads-and-complete-scans"></a>
 ## Reads and complete scans
 
+Repository GraphQL selections use `databaseId`, admitted as a positive safe integer and converted to the provider-neutral decimal-string id before identity matching. Null, string, fractional, and unsafe numeric responses are rejected.
+
 `project-fields` verifies the selected Project owner before traversing all field pages. It rejects mismatched Project ids, changing totals, incomplete pagination, duplicate field or option ids, and field-capacity overflow. Mapping discovery shares field parsing with Board scans but does not require the previously configured Status field to exist.
 
 The provider implements installation, Repository, Issue revision, complete Issue detail, branch safety, exact branch head, Project v2, pull request and branch association, raw exact-Commit Actions/check/status facts, fully paginated Milestone Issue scope, exact `refs/tags/saki-v*`, recursive annotated-tag peel, Release-by-tag, installation-authorized and public Commit, and Commit-comparison reads. Every Milestone Issue must repeat both target Repository node and database identities. Branch-head reads return the exact remote Commit or absence independently of protection policy. CI reads retain stable workflow identity, run number and attempt, latest checks, and latest statuses per context without deriving a product result. Tag peeling is cycle-checked and depth-bounded. Release `target_commitish` is retained for display and is never treated as Commit evidence. Public Commit reads are limited to public repositories and share the configured request timeout and response-byte bound.

@@ -47,6 +47,7 @@ describe('Saki Product GitHub App Pull Request create recovery', () => {
       }
       if (url.pathname === '/graphql') {
         const body = JSON.parse(await httpRequest.text()) as { query: string; variables: Record<string, unknown> }
+        expect(body.query).not.toContain('fullDatabaseId')
         if (body.query.includes('mutation SakiPullRequestCreate(')) {
           expect(body.variables).toEqual({
             repositoryId, headRef: request.headRef, baseRef: request.baseRef,
@@ -56,11 +57,11 @@ describe('Saki Product GitHub App Pull Request create recovery', () => {
             clientMutationId: request.operationId,
             pullRequest: { id: 'PR_75', number: 75, state: 'OPEN', title: request.title, body: request.body,
               headRefName: request.headRef, headRefOid: request.expectedHeadCommitId, baseRefName: request.baseRef,
-              repository: { id: repositoryId, databaseId: '4242', owner: { id: request.installation.accountId } } },
+              repository: { id: repositoryId, databaseId: 4242, owner: { id: request.installation.accountId } } },
           } } })
         }
         if (body.query.includes('SakiPullRequestCreateRepository')) return json({ data: { repository: {
-          __typename: 'Repository', id: repositoryId, databaseId: '4242',
+          __typename: 'Repository', id: repositoryId, databaseId: 4242,
           nameWithOwner: 'BreakfastDaPaiDang/saki', owner: { id: request.installation.accountId },
         } } })
       }
@@ -133,7 +134,7 @@ describe('Saki Product GitHub App Pull Request create recovery', () => {
           repository_selection: 'selected', repositories: [{ id: 4_242 }] }, { status: 201 })
       }
       if (url.pathname === '/graphql') return json({ data: { repository: {
-        __typename: 'Repository', id: repositoryId, databaseId: '4242',
+        __typename: 'Repository', id: repositoryId, databaseId: 4242,
         nameWithOwner: 'BreakfastDaPaiDang/saki', owner: { id: request.installation.accountId },
       } } })
       if (url.pathname.endsWith('/pulls')) {

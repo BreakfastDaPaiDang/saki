@@ -49,6 +49,7 @@ describe('Saki Product GitHub App delivery reads', () => {
       }
       if (url.pathname !== '/graphql') throw new Error(`unexpected GitHub request: ${request.method} ${url.pathname}`)
       const body = JSON.parse(await request.text()) as { query: string; variables: Record<string, unknown> }
+      expect(body.query).not.toContain('fullDatabaseId')
       expect(body.query).toContain('SakiPullRequestReviews')
       expect(body.variables).toMatchObject({ pullRequestId: 'PR_75', first: 1 })
       page += 1
@@ -212,9 +213,10 @@ describe('Saki Product GitHub App delivery reads', () => {
       }
       if (url.pathname === '/graphql') {
         const body = JSON.parse(await request.text()) as { query: string; variables: Record<string, unknown> }
+        expect(body.query).not.toContain('fullDatabaseId')
         if (body.query.includes('SakiRepository')) return json({ data: {
           node: {
-            __typename: 'Repository', id: repositoryId, databaseId: '4242',
+            __typename: 'Repository', id: repositoryId, databaseId: 4_242,
             nameWithOwner: 'BreakfastDaPaiDang/saki', visibility: 'PUBLIC',
             url: 'https://github.com/BreakfastDaPaiDang/saki', updatedAt: '2026-09-03T07:00:00Z',
             owner: { id: observedOwner },
@@ -235,7 +237,7 @@ describe('Saki Product GitHub App delivery reads', () => {
           if (associationConflict === 'foreign') associationNode.headRepository = { id: 'R_foreign' }
           return json({ data: {
             node: {
-              __typename: 'Repository', id: repositoryId, databaseId: '4242',
+              __typename: 'Repository', id: repositoryId, databaseId: 4_242,
               owner: { id: observedOwner },
               pullRequests: associationPage === 1
                 ? { totalCount: associationTotal, nodes: [associationNode], pageInfo: {
@@ -252,7 +254,7 @@ describe('Saki Product GitHub App delivery reads', () => {
               __typename: 'Milestone', id: 'MI_delivery', number: 1, state: 'OPEN', title: '0.1.0',
               description: 'First release', dueOn: '2026-09-10T00:00:00Z',
               url: 'https://github.com/BreakfastDaPaiDang/saki/milestone/1', updatedAt: '2026-09-03T07:00:00Z',
-              repository: { id: repositoryId, databaseId: '4242', owner: { id: observedOwner } },
+              repository: { id: repositoryId, databaseId: 4_242, owner: { id: observedOwner } },
               issues: milestonePage === 1
                 ? { totalCount: 2, nodes: [issueNode(31)], pageInfo: { hasNextPage: true, endCursor: 'next' } }
                 : { totalCount: 2, nodes: [issueNode(32)], pageInfo: { hasNextPage: false, endCursor: null } },
@@ -400,9 +402,9 @@ describe('Saki Product GitHub App delivery reads', () => {
           __typename: 'Milestone', id: 'MI_delivery', number: 1, state: 'OPEN', title: '0.1.0',
           description: null, dueOn: null,
           url: 'https://github.com/BreakfastDaPaiDang/saki/milestone/1', updatedAt: '2026-09-03T07:00:00Z',
-          repository: { id: repositoryId, databaseId: '4242', owner: { id: profile.accountId } },
+          repository: { id: repositoryId, databaseId: 4_242, owner: { id: profile.accountId } },
           issues: { totalCount: 1, nodes: [{ ...issueNode(31), repository: {
-            id: repositoryId, databaseId: '4243',
+            id: repositoryId, databaseId: 4_243,
           } }], pageInfo: { hasNextPage: false, endCursor: null } },
         },
         rateLimit,
@@ -444,6 +446,6 @@ function issueNode(number: number): Record<string, unknown> {
   return {
     __typename: 'Issue', id: `I_${number}`, number, state: 'OPEN', title: `Issue ${number}`,
     url: `https://github.com/BreakfastDaPaiDang/saki/issues/${number}`,
-    updatedAt: '2026-09-03T07:00:00Z', repository: { id: repositoryId, databaseId: '4242' },
+    updatedAt: '2026-09-03T07:00:00Z', repository: { id: repositoryId, databaseId: 4_242 },
   }
 }

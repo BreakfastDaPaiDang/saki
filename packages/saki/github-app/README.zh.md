@@ -40,6 +40,8 @@ kind: "package-reference"
 <a id="reads-and-complete-scans"></a>
 ## Read 与完整 scan
 
+Repository GraphQL 查询使用 `databaseId`，先验证为正安全整数，再转换为供应商无关的十进制字符串 id 以匹配身份。空值、字符串、小数以及不安全的数值响应均被拒绝。
+
 `project-fields` 在遍历全部字段分页前验证所选 Project 的 owner。它拒绝 Project id 不匹配、总数变化、分页不完整、字段或选项 id 重复，以及字段容量超限。映射发现与 Board 扫描共用字段解析，但不要求此前配置的 Status 字段仍然存在。
 
 提供方实现 installation、Repository、Issue revision、完整 Issue detail、branch safety、精确 branch head、Project v2、pull request 与 branch association、精确 Commit 的原始 Actions/check/status fact、完整分页的 Milestone Issue scope、精确 `refs/tags/saki-v*`、递归 annotated-tag peel、按 tag 查找 Release、经 installation 授权与公开的 Commit，以及 Commit comparison read。每个 Milestone Issue 都必须同时重复目标 Repository 的 node identity 与 database identity。Branch-head read 独立于保护策略返回精确 remote Commit 或缺失。CI read 保留稳定 workflow identity、run number 与 attempt、latest check，以及每个 context 的 latest status，不派生产品结果。tag peel 会检查循环并限制深度。Release `target_commitish` 只为展示保留，绝不作为 Commit 证据。公开 Commit read 仅适用于 public Repository，并共用已配置的 request timeout 与 response-byte bound。

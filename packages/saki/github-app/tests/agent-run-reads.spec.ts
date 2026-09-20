@@ -50,6 +50,7 @@ describe('Agent Run targeted GitHub reads', () => {
       if (pathname === '/graphql') {
         const body = JSON.parse(await request.text()) as { query?: unknown; variables?: unknown }
         expect(String(body.query)).toContain('query SakiIssueDetail')
+        expect(String(body.query)).not.toContain('fullDatabaseId')
         expect(body.variables).toEqual({ issueId: 'I_kwDOIssueThirty' })
         detailRead += 1
         return json({ data: {
@@ -64,7 +65,7 @@ describe('Agent Run targeted GitHub reads', () => {
               : 'x'.repeat(GITHUB_ISSUE_DETAIL_BODY_UTF8_LIMIT + 1),
             url: 'https://github.com/BreakfastDaPaiDang/saki/issues/30',
             updatedAt: '2026-08-26T08:01:00Z',
-            repository: { id: repositoryId, databaseId: '4242' },
+            repository: { id: repositoryId, databaseId: 4_242 },
           },
           rateLimit,
         } })
@@ -197,7 +198,7 @@ function repositoryResponse(): Response {
     node: {
       __typename: 'Repository',
       id: repositoryId,
-      databaseId: '4242',
+      databaseId: 4_242,
       nameWithOwner: 'BreakfastDaPaiDang/saki',
       visibility: 'PUBLIC',
       url: 'https://github.com/BreakfastDaPaiDang/saki',

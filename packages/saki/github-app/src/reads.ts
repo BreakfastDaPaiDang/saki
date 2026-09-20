@@ -73,7 +73,7 @@ query SakiRepository($repositoryId: ID!) {
     __typename
     ... on Repository {
       id
-      databaseId: fullDatabaseId
+      databaseId
       nameWithOwner
       visibility
       url
@@ -90,7 +90,7 @@ query SakiIssue($issueId: ID!) {
     __typename
     ... on Issue {
       id number state title url updatedAt
-      repository { id databaseId: fullDatabaseId }
+      repository { id databaseId }
     }
   }
   rateLimit { cost limit remaining resetAt }
@@ -102,7 +102,7 @@ query SakiIssueDetail($issueId: ID!) {
     __typename
     ... on Issue {
       id number state title body url updatedAt
-      repository { id databaseId: fullDatabaseId }
+      repository { id databaseId }
     }
   }
   rateLimit { cost limit remaining resetAt }
@@ -678,13 +678,13 @@ export async function repositoryFromSession(
   ))
   if (data.node === null) notFound(request.kind)
   if (data.node.id !== request.repositoryId
-    || data.node.databaseId !== request.repositoryDatabaseId
+    || String(data.node.databaseId) !== request.repositoryDatabaseId
     || data.node.owner.id !== request.installation.accountId) {
     throw new Error('GitHub returned a different Repository identity')
   }
   return githubRepositoryFactSchema.parse({
     id: githubRepositoryId(data.node.id),
-    databaseId: githubRepositoryDatabaseId(data.node.databaseId),
+    databaseId: githubRepositoryDatabaseId(String(data.node.databaseId)),
     ownerAccountId: githubAccountId(data.node.owner.id),
     nameWithOwner: data.node.nameWithOwner,
     visibility: data.node.visibility.toLowerCase(),
@@ -705,7 +705,7 @@ function requireMatchingIssueNode<Node extends NonNullable<z.infer<typeof issueD
   if (node === null) notFound(request.kind)
   if (node.id !== request.issueId
     || node.repository.id !== request.repositoryId
-    || node.repository.databaseId !== request.repositoryDatabaseId) invalid(request.kind)
+    || String(node.repository.databaseId) !== request.repositoryDatabaseId) invalid(request.kind)
   return node
 }
 
