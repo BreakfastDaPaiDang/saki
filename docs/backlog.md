@@ -15,3 +15,5 @@
 **目标**：写一个 Saki 插件，让 `trustedHosts` 中登记过的主机名也能持久化设置；非信任主机保持原行为。不修改 DSH 包本身。
 
 **验收**：经 `saki.dapaidang.org` 打开设置 → 模型，能保存并在刷新后保留；未登记的主机名仍然只读。
+
+**相关**：社区插件 `dsh-codex-subscription` 的设置 RPC 也只对 loopback 授权（见其 SECURITY.md），实现时一并确认它判断的是页面还是请求 Host，是否能被同一机制覆盖。
