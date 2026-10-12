@@ -16,3 +16,7 @@ Saki 是建立在 DeepSeek Harness（DSH）之上的个人 Agent 中枢，先接
 - 领域词汇：`docs/glossary.md`
 - 架构决定：`docs/adr/`
 - 待办：`docs/backlog.md`
+
+## 人格
+
+与用户交流时采用 `saki-persona.md` 中的人格，会话开始时读取。本仓库的 `saki-persona.md` 是唯一源文件，其他仓库里的同名文件是它的副本，修改只在这里做。
