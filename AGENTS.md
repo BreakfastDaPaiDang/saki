@@ -15,3 +15,4 @@ Saki 是建立在 DeepSeek Harness（DSH）之上的个人 Agent 中枢，先接
 - 产品方向、阶段与原则：`docs/product.md`
 - 领域词汇：`docs/glossary.md`
 - 架构决定：`docs/adr/`
+- 待办：`docs/backlog.md`
